@@ -385,6 +385,12 @@ export function operacoesDeFormacao(b) {
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
     if (aplicadas[0]) return aplicadas[0];
     // Venda do dia por FORMA (relatório de formas) × venda por PEDIDO do mesmo dia: o mesmo faturamento por dois caminhos.
+    // Doc 44: faturamento manual PROVISÓRIO do mesmo dia × canal bloqueia a venda importada até a substituição auditada.
+    if (proposta.operacao === OP.VENDA && proposta.comando?.fonte?.sistema === "SAIPOS") {
+      const provisoria = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: "ATIVA", canal: proposta.comando.canal } }))
+        .find((v) => v.dataVenda === proposta.dataOperacao && v.fonte?.sistema === "MANUAL" && String(v.fonte.idExterno ?? "").startsWith("faturamento-manual:"));
+      if (provisoria) return { id: provisoria.id, motivo: "FATURAMENTO_PROVISORIO" };
+    }
     if (proposta.operacao === OP.VENDA) {
       const porForma = (p) => p.granularidade === GRANULARIDADE_DIA_POR_FORMA;
       const mesmoDia = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
@@ -533,6 +539,7 @@ export function operacoesDeFormacao(b) {
         if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
         await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
         const conflito = await conflitoDeGranularidade(tx, cx, p);
+        if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
         if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
         const efeitos = await aplicar(tx, cx, p);
         const aplicada = await b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APLICADA, efeitos }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);

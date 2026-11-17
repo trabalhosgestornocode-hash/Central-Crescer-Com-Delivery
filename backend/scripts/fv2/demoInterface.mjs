@@ -191,7 +191,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
     // Fases 04–06 (docs 42–44): as MESMAS consultas da plataforma (área SAIPOS, fechamento manual, operadoras, cards).
-    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
+    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
     "/api/fv2/contas-a-pagar": async (ctx, p) => {
       const r = await nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"]));
       // 08D: opções do formulário "Registrar conta a pagar": categorias lançáveis que não são receita (inclui "a classificar") e fornecedores.
@@ -294,7 +294,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
     // Fases 04–06: as MESMAS ações da plataforma (fechamento manual, operadoras e taxas, lote de propostas prontas).
-    ...Object.fromEntries(["/fechamento-manual/registrar", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas"]
+    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas"]
       .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, k === "/propostas/aprovar-e-aplicar-prontas" ? { ...b, importacao: id(b.importacao) } : b) }])),
     // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
     // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.

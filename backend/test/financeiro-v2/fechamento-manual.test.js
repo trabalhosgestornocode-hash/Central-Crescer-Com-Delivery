@@ -96,3 +96,53 @@ test("comparação: voucher importado sem bandeira compara o total do dia; zero 
   assert.deepEqual(r.comparacao.map((l) => [l.grupo, l.sub, l.situacao]), [["DINHEIRO", null, "CONFERE"], ["VOUCHER", "TODAS", "CONFERE"]]);
   assert.equal(r.situacao, "CONFERE");
 });
+
+// ------------------------------------------------------------------------------------- faturamento manual provisório
+const faturar = (n, extra = {}, x = c) => W(n, "/faturamento-manual/registrar", { data: "2026-11-05", caixa: "1", canal: "BALCAO", justificativa: "Sem relatório da SAIPOS ainda (sintético)", din_vendas: "50,00", f_CREDITO_VISA_inf: "40,00", f_PIX_MAQUININHA_IFOOD_inf: "100,00", ...extra }, x);
+
+test("faturamento manual: ação explícita, provisório, com bandeira/operadora e taxa estimada; repetir não duplica", async () => {
+  const { nucleo: n } = montar({ relogio: NOVEMBRO });
+  await W(n, "/configuracoes/unidade", { nomeExibicao: "U", justificativa: "Teste." });
+  await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
+  await W(n, "/configuracoes/operadoras", { codigo: "MAQUININHA_IFOOD", nome: "Maq", processador: "MAQUININHA_IFOOD", inicio: "2026-11-01", modalidades: "PIX", justificativa: "x" });
+  await W(n, "/configuracoes/taxas-contratadas", { operadora: "MAQUININHA_IFOOD", vigenciaInicio: "2026-11-01", fonte: "Fictícia", taxas: "PIX;PIX;0,80", justificativa: "x" });
+  await fechar(n);
+  assert.equal(await receita(n), 0, "o fechamento sozinho não cria receita");
+  const r = await faturar(n);
+  assert.equal(r.provisorio, true);
+  assert.match(r.venda.fonte.idExterno, /^faturamento-manual:2026-11-05:BALCAO:1$/);
+  assert.equal(r.venda.canal, "BALCAO");
+  assert.equal(await receita(n), 19000);
+  const pix = r.pagamentos.find((p) => p.forma === "PIX");
+  assert.deepEqual([pix.processador, pix.taxaEstimada.taxaCentavos], ["MAQUININHA_IFOOD", 80]);
+  assert.equal((await faturar(n)).repetido, true);
+  assert.equal(await receita(n), 19000);
+  await rejeita(faturar(n, { canal: "IFOOD" }), CODIGO.ENTRADA_INVALIDA); // iFood/99Food só pela fonte oficial
+});
+
+const CAB2 = ["Pedido", "Código da loja", "Nome da loja", "Tipo do pedido", "Turno", "Canal de venda", "Id do pedido no parceiro", "Número do pedido no parceiro", "Data da venda", "Consumidor", "Tem cupom", "Pagamento", "Está cancelado", "Motivo do cancelamento", "Itens", "Entrega", "Valor Entregador", "Entregador", "Bairro", "CEP", "Acréscimo", "Motivo de acréscimo", "Desconto", "Motivo do desconto", "Total", "Total taxa de serviço"];
+const ficha2 = (hora, pag, v) => ["Ficha", null, null, "F", "Dia", null, null, null, `05/11/2026 ${hora}`, "Consumidor não identificado", "N", pag, "N", null, v, null, null, null, null, "", 0, "", 0, "", v, 0];
+
+test("faturamento manual × importação: a importação do mesmo dia é recusada até a substituição auditada; nunca soma duas vezes", async () => {
+  const { nucleo: n } = montar({ relogio: NOVEMBRO });
+  await W(n, "/configuracoes/unidade", { nomeExibicao: "U", justificativa: "Teste." });
+  const caixa = await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
+  await faturar(n);
+  const conteudo = xlsx([{ nome: "Vendas por período", linhas: [CAB2, ficha2("12:00", "Dinheiro", 50), ficha2("12:10", "Crédito Visa", 40), ficha2("12:20", "Pago Online via Pix", 100)] }]);
+  const r = await n.receberArquivoParaImportacao(c, { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", tipoMime: "application/octet-stream", conteudo, periodoInicio: "2026-11-05", periodoFim: "2026-11-05" });
+  const imp = (await n.confirmarImportacao(c, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia, ...(r.previa.totalDivergencias ? { aceitarPendencias: true, justificativa: "x" } : {}) })).importacao;
+  await n.gerarPropostas(c, { importacaoId: imp.id, contaCaixaId: caixa.id });
+  const lote1 = await W(n, "/propostas/aprovar-e-aplicar-prontas", { importacao: imp.id });
+  assert.equal(lote1.aplicadas, 0);
+  assert.ok(lote1.falhas.every((f) => /provisório/.test(f.mensagem)));
+  assert.equal(await receita(n), 19000, "só o provisório");
+  // Substituição: exige permissão de cancelar e justificativa; cancela (não apaga) e libera a importação.
+  await rejeita(W(n, "/faturamento-manual/substituir", { data: "2026-11-05", canal: "BALCAO", justificativa: "x" }, ctx(undefined, undefined, ["financeiro_v2.ver", "financeiro_v2.registrar"])), CODIGO.PERMISSAO_INSUFICIENTE);
+  const s = await W(n, "/faturamento-manual/substituir", { data: "2026-11-05", canal: "BALCAO", justificativa: "Relatório oficial do dia importado (sintético)." });
+  assert.deepEqual([s.canceladas, s.valorCentavos], [1, 19000]);
+  const lote2 = await W(n, "/propostas/aprovar-e-aplicar-prontas", { importacao: imp.id });
+  assert.equal(lote2.falhas.length, 0, JSON.stringify(lote2.falhas));
+  assert.equal(await receita(n), 19000, "agora só a importação: o provisório saiu");
+  // Com venda importada no dia, novo faturamento manual é recusado.
+  await rejeita(faturar(n, { caixa: "2" }), CODIGO.OPERACAO_INVALIDA);
+});

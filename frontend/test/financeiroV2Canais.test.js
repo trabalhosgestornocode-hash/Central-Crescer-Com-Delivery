@@ -29,8 +29,13 @@ test("cards: taxa pendente nunca aparece como zero; recebido não confirmado é 
 
 test("sem vendas: ausência de dados, nunca zero confirmado; iFood/99Food sem fonte oficial idem", () => {
   assert.match(can.saipos({ cards: { BALCAO: { modalidades: [], total: null } } }, PERIODO), /não é zero confirmado/);
-  assert.match(can.plataforma({ faturamentoBruto: { porCanal: [{ canal: "IFOOD", valorCentavos: 0, registros: [] }] } }, "IFOOD"), /Sem dados da fonte oficial/);
-  assert.match(can.plataforma({ faturamentoBruto: { porCanal: [] } }, "NOVENTA_E_NOVE_FOOD"), /da 99Food/);
+  const ifood = can.plataforma({ canal: "IFOOD", competencia: "2026-11", situacao: "PRELIMINAR", totais: null, historico: [], pendencias: [{ codigo: "DEMONSTRATIVO_AUSENTE", mensagem: "Sem demonstrativo oficial (não é zero)." }], conferenciaSaipos: { pedidos: 3, cancelados: 0, totalCentavos: 9000 } });
+  assert.match(ifood, /Depende do relatório oficial/);
+  assert.doesNotMatch(ifood.split("só conferência")[0], /R\$ 0,00/);
+  assert.match(ifood, /Preliminar/);
+  const noventa = can.plataforma({ canal: "NOVENTA_E_NOVE_FOOD", competencia: "2026-11", situacao: "SEM_FONTE_OFICIAL", dependeDeRelatorioOficial: true, totais: null, historico: [], pendencias: [] });
+  assert.match(noventa, /nenhum número é presumido/);
+  assert.match(noventa, /da 99Food/);
 });
 
 test("fechamento manual: a grade da tela é a mesma do servidor; sem permissão, sem formulário", () => {

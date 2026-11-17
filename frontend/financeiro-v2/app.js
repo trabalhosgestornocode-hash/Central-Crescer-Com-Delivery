@@ -127,7 +127,7 @@ function consultaDaRota() {
       return f.aba === "fechamento" ? `/api/fv2/fechamento-manual?${qs(periodo)}` : `/api/fv2/saipos?${qs(periodo)}`;
     }
     case "operadoras-taxas": return `/api/fv2/operadoras?${qs({ competencia: undefined })}`;
-    case "ifood": case "noventa-e-nove-food": return `/api/fv2/visao-geral?${qs()}`;
+    case "ifood": case "noventa-e-nove-food": return `/api/fv2/canal-plataforma?${qs({ canal: estado.rota === "ifood" ? "IFOOD" : "NOVENTA_E_NOVE_FOOD" })}`;
     case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
@@ -164,8 +164,7 @@ function desenhar(dados) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
     case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade() });
     case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade() });
-    case "ifood": return can.plataforma(dados, "IFOOD");
-    case "noventa-e-nove-food": return can.plataforma(dados, "NOVENTA_E_NOVE_FOOD");
+    case "ifood": case "noventa-e-nove-food": return can.plataforma(dados, { permissoes: permissoesDaUnidade() });
     case "configuracoes": {
       const perm = permissoesDaUnidade();
       const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [], permissoes: perm };

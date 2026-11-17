@@ -138,3 +138,27 @@ export function compararDia({ fechamentos, vendas }) {
       : "O faturamento é o das vendas importadas; o fechamento manual só confere (nunca soma).",
   };
 }
+
+/**
+ * Fase 08 (doc 44) — FATURAMENTO MANUAL PROVISÓRIO (ação explícita, separada do fechamento). Canal Presencial (BALCAO) ou
+ * Anota Aí; formas com valor > 0; justificativa obrigatória (a origem manual fica registrada na venda).
+ */
+const GRUPOS_FATURAMENTO = ["DINHEIRO", "CREDITO", "DEBITO", "PIX", "VOUCHER", "ANOTA_AI", "OUTRA"];
+export function validarFaturamentoManual(e) {
+  semCamposDesconhecidos(e, ["data", "caixa", "canal", "formas", "justificativa"], "faturamentoManual");
+  const canal = String(e.canal ?? "").toUpperCase();
+  if (!["BALCAO", "ANOTA_AI"].includes(canal)) falhar(CODIGO.ENTRADA_INVALIDA, "canal: Presencial (BALCAO) ou Anota Aí (ANOTA_AI). iFood e 99Food só pela fonte oficial.", { campo: "canal" });
+  const formas = exigirLista(e.formas, "formas", { min: 1, max: 60 }).map((f, i) => {
+    const campo = `formas[${i}]`;
+    semCamposDesconhecidos(f, ["grupo", "bandeira", "operadora", "valorCentavos"], campo);
+    const grupo = String(f.grupo ?? "").toUpperCase();
+    if (!GRUPOS_FATURAMENTO.includes(grupo)) falhar(CODIGO.ENTRADA_INVALIDA, `${campo}.grupo: use ${GRUPOS_FATURAMENTO.join(", ")}.`, { campo: `${campo}.grupo` });
+    if (grupo === "ANOTA_AI" && canal !== "ANOTA_AI") falhar(CODIGO.ENTRADA_INVALIDA, "Anota Aí online só no canal Anota Aí.", { campo: `${campo}.grupo` });
+    return {
+      grupo, bandeira: COM_BANDEIRA.includes(grupo) ? bandeiraNormalizada(exigirTexto(f.bandeira, `${campo}.bandeira`, { max: 30 })) : null,
+      operadora: grupo === "PIX" ? (f.operadora ? codigoDeOperadora(f.operadora, `${campo}.operadora`) : "DIRETO") : null,
+      valorCentavos: exigirInteiro(f.valorCentavos, `${campo}.valorCentavos`, { min: 1, max: 100_000_000_00 }),
+    };
+  });
+  return { data: exigirData(e.data, "data"), caixa: exigirTexto(e.caixa, "caixa", { max: 40 }), canal, formas, justificativa: exigirTexto(e.justificativa, "justificativa", { max: 300 }) };
+}

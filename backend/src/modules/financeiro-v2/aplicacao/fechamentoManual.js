@@ -4,11 +4,42 @@ import { EVENTO_HISTORICO, SITUACAO_VENDA, TIPO } from "../dominio/catalogos.js"
 import { ACAO } from "../dominio/contexto.js";
 import { calcularFechamento, compararDia, validarFechamentoManual } from "../dominio/fechamentoManual.js";
 import { competenciaDe, exigirData } from "../dominio/tempo.js";
-import { semCamposDesconhecidos } from "../dominio/validacao.js";
+import { exigirTexto, semCamposDesconhecidos } from "../dominio/validacao.js";
+import { operadoraNaData } from "../dominio/operadoras.js";
+import { operacoesDeVendas } from "./vendas.js";
+import { validarFaturamentoManual } from "../dominio/fechamentoManual.js";
+
+/** Venda de faturamento manual provisório: origem MANUAL com este prefixo no identificador. */
+export const PREFIXO_PROVISORIO = "faturamento-manual:";
+export const ehProvisoria = (v) => v?.fonte?.sistema === "MANUAL" && String(v.fonte.idExterno ?? "").startsWith(PREFIXO_PROVISORIO);
+
+/** Formas informadas → pagamentos da venda (mesmo de-para da SAIPOS). O que não tem destino claro fica pendente (nunca presumido). */
+function pagamentosDoFaturamentoManual(f, { config, caixaId }) {
+  const pagamentos = [];
+  const pendencias = [];
+  const cartaoCadastrado = (Array.isArray(config?.operadoras) ? config.operadoras : []).some((o) => ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"].includes(o.processador));
+  for (const x of f.formas) {
+    const base = { valorCentavos: x.valorCentavos, descricaoOriginal: `Faturamento manual: ${x.grupo}${x.bandeira ? ` ${x.bandeira}` : ""}${x.operadora ? ` ${x.operadora}` : ""}` };
+    if (x.grupo === "DINHEIRO") { if (caixaId) pagamentos.push({ ...base, forma: "DINHEIRO", contaId: caixaId }); else pendencias.push({ ...x, motivo: "Sem caixa físico único cadastrado." }); continue; }
+    if (x.grupo === "CREDITO" || x.grupo === "DEBITO") {
+      const op = operadoraNaData({ config, data: f.data, forma: x.grupo, processadores: ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"] });
+      if (op.operadora) pagamentos.push({ ...base, forma: x.grupo, bandeira: x.bandeira, processador: op.processador, operadora: op.operadora });
+      else if (!cartaoCadastrado && op.situacao === "SEM_OPERADORA") pagamentos.push({ ...base, forma: x.grupo, bandeira: x.bandeira, processador: "STONE" });
+      else pendencias.push({ ...x, motivo: op.candidatas.length ? `Operadoras ativas ao mesmo tempo: ${op.candidatas.join(", ")}.` : "Nenhuma operadora de cartão ativa na data." });
+      continue;
+    }
+    if (x.grupo === "PIX") { if (["MAQUININHA_IFOOD", "STONE", "PAGBANK"].includes(x.operadora)) pagamentos.push({ ...base, forma: "PIX", processador: x.operadora, operadora: x.operadora }); else pendencias.push({ ...x, motivo: "Pix sem operadora (direto na conta): informe a conta na conciliação." }); continue; }
+    if (x.grupo === "VOUCHER") { pagamentos.push({ ...base, forma: "VALE", bandeira: x.bandeira, processador: "OPERADORA_BENEFICIOS" }); continue; }
+    if (x.grupo === "ANOTA_AI") { pagamentos.push({ ...base, forma: "OUTRA", processador: "ANOTA_AI" }); continue; }
+    pendencias.push({ ...x, motivo: "Forma sem destino definido." });
+  }
+  return { pagamentos, pendencias };
+}
 
 const chaveDoFechamento = (data, caixa) => `fechamento-caixa:${data}:${caixa.trim().toUpperCase()}`;
 
 export function operacoesDeFechamentoManual(b) {
+  const vendas = operacoesDeVendas(b); // mesmas operações de venda (permissão, transação, idempotência, histórico)
   return {
     /**
      * Registra o fechamento de UM caixa num dia. Repetir igual não faz nada; com valores diferentes é CORREÇÃO (exige
@@ -35,6 +66,54 @@ export function operacoesDeFechamentoManual(b) {
       });
     },
 
+    /**
+     * Fase 08 (doc 44) — FATURAMENTO MANUAL PROVISÓRIO: ação EXPLÍCITA (o fechamento sozinho nunca cria receita). Uma venda
+     * por dia × caixa × canal (Presencial ou Anota Aí), origem MANUAL marcada como provisória, com as formas/bandeiras e a
+     * taxa estimada pelo motor existente. Recusada se o dia já tem vendas importadas do canal; depois de registrada, a
+     * importação SAIPOS do mesmo dia/canal é recusada até a substituição auditada (substituirFaturamentoProvisorio).
+     */
+    async registrarFaturamentoManual(ctx, entrada) {
+      const f = validarFaturamentoManual(entrada);
+      b.exigirNaoFutura(f.data, "data");
+      const contexto = await b.consultar(ctx, async (cx, tx) => {
+        const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal: f.canal } })).filter((v) => v.dataVenda === f.data);
+        const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+        const caixas = (await tx.listar(cx, TIPO.CONTA)).filter((c) => c.ativa && c.tipo === "CAIXA_FISICO");
+        return { importadas: vendas.filter((v) => v.fonte?.sistema === "SAIPOS").length, config, caixaId: caixas.length === 1 ? caixas[0].id : null };
+      });
+      if (contexto.importadas) falhar(CODIGO.OPERACAO_INVALIDA, `Já há ${contexto.importadas} venda(s) importada(s) da SAIPOS neste dia e canal: o faturamento manual duplicaria a receita.`, { motivo: "IMPORTACAO_EXISTENTE" });
+      const { pagamentos, pendencias } = pagamentosDoFaturamentoManual(f, contexto);
+      const bruto = f.formas.reduce((s, x) => s + x.valorCentavos, 0);
+      const r = await vendas.registrarVenda(ctx, {
+        canal: f.canal, dataVenda: f.data, brutoCentavos: bruto, pagamentos, ...(pendencias.length ? { pagamentoParcial: true } : {}),
+        fonte: { sistema: "MANUAL", idExterno: `${PREFIXO_PROVISORIO}${f.data}:${f.canal}:${f.caixa.trim().toUpperCase()}` },
+        descricao: `Faturamento manual PROVISÓRIO — caixa ${f.caixa} (${f.justificativa})`.slice(0, 200),
+      });
+      return { ...r, provisorio: true, pendencias };
+    },
+
+    /** Substitui (cancela, com justificativa e histórico) o faturamento provisório do dia × canal para a importação oficial entrar. */
+    async substituirFaturamentoProvisorio(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["data", "canal", "justificativa"], "substituicao");
+      const data = exigirData(entrada.data, "data");
+      const canal = String(entrada.canal ?? "").toUpperCase();
+      if (!["BALCAO", "ANOTA_AI"].includes(canal)) falhar(CODIGO.ENTRADA_INVALIDA, "canal: BALCAO ou ANOTA_AI.", { campo: "canal" });
+      const justificativa = exigirTexto(entrada.justificativa, "justificativa", { max: 400 });
+      const provisorias = await b.consultar(ctx, async (cx, tx) => {
+        const lista = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal } })).filter((v) => v.dataVenda === data && ehProvisoria(v));
+        const pagamentos = await tx.listar(cx, TIPO.PAGAMENTO_VENDA);
+        return lista.map((v) => ({ ...v, entradasEmConta: pagamentos.filter((p) => p.vendaId === v.id && p.movimentacaoId && p.situacao === "VALIDO") }));
+      });
+      if (!provisorias.length) falhar(CODIGO.NAO_ENCONTRADO, "Não há faturamento manual provisório ativo neste dia e canal.");
+      const canceladas = [];
+      for (const v of provisorias) {
+        // Entrada provisória no caixa/conta: CORREÇÃO (a movimentação fica estornada, com histórico; nenhuma saída nova).
+        for (const p of v.entradasEmConta) await vendas.estornarPagamentoDeVenda(ctx, { pagamentoId: p.id, motivo: "CORRECAO_DE_PAGAMENTO", justificativa: `Faturamento provisório substituído: ${justificativa}` });
+        canceladas.push((await vendas.cancelarVenda(ctx, { vendaId: v.id, justificativa: `Substituído pela importação oficial: ${justificativa}` })).venda?.id ?? v.id);
+      }
+      return { data, canal, canceladas: canceladas.length, valorCentavos: provisorias.reduce((s, v) => s + v.brutoCentavos, 0) };
+    },
+
     /** Fechamentos do período, agrupados por dia, com a comparação contra as vendas do dia (Presencial e Anota Aí). */
     consultarFechamentoManual(ctx, entrada = {}) {
       semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim"], "consulta");
@@ -52,7 +131,8 @@ export function operacoesDeFechamentoManual(b) {
         const dias = datas.map((data) => {
           const doDia = fechamentos.filter((f) => f.data === data).sort((a, x) => a.caixa.localeCompare(x.caixa));
           const vendasDoDia = vendas.filter((v) => v.dataVenda === data).map((v) => ({ ...v, pagamentos: porVenda.get(v.id) ?? [] }));
-          return { data, fechamentos: doDia, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }) };
+          const provisorias = vendasDoDia.filter(ehProvisoria).map((v) => ({ id: v.id, canal: v.canal, brutoCentavos: v.brutoCentavos, descricao: v.descricao, caixa: String(v.fonte.idExterno).split(":").at(-1) }));
+          return { data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }) };
         });
         return { periodoInicio: inicio, periodoFim: fim, dias };
       });

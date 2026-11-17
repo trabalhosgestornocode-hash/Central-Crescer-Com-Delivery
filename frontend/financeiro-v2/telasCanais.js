@@ -120,7 +120,7 @@ ${d.divergencias?.length ? `<ul class="lista-simples">${d.divergencias.map((x) =
   }
   // resumo
   const canalCard = (titulo, x, aba2) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(titulo)}</h3></div><p>${x?.brutoCentavos === null || x?.brutoCentavos === undefined ? '<span class="valor valor--desconhecido">Sem vendas no período</span>' : valor(x.brutoCentavos)}</p>
-<p class="nota">${x?.vendas ?? 0} venda(s) em ${x?.dias ?? 0} dia(s)${x?.semPagamento?.vendas ? ` · ${x.semPagamento.vendas} sem pagamento identificado` : ""}</p><button type="button" class="botao-link" data-aba-saipos="${aba2}">Ver detalhes</button></article>`;
+<p class="nota">${x?.vendas ?? 0} venda(s) em ${x?.dias ?? 0} dia(s)${x?.semPagamento?.vendas ? ` · ${x.semPagamento.vendas} sem pagamento identificado` : ""}${x?.provisorias?.vendas ? ` · <strong>${x.provisorias.vendas} provisória(s) manual(is): ${esc(moeda(x.provisorias.valorCentavos))}</strong>` : ""}</p><button type="button" class="botao-link" data-aba-saipos="${aba2}">Ver detalhes</button></article>`;
   return `${topo}<section class="resumo" aria-label="Faturamento SAIPOS">
 ${canalCard("Presencial", c.BALCAO, "presencial")}${canalCard("Anota Aí", c.ANOTA_AI, "anota")}
 <article class="card card--sec"><div class="card-topo"><h3>Só conferência (não é faturamento SAIPOS)</h3>${explicar("Só conferência", "Pedidos iFood e 99Food que aparecem no relatório SAIPOS. O faturamento deles vem das fontes oficiais de cada plataforma.")}</div>
@@ -152,7 +152,7 @@ export const GRADE_FECHAMENTO = Object.freeze([
 const campo = (g, s, k) => `f_${g}${s ? `_${s}` : ""}_${k}`;
 const reais = (nome, rotulo, extra = "") => `<label>${esc(rotulo)} <input type="text" name="${esc(nome)}" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" placeholder="0,00"${extra}></label>`;
 const ROTULO_LINHA = Object.freeze({ DINHEIRO: "Dinheiro (vendas)", A_CONFERIR: "Vendas sem pagamento identificado", ANOTA_AI: "Anota Aí", OUTRA: "Outras formas", CREDITO: "Crédito", DEBITO: "Débito", PIX: "Pix", VOUCHER: "Voucher" });
-const SITUACAO_LINHA = Object.freeze({ CONFERE: ["Confere", "ok"], DIVERGENTE: ["Divergente", "erro"], SO_MANUAL: ["Só no fechamento", "alerta"], SO_IMPORTADO: ["Só na importação", "alerta"] });
+const SITUACAO_LINHA = Object.freeze({ CONFERE: ["Confere", "ok"], DIVERGENTE: ["Divergente", "erro"], SO_MANUAL: ["Só no fechamento", "alerta"], SO_IMPORTADO: ["Só nas vendas", "alerta"] });
 const SITUACAO_DIA = Object.freeze({
   CONFERE: ["Confere com a importação", "ok"], DIVERGENTE: ["Divergências com a importação", "erro"], SO_FECHAMENTO_MANUAL: ["Sem relatório importado", "alerta"],
   SEM_FECHAMENTO_MANUAL: ["Sem fechamento manual", "neutro"], SEM_MOVIMENTO: ["Sem movimento", "neutro"],
@@ -191,30 +191,83 @@ ${formas.length ? `<ul class="lista-simples">${formas.map((x) => `<li><span>${es
 ${f.observacao ? `<p class="nota">${esc(f.observacao)}</p>` : ""}</details>`;
 }
 
+function formulariosFaturamento(d, ctx) {
+  if (!tem(ctx.permissoes, "financeiro_v2.registrar")) return "";
+  const linhas = GRADE_FECHAMENTO.filter(([g]) => !g.endsWith("_CONFERENCIA")).map(([g, titulo, subs]) => `<fieldset class="grade-fechamento"><legend>${esc(titulo)}</legend><div class="grade-3">
+${subs.map((x) => reais(campo(g, x, "inf"), x ? (g === "PIX" ? OPERADORAS[x] ?? x : BANDEIRAS[x] ?? x) : "Valor")).join("")}</div></fieldset>`).join("");
+  const registrar = formAcao({
+    url: "/api/fv2/acoes/faturamento-manual/registrar", titulo: "Registrar faturamento manualmente (provisório)", rotulo: "Registrar faturamento provisório", classe: "card--fechamento",
+    aviso: "Confirmo: este faturamento é PROVISÓRIO, de origem manual, sujeito a conferência. Quando o relatório SAIPOS do dia chegar, ele precisa ser substituído (operação auditada) antes da importação entrar.",
+    campos: `<p class="aviso">Use só quando não houver relatório SAIPOS importado do dia. Preencher o fechamento de caixa NÃO cria faturamento — esta é uma ação separada.</p>
+<div class="grade-3"><label>Data <input type="date" name="data" value="${esc(d.periodoFim ?? "")}" required></label><label>Caixa <input type="text" name="caixa" maxlength="40" required></label>
+<label>Canal <select name="canal" required><option value="BALCAO">Presencial</option><option value="ANOTA_AI">Anota Aí</option></select></label></div>
+${reais("din_vendas", "Vendas em dinheiro")}
+${linhas}
+<label>Justificativa (origem do valor) <input type="text" name="justificativa" maxlength="300" required placeholder="Fechamento enviado pela equipe; relatório SAIPOS ainda não importado"></label>`,
+  });
+  const substituir = tem(ctx.permissoes, "financeiro_v2.cancelar") ? formAcao({
+    url: "/api/fv2/acoes/faturamento-manual/substituir", titulo: "Substituir faturamento provisório pela importação oficial", rotulo: "Substituir provisório",
+    aviso: "Confirmo: o faturamento provisório do dia e canal será cancelado (com histórico; nada é apagado) para a venda importada entrar no lugar.",
+    campos: `<div class="grade-3"><label>Data <input type="date" name="data" required></label><label>Canal <select name="canal"><option value="BALCAO">Presencial</option><option value="ANOTA_AI">Anota Aí</option></select></label>
+<label>Justificativa <input type="text" name="justificativa" maxlength="400" required></label></div>`,
+  }) : "";
+  return `<details class="card"><summary><strong>Faturamento manual provisório</strong> — quando ainda não há relatório SAIPOS do dia</summary>${registrar}${substituir}</details>`;
+}
+
 export function fechamentoManual(d, ctx = {}) {
   const dias = d.dias ?? [];
   const lista = dias.length ? dias.map((dia) => {
     const [r, c] = SITUACAO_DIA[dia.situacao] ?? [dia.situacao, "neutro"];
     return `<section class="card" aria-label="Dia ${esc(dataBR(dia.data))}"><div class="card-topo"><h2>${esc(dataBR(dia.data))}</h2>${selo(r, c)}</div><p class="nota">${esc(dia.observacao)}</p>
 ${dia.fechamentos.map(caixaRegistrado).join("")}
-${dia.comparacao.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Fechamento manual × importação em ${esc(dataBR(dia.data))}</caption><thead><tr><th scope="col">Forma</th><th scope="col">Fechamento</th><th scope="col">Importado</th><th scope="col">Diferença</th><th scope="col">Situação</th></tr></thead><tbody>
-${dia.comparacao.map((l) => { const [rr, cc] = SITUACAO_LINHA[l.situacao] ?? [l.situacao, "neutro"]; return `<tr>${td("Forma", `${esc(ROTULO_LINHA[l.grupo] ?? l.grupo)}${l.sub ? ` · ${esc(l.grupo === "PIX" ? OPERADORAS[l.sub] ?? l.sub : BANDEIRAS[l.sub] ?? l.sub)}` : ""}`, "esquerda")}${td("Fechamento", l.manualCentavos === null ? "—" : valor(l.manualCentavos))}${td("Importado", l.importadoCentavos === null ? "—" : valor(l.importadoCentavos))}${td("Diferença", l.diferencaCentavos === null ? "—" : valor(l.diferencaCentavos))}${td("Situação", selo(rr, cc))}</tr>`; }).join("")}
+${dia.provisorias?.length ? `<p class="aviso aviso--alerta">${dia.provisorias.length} faturamento(s) manual(is) PROVISÓRIO(S) neste dia: ${dia.provisorias.map((x) => `${esc(x.canal === "ANOTA_AI" ? "Anota Aí" : "Presencial")} · caixa ${esc(x.caixa)} · ${esc(moeda(x.brutoCentavos))}`).join("; ")}. A importação SAIPOS do dia só entra depois da substituição.</p>` : ""}
+${dia.comparacao.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Fechamento manual × importação em ${esc(dataBR(dia.data))}</caption><thead><tr><th scope="col">Forma</th><th scope="col">Fechamento</th><th scope="col">Vendas registradas</th><th scope="col">Diferença</th><th scope="col">Situação</th></tr></thead><tbody>
+${dia.comparacao.map((l) => { const [rr, cc] = SITUACAO_LINHA[l.situacao] ?? [l.situacao, "neutro"]; return `<tr>${td("Forma", `${esc(ROTULO_LINHA[l.grupo] ?? l.grupo)}${l.sub ? ` · ${esc(l.grupo === "PIX" ? OPERADORAS[l.sub] ?? l.sub : BANDEIRAS[l.sub] ?? l.sub)}` : ""}`, "esquerda")}${td("Fechamento", l.manualCentavos === null ? "—" : valor(l.manualCentavos))}${td("Vendas registradas", l.importadoCentavos === null ? "—" : valor(l.importadoCentavos))}${td("Diferença", l.diferencaCentavos === null ? "—" : valor(l.diferencaCentavos))}${td("Situação", selo(rr, cc))}</tr>`; }).join("")}
 </tbody></table></div>` : ""}</section>`;
   }).join("") : nenhum("Nenhum fechamento nem venda no período.");
   return `<p class="aviso">O fechamento manual registra o que a equipe informou, por caixa. Ele <strong>confere</strong> o faturamento importado e nunca soma receita. Sem relatório importado, o dia fica como "sem relatório importado".</p>
 ${tem(ctx.permissoes, "financeiro_v2.registrar") ? formularioFechamento(d) : '<p class="nota">Você não tem permissão para registrar fechamentos nesta unidade.</p>'}
+${formulariosFaturamento(d, ctx)}
 ${lista}`;
 }
 
 // -------------------------------------------------------------------------------------------- iFood e 99Food (oficiais)
-export function plataforma(d, canal) {
-  const nome = canal === "IFOOD" ? "iFood" : "99Food";
-  const doCanal = canal === "IFOOD" ? "do iFood" : "da 99Food";
-  const x = d.faturamentoBruto?.porCanal?.find((c) => c.canal === canal);
-  return `${cabecalho(nome, "Faturamento pela fonte oficial da plataforma")}
-<section class="resumo"><article class="card card--sec"><div class="card-topo"><h3>Faturamento bruto ${esc(doCanal)} na competência</h3></div><p>${x && x.valorCentavos !== null && (x.registros?.length ?? 0) > 0 ? valor(x.valorCentavos) : '<span class="valor valor--desconhecido">Sem dados da fonte oficial</span>'}</p></article></section>
-<p class="aviso">A SAIPOS não alimenta o faturamento ${esc(doCanal)}: os pedidos dela aparecem só para conferência (SAIPOS → Conferências).
-${canal === "IFOOD" ? "O faturamento do iFood vem do demonstrativo oficial (Configurações → Taxas Stone → Registrar o demonstrativo do iFood)." : "A importação dos relatórios oficiais da 99Food será habilitada quando houver uma amostra real do arquivo."}</p>`;
+const SITUACAO_PLATAFORMA = Object.freeze({
+  PRELIMINAR: ["Preliminar — sem demonstrativo oficial", "alerta"], CONFIRMADO: ["Confirmado pela fonte oficial", "ok"],
+  CONFIRMADO_COM_REPASSE_PENDENTE: ["Confirmado · repasse pendente", "info"], SEM_FONTE_OFICIAL: ["Sem relatório oficial", "neutro"],
+});
+const REPASSE = Object.freeze({ RECEBIDO: ["Recebido", "ok"], PARCIAL: ["Parcial", "alerta"], PREVISTO: ["Previsto", "info"], ATRASADO: ["Atrasado", "erro"], SEM_RECEBIVEL: ["Sem recebível", "neutro"] });
+const depende = (texto = "Depende do relatório oficial") => `<span class="valor valor--desconhecido">${esc(texto)}</span>`;
+
+/** iFood e 99Food: SÓ fontes oficiais. Totais vêm prontos do servidor; ausência aparece como ausência (nunca zero). */
+export function plataforma(d, ctx = {}) {
+  const ifood = d.canal === "IFOOD";
+  const nome = ifood ? "iFood" : "99Food";
+  const [rs, cs] = SITUACAO_PLATAFORMA[d.situacao] ?? [d.situacao, "neutro"];
+  const t = d.totais;
+  const v = (k) => (t ? valor(t[k]) : depende());
+  const cards = [
+    ["Faturamento bruto", v("brutoCentavos"), "Vendas do período pelo relatório oficial da plataforma."],
+    ["Pedidos e cancelamentos", t && t.pedidos !== null ? `${t.pedidos} · ${t.cancelamentos}` : depende("Depende do relatório de pedidos"), t?.observacaoPedidos ?? "O relatório oficial de pedidos ainda não é importado."],
+    ["Descontos e promoções", v("descontosEPromocoesCentavos"), "Serviços e promoções sem decomposição no demonstrativo: dedução a classificar."],
+    ["Comissões", v("comissoesCentavos"), "Comissão do marketplace (não é taxa de maquininha)."],
+    ["Taxas", v("taxasCentavos"), "Taxa de transação do pagamento online."],
+    ["Mensalidade", v("mensalidadesCentavos"), "Mensalidade da plataforma no período."],
+    ["Ajustes", v("ajustesCentavos"), "Ajustes informados pela plataforma."],
+    ["Repasse previsto", v("repassePrevistoCentavos"), "Líquido a receber da plataforma (recebível). Não é depósito."],
+    ["Repasse recebido", t ? (t.repasseRecebidoCentavos ? valor(t.repasseRecebidoCentavos) : '<span class="nota">Nenhum repasse confirmado</span>') : depende(), "Só o que já foi liquidado com a entrada no banco."],
+  ].map(([titulo, conteudo, exp]) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(titulo)}</h3>${explicar(titulo, exp)}</div><p>${conteudo}</p></article>`).join("");
+  const historico = d.historico?.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Demonstrativos oficiais registrados</caption><thead><tr><th scope="col">Período</th><th scope="col">Bruto</th><th scope="col">Repasse previsto</th><th scope="col">Recebido</th><th scope="col">Repasse</th></tr></thead><tbody>
+${d.historico.map((x) => { const [r, c] = REPASSE[x.situacaoRepasse] ?? [x.situacaoRepasse, "neutro"]; return `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Bruto", valor(x.brutoCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Recebido", valor(x.repasseRecebidoCentavos))}${td("Repasse", selo(r, c))}</tr>`; }).join("")}
+</tbody></table></div>` : nenhum(ifood ? "Nenhum demonstrativo oficial registrado." : "Nenhum relatório oficial importado.");
+  const cs2 = d.conferenciaSaipos;
+  return `${cabecalho(nome, `Faturamento pela fonte oficial · ${esc(d.competencia ?? "")}`)}
+<p>${selo(rs, cs)}${d.fonteOficial ? ` <span class="nota">Fonte: ${esc(d.fonteOficial)}</span>` : ""}</p>
+${d.dependeDeRelatorioOficial ? '<p class="aviso">Os relatórios oficiais da 99Food ainda não foram fornecidos: a área está pronta, mas nenhum número é presumido. Os valores aparecerão quando o leitor do arquivo real for implementado.</p>' : ""}
+<section class="resumo" aria-label="Números do canal ${esc(nome)}">${cards}</section>
+${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de conciliação</h2><ul class="lista-simples">${d.pendencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${p.valorCentavos ? valor(p.valorCentavos) : ""}</li>`).join("")}</ul></section>` : ""}
+<section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<a class="botao-link" href="#/configuracoes">Registrar demonstrativo (Configurações → Taxas Stone)</a>' : ""}</div>${historico}</section>
+<section class="card"><h2>Pedidos no relatório SAIPOS — só conferência</h2><p class="nota">${cs2 ? `${cs2.pedidos} pedido(s) · ${cs2.cancelados} cancelado(s) · ${esc(moeda(cs2.totalCentavos))}` : "—"}. Não entram no faturamento: a SAIPOS não é fonte oficial ${ifood ? "do iFood" : "da 99Food"}.</p></section>`;
 }
 
 // ------------------------------------------------------------------------------------------------ Operadoras e Taxas

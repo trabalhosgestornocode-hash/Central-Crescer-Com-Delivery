@@ -5,6 +5,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { ESTADO_PROPOSTA, SITUACAO_REGISTRO_FONTE, SITUACAO_VENDA, TIPO } from "../dominio/catalogos.js";
 import { exigirData } from "../dominio/tempo.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
+import { ehProvisoria } from "./fechamentoManual.js";
 
 const CANAIS_SAIPOS = ["BALCAO", "ANOTA_AI"];
 
@@ -26,6 +27,7 @@ export function operacoesDoCanalSaipos(b) {
             descontosCentavos: lista.reduce((s, v) => s + (v.descontosCentavos ?? 0), 0),
             semPagamento: { vendas: lista.filter((v) => !v.pagamentoIds?.length).length, valorCentavos: lista.filter((v) => !v.pagamentoIds?.length).reduce((s, v) => s + v.brutoCentavos, 0) },
             porOrigem: { SAIPOS: daFonte("SAIPOS").length, MANUAL: daFonte("MANUAL").length },
+            provisorias: { vendas: lista.filter(ehProvisoria).length, valorCentavos: lista.filter(ehProvisoria).reduce((s, v) => s + v.brutoCentavos, 0) },
             dias: [...new Set(lista.map((v) => v.dataVenda))].length,
           }];
         }));

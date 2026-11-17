@@ -127,6 +127,8 @@ export const CONSULTAS = Object.freeze({
     const periodo = { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim };
     return { ...(await n.consultarCanalSaipos(c, periodo)), cards: Object.fromEntries(await Promise.all(["BALCAO", "ANOTA_AI"].map(async (canal) => { const r = await n.consultarLiquidoEsperado(c, { ...periodo, canal }); return [canal, { modalidades: r.modalidades, total: r.total }]; }))) };
   },
+  // Fase 07 (doc 44): iFood e 99Food só pela fonte oficial (demonstrativo iFood; 99Food aguarda o relatório real).
+  "/canal-plataforma": (n, c, p) => n.consultarCanalPlataforma(c, { canal: p.canal, competencia: p.competencia }),
   "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),

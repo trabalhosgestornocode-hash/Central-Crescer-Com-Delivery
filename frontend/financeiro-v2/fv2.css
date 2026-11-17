@@ -177,6 +177,7 @@ button.botao-link[data-composicao]:hover { background: var(--hover); color: var(
 .segmento { min-width: 3px; }
 .segmento--canal-balcao { background: var(--c-balcao); } .segmento--canal-ifood { background: var(--c-ifood); }
 .segmento--canal-anota-ai { background: var(--c-anota-ai); } .segmento--canal-outro { background: var(--c-outro); }
+.segmento--canal-noventa-e-nove-food { background: var(--c-outro); }
 .segmento--canal-sem-canal { background: repeating-linear-gradient(135deg, var(--c-sem-a) 0 3px, var(--c-sem-b) 3px 6px); }
 .segmento--deducoes_comerciais { background: var(--s-deducoes); } .segmento--custos_operacionais { background: var(--s-custos); }
 .segmento--despesas_operacionais { background: var(--s-despesas); } .segmento--resultado_financeiro { background: var(--s-financeiro); }

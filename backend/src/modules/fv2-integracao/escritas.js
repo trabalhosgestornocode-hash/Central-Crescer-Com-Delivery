@@ -162,6 +162,17 @@ const DINHEIRO_FECHAMENTO = ["abertura", "vendas", "retiradas", "reforcos", "tra
 const CAMPOS_FECHAMENTO = Object.freeze(["data", "caixa", "responsavelAbertura", "responsavelFechamento", "horaAbertura", "horaFechamento", "observacao", "justificativa",
   ...DINHEIRO_FECHAMENTO.map((k) => `din_${k}`), ...GRADE_FECHAMENTO.flatMap(([g, s]) => [campoDaGrade(g, s, "inf"), campoDaGrade(g, s, "esp")])]);
 const reaisOuNulo = (v) => (v === undefined || v === null || String(v).trim() === "" ? null : centavos(v));
+const CAMPOS_FATURAMENTO = Object.freeze(["data", "caixa", "canal", "justificativa", "din_vendas", ...GRADE_FECHAMENTO.filter(([g]) => !g.endsWith("_CONFERENCIA")).map(([g, s]) => campoDaGrade(g, s, "inf"))]);
+/** Faturamento manual: os MESMOS campos "Informado" da grade (sem as linhas só de conferência) + vendas em dinheiro. */
+function corpoDoFaturamento(b) {
+  const formas = [
+    ...(reaisOuNulo(b.din_vendas) ? [{ grupo: "DINHEIRO", valorCentavos: reaisOuNulo(b.din_vendas) }] : []),
+    ...GRADE_FECHAMENTO.filter(([g]) => !g.endsWith("_CONFERENCIA")).filter(([g, s]) => reaisOuNulo(b[campoDaGrade(g, s, "inf")])).map(([g, s]) => ({
+      grupo: g, ...(["CREDITO", "DEBITO", "VOUCHER"].includes(g) ? { bandeira: s } : {}), ...(g === "PIX" ? { operadora: s } : {}), valorCentavos: reaisOuNulo(b[campoDaGrade(g, s, "inf")]),
+    })),
+  ];
+  return { data: b.data, caixa: b.caixa, canal: b.canal, justificativa: b.justificativa, formas };
+}
 function corpoDoFechamento(b) {
   const texto = (k) => (b[k] === undefined || String(b[k]).trim() === "" ? undefined : String(b[k]));
   const dinheiro = Object.fromEntries(DINHEIRO_FECHAMENTO.map((k) => [`${k}Centavos`, reaisOuNulo(b[`din_${k}`])]));
@@ -217,14 +228,15 @@ export const ESCRITAS = Object.freeze({
   // PROPOSTA) da importação. As em revisão/aguardando evidência ficam para a revisão individual. Falha de uma não para o resto.
   "/propostas/aprovar-e-aplicar-prontas": { campos: ["importacao"], fazer: async (n, c, b) => {
     const importacaoId = id(b.importacao);
-    const todas = (await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" })).sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao)));
+    // Prontas = PROPOSTA (aprova e aplica) e APROVADA ainda não aplicada (ex.: recusada antes por conflito já resolvido: só aplica).
+    const todas = [...await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" }), ...await n.listarPropostas(c, { importacaoId, estado: "APROVADA" })].sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao)));
     const prontas = todas.slice(0, 400); // por chamada; o restante sai no clique seguinte (a resposta informa quantas faltam)
     let aplicadas = 0;
     let valorCentavos = 0;
     const falhas = [];
     for (const p of prontas) {
       try {
-        await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
+        if (p.estado === "PROPOSTA") await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
         await n.aplicarProposta(c, { propostaId: p.id });
         aplicadas += 1;
         valorCentavos += p.valorCentavos ?? 0;
@@ -306,6 +318,9 @@ export const ESCRITAS = Object.freeze({
   }) },
   // Fase 04 (doc 42): fechamento manual de UM caixa num dia (conferência; nunca receita). Grade fixa de formas (GRADE_FECHAMENTO).
   "/fechamento-manual/registrar": { campos: CAMPOS_FECHAMENTO, fazer: (n, c, b) => n.registrarFechamentoManual(c, corpoDoFechamento(b)) },
+  // Fase 08 (doc 44): faturamento manual PROVISÓRIO (ação explícita, separada do fechamento) e a substituição auditada.
+  "/faturamento-manual/registrar": { campos: CAMPOS_FATURAMENTO, fazer: (n, c, b) => n.registrarFaturamentoManual(c, corpoDoFaturamento(b)) },
+  "/faturamento-manual/substituir": { campos: ["data", "canal", "justificativa"], fazer: (n, c, b) => n.substituirFaturamentoProvisorio(c, { data: b.data, canal: b.canal, justificativa: b.justificativa }) },
   // Fase 02 (doc 40): operadoras de pagamento da unidade (cadastro, ativação/desativação, encerramento; nada é apagado).
   "/configuracoes/operadoras": { campos: ["codigo", "nome", "processador", "inicio", "encerramento", "modalidades", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarOperadora(c, {
     codigo: b.codigo, nome: b.nome, processador: b.processador, inicio: b.inicio, ...(b.encerramento ? { encerramento: b.encerramento } : {}),

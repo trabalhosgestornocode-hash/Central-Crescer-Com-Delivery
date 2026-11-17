@@ -25,7 +25,8 @@ export const SITUACAO_INDICADOR = Object.freeze({
 });
 const S = SITUACAO_INDICADOR;
 
-export const CANAIS_PRINCIPAIS = Object.freeze(["BALCAO", "IFOOD", "ANOTA_AI"]);
+// Fase 08: os quatro canais de faturamento sempre aparecem (ausência de registros = "sem dados", nunca zero confirmado).
+export const CANAIS_PRINCIPAIS = Object.freeze(["BALCAO", "ANOTA_AI", "IFOOD", "NOVENTA_E_NOVE_FOOD"]);
 export const SEM_CANAL = "NAO_IDENTIFICADO";
 
 /**
