@@ -23,7 +23,7 @@ test("iFood oficial: SAIPOS iFood rejeitado (só conferência); demonstrativo d�
   const { nucleo: n } = montar();
   const p = await canais(n);
   for (const k of ["BALCAO", "ANOTA_AI"]) { await n.aprovarProposta(c, { propostaId: p[k].id, justificativa: "Sintético." }); await n.aplicarProposta(c, { propostaId: p[k].id }); }
-  await n.rejeitarProposta(c, { propostaId: p.IFOOD.id, justificativa: "Fonte oficial do canal iFood é o demonstrativo do iFood; SAIPOS fica só para conferência." });
+  assert.equal(p.IFOOD, undefined, "o total iFood da SAIPOS não vira proposta: só conferência (doc 38/39)");
   await rejeita(W(n)("/vendas/demonstrativo-ifood", { ...DEM, liquido: "670,49" }), CODIGO.ENTRADA_INVALIDA); // não fecha
   const r = await W(n)("/vendas/demonstrativo-ifood", DEM);
   assert.deepEqual([r.receita.valorCentavos, r.receita.canal, r.retencoes.length], [100000, "IFOOD", 4]);
@@ -34,18 +34,11 @@ test("iFood oficial: SAIPOS iFood rejeitado (só conferência); demonstrativo d�
   assert.equal(ind.RESULTADO_GERENCIAL.valorCentavos, 162000 - 33000 + 50, "retenções e ajuste uma vez cada");
   const rec = (await n.consultarContasAReceber(c, { tamanho: 20 })).itens.find((x) => x.id === r.recebivel.id);
   assert.equal(rec.saldoCentavos, 67050, "o líquido é o que o iFood deve repassar — não é depósito");
-  // O agregado SAIPOS iFood (se alguém tentar aplicar depois) é recusado pela granularidade única.
+  // Granularidade única: com o demonstrativo registrado, nem a SAIPOS nem um novo arquivo de canais criam receita iFood.
   const { nucleo: n2 } = montar();
-  const p2 = await canais(n2);
   await W(n2)("/vendas/demonstrativo-ifood", DEM);
-  await n2.aprovarProposta(c, { propostaId: p2.IFOOD.id, justificativa: "Tentativa (sintético)." });
-  await rejeita(n2.aplicarProposta(c, { propostaId: p2.IFOOD.id }), CODIGO.CONFLITO_IDEMPOTENCIA);
-  // E o inverso: com o agregado SAIPOS iFood aplicado, o demonstrativo é recusado até a reversão auditada.
-  const { nucleo: n3 } = montar();
-  const p3 = await canais(n3);
-  await n3.aprovarProposta(c, { propostaId: p3.IFOOD.id, justificativa: "Sintético." });
-  await n3.aplicarProposta(c, { propostaId: p3.IFOOD.id });
-  await rejeita(W(n3)("/vendas/demonstrativo-ifood", DEM), CODIGO.CONFLITO_IDEMPOTENCIA);
-  await n3.reverterPropostaAgregada(c, { propostaId: p3.IFOOD.id, justificativa: "Substituído pelo demonstrativo oficial (sintético)." });
-  assert.equal((await W(n3)("/vendas/demonstrativo-ifood", DEM)).repetido, false);
+  const p2 = await canais(n2);
+  assert.equal(p2.IFOOD, undefined);
+  const ind2 = (await n2.apurarCompetencia(c, SET)).indicadores;
+  assert.equal(ind2.FATURAMENTO_BRUTO_PROPRIO.porCanal.find((x) => x.canal === "IFOOD")?.valorCentavos, 100000);
 });

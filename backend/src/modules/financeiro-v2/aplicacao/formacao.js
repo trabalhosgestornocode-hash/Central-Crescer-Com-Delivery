@@ -28,12 +28,15 @@ import { operacoesDeVendas } from "./vendas.js";
 import { taxasDoPeriodo } from "./taxasContratadas.js";
 import { demonstrativoIfoodQueCobre } from "./demonstrativoIfood.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
-import { deParaFormaSaipos } from "../importacao/fontes/saipos.js";
+import { deParaFormaSaipos, pagamentoDaDescricaoSaipos } from "../importacao/fontes/saipos.js";
+import { operadoraNaData } from "../dominio/operadoras.js";
 import { rotulo } from "../importacao/leitor.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
 /** Venda formada do relatório de formas de pagamento (total do dia por forma), não de pedido. */
 export const GRANULARIDADE_DIA_POR_FORMA = "DIA_POR_FORMA";
+/** Canais cujo faturamento vem SÓ da fonte oficial da plataforma (doc 38/39): o pedido da SAIPOS fica só para conferência. */
+export const CANAIS_SO_PELA_FONTE_OFICIAL = Object.freeze(["IFOOD", "NOVENTA_E_NOVE_FOOD"]);
 const CONCLUIDAS = ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"];
 const FINAIS = [E.APLICADA, E.REJEITADA, E.SUBSTITUIDA];
 const arredondar = (micros) => { const n = micros < 0; const a = BigInt(Math.abs(micros)); const c = Number((a + 5000n) / 10000n); return n ? -c : c; };
@@ -76,13 +79,30 @@ export function operacoesDeFormacao(b) {
   // ------------------------------------------------------------------------------------- interpretação por fonte
   async function propostasDeVendas(tx, cx, registros, g) {
     const saida = [];
+    const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
     for (const r of registros.filter((x) => x.tipoRegistro === "PEDIDO")) {
       const d = r.dados;
       if (d.cancelado) continue; // cancelado não forma venda; permanece no registro de origem
+      // Doc 38/39: iFood e 99Food têm faturamento SÓ pelas fontes oficiais. O pedido fica no registro (conferência), sem venda.
+      if (CANAIS_SO_PELA_FONTE_OFICIAL.includes(d.canal)) continue;
       const divergencias = [];
       const pagamentos = [];
-      if (d.formaPagamento === "DINHEIRO") pagamentos.push({ forma: "DINHEIRO", valorCentavos: r.valorCentavos, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
-      else if (d.formaPagamento === "ONLINE_PLATAFORMA" && d.canal === "IFOOD") pagamentos.push({ forma: "OUTRA", processador: "IFOOD", valorCentavos: r.valorCentavos });
+      const descricoes = d.pagamentosOriginais ?? [d.formaOriginal].filter(Boolean);
+      const dp = descricoes.length === 1 ? pagamentoDaDescricaoSaipos(descricoes[0]) : null;
+      if (d.pagamentosOriginais && descricoes.length > 1) {
+        divergencias.push({ codigo: "PAGAMENTO_MULTIPLO_SEM_VALOR", mensagem: `Pagamento com ${descricoes.length} formas ("${d.formaOriginal}") e sem o valor de cada uma: nada é dividido por suposição; o pagamento fica a conferir.` });
+      } else if (dp && (!dp.canais || dp.canais.includes(d.canal))) {
+        const base = { forma: dp.forma, valorCentavos: r.valorCentavos, descricaoOriginal: descricoes[0] };
+        if (dp.caixa) pagamentos.push({ ...base, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
+        else if (dp.adquirente) {
+          // Operadora pela DATA da venda: única ativa decide; duas ativas → conferência; nenhuma operadora de CARTÃO cadastrada → Stone (de-para da loja).
+          const op = operadoraNaData({ config, data: r.dataReferencia, forma: dp.forma, processadores: ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"] });
+          const cadastradas = (Array.isArray(config?.operadoras) ? config.operadoras : []).some((o) => ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"].includes(o.processador));
+          if (op.operadora) pagamentos.push({ ...base, processador: op.processador, operadora: op.operadora, bandeira: dp.bandeira });
+          else if (!cadastradas && op.situacao === "SEM_OPERADORA") pagamentos.push({ ...base, processador: "STONE", bandeira: dp.bandeira });
+          else divergencias.push({ codigo: op.situacao, mensagem: `"${descricoes[0]}" em ${r.dataReferencia}: ${op.candidatas.length ? `operadoras ativas ao mesmo tempo (${op.candidatas.join(", ")})` : "nenhuma operadora ativa"} — o pagamento fica a conferir.` });
+        } else pagamentos.push({ ...base, processador: dp.processador });
+      } else if (d.formaPagamento === "DINHEIRO") pagamentos.push({ forma: "DINHEIRO", valorCentavos: r.valorCentavos, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
       else if (d.formaPagamento === "ONLINE_PLATAFORMA" && d.canal === "ANOTA_AI") pagamentos.push({ forma: "OUTRA", processador: "ANOTA_AI", valorCentavos: r.valorCentavos });
       else divergencias.push({ codigo: "PAGAMENTO_A_EVIDENCIAR", mensagem: `Forma "${d.formaOriginal}" sem processador identificado: o pagamento entra quando houver evidência (ex.: transação Stone).` });
       if (!d.canal) divergencias.push({ codigo: "CANAL_NAO_RECONHECIDO", mensagem: `Canal "${d.canalOriginal}" não reconhecido.` });
@@ -96,7 +116,11 @@ export function operacoesDeFormacao(b) {
       saida.push({
         operacao: OP.VENDA, registro: r, competencia: r.competencia, dataOperacao: r.dataReferencia, natureza: "RECEITA", valorCentavos: receitaPropria,
         categoriaSugerida: d.canal ? CATEGORIA_DE_VENDA[d.canal] : null,
-        comando: { canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }), fonte: { sistema: "SAIPOS", idExterno: r.idExterno }, descricao: `Pedido ${r.idExterno}` },
+        comando: {
+          canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }),
+          fonte: { sistema: "SAIPOS", idExterno: r.idExterno ?? r.chaveIdempotencia },
+          descricao: r.idExterno ? `Pedido ${d.pedidoOriginal && d.idParceiro ? `${d.pedidoOriginal} (${d.canalOriginal})` : r.idExterno}` : `Ficha ${r.dataReferencia.split("-").reverse().join("/")} ${d.hora ?? ""}`.trim(),
+        },
         extras: { autorizacao: d.autorizacao ?? null }, divergencias,
         confianca: d.canal && pagamentos.length ? CONFIANCA.ALTA : CONFIANCA.MEDIA,
         estado: d.canal && !(d.canal === "IFOOD" && d.taxaEntregaCentavos) ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
@@ -155,6 +179,7 @@ export function operacoesDeFormacao(b) {
     // datada no último dia do período, sem pedido nem forma de pagamento inventados. Nunca convive com pedidos do mesmo
     // canal nem com o agregado diário (sem canal) no período — a aplicação recusa (conflitoDeGranularidade).
     for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_CANAL")) {
+      if (CANAIS_SO_PELA_FONTE_OFICIAL.includes(r.dados.canal)) continue; // iFood/99Food: só pela fonte oficial (doc 38/39)
       const d = r.dados;
       const inicio = d.periodoInicio ?? r.dataReferencia;
       const fim = d.periodoFim ?? r.dataReferencia;

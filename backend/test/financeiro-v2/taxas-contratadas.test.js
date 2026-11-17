@@ -102,12 +102,12 @@ test("taxas Stone do período na DRE: soma exata uma vez; bruto e líquido Stone
   const impS = await importar36(n, "STONE", "STONE_VENDAS", stoneCsv(STONE36));
   await n.gerarPropostas(c, { importacaoId: impS.id }); // sem pedidos: nenhuma venda a ligar
   const depoisImport = await resultado36(n);
-  assert.deepEqual([depoisImport.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, depoisImport.RESULTADO_GERENCIAL.valorCentavos], [92000, antes.RESULTADO_GERENCIAL.valorCentavos], "importar a Stone não muda receita nem resultado");
+  assert.deepEqual([depoisImport.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, depoisImport.RESULTADO_GERENCIAL.valorCentavos], [62000, antes.RESULTADO_GERENCIAL.valorCentavos], "importar a Stone não muda receita nem resultado");
   const r = await ESCRITAS["/importacao/reconhecer-taxas"].fazer(n, c, { importacao: impS.id, justificativa: "Tarifas conferidas por transação (sintético)." });
   const taxa = Math.floor((MICROS36 + 5000) / 10000);
   assert.deepEqual([r.resultado.length, r.resultado[0].lancamento.valorCentavos, r.resultado[0].lancamento.categoria, r.resultado[0].lancamento.taxasDoPeriodo.transacoes], [1, taxa, "TAXAS_STONE", 5]);
   const depois = await resultado36(n);
-  assert.equal(depois.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, 92000, "nem o bruto nem o líquido Stone viram receita");
+  assert.equal(depois.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, 62000, "nem o bruto nem o líquido Stone viram receita");
   assert.equal(depois.RESULTADO_GERENCIAL.valorCentavos, antes.RESULTADO_GERENCIAL.valorCentavos - taxa, "a tarifa entra uma única vez");
   // Repetir, reimportar a Stone e reimportar os canais: nada muda.
   assert.equal((await n.reconhecerTaxasDoPeriodo(c, { importacaoId: impS.id, justificativa: "De novo." })).resultado[0].repetido, true);

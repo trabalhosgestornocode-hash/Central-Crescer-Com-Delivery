@@ -23,7 +23,7 @@ const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !=
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
 export const FONTE_DO_RELATORIO = Object.freeze({
-  SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
+  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
 });
 const MIME_DA_EXTENSAO = Object.freeze({ pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
 /** Base64 estrito → bytes (até 5 MiB). */
@@ -188,7 +188,8 @@ export const ESCRITAS = Object.freeze({
   // PROPOSTA) da importação. As em revisão/aguardando evidência ficam para a revisão individual. Falha de uma não para o resto.
   "/propostas/aprovar-e-aplicar-prontas": { campos: ["importacao"], fazer: async (n, c, b) => {
     const importacaoId = id(b.importacao);
-    const prontas = (await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" })).sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao))).slice(0, 400);
+    const todas = (await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" })).sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao)));
+    const prontas = todas.slice(0, 400); // por chamada; o restante sai no clique seguinte (a resposta informa quantas faltam)
     let aplicadas = 0;
     let valorCentavos = 0;
     const falhas = [];
@@ -202,7 +203,7 @@ export const ESCRITAS = Object.freeze({
         falhas.push({ propostaId: p.id, data: p.dataOperacao, mensagem: e?.message ?? "Falha ao aplicar." });
       }
     }
-    return { importacaoId, prontas: prontas.length, aplicadas, valorCentavos, falhas };
+    return { importacaoId, prontas: prontas.length, aplicadas, valorCentavos, falhas, restantes: todas.length - prontas.length };
   } },
   // `chave` (UUID do formulário): o MESMO envio repetido (clique duplo, rede) devolve o registro já gravado, sem duplicar.
   "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {

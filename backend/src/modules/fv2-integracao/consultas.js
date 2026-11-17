@@ -26,6 +26,7 @@ const RELATORIOS_DA_PLATAFORMA = Object.freeze([
   { tipoRelatorio: "SAIPOS_DESEMPENHO_POR_ATENDENTE", nome: "SAIPOS — Canais de venda (desempenho por atendente, XLSX)" },
   { tipoRelatorio: "UNICRED_EXTRATO", nome: "Unicred — Extrato (PDF)" },
   { tipoRelatorio: "STONE_VENDAS", nome: "Stone — Vendas (XLSX)" },
+  { tipoRelatorio: "SAIPOS_VENDAS", nome: "SAIPOS — Vendas por período (XLSX, por pedido: Presencial e Anota Aí)" },
   { tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "SAIPOS — Formas de pagamento (XLSX)" },
   { tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "SAIPOS — Faturamento por dia (PDF)" },
 ]);
