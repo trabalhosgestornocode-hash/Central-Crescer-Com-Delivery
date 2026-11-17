@@ -110,8 +110,20 @@ export function compararDia({ fechamentos, vendas }) {
       somar(pegar(grupo, sub), "importadoCentavos", p.valorCentavos);
     }
   }
-  const comparacao = [...linhas.values()].sort((a, b) => `${a.grupo}|${a.sub}`.localeCompare(`${b.grupo}|${b.sub}`)).map((l) => {
-    const situacao = l.manualCentavos === null ? "SO_IMPORTADO" : l.importadoCentavos === null ? "SO_MANUAL" : l.manualCentavos === l.importadoCentavos ? "CONFERE" : "DIVERGENTE";
+  // Voucher importado SEM bandeira (a SAIPOS diz só "Vale"): compara o total do voucher do dia, sem inventar bandeira.
+  const vouchers = [...linhas.values()].filter((l) => l.grupo === "VOUCHER");
+  const agruparVoucher = vouchers.some((l) => l.sub === "NAO_INFORMADA" && l.importadoCentavos !== null);
+  const linhasFinais = agruparVoucher ? [...linhas.values()].filter((l) => l.grupo !== "VOUCHER") : [...linhas.values()];
+  if (agruparVoucher) {
+    const total = { grupo: "VOUCHER", sub: "TODAS", manualCentavos: null, importadoCentavos: null };
+    for (const l of vouchers) {
+      if (l.manualCentavos !== null) total.manualCentavos = (total.manualCentavos ?? 0) + l.manualCentavos;
+      if (l.importadoCentavos !== null) total.importadoCentavos = (total.importadoCentavos ?? 0) + l.importadoCentavos;
+    }
+    linhasFinais.push(total);
+  }
+  const comparacao = linhasFinais.sort((a, b) => `${a.grupo}|${a.sub}`.localeCompare(`${b.grupo}|${b.sub}`)).map((l) => {
+    const situacao = (l.manualCentavos ?? 0) === 0 && (l.importadoCentavos ?? 0) === 0 ? "CONFERE" : l.manualCentavos === null ? "SO_IMPORTADO" : l.importadoCentavos === null ? "SO_MANUAL" : l.manualCentavos === l.importadoCentavos ? "CONFERE" : "DIVERGENTE";
     return { ...l, diferencaCentavos: l.manualCentavos !== null && l.importadoCentavos !== null ? l.manualCentavos - l.importadoCentavos : null, situacao };
   });
   const temImportacao = relevantes.some((v) => v.fonte?.sistema === "SAIPOS");

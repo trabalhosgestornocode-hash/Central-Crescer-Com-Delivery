@@ -77,12 +77,14 @@ export function operacoesDeTaxasContratadas(b) {
 
     /** Ativa/desativa uma operadora ou define o encerramento — sem apagar nada; vendas já registradas guardam a versão usada. */
     alterarSituacaoOperadora(ctx, entrada) {
-      semCamposDesconhecidos(entrada, ["codigo", "situacao", "encerramento", "justificativa"], "situacaoOperadora");
+      semCamposDesconhecidos(entrada, ["codigo", "situacao", "encerramento", "nome", "observacao", "justificativa"], "situacaoOperadora");
       const codigo = codigoDeOperadora(entrada.codigo, "codigo");
       const situacao = entrada.situacao === undefined ? null : String(entrada.situacao).toUpperCase();
       if (situacao !== null && !SITUACAO_OPERADORA[situacao]) falhar(CODIGO.ENTRADA_INVALIDA, "situacao: use ATIVA ou INATIVA.", { campo: "situacao" });
       const encerramento = entrada.encerramento === undefined ? undefined : entrada.encerramento === null ? null : exigirData(entrada.encerramento, "encerramento");
-      if (situacao === null && encerramento === undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a situação ou o encerramento.");
+      const nome = entrada.nome === undefined ? undefined : exigirTexto(entrada.nome, "nome", { max: 80 });
+      const observacao = entrada.observacao === undefined ? undefined : exigirTexto(entrada.observacao, "observacao", { max: 300, opcional: true }) ?? null;
+      if (situacao === null && encerramento === undefined && nome === undefined && observacao === undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o que muda (situação, encerramento, nome ou observação).");
       const justificativa = exigirTexto(entrada.justificativa, "justificativa", { max: 500 });
       return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
         await tx.travar(cx, "configuracao-unidade", "EXCLUSIVA");
@@ -91,8 +93,8 @@ export function operacoesDeTaxasContratadas(b) {
         const o = lista.find((x) => x.codigo === codigo);
         if (!o) falhar(CODIGO.NAO_ENCONTRADO, "Operadora não cadastrada nesta unidade.", { codigo });
         if (encerramento && encerramento < o.inicio) falhar(CODIGO.DATA_INVALIDA, "Encerramento antes do início da operadora.", { campo: "encerramento" });
-        const mudou = { ...(situacao !== null ? { situacao } : {}), ...(encerramento !== undefined ? { encerramento } : {}) };
-        const nova = { ...o, ...mudou, historico: [...(o.historico ?? []), { evento: "ALTERACAO", ...mudou, antes: { situacao: o.situacao, encerramento: o.encerramento ?? null }, em: b.agora(), por: cx.usuarioId, justificativa }] };
+        const mudou = { ...(situacao !== null ? { situacao } : {}), ...(encerramento !== undefined ? { encerramento } : {}), ...(nome !== undefined && nome !== o.nome ? { nome } : {}), ...(observacao !== undefined ? { observacao } : {}) };
+        const nova = { ...o, ...mudou, historico: [...(o.historico ?? []), { evento: "ALTERACAO", ...mudou, antes: { situacao: o.situacao, encerramento: o.encerramento ?? null, nome: o.nome }, em: b.agora(), por: cx.usuarioId, justificativa }] };
         await b.alterar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, atual, { operadoras: lista.map((x) => (x.codigo === codigo ? nova : x)) }, EVENTO_HISTORICO.CONFIGURACAO, justificativa);
         return { operadora: nova };
       });

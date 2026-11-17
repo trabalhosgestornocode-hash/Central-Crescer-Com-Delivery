@@ -87,3 +87,12 @@ test("isolamento e permissão: outra unidade não vê; sem permissão de registr
   const soLeitura = ctx(undefined, undefined, ["financeiro_v2.ver"]);
   await rejeita(fechar(n, { caixa: "9" }, soLeitura), CODIGO.PERMISSAO_INSUFICIENTE);
 });
+
+test("comparação: voucher importado sem bandeira compara o total do dia; zero informado sem venda confere", async () => {
+  const { compararDia } = await import("../../src/modules/financeiro-v2/dominio/fechamentoManual.js");
+  const fechamentos = [{ dados: { dinheiro: { vendasCentavos: 0 }, formas: [{ grupo: "VOUCHER", bandeira: "ALELO", informadoCentavos: 1500 }, { grupo: "VOUCHER", bandeira: "OUTRA", informadoCentavos: 1000 }] } }];
+  const vendas = [{ canal: "BALCAO", fonte: { sistema: "SAIPOS" }, brutoCentavos: 2500, pagamentos: [{ forma: "VALE", valorCentavos: 2500 }] }];
+  const r = compararDia({ fechamentos, vendas });
+  assert.deepEqual(r.comparacao.map((l) => [l.grupo, l.sub, l.situacao]), [["DINHEIRO", null, "CONFERE"], ["VOUCHER", "TODAS", "CONFERE"]]);
+  assert.equal(r.situacao, "CONFERE");
+});

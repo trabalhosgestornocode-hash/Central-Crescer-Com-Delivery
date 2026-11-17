@@ -432,6 +432,31 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
   .dre .dre-linha > * > .selo { grid-column: 1 / -1; justify-self: start; margin-top: -4px; }
 }
 
+/* ------------------------------------------------------------------ canais de faturamento (Fases 04–06) */
+.canal-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; align-items: start; }
+.card--canal { margin-bottom: 0; }
+.card--canal .card-topo h3 { font-size: 15px; color: var(--texto); }
+.canal-numeros { margin: 8px 0 4px; }
+.canal-numeros dd .valor { font-weight: 600; }
+.canal-expandir { display: flex; grid-template-columns: none; justify-content: flex-start; padding: 8px 10px 8px 30px; margin-top: 8px; min-height: 40px; font-weight: 600; font-size: 13px; }
+.card--canal [hidden] { display: none; }
+.card--canal .tabela-rolavel { margin-top: 8px; }
+.grade-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.grade-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }
+.grade-fechamento { border: 1px solid var(--linha); border-radius: var(--raio-sm); padding: 10px 14px 4px; margin: 4px 0; background: var(--card); min-width: 0; }
+.grade-fechamento legend { font-weight: 650; font-size: 13px; padding: 0 4px; color: var(--texto); }
+.linha-fechamento { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; align-items: end; }
+.linha-fechamento__nome { font-size: 13px; padding-bottom: 16px; color: var(--texto); }
+.acao input[type="date"], .acao input[type="time"], .acao select, .acao textarea, .grade-fechamento input { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-width: 0; width: 100%; box-sizing: border-box; }
+.caixa-fechado, .versao-taxas { border-top: 1px solid var(--linha); padding: 8px 0; }
+.caixa-fechado summary, .versao-taxas summary { cursor: pointer; font-size: 14px; padding: 4px 0; }
+.canal-operadoras { display: grid; gap: 0; }
+@media (max-width: 760px) {
+  .grade-2, .grade-3 { grid-template-columns: minmax(0, 1fr); }
+  .linha-fechamento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .linha-fechamento__nome { grid-column: 1 / -1; padding-bottom: 2px; }
+}
+
 /* ------------------------------------------------------------------ celular */
 @media (max-width: 760px) {
   body { font-size: 14.5px; }
@@ -559,3 +584,4 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .corrigir > summary h3, .dados-conta > summary h3 { margin: 0; font-size: 14.5px; }
 @media (max-width: 640px) { .par-vinculo { grid-template-columns: 1fr; } .par-vinculo__liga { justify-self: center; transform: rotate(90deg); } }
 @media (prefers-reduced-motion: reduce) { .baixa-tile { transition: none; } }
+

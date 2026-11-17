@@ -311,8 +311,9 @@ export const ESCRITAS = Object.freeze({
     codigo: b.codigo, nome: b.nome, processador: b.processador, inicio: b.inicio, ...(b.encerramento ? { encerramento: b.encerramento } : {}),
     modalidades: Array.isArray(b.modalidades) ? b.modalidades : String(b.modalidades ?? "").split(/[,;\s]+/).filter(Boolean), ...(b.observacao ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
   }) },
-  "/configuracoes/operadoras/situacao": { campos: ["codigo", "situacao", "encerramento", "justificativa"], fazer: (n, c, b) => n.alterarSituacaoOperadora(c, {
-    codigo: b.codigo, ...(b.situacao ? { situacao: b.situacao } : {}), ...(b.encerramento !== undefined ? { encerramento: b.encerramento || null } : {}), justificativa: b.justificativa,
+  "/configuracoes/operadoras/situacao": { campos: ["codigo", "situacao", "encerramento", "nome", "observacao", "justificativa"], fazer: (n, c, b) => n.alterarSituacaoOperadora(c, {
+    codigo: b.codigo, ...(b.situacao ? { situacao: b.situacao } : {}), ...(b.encerramento !== undefined ? { encerramento: b.encerramento || null } : {}),
+    ...(b.nome ? { nome: b.nome } : {}), ...(b.observacao !== undefined ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },

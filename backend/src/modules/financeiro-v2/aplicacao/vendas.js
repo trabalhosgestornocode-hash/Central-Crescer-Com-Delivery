@@ -115,7 +115,7 @@ export function operacoesDeVendas(b) {
           const v = daVenda.get(p.vendaId);
           return {
             modalidade, bandeira: modalidade === "PIX" ? (p.operadora ?? t?.operadora ?? p.processador ?? "DIRETO") : (t?.bandeira ?? p.bandeira ?? null), brutoCentavos: p.valorCentavos,
-            situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
+            situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, liquidoEsperadoCentavos: t?.liquidoEsperadoCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
             venda: { id: v.id, data: v.dataVenda, descricao: v.descricao ?? null, canal: v.canal, fonte: v.fonte?.sistema ?? null }, descricaoOriginal: p.descricaoOriginal ?? null,
           };
         });
@@ -126,7 +126,9 @@ export function operacoesDeVendas(b) {
             .sort((a, x) => a.venda.data.localeCompare(x.venda.data));
           return { ...base, modalidade: String(entrada.modalidade), chave: entrada.chave ?? null, itens: lista.slice(0, 500), total: lista.length };
         }
-        return { ...base, modalidades: resumoPorModalidade(itens) };
+        // Total do canal (todas as modalidades) calculado AQUI: a tela não soma dinheiro.
+        const [total] = itens.length ? resumoPorModalidade(itens.map((x) => ({ ...x, modalidade: "TOTAL", bandeira: "TOTAL" }))) : [null];
+        return { ...base, modalidades: resumoPorModalidade(itens), total };
       });
     },
 

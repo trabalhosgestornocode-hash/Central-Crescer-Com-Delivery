@@ -125,7 +125,7 @@ export const CONSULTAS = Object.freeze({
   // Fases 04/05 (docs 42/43): área SAIPOS (resumo + cards de Presencial e Anota Aí) e fechamento manual com a comparação diária.
   "/saipos": async (n, c, p) => {
     const periodo = { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim };
-    return { ...(await n.consultarCanalSaipos(c, periodo)), cards: { BALCAO: (await n.consultarLiquidoEsperado(c, { ...periodo, canal: "BALCAO" })).modalidades, ANOTA_AI: (await n.consultarLiquidoEsperado(c, { ...periodo, canal: "ANOTA_AI" })).modalidades } };
+    return { ...(await n.consultarCanalSaipos(c, periodo)), cards: Object.fromEntries(await Promise.all(["BALCAO", "ANOTA_AI"].map(async (canal) => { const r = await n.consultarLiquidoEsperado(c, { ...periodo, canal }); return [canal, { modalidades: r.modalidades, total: r.total }]; }))) };
   },
   "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),

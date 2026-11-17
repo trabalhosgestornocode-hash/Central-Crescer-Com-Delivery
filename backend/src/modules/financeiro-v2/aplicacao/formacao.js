@@ -119,7 +119,7 @@ export function operacoesDeFormacao(b) {
         comando: {
           canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }),
           fonte: { sistema: "SAIPOS", idExterno: r.idExterno ?? r.chaveIdempotencia },
-          descricao: r.idExterno ? `Pedido ${d.pedidoOriginal && d.idParceiro ? `${d.pedidoOriginal} (${d.canalOriginal})` : r.idExterno}` : `Ficha ${r.dataReferencia.split("-").reverse().join("/")} ${d.hora ?? ""}`.trim(),
+          descricao: r.idExterno ? `Pedido ${d.pedidoOriginal && d.idParceiro ? `${d.pedidoOriginal} (${d.canalOriginal})` : r.idExterno}` : `Ficha ${r.dataReferencia.split("-").reverse().join("/")} ${(d.hora ?? "").slice(0, 5)}`.trim(),
         },
         extras: { autorizacao: d.autorizacao ?? null }, divergencias,
         confianca: d.canal && pagamentos.length ? CONFIANCA.ALTA : CONFIANCA.MEDIA,

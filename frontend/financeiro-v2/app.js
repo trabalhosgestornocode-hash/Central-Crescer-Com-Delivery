@@ -8,6 +8,7 @@ import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
 import * as ven from "./telasVendas.js";
+import * as can from "./telasCanais.js";
 import { esc } from "./formatar.js";
 
 const $ = (s) => document.querySelector(s);
@@ -26,12 +27,12 @@ const estado = {
   pagina: {}, calendario: null, diaSelecionado: null,
 };
 function filtrosIniciais() {
-  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
+  return { saipos: { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
 }
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["visao-geral", "dre", "saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -115,6 +116,18 @@ function consultaDaRota() {
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
+    case "saipos": {
+      // Período da área SAIPOS: o escolhido; senão o mês da competência (até a data-base, se for o mês corrente).
+      if (f.competenciaBase !== estado.competencia || !f.inicio || !f.fim) {
+        const fimMes = fimDoMes(estado.competencia);
+        Object.assign(f, { competenciaBase: estado.competencia, inicio: inicioDoMes(estado.competencia), fim: estado.dataBase && estado.dataBase >= inicioDoMes(estado.competencia) && estado.dataBase < fimMes ? estado.dataBase : fimMes });
+        estado.filtros.saipos = f;
+      }
+      const periodo = { competencia: undefined, periodoInicio: f.inicio, periodoFim: f.fim };
+      return f.aba === "fechamento" ? `/api/fv2/fechamento-manual?${qs(periodo)}` : `/api/fv2/saipos?${qs(periodo)}`;
+    }
+    case "operadoras-taxas": return `/api/fv2/operadoras?${qs({ competencia: undefined })}`;
+    case "ifood": case "noventa-e-nove-food": return `/api/fv2/visao-geral?${qs()}`;
     case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
@@ -149,6 +162,10 @@ function desenhar(dados) {
   const f = estado.filtros[estado.rota] ?? {};
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
+    case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade() });
+    case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade() });
+    case "ifood": return can.plataforma(dados, "IFOOD");
+    case "noventa-e-nove-food": return can.plataforma(dados, "NOVENTA_E_NOVE_FOOD");
     case "configuracoes": {
       const perm = permissoesDaUnidade();
       const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [], permissoes: perm };
@@ -248,6 +265,8 @@ function detalheDe(chave) {
   if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
   // 08E: prévia do vínculo de uma saída do extrato com a conta — "vinculo:<conta>|<saída>".
   if (tipo === "vinculo") { const [obrigacao, movimentacao] = id.split("|"); return [`/api/fv2/vinculo-extrato?${qs({ competencia: undefined, obrigacao, movimentacao })}`, (d) => tes.detalheVinculoExtrato(d, ctxPainel())]; }
+  // Fase 05: lançamentos que compõem um card — "card:<canal>|<modalidade>|<bandeira/operadora>|<início>|<fim>".
+  if (tipo === "card") { const [canal, modalidade, chave, periodoInicio, periodoFim] = id.split("|"); return [`/api/fv2/vendas/liquido-esperado?${qs({ competencia: undefined, canal, modalidade, chave, periodoInicio, periodoFim })}`, (d) => can.detalheDoCard(d)]; }
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
@@ -392,6 +411,7 @@ function aplicarFiltroLocal(form) {
   const dados = Object.fromEntries(new FormData(form).entries());
   const anterior = estado.filtros[rota] ?? {};
   estado.filtros[rota] = { ...dados, soCompetencia: form.querySelector('[name="soCompetencia"]')?.checked ?? false };
+  if (rota === "saipos") estado.filtros.saipos.competenciaBase = estado.competencia; // período escolhido vale para a competência atual
   if (rota === "vendas-e-recebimentos") {
     // Valor digitado em reais → centavos por texto (sem ponto flutuante); inválido é ignorado.
     estado.filtros[rota].valorMinimoCentavos = ven.reaisParaCentavos(dados.valorMinimo);
@@ -424,6 +444,12 @@ document.addEventListener("click", (e) => {
     estado.filtros["vendas-e-recebimentos"] = { aba: aba.dataset.aba, canal: anterior.canal, forma: anterior.forma, processador: anterior.processador };
     estado.pagina["vendas-e-recebimentos"] = 1;
     carregar().then(() => document.querySelector(`[data-aba="${aba.dataset.aba}"]`)?.focus());
+    return;
+  }
+  const abaSaipos = e.target.closest("[data-aba-saipos]");
+  if (abaSaipos) {
+    estado.filtros.saipos = { ...(estado.filtros.saipos ?? {}), aba: abaSaipos.dataset.abaSaipos };
+    carregar().then(() => document.querySelector(`nav [data-aba-saipos="${abaSaipos.dataset.abaSaipos}"]`)?.focus());
     return;
   }
   const secaoConfig = e.target.closest("[data-secao-config]");
