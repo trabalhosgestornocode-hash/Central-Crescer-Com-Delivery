@@ -31,6 +31,11 @@ begin
   end loop;
 end $$;
 
+-- A varredura acima apaga TODA CHECK que cita 'ANOTA_AI' nessas tabelas, e isso inclui a da origem da venda (SAIPOS, IFOOD,
+-- ANOTA_AI, MANUAL), que não deve mudar. Ela volta aqui, idêntica à da fundação (0001): nenhuma linha atual a viola.
+alter table fv2_venda add constraint fv2_venda_fonte_sistema_check
+  check (fonte_sistema in ('SAIPOS', 'IFOOD', 'ANOTA_AI', 'MANUAL'));
+
 alter table fv2_lancamento add constraint fv2_lancamento_canal_valido
   check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
 alter table fv2_venda add constraint fv2_venda_canal_valido

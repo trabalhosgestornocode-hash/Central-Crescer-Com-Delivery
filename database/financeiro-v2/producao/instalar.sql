@@ -3550,7 +3550,7 @@ grant execute on function fv2_painel_administradores(uuid, uuid) to fv2_autorida
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
 insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23', '7cf93b58ab340e8da8b4414205cac63155129e20bbf5525d8338fcdaa3514687');
 
--- ------------------------------------------------------------------------- 0024_canais_e_operadoras.sql (arquivo 72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4)
+-- ------------------------------------------------------------------------- 0024_canais_e_operadoras.sql (arquivo 06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59)
 grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
 -- =====================================================================================================================
 -- Financeiro v2 — migração 0024: CANAL 99FOOD e OPERADORAS de pagamento (Fase 02, doc 40)
@@ -3585,6 +3585,11 @@ begin
   end loop;
 end $$;
 
+-- A varredura acima apaga TODA CHECK que cita 'ANOTA_AI' nessas tabelas, e isso inclui a da origem da venda (SAIPOS, IFOOD,
+-- ANOTA_AI, MANUAL), que não deve mudar. Ela volta aqui, idêntica à da fundação (0001): nenhuma linha atual a viola.
+alter table fv2_venda add constraint fv2_venda_fonte_sistema_check
+  check (fonte_sistema in ('SAIPOS', 'IFOOD', 'ANOTA_AI', 'MANUAL'));
+
 alter table fv2_lancamento add constraint fv2_lancamento_canal_valido
   check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
 alter table fv2_venda add constraint fv2_venda_canal_valido
@@ -3599,7 +3604,7 @@ alter table fv2_canal_processador add constraint fv2_canal_processador_codigo_ba
   check ((papel = 'CANAL' and codigo_base in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'))
       or (papel = 'PROCESSADOR' and codigo_base in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO')));
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0024_canais_e_operadoras.sql', '72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4', '72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4');
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0024_canais_e_operadoras.sql', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59');
 
 -- ------------------------------------------------------------------------- 0025_fechamento_manual_caixa.sql (arquivo ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2)
 grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;

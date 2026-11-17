@@ -408,6 +408,21 @@ function aplicarFiltrosDaUrl({ comRevisao = false } = {}) {
 function aplicarFiltroLocal(form) {
   const rota = form.dataset.filtroLocal;
   const dados = Object.fromEntries(new FormData(form).entries());
+  // Início depois do fim: avisa AQUI, sem recarregar. Recarregar trocaria a tela (e o próprio filtro) por um erro e a pessoa
+  // não teria onde corrigir a data.
+  let aviso = form.parentElement?.querySelector("[data-aviso-periodo]");
+  if (dados.inicio && dados.fim && dados.fim < dados.inicio) {
+    if (!aviso) {
+      aviso = document.createElement("p");
+      aviso.className = "aviso aviso--alerta";
+      aviso.setAttribute("role", "alert");
+      aviso.dataset.avisoPeriodo = "";
+      form.after(aviso);
+    }
+    aviso.textContent = "A data inicial está depois da final. Corrija o período para atualizar a tela.";
+    return;
+  }
+  aviso?.remove();
   const anterior = estado.filtros[rota] ?? {};
   estado.filtros[rota] = { ...dados, soCompetencia: form.querySelector('[name="soCompetencia"]')?.checked ?? false };
   if (rota === "saipos") estado.filtros.saipos.competenciaBase = estado.competencia; // período escolhido vale para a competência atual

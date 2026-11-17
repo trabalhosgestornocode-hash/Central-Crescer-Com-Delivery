@@ -379,6 +379,21 @@ export function operacoesDeFormacao(b) {
    * TOTAL DO PERÍODO POR CANAL × (pedidos daquele canal no período | agregado diário sem canal no período | outro total do
    * mesmo canal com período sobreposto).
    */
+  /**
+   * Proposta de VENDA cuja venda foi CANCELADA não bloqueia mais nada: o faturamento que ela representava saiu (cancelamento
+   * lógico, com histórico). É o que permite corrigir uma importação por forma de pagamento reimportando por pedido (doc 45 §7).
+   * Proposta sem venda própria (agregada, total do período) continua valendo como antes.
+   */
+  async function semVendaCancelada(tx, cx, lista) {
+    const vivas = [];
+    for (const x of lista) {
+      const ef = x.operacao === OP.VENDA ? (x.efeitos ?? []).find((e) => e.tipo === TIPO.VENDA) : null;
+      if (ef && (await tx.obter(cx, TIPO.VENDA, ef.id))?.situacao === "CANCELADA") continue;
+      vivas.push(x);
+    }
+    return vivas;
+  }
+
   async function conflitoDeGranularidade(tx, cx, proposta) {
     if (![OP.VENDA, OP.VENDA_AGREGADA].includes(proposta.operacao)) return null;
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
@@ -393,7 +408,7 @@ export function operacoesDeFormacao(b) {
     }
     if (proposta.operacao === OP.VENDA) {
       const porForma = (p) => p.granularidade === GRANULARIDADE_DIA_POR_FORMA;
-      const mesmoDia = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
+      const mesmoDia = await semVendaCancelada(tx, cx, await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } }));
       const outraGranularidade = mesmoDia.find((x) => x.id !== proposta.id && porForma(x) !== porForma(proposta));
       if (outraGranularidade) return outraGranularidade;
     }
@@ -405,8 +420,8 @@ export function operacoesDeFormacao(b) {
     const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
     const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
     const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;
-    const vendas = [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
-      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia);
+    const vendas = await semVendaCancelada(tx, cx, [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
+      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia));
     const meu = periodo(proposta);
     for (const x of vendas) {
       const dele = periodo(x);

@@ -88,7 +88,8 @@ h1, h2, h3, h4 { line-height: 1.25; }
 /* números */
 .valor { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .valor--negativo { color: var(--erro); }
-.valor--desconhecido { color: var(--suave); font-style: italic; font-weight: 400; }
+.valor--desconhecido { color: var(--suave); font-style: italic; font-weight: 400; white-space: normal; overflow-wrap: anywhere; }
+.card--sec .card-topo + p .valor--desconhecido, .card--sec h3 + p .valor--desconhecido { font-size: 15px; line-height: 1.35; letter-spacing: 0; }
 .numero-principal { font-size: clamp(32px, 5.4vw, 46px); font-weight: 700; line-height: 1.1; letter-spacing: -.025em; margin: 10px 0 18px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .numero-principal--medio { font-size: clamp(26px, 4vw, 32px); margin-bottom: 6px; letter-spacing: -.02em; }
 .nota-zero { display: inline-block; margin-left: 12px; font-size: 13px; font-weight: 600; color: var(--ok); vertical-align: middle; letter-spacing: 0; }

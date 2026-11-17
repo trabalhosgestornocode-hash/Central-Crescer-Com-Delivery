@@ -78,10 +78,13 @@ alimenta iFood nem 99Food". Os valores exatos ficam fora deste documento públic
 
 **Plano (depende da decisão D1 do proprietário):**
 1. Congelar o estado: listar as vendas de formas de pagamento do período e seus recebíveis, só leitura.
-2. Cancelar pela rota existente `/vendas/cancelar` (justificativa e trilha), em lotes pequenos, conferindo o total a cada lote.
-3. Importar o relatório por pedido do mesmo período (leitor `SAIPOS_VENDAS`), revisar as pendências, e aplicar as propostas em lotes de 400.
-4. Conferir contra a contagem independente (Presencial, Anota Aí bruto e descontos, zero de iFood e 99Food pela SAIPOS).
-5. Ensaiar tudo antes em cópia local sanitizada.
+2. **Antes de cancelar**, estornar as entradas em dinheiro no caixa dessas vendas pela rota de estorno de pagamento, com o motivo
+   "correção de pagamento" (anula a entrada inteira; só vale se a entrada ainda não foi conciliada). O cancelamento da venda é
+   **recusado** enquanto houver dinheiro já registrado em conta. *(Correção feita na Fase 10: a versão anterior deste plano não tinha este passo.)*
+3. Cancelar pela rota existente `/vendas/cancelar` (justificativa e trilha), em lotes pequenos, conferindo o total a cada lote.
+4. Importar o relatório por pedido do mesmo período (leitor `SAIPOS_VENDAS`), revisar as pendências, e aplicar as propostas em lotes de 400.
+5. Conferir contra a contagem independente (Presencial, Anota Aí bruto e descontos, zero de iFood e 99Food pela SAIPOS).
+6. Ensaiar tudo antes em cópia local sanitizada.
 
 ## 8. Pendências externas
 - **D1:** autorização para cancelar as vendas de 16/11 e reimportar por pedido.

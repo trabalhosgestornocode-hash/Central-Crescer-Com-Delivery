@@ -310,11 +310,11 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
 }
 
 /**
- * ATUALIZAÇÃO incremental de um banco que já tem o Financeiro v2 instalado (produção: 0001–0021, instalação de 15/11).
+ * ATUALIZAÇÃO incremental de um banco que já tem o Financeiro v2 instalado (produção em 17/11/2026: 0001–0023, conferidas por nome e hash contra o Git).
  * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
  * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
  */
-export const BASE_INSTALADA = "0022";
+export const BASE_INSTALADA = "0023";
 export function atualizar(base = BASE_INSTALADA) {
   const ms = listarMigracoes();
   const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);
