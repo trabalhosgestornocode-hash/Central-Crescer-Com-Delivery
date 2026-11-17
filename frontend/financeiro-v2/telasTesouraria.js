@@ -236,6 +236,7 @@ ${precisaEscolher ? `<label>Documento que comprova o pagamento <select name="doc
 ${ant ? `<label class="caixa-marcar"><input type="checkbox" name="pagamentoAntecipado" required> É pagamento ANTECIPADO de ${esc(ant.contraparte ?? "este beneficiário")}: conferi beneficiário e valor no comprovante (saída ${esc(dataBR(ant.dataSaida))}, ${esc(String(ant.dias))} dia(s) antes da emissão em ${esc(dataBR(ant.dataEmissao))}).</label>` : ""}` }) : "";
   const antes = e.efeito.obrigacao.saldoAntesCentavos;
   return `${fechar("Confirmar pagamento pelo extrato")}
+<p class="nota">Prévia: nada foi gravado. Confira e confirme abaixo.</p>
 <div class="par-vinculo" role="group" aria-label="Conta e saída que serão ligadas">
   <div class="par-vinculo__lado"><span class="par-vinculo__rotulo">A conta</span><strong>${esc(o.fornecedor?.nome ?? descricaoLegivel(o.descricao))}</strong><span class="nota">${esc(descricaoLegivel(o.descricao))} · vence ${esc(dataBR(o.vencimento))}</span><span class="par-vinculo__valor">${esc(moeda(antes))}</span></div>
   <span class="par-vinculo__liga" aria-hidden="true">⇄</span>
@@ -262,8 +263,8 @@ ${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes
 export function diaDoCalendario(d) {
   if (!d) return "";
   const dia = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${d.data}T12:00:00Z`));
-  const emAberto = d.titulos.filter((t) => t.saldoCentavos > 0);
-  const totalAberto = emAberto.reduce((s, t) => s + t.saldoCentavos, 0);
+  // Total em aberto do dia: calculado no servidor (dia.emAbertoCentavos) — a tela não soma dinheiro.
+  const totalAberto = d.emAbertoCentavos ?? null;
   const cartao = (t) => {
     const quitada = !(t.saldoCentavos > 0);
     return `<li class="conta-dia${quitada ? " conta-dia--quitada" : ""}"><div class="conta-dia__txt"><strong>${esc(t.fornecedor ?? "Fornecedor não identificado")}</strong><span>${esc(descricaoLegivel(t.descricao))}${t.parcela?.total > 1 ? ` (${t.parcela.numero}/${t.parcela.total})` : ""}${t.recorrente ? " · recorrente" : ""}</span></div>
