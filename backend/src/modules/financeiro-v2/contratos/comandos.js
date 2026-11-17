@@ -535,7 +535,7 @@ export function validarMudancaDeEstado(e) {
  * despesa: só liquida (baixa) as contas com parte do valor ainda não alocado da saída.
  */
 export function validarVinculoDeExtrato(e) {
-  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar", "pagamentoAntecipado"], "vinculo");
+  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar", "pagamentoAntecipado", "jurosCentavos"], "vinculo");
   const alocacoes = exigirLista(e.alocacoes, "alocacoes", { min: 1, max: 50 }).map((a, i) => {
     semCamposDesconhecidos(a, ["obrigacaoId", "valorCentavos"], `alocacoes[${i}]`);
     return { obrigacaoId: exigirUuid(a.obrigacaoId, `alocacoes[${i}].obrigacaoId`), valorCentavos: exigirCentavos(a.valorCentavos, `alocacoes[${i}].valorCentavos`, { positivo: true }) };
@@ -549,6 +549,8 @@ export function validarVinculoDeExtrato(e) {
     confirmar: e.confirmar === true,
     // Execução 09: identificação EXPLÍCITA de pagamento antecipado (saída anterior à emissão da conta).
     pagamentoAntecipado: e.pagamentoAntecipado === true,
+    // Parte do valor vinculado que é JURO/MULTA do fornecedor (já INCLUÍDA em alocacoes[0].valorCentavos): vira ajuste da própria conta.
+    jurosCentavos: e.jurosCentavos === undefined || e.jurosCentavos === null || e.jurosCentavos === 0 ? 0 : exigirCentavos(e.jurosCentavos, "jurosCentavos", { positivo: true }),
   };
 }
 

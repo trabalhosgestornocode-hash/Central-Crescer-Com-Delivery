@@ -634,3 +634,99 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 @media (max-width: 640px) { .par-vinculo { grid-template-columns: 1fr; } .par-vinculo__liga { justify-self: center; transform: rotate(90deg); } }
 @media (prefers-reduced-motion: reduce) { .baixa-tile { transition: none; } }
 
+
+/* ------------------------------------------------------------------ Contas a pagar: calendário e lista (visual 2)
+   Escopo em .cal-bloco / .linha-conta para não alterar o calendário dos canais. Só tokens do sistema (claro e escuro). */
+.resumo--status { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.resumo-item { border-radius: var(--raio); border-left: 4px solid var(--linha-forte); }
+.resumo-item .card { border-top-left-radius: 0; border-bottom-left-radius: 0; height: 100%; }
+.resumo-item--info { border-left-color: var(--info); } .resumo-item--erro { border-left-color: var(--erro); }
+.resumo-item--ok { border-left-color: var(--ok); } .resumo-item--alerta { border-left-color: var(--alerta); }
+
+.cal-layout { display: grid; gap: 16px; align-items: start; }
+.cal-bloco { min-width: 0; }
+.cal-painel { margin: 0; }
+.cal-painel__vazio { margin: 0; display: grid; gap: 4px; color: var(--suave); font-size: 14px; }
+.cal-painel__vazio strong { color: var(--texto); font-size: 16px; font-weight: 650; }
+@media (min-width: 1100px) {
+  .cal-layout { grid-template-columns: minmax(0, 1fr) 360px; }
+  .cal-painel { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+}
+
+.legenda--cal { gap: 6px 18px; }
+.legenda--cal li { color: var(--suave); }
+.cal-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--texto); }
+.cal-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
+.cal-chip--info { --c: var(--info); } .cal-chip--erro { --c: var(--erro); } .cal-chip--ok { --c: var(--ok); } .cal-chip--alerta { --c: var(--alerta); }
+.legenda--cal .cal-chip i { width: 10px; height: 10px; }
+
+.cal-bloco .calendario { gap: 6px; margin-bottom: 0; }
+.cal-bloco .cal-cab { text-align: left; padding: 2px 4px 4px; font-weight: 600; }
+.cal-bloco .cal-cab--fim { color: var(--suave); opacity: .75; }
+.cal-bloco .cal-dia { --faixa: var(--linha-forte); position: relative; min-height: 96px; padding: 8px 8px 8px 11px; gap: 3px; grid-template-rows: auto auto 1fr; border: 1px solid var(--linha); border-left: 4px solid var(--faixa); transition: border-color .12s, box-shadow .12s, background .12s; }
+.cal-bloco .cal-dia--erro { --faixa: var(--erro); } .cal-bloco .cal-dia--info { --faixa: var(--info); }
+.cal-bloco .cal-dia--ok { --faixa: var(--ok); } .cal-bloco .cal-dia--alerta { --faixa: var(--alerta); }
+.cal-bloco .cal-dia--alerta { border-left-style: dashed; }
+.cal-bloco .cal-dia--fim:not(.cal-dia--erro):not(.cal-dia--info):not(.cal-dia--ok):not(.cal-dia--alerta) { background: var(--superficie); }
+.cal-bloco .cal-dia--livre { background: transparent; border: 1px dashed var(--linha); border-left: 4px solid transparent; color: var(--suave); }
+.cal-bloco .cal-dia--livre.cal-dia--fim { background: transparent; opacity: .7; }
+.cal-bloco .cal-dia:hover { background: var(--hover); border-color: var(--linha-forte); border-left-color: var(--faixa); }
+.cal-bloco .cal-dia--sel { outline: none; background: var(--card); border-color: var(--texto); border-left-color: var(--faixa); box-shadow: var(--sombra); z-index: 1; }
+.cal-bloco .cal-dia:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.cal-bloco .cal-num { font-size: 13px; font-weight: 600; color: var(--suave); line-height: 1; display: inline-grid; place-items: center; min-width: 22px; height: 22px; margin: -3px 0 0 -3px; padding: 0 4px; border-radius: 99px; justify-self: start; }
+.cal-bloco .cal-dia:not(.cal-dia--livre) .cal-num { color: var(--texto); }
+.cal-bloco .cal-dia--hoje { box-shadow: none; }
+.cal-bloco .cal-dia.cal-dia--hoje .cal-num { background: var(--texto); color: var(--card); }
+.cal-bloco .cal-valor { font-size: 14px; font-weight: 650; color: var(--texto); letter-spacing: -.01em; line-height: 1.2; }
+.cal-bloco .cal-marcas { display: flex; flex-wrap: wrap; gap: 3px 8px; align-self: end; }
+
+@media (max-width: 640px) {
+  .cal-bloco .calendario { gap: 3px; }
+  .cal-bloco .cal-dia { min-height: 54px; padding: 4px 3px 4px 6px; border-left-width: 3px; }
+  .cal-bloco .cal-num { font-size: 12px; min-width: 18px; height: 18px; }
+  .cal-bloco .cal-cab { padding: 2px 0 4px; text-align: center; font-size: 11px; }
+  .cal-bloco .cal-marcas { gap: 2px 5px; } .cal-bloco .cal-chip { font-size: 10px; } .cal-bloco .cal-chip i { width: 6px; height: 6px; }
+  .cal-bloco .cal-valor { display: none; }
+  .resumo--status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* painel do dia: o cabeçalho ganha peso */
+.cal-painel .dia-cab { padding-bottom: 10px; border-bottom: 1px solid var(--linha); margin-bottom: 12px; }
+.cal-painel .conta-dia--quitada .conta-dia__valor { color: var(--suave); }
+
+/* lista de contas: faixa de status por linha, etiqueta de data e barra de pago */
+.linha-conta > td:first-child { box-shadow: inset 4px 0 0 var(--faixa, var(--linha-forte)); }
+.linha-conta--erro { --faixa: var(--erro); } .linha-conta--alerta { --faixa: var(--alerta); }
+.linha-conta--ok { --faixa: var(--ok); } .linha-conta--info { --faixa: var(--info); }
+.linha-conta .col-data { width: 76px; padding-left: 16px; }
+.data-etiqueta { display: inline-grid; justify-items: center; gap: 1px; min-width: 48px; padding: 5px 6px 4px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--superficie); line-height: 1; }
+.data-etiqueta__dia { font-size: 19px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--texto); }
+.data-etiqueta__mes { font-size: 10.5px; font-weight: 600; color: var(--suave); white-space: nowrap; }
+.linha-conta--erro .data-etiqueta { background: var(--erro-bg); border-color: transparent; } .linha-conta--erro .data-etiqueta__dia { color: var(--erro); }
+.linha-conta--ok .data-etiqueta { opacity: .75; }
+.linha-conta td[data-rotulo="Saldo"] .valor { font-weight: 700; }
+.barra-pago { display: block; height: 4px; margin-top: 6px; border-radius: 99px; background: var(--neutro-bg); overflow: hidden; min-width: 56px; }
+.barra-pago > span { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
+@media (max-width: 640px) {
+  .linha-conta { border-left: 4px solid var(--faixa, var(--linha-forte)); }
+  .linha-conta > td:first-child { box-shadow: none; }
+  .linha-conta .col-data { width: 100%; padding-left: 0; }
+  .linha-conta .data-etiqueta { grid-auto-flow: column; gap: 6px; align-items: baseline; justify-content: start; padding: 4px 8px; }
+  .linha-conta .col-data::before { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .cal-bloco .cal-dia { transition: none; } }
+
+.cal-painel .dia-cab h2 { text-transform: none; }
+.cal-painel .dia-cab h2::first-letter { text-transform: uppercase; }
+.tabela--contas thead th:nth-child(2) { text-align: left; }
+
+/* Baixa pelo extrato: o que é a diferença entre a saída e a conta */
+.diferenca-saida { margin: 0 0 12px; padding: 12px 14px 14px; border: 1px solid var(--linha-forte); border-left: 4px solid var(--alerta); border-radius: var(--raio-sm); background: var(--card); min-width: 0; }
+.diferenca-saida legend { padding: 0 6px; font-weight: 650; font-size: 14px; color: var(--texto); }
+.diferenca-saida__opcoes { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.acao .escolha-diferenca { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; margin: 0; padding: 10px 12px; color: var(--texto); font-size: 14px; background: var(--superficie); border: 1px solid var(--linha); border-radius: var(--raio-sm); cursor: pointer; }
+.acao .escolha-diferenca:hover { border-color: var(--linha-forte); }
+.acao .escolha-diferenca:has(input:checked) { border-color: var(--texto); background: var(--card); box-shadow: var(--sombra); }
+.acao .escolha-diferenca input { width: 18px; height: 18px; min-height: 0; padding: 0; margin: 2px 0 0; accent-color: var(--marca-escura); }
+.escolha-diferenca > span { display: grid; gap: 2px; min-width: 0; }
+.escolha-diferenca .nota { font-size: 13px; color: var(--suave); }
