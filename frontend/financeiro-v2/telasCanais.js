@@ -2,6 +2,7 @@
 // Manual, Conferências), iFood e 99Food (fontes oficiais) e Operadoras e Taxas. Só apresentação: os números vêm prontos do
 // núcleo (nenhum cálculo de dinheiro aqui). Taxa pendente nunca aparece como zero; estimativa nunca aparece como recebido.
 import { dataBR, esc, moeda, percentual } from "./formatar.js";
+import { calendarioCanal } from "./telasCalendarioCanais.js";
 
 const valor = (c) => `<span class="${c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor"}">${esc(moeda(c))}</span>`;
 const selo = (rotulo, classe, titulo = "") => `<span class="selo selo--${classe}"${titulo ? ` title="${esc(titulo)}"` : ""}>${esc(rotulo)}</span>`;
@@ -101,8 +102,9 @@ export function saipos(d, f, ctx = {}) {
   const topo = `${cabecalho("SAIPOS", sub)}${abas(aba)}${filtroPeriodo("saipos", { ...f, ...periodo }, `<input type="hidden" name="aba" value="${esc(aba)}">`)}`;
   if (aba === "fechamento") return topo + fechamentoManual(d, ctx);
   const c = d.canais ?? {};
-  if (aba === "presencial") return `${topo}<p class="aviso">Vendas presenciais (fichas) do relatório SAIPOS. Pix da maquininha do iFood é presencial — não é o canal iFood.</p>${cardsDoCanal(d.cards?.BALCAO, { canal: "BALCAO", ...periodo })}`;
-  if (aba === "anota") return `${topo}<p class="aviso">Pedidos do Anota Aí: faturamento separado do Presencial.</p>${cardsDoCanal(d.cards?.ANOTA_AI, { canal: "ANOTA_AI", ...periodo })}`;
+  const calendario = () => calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null });
+  if (aba === "presencial") return `${topo}<p class="aviso">Vendas presenciais (fichas) do relatório SAIPOS. Pix da maquininha do iFood é presencial — não é o canal iFood.</p>${calendario()}${cardsDoCanal(d.cards?.BALCAO, { canal: "BALCAO", ...periodo })}`;
+  if (aba === "anota") return `${topo}<p class="aviso">Pedidos do Anota Aí: faturamento separado do Presencial.</p>${calendario()}${cardsDoCanal(d.cards?.ANOTA_AI, { canal: "ANOTA_AI", ...periodo })}`;
   if (aba === "importacoes") {
     const pode = tem(ctx.permissoes, "financeiro_v2.importar");
     return `${topo}<section class="card"><div class="card-topo"><h2>Relatórios importados</h2>${pode ? '<button type="button" class="botao" data-detalhe="importar:saipos">Importar relatório</button>' : ""}</div>
@@ -211,7 +213,7 @@ ${linhas}
     campos: `<div class="grade-3"><label>Data <input type="date" name="data" required></label><label>Canal <select name="canal"><option value="BALCAO">Presencial</option><option value="ANOTA_AI">Anota Aí</option></select></label>
 <label>Justificativa <input type="text" name="justificativa" maxlength="400" required></label></div>`,
   }) : "";
-  return `<details class="card"><summary><strong>Faturamento manual provisório</strong> — quando ainda não há relatório SAIPOS do dia</summary>${registrar}${substituir}</details>`;
+  return `<details class="card"${ctx.abrirProvisorio ? " open" : ""}><summary><strong>Faturamento manual provisório</strong> — quando ainda não há relatório SAIPOS do dia</summary>${registrar}${substituir}</details>`;
 }
 
 export function fechamentoManual(d, ctx = {}) {
@@ -264,6 +266,7 @@ ${d.historico.map((x) => { const [r, c] = REPASSE[x.situacaoRepasse] ?? [x.situa
   return `${cabecalho(nome, `Faturamento pela fonte oficial · ${esc(d.competencia ?? "")}`)}
 <p>${selo(rs, cs)}${d.fonteOficial ? ` <span class="nota">Fonte: ${esc(d.fonteOficial)}</span>` : ""}</p>
 ${d.dependeDeRelatorioOficial ? '<p class="aviso">Os relatórios oficiais da 99Food ainda não foram fornecidos: a área está pronta, mas nenhum número é presumido. Os valores aparecerão quando o leitor do arquivo real for implementado.</p>' : ""}
+${calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null })}
 <section class="resumo" aria-label="Números do canal ${esc(nome)}">${cards}</section>
 ${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de conciliação</h2><ul class="lista-simples">${d.pendencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${p.valorCentavos ? valor(p.valorCentavos) : ""}</li>`).join("")}</ul></section>` : ""}
 <section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<a class="botao-link" href="#/configuracoes">Registrar demonstrativo (Configurações → Taxas Stone)</a>' : ""}</div>${historico}</section>

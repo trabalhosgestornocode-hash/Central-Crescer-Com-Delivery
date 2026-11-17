@@ -453,6 +453,42 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .caixa-fechado, .versao-taxas { border-top: 1px solid var(--linha); padding: 8px 0; }
 .caixa-fechado summary, .versao-taxas summary { cursor: pointer; font-size: 14px; padding: 4px 0; }
 .canal-operadoras { display: grid; gap: 0; }
+/* ------------------------------------------------------------------ calendário de faturamento dos canais (doc 47) */
+.cal-canal { display: grid; gap: 12px; margin: 0 0 24px; }
+.cal-canal > h2 { margin: 0; font-size: 18px; }
+.resumo--calendario { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 4px; }
+.valor-grande { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+.cal-canal .cal-nav { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 0; }
+.cal-canal .cal-nav strong { flex: 1 1 auto; text-align: center; display: block; } .cal-canal .cal-nav strong::first-letter { text-transform: uppercase; }
+.legenda--estados { margin: 0; gap: 8px 16px; }
+.legenda--estados li { display: inline-flex; align-items: center; gap: 6px; }
+.est { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 6px; font-size: 12px; font-weight: 700; line-height: 1; border: 1px solid transparent; }
+.est--neutro { background: var(--neutro-bg); color: var(--suave); border-color: var(--linha-forte); }
+.est--info { background: var(--info-bg); color: var(--info); } .est--alerta { background: var(--alerta-bg); color: var(--alerta); }
+.est--erro { background: var(--erro-bg); color: var(--erro); } .est--ok { background: var(--ok-bg); color: var(--ok); }
+.cal-dia--canal { min-height: 92px; border-left-width: 4px; }
+.cal-dia--canal[data-principal="DIVERGENCIA"] { border-left-color: var(--erro); }
+.cal-dia--canal[data-principal="CONFERENCIA_PENDENTE"], .cal-dia--canal[data-principal="PROVISORIO"] { border-left-color: var(--alerta); }
+.cal-dia--canal[data-principal="CONCILIADO"] { border-left-color: var(--ok); }
+.cal-dia--canal[data-principal="IMPORTADO"], .cal-dia--canal[data-principal="FECHAMENTO_MANUAL"] { border-left-color: var(--info); }
+.cal-dia--canal[data-principal="SEM_MOVIMENTO_CONFIRMADO"] { border-left-color: var(--suave); }
+.cal-dia--canal[data-principal="SEM_REGISTRO"] { border-style: dashed; border-left-color: var(--linha-forte); background: transparent; }
+.cal-dia--futuro { opacity: .62; }
+.cal-estados { display: flex; flex-wrap: wrap; gap: 3px; }
+.cal-dia--canal:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.lista-estados { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
+.lista-estados li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.cal-detalhe-cab h3 { margin: 0 0 8px; font-size: 16px; }
+#cal-dia-detalhe h3 { margin: 14px 0 6px; font-size: 14px; }
+.cal-acoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.cal-config summary { cursor: pointer; padding: 4px 0; }
+@media (max-width: 640px) {
+  .cal-dia--canal { min-height: 62px; padding: 4px 3px 4px 5px; border-left-width: 3px; }
+  .cal-dia--canal .est { min-width: 15px; height: 15px; font-size: 10px; padding: 0 2px; border-radius: 4px; }
+  .cal-canal .cal-nav strong { order: -1; flex: 1 0 100%; }
+  .resumo--calendario { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .legenda--estados { gap: 6px 12px; font-size: 12px; }
+}
 @media (max-width: 760px) {
   .grade-2, .grade-3 { grid-template-columns: minmax(0, 1fr); }
   .linha-fechamento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

@@ -128,6 +128,7 @@ Cada passo só começa depois do anterior conferido, e **cada bloco exige autori
 - [ ] `GET /api/v1/financeiro-v2/status` responde e informa o módulo ligado.
 - [ ] Com um login de administrador: SAIPOS, iFood, 99Food, Operadoras e Taxas, Visão Geral e DRE abrem sem erro (só leitura).
 - [ ] Valores de novembro iguais aos de antes da publicação (nada foi corrigido ainda).
+- [ ] (Fase 10, doc 47) Calendário de faturamento dos quatro canais abre em um mês passado e no mês corrente, sem erro e sem escrever nada.
 
 ### 4.6 Segurança
 - [ ] Usuário sem concessão vê "sem acesso" e nenhum valor.

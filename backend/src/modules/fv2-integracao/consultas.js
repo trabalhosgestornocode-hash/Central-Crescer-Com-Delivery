@@ -129,6 +129,8 @@ export const CONSULTAS = Object.freeze({
   },
   // Fase 07 (doc 44): iFood e 99Food só pela fonte oficial (demonstrativo iFood; 99Food aguarda o relatório real).
   "/canal-plataforma": (n, c, p) => n.consultarCanalPlataforma(c, { canal: p.canal, competencia: p.competencia }),
+  // Fase 10 (doc 47): calendário de controle de faturamento — UMA consulta mensal consolidada por canal.
+  "/calendario-faturamento": (n, c, p) => n.consultarCalendarioDeFaturamento(c, { canal: p.canal, mes: p.mes }),
   "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),

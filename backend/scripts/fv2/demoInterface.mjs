@@ -191,7 +191,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
     // Fases 04–06 (docs 42–44): as MESMAS consultas da plataforma (área SAIPOS, fechamento manual, operadoras, cards).
-    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
+    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma", "/calendario-faturamento"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
     "/api/fv2/contas-a-pagar": async (ctx, p) => {
       const r = await nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"]));
       // 08D: opções do formulário "Registrar conta a pagar": categorias lançáveis que não são receita (inclui "a classificar") e fornecedores.
@@ -294,7 +294,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
     // Fases 04–06: as MESMAS ações da plataforma (fechamento manual, operadoras e taxas, lote de propostas prontas).
-    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas"]
+    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas"]
       .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, k === "/propostas/aprovar-e-aplicar-prontas" ? { ...b, importacao: id(b.importacao) } : b) }])),
     // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
     // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.
@@ -613,6 +613,9 @@ async function canaisDeFaturamento(nucleo, A, { caixa, importar }) {
   await op("MAQUININHA_IFOOD", "MAQUININHA_IFOOD", "2026-11-01", "PIX");
   await W("/configuracoes/taxas-contratadas", { operadora: "STONE", vigenciaInicio: "2026-01-01", fonte: "Tabela fictícia da demonstração", justificativa: "Demonstração.",
     taxas: ["DEBITO;MASTERCARD;1,10", "DEBITO;VISA;1,10", "CREDITO_A_VISTA;MASTERCARD;2,90", "CREDITO_A_VISTA;VISA;2,90"].join(String.fromCharCode(10)) });
+  // Fase 10: demonstrativo OFICIAL fictício do iFood cobrindo 01 a 08/11 (um período; o calendário não o reparte por dia).
+  // Só com FV2_DEMO_IFOOD_DEMONSTRATIVO=1 (roteiro de navegador do calendário): os testes de tela usam a demonstração SEM ele.
+  if (process.env.FV2_DEMO_IFOOD_DEMONSTRATIVO === "1") await W("/vendas/demonstrativo-ifood", { periodoInicio: "2026-11-01", periodoFim: "2026-11-08", vendas: "1.000,00", comissoes: "120,00", taxaPagamento: "20,00", mensalidade: "10,00", servicosEPromocoes: "50,00", ajustes: "0,00", liquido: "800,00", origem: "Demonstrativo fictício da demonstração", justificativa: "Demonstração: demonstrativo sintético do iFood." });
   await W("/configuracoes/taxas-contratadas", { operadora: "MAQUININHA_IFOOD", vigenciaInicio: "2026-11-01", fonte: "Tabela fictícia da demonstração", taxas: "PIX;PIX;0,80", justificativa: "Demonstração." });
   const CAB = ["Pedido", "Código da loja", "Nome da loja", "Tipo do pedido", "Turno", "Canal de venda", "Id do pedido no parceiro", "Número do pedido no parceiro", "Data da venda", "Consumidor", "Tem cupom", "Pagamento", "Está cancelado", "Motivo do cancelamento", "Itens", "Entrega", "Valor Entregador", "Entregador", "Bairro", "CEP", "Acréscimo", "Motivo de acréscimo", "Desconto", "Motivo do desconto", "Total", "Total taxa de serviço"];
   const ficha = (q, pag, v) => ["Ficha", null, null, "F", "Dia", null, null, null, q, "Consumidor não identificado", "N", pag, "N", null, v, null, null, null, null, "", 0, "", 0, "", v, 0];

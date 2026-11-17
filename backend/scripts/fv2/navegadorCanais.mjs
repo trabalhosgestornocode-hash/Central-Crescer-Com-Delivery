@@ -1,6 +1,7 @@
 // Validação de NAVEGADOR (Chrome real, via Playwright) das telas de canais do Financeiro v2.
 // Alvo: servidor demonstrativo local (127.0.0.1:5179, dados sintéticos). Nada toca produção, banco ou rede externa.
-//   1) node scripts/fv2-demo-interface.mjs                       (em outro terminal)
+//   1) FV2_DEMO_IFOOD_DEMONSTRATIVO=1 node scripts/fv2-demo-interface.mjs   (em outro terminal; o demonstrativo iFood fictício
+//      só existe com essa variável, para a verificação do calendário do iFood)
 //   2) FV2_PLAYWRIGHT_PATH=<pasta do pacote playwright> node scripts/fv2/navegadorCanais.mjs
 // Sai com código 1 se qualquer verificação falhar. Capturas de tela vão para FV2_NAVEGADOR_SAIDA (padrão: pasta temporária).
 import { createRequire } from "node:module";
@@ -259,6 +260,142 @@ for (const [sessao, esperado] of [["sem-acesso", /permiss|concess|acesso/i], ["e
   });
 }
 
+// ---- Calendário de controle de faturamento (Fase 10): quatro canais, mesmo padrão
+let chamadasDoCalendario = 0;
+d.on("request", (r) => { if (r.url().includes("/api/fv2/calendario-faturamento")) chamadasDoCalendario += 1; });
+const gradeDe = (rota, aba) => async () => {
+  await irPara(d, rota, rota === "saipos" ? "[data-aba-saipos]" : undefined);
+  if (aba) await d.click(`nav [data-aba-saipos="${aba}"]`);
+  await d.waitForSelector("[data-cal-dia]", { timeout: 10000 }); await d.waitForTimeout(400);
+};
+await irPara(d, "saipos", "[data-aba-saipos]");
+await d.fill("#filtro-competencia", "2026-11"); await d.waitForTimeout(1200);
+for (const [rota, aba, canal, nome] of [["saipos", "presencial", "BALCAO", "SAIPOS Presencial"], ["saipos", "anota", "ANOTA_AI", "SAIPOS Anota Aí"], ["ifood", null, "IFOOD", "iFood"], ["noventa-e-nove-food", null, "NOVENTA_E_NOVE_FOOD", "99Food"]]) {
+  await checar("Calendário", `${nome}: grade do mês com 30 dias, legenda com os 8 estados e seis indicadores`, async () => {
+    await gradeDe(rota, aba)();
+    const n = await d.locator(`[data-cal-canal="${canal}"] [data-cal-dia]`).count();
+    const legenda = await d.locator(".legenda--estados li").count();
+    const indicadores = await d.locator(".resumo--calendario .card").count();
+    await d.screenshot({ path: `${SHOTS}/d-calendario-${canal}.png`, fullPage: true });
+    return n === 30 && legenda === 8 && indicadores === 6 ? "" : `FALHA:dias=${n} legenda=${legenda} indicadores=${indicadores}`;
+  });
+}
+await gradeDe("saipos", "presencial")();
+await checar("Calendário", "navegação entre meses: uma consulta por mês, outubro tem 31 dias, dezembro é todo futuro (nada atrasado) e volta ao mês", async () => {
+  const antes = chamadasDoCalendario;
+  await d.click("[data-mes='-1']"); await d.waitForTimeout(1000);
+  const out = await d.locator("[data-cal-dia]").count();
+  const titulo = await d.locator(".cal-nav strong").innerText();
+  await d.click("[data-mes='1']"); await d.waitForTimeout(900);
+  await d.click("[data-mes='1']"); await d.waitForTimeout(1000);
+  const dez = await d.locator("[data-cal-dia].cal-dia--futuro").count();
+  const semRegistroEmDezembro = await d.locator("[data-cal-dia]:has-text('Sem registro')").count();
+  await d.click("[data-mes='-1']"); await d.waitForTimeout(900);
+  const consultas = chamadasDoCalendario - antes;
+  const ok = out === 31 && /outubro/i.test(titulo) && dez === 31 && semRegistroEmDezembro === 0 && consultas === 4;
+  return ok ? `${consultas} consultas para 4 mudanças de mês` : `FALHA:out=${out} titulo=${titulo} dez=${dez} semRegistro=${semRegistroEmDezembro} consultas=${consultas}`;
+});
+await checar("Calendário", "escolher um dia abre o painel (canal, data, origem, valores, importações, ações) sem nova consulta", async () => {
+  const antes = chamadasDoCalendario;
+  await d.click('[data-cal-dia="2026-11-03"]'); await d.waitForTimeout(400);
+  const t = await d.locator("#cal-dia-detalhe").innerText();
+  const pressionado = await d.getAttribute('[data-cal-dia="2026-11-03"]', "aria-pressed");
+  await d.screenshot({ path: `${SHOTS}/d-calendario-dia.png`, fullPage: true });
+  const ok = /SAIPOS — Presencial/.test(t) && /03\/11\/2026/.test(t) && /Origem da informação/.test(t) && /Valores/.test(t) && /Ações/.test(t) && pressionado === "true" && chamadasDoCalendario === antes;
+  return ok ? "" : `FALHA:pressionado=${pressionado} novasConsultas=${chamadasDoCalendario - antes} texto=${t.slice(0, 120).replace(/\n/g, " ")}`;
+});
+await checar("Calendário", "teclado: setas andam pelos dias (←→ dia, ↑↓ semana), Home/End na semana, um só dia focável e Enter abre o dia", async () => {
+  await d.focus('[data-cal-dia="2026-11-03"]');
+  const foco = () => d.evaluate(() => document.activeElement?.dataset?.calDia);
+  await d.keyboard.press("ArrowRight"); const a = await foco();
+  await d.keyboard.press("ArrowDown"); const b = await foco();
+  await d.keyboard.press("ArrowLeft"); const c2 = await foco();
+  await d.keyboard.press("ArrowUp"); const e2 = await foco();
+  await d.keyboard.press("End"); const fim = await foco();
+  await d.keyboard.press("Home"); const ini = await foco();
+  const focaveis = await d.locator('[data-cal-dia][tabindex="0"]').count();
+  await d.keyboard.press("ArrowRight"); await d.keyboard.press("Enter"); await d.waitForTimeout(400);
+  const painel = await d.locator("#cal-dia-detalhe").innerText();
+  const ok = a === "2026-11-04" && b === "2026-11-11" && c2 === "2026-11-10" && e2 === "2026-11-03" && fim === "2026-11-08" && ini === "2026-11-02" && focaveis === 1 && /04\/11\/2026/.test(painel);
+  return ok ? "" : `FALHA:${[a, b, c2, e2, fim, ini, focaveis].join(",")}`;
+});
+await checar("Calendário", "dia com divergência/pendência mostra ícone e texto (não só cor) e explica no painel", async () => {
+  const celula = d.locator('[data-cal-dia][aria-label*="Divergência"]').first();
+  if (!(await celula.count())) return "FALHA:a demonstração não tem dia com divergência neste mês";
+  const rotulo = await celula.getAttribute("aria-label");
+  const temIcone = (await celula.locator(".est").count()) >= 1;
+  await celula.click(); await d.waitForTimeout(300);
+  const t = await d.locator("#cal-dia-detalhe").innerText();
+  return temIcone && /Divergência encontrada/.test(t) && /Divergências/.test(t) ? rotulo.slice(0, 80) : "FALHA:sem ícone ou sem explicação";
+});
+await checar("Calendário", "marcar dia sem operação: exige justificativa e confirmação; depois o dia vira 'sem movimento confirmado' e sai da cobrança; voltar a operar desfaz", async () => {
+  await d.click('[data-cal-dia="2026-11-09"]'); await d.waitForTimeout(300);
+  const form = d.locator("#cal-dia-detalhe form[data-acao$='/calendario-faturamento/sem-operacao']");
+  if (!(await form.count())) return "FALHA:sem formulário (dia com registro?)";
+  const bloqueado = await form.evaluate((f) => !f.checkValidity());
+  await form.locator("input[name=justificativa]").fill("Loja fechada por feriado (demonstração)");
+  await form.locator("input[name=confirmar]").check();
+  await form.locator("button[type=submit]").click(); await d.waitForTimeout(1500);
+  const rotulo = await d.getAttribute('[data-cal-dia="2026-11-09"]', "aria-label");
+  const painel = await d.locator("#cal-dia-detalhe").innerText();
+  const marcado = /Sem movimento confirmado/.test(rotulo) && /Marcado para esta data/.test(painel);
+  const desfazer = d.locator("#cal-dia-detalhe form[data-acao$='/calendario-faturamento/sem-operacao']");
+  await desfazer.locator("input[name=justificativa]").fill("Voltou a operar (demonstração)");
+  await desfazer.locator("input[name=confirmar]").check();
+  await desfazer.locator("button[type=submit]").click(); await d.waitForTimeout(1500);
+  const rotulo2 = await d.getAttribute('[data-cal-dia="2026-11-09"]', "aria-label");
+  const ok = bloqueado && marcado && /Sem registro/.test(rotulo2);
+  return ok ? "" : `FALHA:bloqueado=${bloqueado} marcado=${marcado} depois=${rotulo2}`;
+});
+await checar("Calendário", "ação 'Registrar faturamento provisório' leva ao formulário já aberto, com a data do dia", async () => {
+  await d.click('[data-cal-dia="2026-11-09"]'); await d.waitForTimeout(300);
+  await d.click('#cal-dia-detalhe [data-cal-acao="provisorio"]'); await d.waitForTimeout(1200);
+  const aberto = await d.locator("details.card[open] form[data-acao$='/faturamento-manual/registrar']").count();
+  const data = await d.inputValue("form[data-acao$='/faturamento-manual/registrar'] input[name=data]");
+  return aberto === 1 && data === "2026-11-09" ? "" : `FALHA:aberto=${aberto} data=${data}`;
+});
+await checar("Calendário", "ação 'Ver faturamento e pagamentos' abre as vendas do dia no painel", async () => {
+  await gradeDe("saipos", "presencial")();
+  await d.click('[data-cal-dia="2026-11-10"]'); await d.waitForTimeout(300);
+  await d.click('#cal-dia-detalhe [data-cal-acao="vendas"]'); await d.waitForSelector("#painel:not([hidden])", { timeout: 8000 });
+  await d.waitForFunction(() => /Ver venda e pagamentos|Nenhuma venda/.test(document.querySelector("#painel")?.innerText ?? ""), null, { timeout: 8000 });
+  const t = await d.locator("#painel").innerText(); await d.keyboard.press("Escape");
+  return /Ver venda e pagamentos/.test(t) ? "" : `FALHA:${t.slice(0, 100)}`;
+});
+await checar("Calendário", "99Food: nenhum dia mostra valor nem 'sem movimento'; o painel diz que não é zero confirmado", async () => {
+  await gradeDe("noventa-e-nove-food")();
+  const celulas = await d.$$eval("[data-cal-dia]", (bs) => bs.map((b) => b.innerText + "|" + b.getAttribute("aria-label")));
+  const indevido = celulas.filter((t) => /R\$|Sem movimento/.test(t)).length;
+  await d.click('[data-cal-dia="2026-11-05"]'); await d.waitForTimeout(300);
+  const t = await d.locator("#cal-dia-detalhe").innerText();
+  return indevido === 0 && /não é zero confirmado/.test(t) ? "" : `FALHA:indevido=${indevido}`;
+});
+await checar("Calendário", "iFood: o painel de um dia coberto por demonstrativo explica que o detalhe diário depende do relatório de pedidos (sem valor na célula)", async () => {
+  await gradeDe("ifood")();
+  for (const mesAlvo of ["2026-11", "2026-10", "2026-09"]) {
+    await d.fill("#filtro-competencia", mesAlvo); await d.waitForTimeout(1200);
+    const coberto = d.locator('[data-cal-dia][aria-label*="Relatório importado"]').first();
+    if (await coberto.count()) {
+      const celula = await coberto.innerText();
+      await coberto.click(); await d.waitForTimeout(300);
+      const t = await d.locator("#cal-dia-detalhe").innerText();
+      return !/R\$/.test(celula) && /depende do relatório oficial de pedidos/.test(t) ? `coberto em ${mesAlvo}` : "FALHA:célula com valor ou sem explicação";
+    }
+  }
+  return "FALHA:a demonstração não tem demonstrativo do iFood em nenhum dos três meses (o caso é coberto no teste de backend)";
+});
+await d.fill("#filtro-competencia", "2026-11"); await d.waitForTimeout(600);
+await checar("Calendário", "perfil só leitura vê o calendário mas nenhum formulário nem botão de escrita no painel", async () => {
+  const g = await novaPagina(1366, 900, "gestor");
+  await irPara(g, "saipos", "[data-aba-saipos]"); await g.fill("#filtro-competencia", "2026-11"); await g.waitForTimeout(800);
+  await g.click('nav [data-aba-saipos="presencial"]'); await g.waitForSelector("[data-cal-dia]", { timeout: 10000 });
+  await g.click('[data-cal-dia="2026-11-09"]'); await g.waitForTimeout(400);
+  const forms = await g.locator("#cal-dia-detalhe form[data-acao], .cal-config form[data-acao]").count();
+  const escrita = await g.locator('#cal-dia-detalhe [data-cal-acao="provisorio"], #cal-dia-detalhe [data-cal-acao="fechamentos"]').count();
+  await g.context().close();
+  return forms === 0 && escrita === 0 ? "" : `FALHA:forms=${forms} botoesDeEscrita=${escrita}`;
+});
+
 // ---- teclado e acessibilidade básica
 await irPara(d, "saipos", "[data-aba-saipos]");
 await checar("Acessibilidade", "foco visível por teclado nas abas e botões com nome acessível", async () => {
@@ -306,6 +443,18 @@ await checar("Celular 390px", "alvos de toque das abas e botões principais ≥ 
   await irPara(m, "saipos", "[data-aba-saipos]");
   const pequenos = await m.$$eval("nav [data-aba-saipos], #conteudo button.botao, #conteudo button.botao--primario", (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)).filter((h) => h > 0 && h < 40));
   return pequenos.length === 0 ? "" : `alvos pequenos: ${pequenos.join(",")}px`;
+});
+await checar("Celular 390px", "calendário: sete colunas dentro da tela, dia tocável e painel do dia abre", async () => {
+  await irPara(m, "saipos", "[data-aba-saipos]");
+  await m.fill("#filtro-competencia", "2026-11"); await m.waitForTimeout(800);
+  await m.click('nav [data-aba-saipos="presencial"]'); await m.waitForSelector("[data-cal-dia]", { timeout: 10000 });
+  const caixa = await m.$eval(".calendario--canal", (e) => { const r = e.getBoundingClientRect(); return { esq: Math.round(r.left), dir: Math.round(r.right) }; });
+  const larguraDoDia = await m.$eval('[data-cal-dia="2026-11-03"]', (e) => Math.round(e.getBoundingClientRect().width));
+  await m.click('[data-cal-dia="2026-11-03"]'); await m.waitForTimeout(400);
+  const painel = await m.locator("#cal-dia-detalhe").innerText();
+  await m.screenshot({ path: `${SHOTS}/m-calendario-dia.png`, fullPage: true });
+  const ok = caixa.esq >= 0 && caixa.dir <= 390 && larguraDoDia >= 36 && /SAIPOS — Presencial/.test(painel) && (await semRolagemHorizontal(m));
+  return ok ? `célula de ${larguraDoDia}px` : `FALHA:caixa=${JSON.stringify(caixa)} celula=${larguraDoDia}`;
 });
 await checar("Console", "sem erros de JavaScript no celular", async () => m.diagnosticos.pagina.length === 0);
 await m.context().close();

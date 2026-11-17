@@ -13,6 +13,26 @@ import { validarFaturamentoManual } from "../dominio/fechamentoManual.js";
 export const PREFIXO_PROVISORIO = "faturamento-manual:";
 export const ehProvisoria = (v) => v?.fonte?.sistema === "MANUAL" && String(v.fonte.idExterno ?? "").startsWith(PREFIXO_PROVISORIO);
 
+/**
+ * Dias do período com fechamento manual e/ou vendas (Presencial e Anota Aí), cada um com a comparação fechamento × vendas.
+ * Base da área "Fechamento manual" e do calendário de faturamento (uma só fonte).
+ */
+export async function diasDeFechamento(tx, cx, inicio, fim) {
+  const fechamentos = (await tx.listar(cx, TIPO.FECHAMENTO_CAIXA)).filter((f) => f.data >= inicio && f.data <= fim);
+  const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA } })).filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim && (v.canal === "BALCAO" || v.canal === "ANOTA_AI"));
+  const ids = new Set(vendas.map((v) => v.id));
+  const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === "VALIDO");
+  const porVenda = new Map();
+  for (const p of pagamentos) { if (!porVenda.has(p.vendaId)) porVenda.set(p.vendaId, []); porVenda.get(p.vendaId).push(p); }
+  const datas = [...new Set([...fechamentos.map((f) => f.data), ...vendas.map((v) => v.dataVenda)])].sort();
+  return datas.map((data) => {
+    const doDia = fechamentos.filter((f) => f.data === data).sort((a, x) => a.caixa.localeCompare(x.caixa));
+    const vendasDoDia = vendas.filter((v) => v.dataVenda === data).map((v) => ({ ...v, pagamentos: porVenda.get(v.id) ?? [] }));
+    const provisorias = vendasDoDia.filter(ehProvisoria).map((v) => ({ id: v.id, canal: v.canal, brutoCentavos: v.brutoCentavos, descricao: v.descricao, caixa: String(v.fonte.idExterno).split(":").at(-1) }));
+    return { data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }) };
+  });
+}
+
 /** Formas informadas → pagamentos da venda (mesmo de-para da SAIPOS). O que não tem destino claro fica pendente (nunca presumido). */
 function pagamentosDoFaturamentoManual(f, { config, caixaId }) {
   const pagamentos = [];
@@ -137,22 +157,7 @@ export function operacoesDeFechamentoManual(b) {
       const inicio = exigirData(entrada.periodoInicio, "periodoInicio");
       const fim = exigirData(entrada.periodoFim, "periodoFim");
       if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
-      return b.consultar(ctx, async (cx, tx) => {
-        const fechamentos = (await tx.listar(cx, TIPO.FECHAMENTO_CAIXA)).filter((f) => f.data >= inicio && f.data <= fim);
-        const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA } })).filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim && (v.canal === "BALCAO" || v.canal === "ANOTA_AI"));
-        const ids = new Set(vendas.map((v) => v.id));
-        const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === "VALIDO");
-        const porVenda = new Map();
-        for (const p of pagamentos) { if (!porVenda.has(p.vendaId)) porVenda.set(p.vendaId, []); porVenda.get(p.vendaId).push(p); }
-        const datas = [...new Set([...fechamentos.map((f) => f.data), ...vendas.map((v) => v.dataVenda)])].sort();
-        const dias = datas.map((data) => {
-          const doDia = fechamentos.filter((f) => f.data === data).sort((a, x) => a.caixa.localeCompare(x.caixa));
-          const vendasDoDia = vendas.filter((v) => v.dataVenda === data).map((v) => ({ ...v, pagamentos: porVenda.get(v.id) ?? [] }));
-          const provisorias = vendasDoDia.filter(ehProvisoria).map((v) => ({ id: v.id, canal: v.canal, brutoCentavos: v.brutoCentavos, descricao: v.descricao, caixa: String(v.fonte.idExterno).split(":").at(-1) }));
-          return { data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }) };
-        });
-        return { periodoInicio: inicio, periodoFim: fim, dias };
-      });
+      return b.consultar(ctx, async (cx, tx) => ({ periodoInicio: inicio, periodoFim: fim, dias: await diasDeFechamento(tx, cx, inicio, fim) }));
     },
   };
 }

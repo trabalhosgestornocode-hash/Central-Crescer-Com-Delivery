@@ -30,6 +30,32 @@ const situacaoDoPagamento = (p) => {
   return p.estornadoCentavos === p.valorCentavos ? SITUACAO_PAGAMENTO.ESTORNADO : SITUACAO_PAGAMENTO.ESTORNADO_PARCIAL;
 };
 
+/**
+ * Pagamentos VÁLIDOS das vendas ativas do período (data da venda), com a taxa ESTIMADA gravada e o recebido CONFIRMADO. É a
+ * base dos cards por modalidade e do calendário de faturamento: uma só fonte para os dois (nada é recalculado em outro lugar).
+ */
+export async function itensDoLiquidoEsperado(tx, cx, { inicio, fim, canal = null }) {
+  const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, ...(canal ? { canal } : {}) } }))
+    .filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
+  const ids = new Set(vendas.map((v) => v.id));
+  const daVenda = new Map(vendas.map((v) => [v.id, v]));
+  const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === SITUACAO_PAGAMENTO.VALIDO);
+  const recebiveis = new Map((await tx.listar(cx, TIPO.RECEBIVEL)).filter((r) => ids.has(r.vendaId)).map((r) => [r.id, r]));
+  return pagamentos.map((p) => {
+    const t = p.taxaEstimada;
+    const modalidade = t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma;
+    const rec = p.recebivelId ? recebiveis.get(p.recebivelId) : null;
+    // Recebido CONFIRMADO: entrada no caixa/conta (pagamento direto) ou liquidação registrada no recebível. Nunca presumido.
+    const recebidoCentavos = p.movimentacaoId ? p.valorCentavos : rec && rec.liquidadoCentavos > 0 ? rec.liquidadoCentavos : null;
+    const v = daVenda.get(p.vendaId);
+    return {
+      modalidade, bandeira: modalidade === "PIX" ? (p.operadora ?? t?.operadora ?? p.processador ?? "DIRETO") : (t?.bandeira ?? p.bandeira ?? null), brutoCentavos: p.valorCentavos,
+      situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, liquidoEsperadoCentavos: t?.liquidoEsperadoCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
+      venda: { id: v.id, data: v.dataVenda, descricao: v.descricao ?? null, canal: v.canal, fonte: v.fonte?.sistema ?? null }, descricaoOriginal: p.descricaoOriginal ?? null,
+    };
+  });
+}
+
 export function operacoesDeVendas(b) {
   async function contaDeEntrada(tx, cx, contaId, forma) {
     const conta = await b.obterOuFalhar(tx, cx, TIPO.CONTA, contaId, "Conta financeira");
@@ -100,25 +126,7 @@ export function operacoesDeVendas(b) {
       if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
       const canal = entrada.canal ? exigirUmDe(entrada.canal, CANAL, "canal") : null;
       return b.consultar(ctx, async (cx, tx) => {
-        const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, ...(canal ? { canal } : {}) } }))
-          .filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
-        const ids = new Set(vendas.map((v) => v.id));
-        const daVenda = new Map(vendas.map((v) => [v.id, v]));
-        const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === SITUACAO_PAGAMENTO.VALIDO);
-        const recebiveis = new Map((await tx.listar(cx, TIPO.RECEBIVEL)).filter((r) => ids.has(r.vendaId)).map((r) => [r.id, r]));
-        const itens = pagamentos.map((p) => {
-          const t = p.taxaEstimada;
-          const modalidade = t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma;
-          const rec = p.recebivelId ? recebiveis.get(p.recebivelId) : null;
-          // Recebido CONFIRMADO: entrada no caixa/conta (pagamento direto) ou liquidação registrada no recebível. Nunca presumido.
-          const recebidoCentavos = p.movimentacaoId ? p.valorCentavos : rec && rec.liquidadoCentavos > 0 ? rec.liquidadoCentavos : null;
-          const v = daVenda.get(p.vendaId);
-          return {
-            modalidade, bandeira: modalidade === "PIX" ? (p.operadora ?? t?.operadora ?? p.processador ?? "DIRETO") : (t?.bandeira ?? p.bandeira ?? null), brutoCentavos: p.valorCentavos,
-            situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, liquidoEsperadoCentavos: t?.liquidoEsperadoCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
-            venda: { id: v.id, data: v.dataVenda, descricao: v.descricao ?? null, canal: v.canal, fonte: v.fonte?.sistema ?? null }, descricaoOriginal: p.descricaoOriginal ?? null,
-          };
-        });
+        const itens = await itensDoLiquidoEsperado(tx, cx, { inicio, fim, canal });
         const base = { periodoInicio: inicio, periodoFim: fim, canal, natureza: "ESTIMATIVA", observacao: "Taxa estimada pela tabela vigente na data da venda. Não é despesa lançada nem valor recebido." };
         // Detalhe de um card: os pagamentos (e vendas) que compõem o total da modalidade/bandeira (ou operadora, no Pix).
         if (entrada.modalidade) {

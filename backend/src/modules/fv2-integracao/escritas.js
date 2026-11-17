@@ -320,6 +320,11 @@ export const ESCRITAS = Object.freeze({
   "/fechamento-manual/registrar": { campos: CAMPOS_FECHAMENTO, fazer: (n, c, b) => n.registrarFechamentoManual(c, corpoDoFechamento(b)) },
   // Fase 08 (doc 44): faturamento manual PROVISÓRIO (ação explícita, separada do fechamento) e a substituição auditada.
   "/faturamento-manual/registrar": { campos: CAMPOS_FATURAMENTO, fazer: (n, c, b) => n.registrarFaturamentoManual(c, corpoDoFaturamento(b)) },
+  // Fase 10 (doc 47): dias (ou dias da semana) sem operação de um canal, com justificativa e histórico.
+  "/calendario-faturamento/sem-operacao": { campos: ["canal", "data", "diaDaSemana", "situacao", "justificativa"], fazer: (n, c, b) => n.registrarDiaSemOperacao(c, {
+    canal: b.canal, ...(b.data ? { data: b.data } : {}), ...(b.diaDaSemana !== undefined && b.diaDaSemana !== "" ? { diaDaSemana: b.diaDaSemana } : {}),
+    ...(b.situacao ? { situacao: b.situacao } : {}), justificativa: b.justificativa,
+  }) },
   "/faturamento-manual/substituir": { campos: ["data", "canal", "justificativa"], fazer: (n, c, b) => n.substituirFaturamentoProvisorio(c, { data: b.data, canal: b.canal, justificativa: b.justificativa }) },
   // Fase 02 (doc 40): operadoras de pagamento da unidade (cadastro, ativação/desativação, encerramento; nada é apagado).
   "/configuracoes/operadoras": { campos: ["codigo", "nome", "processador", "inicio", "encerramento", "modalidades", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarOperadora(c, {
