@@ -3,12 +3,15 @@
 //   1) FV2_DEMO_IFOOD_DEMONSTRATIVO=1 node scripts/fv2-demo-interface.mjs   (em outro terminal; o demonstrativo iFood fictício
 //      só existe com essa variável, para a verificação do calendário do iFood)
 //   2) FV2_PLAYWRIGHT_PATH=<pasta do pacote playwright> node scripts/fv2/navegadorCanais.mjs
+// ATENÇÃO: a demonstração guarda estado em memória. Reinicie-a antes de rodar este roteiro (ele importa arquivos e registra um demonstrativo).
 // Sai com código 1 se qualquer verificação falhar. Capturas de tela vão para FV2_NAVEGADOR_SAIDA (padrão: pasta temporária).
 import { createRequire } from "node:module";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { xlsx as xlsxSintetico } from "../../test/financeiro-v2/helpers/formatos.js";
 const require = createRequire(import.meta.url);
+const CAB_SAIPOS = ["Pedido", "Código da loja", "Nome da loja", "Tipo do pedido", "Turno", "Canal de venda", "Id do pedido no parceiro", "Número do pedido no parceiro", "Data da venda", "Consumidor", "Tem cupom", "Pagamento", "Está cancelado", "Motivo do cancelamento", "Itens", "Entrega", "Valor Entregador", "Entregador", "Bairro", "CEP", "Acréscimo", "Motivo de acréscimo", "Desconto", "Motivo do desconto", "Total", "Total taxa de serviço"];
 const { chromium } = require(process.env.FV2_PLAYWRIGHT_PATH || "playwright");
 
 const BASE = process.env.FV2_DEMO_URL || "http://127.0.0.1:5179/";
@@ -110,27 +113,7 @@ await checar("SAIPOS", "filtro de período: aplica ao mudar a data e período in
   return avisoNoFiltro && formularioContinua && naoRecarregou && voltou ? "invertido: aviso no próprio filtro, formulário preservado, volta ao normal" : `FALHA:aviso=${avisoNoFiltro} formulario=${formularioContinua} naoRecarregou=${naoRecarregou} voltou=${voltou}`;
 });
 
-await d.click('nav [data-aba-saipos="importacoes"]'); await d.waitForTimeout(500);
-await checar("Importações", "lista de relatórios e botão 'Importar relatório' abre o formulário no painel (com SAIPOS — Vendas por período)", async () => {
-  const b = d.locator("[data-detalhe='importar:saipos']");
-  if (!(await b.count())) return false;
-  await b.click(); await d.waitForSelector("#painel:not([hidden])", { timeout: 8000 });
-  await d.waitForFunction(() => /Vendas por período|SAIPOS/i.test(document.querySelector("#painel")?.innerText ?? ""), null, { timeout: 8000 }).catch(() => {});
-  const t = await d.locator("#painel").innerText();
-  await d.screenshot({ path: `${SHOTS}/d-importar.png` });
-  await d.keyboard.press("Escape"); await d.waitForTimeout(200);
-  return /Vendas por período|SAIPOS/i.test(t);
-});
-await checar("Importações", "importar sem escolher arquivo é bloqueado (validação do formulário)", async () => {
-  await d.click("[data-detalhe='importar:saipos']"); await d.waitForSelector("#painel:not([hidden])");
-  const form = d.locator("#painel form").first();
-  const submit = form.locator("button[type=submit]").first();
-  await submit.click(); await d.waitForTimeout(500);
-  const invalido = await form.evaluate((f) => !f.checkValidity());
-  const resultado = (await d.locator("#painel").innerText());
-  await d.keyboard.press("Escape");
-  return invalido || /arquivo|obrigat|escolha/i.test(resultado);
-});
+// (as verificações antigas do botão 'Importar relatório' foram substituídas pelas de 'Importações por canal', mais abaixo)
 
 // ---- Fechamento manual
 await d.click('nav [data-aba-saipos="fechamento"]'); await d.waitForTimeout(700);
@@ -232,7 +215,7 @@ await d.screenshot({ path: `${SHOTS}/d-visao-geral.png`, fullPage: true });
 await checar("Visão Geral", "quatro canais separados, sem somar duas vezes", async () => { const t = await texto(d); return /Presencial/.test(t) && /Anota/.test(t) && /iFood/.test(t) && /99Food/.test(t); });
 await checar("Visão Geral", "sem rolagem horizontal; cartões 'por trás do número' (drill-down) abrem", async () => {
   if (!(await semRolagemHorizontal(d))) return false;
-  const b = d.locator("[data-detalhe]").first();
+  const b = d.locator("#conteudo [data-detalhe]").first(); // só os da tela (o painel fechado pode guardar botões do último detalhe)
   if (!(await b.count())) return "sem drill-down nos dados demo";
   await b.click(); await d.waitForTimeout(800);
   const abriu = await d.locator("#painel:not([hidden])").count() > 0 || /Composição|lançamentos/i.test(await texto(d));
@@ -396,6 +379,163 @@ await checar("Calendário", "perfil só leitura vê o calendário mas nenhum for
   return forms === 0 && escrita === 0 ? "" : `FALHA:forms=${forms} botoesDeEscrita=${escrita}`;
 });
 
+// ---- Importações por canal (Fase 11): SAIPOS, iFood e 99Food, dentro da própria página
+const arquivoSintetico = (nome, linhas) => { const p = join(tmpdir(), `fv2-${process.pid}-${nome}`); writeFileSync(p, Buffer.from(xlsxSintetico([{ nome: "Vendas por período", linhas: [CAB_SAIPOS, ...linhas] }]))); return p; };
+const ficha = (quando, pagamento, itens, cancelado = "N") => ["Ficha", null, null, "F", "Dia", null, null, null, quando, "Consumidor não identificado", "N", pagamento, cancelado, null, itens, null, null, null, null, "", 0, "", 0, "", itens, 0];
+let nPed = 900;
+const pedidoSaipos = (canal, quando, pagamento, itens, entrega = 0) => [(nPed += 1), "loja-sintetica", "Loja Sintética", "D", "Dia", canal, `00000000-0000-4000-8000-${String(nPed).padStart(12, "0")}`, String(1000 + nPed), quando, "Cliente Sintético", "N", pagamento, "N", null, itens, entrega, 0, null, "Bairro Sintético", "00000-000", 0, null, 0, null, itens + entrega, 0];
+const ARQ_DIA_9 = arquivoSintetico("dia9.xlsx", [ficha("09/11/2026 12:00", "Dinheiro", 20), ficha("09/11/2026 12:10", "Débito Master", 30), ficha("09/11/2026 12:20", "Débito Master", 99, "S"),
+  pedidoSaipos("Anota.ai", "09/11/2026 19:00", "Online Anotaai", 20, 5), pedidoSaipos("iFood", "09/11/2026 19:10", "Online iFood", 80, 6), pedidoSaipos("99 Food", "09/11/2026 19:20", "Pago Online", 45)]);
+const ARQ_DIA_11 = arquivoSintetico("dia11.xlsx", [ficha("11/11/2026 12:00", "Dinheiro", 12)]);
+const painelDe = () => d.locator("#painel");
+const enviarNoPainel = async (sufixo) => {
+  const f = d.locator(`#painel form[data-acao$='${sufixo}']`).first();
+  if (!(await f.count())) throw new Error(`formulário ${sufixo} não existe no painel`);
+  await f.locator("input[name=confirmar]").check();
+  const aceitar = f.locator("input[name=aceitarPendencias]"); if (await aceitar.count()) await aceitar.check();
+  await f.locator("button[type=submit]").click(); await d.waitForTimeout(1600);
+};
+const enviarArquivo = async (arquivo, inicio, fim) => {
+  const f = d.locator("form[data-acao$='/importacao/receber']");
+  await f.locator("input[name=periodoInicio]").fill(inicio); await f.locator("input[name=periodoFim]").fill(fim);
+  await f.locator("input[type=file]").setInputFiles(arquivo);
+  await f.locator("input[name=confirmar]").check();
+  await f.locator("button[type=submit]").click();
+  await d.waitForSelector("#painel:not([hidden])", { timeout: 15000 }); await d.waitForTimeout(1500);
+};
+const abrirImportacoesSaipos = async () => { await irPara(d, "saipos", "[data-aba-saipos]"); await d.fill("#filtro-competencia", "2026-11"); await d.waitForTimeout(900); await d.click('nav [data-aba-saipos="importacoes"]'); await d.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await d.waitForTimeout(300); };
+
+await checar("Importações", "SAIPOS › Importações: formatos, unidade, período, arquivo e histórico na própria página (sem ir à Central)", async () => {
+  await abrirImportacoesSaipos();
+  const t = await d.locator("[data-importacoes-canal]").innerText();
+  const disponiveis = await d.locator(".formato--ok").count();
+  const campos = (await d.locator("form[data-acao$='/importacao/receber'] input[name=periodoInicio]").count()) + (await d.locator("form[data-acao$='/importacao/receber'] input[type=file]").count()) + (await d.locator("form[data-acao$='/importacao/receber'] select[name=tipoRelatorio]").count());
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-saipos.png`, fullPage: true });
+  const ok = disponiveis === 4 && campos === 3 && /Unidade:/.test(t) && /Vendas por período/.test(t) && /Histórico de importações SAIPOS/.test(t) && /Leitor homologado \(XLSX\)/.test(t);
+  return ok ? "" : `FALHA:disponiveis=${disponiveis} campos=${campos}`;
+});
+await checar("Importações", "SAIPOS: o envio exige arquivo e confirmação (validação do formulário) e o seletor só oferece relatórios SAIPOS", async () => {
+  const f = d.locator("form[data-acao$='/importacao/receber']");
+  const invalido = await f.evaluate((x) => !x.checkValidity());
+  const opcoes = await f.locator("select[name=tipoRelatorio] option").evaluateAll((o) => o.map((x) => x.value));
+  return invalido && opcoes.length === 4 && opcoes.every((v) => v.startsWith("SAIPOS_")) ? "" : `FALHA:invalido=${invalido} opcoes=${opcoes}`;
+});
+await checar("Importações", "SAIPOS: cancelar — enviar, conferir a prévia e rejeitar não grava nada e o calendário não muda", async () => {
+  await enviarArquivo(ARQ_DIA_11, "2026-11-11", "2026-11-11");
+  const prev = await painelDe().innerText();
+  await d.locator("#painel form[data-acao$='/importacao/rejeitar'] input[name=justificativa]").fill("Arquivo enviado por engano (demonstração)");
+  await enviarNoPainel("/importacao/rejeitar");
+  const t = await painelDe().innerText();
+  await d.keyboard.press("Escape"); await d.waitForTimeout(1200);
+  await abrirImportacoesSaipos();
+  const hist = await d.locator("[data-importacoes-canal] tbody").innerText();
+  await d.click('nav [data-aba-saipos="presencial"]'); await d.waitForSelector("[data-cal-dia]"); await d.waitForTimeout(300);
+  const rotulo = await d.getAttribute('[data-cal-dia="2026-11-11"]', "aria-label");
+  const ok = /Prévia pronta|Importação|Confirmar/i.test(prev) && /Rejeitado/i.test(t + hist) && /Rejeitado/.test(hist) && /Sem registro/.test(rotulo) && !/Relatório importado/.test(rotulo);
+  return ok ? "" : `FALHA:rejeitadoNoHistorico=${/Rejeitado/.test(hist)} rotulo=${rotulo}`;
+});
+await checar("Importações", "SAIPOS: a prévia separa Presencial e Anota Aí, mostra iFood/99Food só como conferência e os cancelados", async () => {
+  await abrirImportacoesSaipos();
+  await enviarArquivo(ARQ_DIA_9, "2026-11-09", "2026-11-09");
+  const t = await painelDe().innerText();
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-saipos-previa.png`, fullPage: true });
+  const ok = /Prévia por canal/.test(t) && /Presencial[\s\S]*2 pedido\(s\)/.test(t) && /Anota Aí[\s\S]*1 pedido\(s\)/.test(t) && /iFood[\s\S]*Só conferência[\s\S]*NÃO vira receita/.test(t) && /99Food[\s\S]*Só conferência/.test(t) && /Cancelados[\s\S]*1 pedido\(s\)/.test(t);
+  return ok ? "" : `FALHA:${t.slice(0, 260).replace(/\n/g, " ")}`;
+});
+await checar("Importações", "SAIPOS: confirmar → gerar propostas → aplicar; ao fechar o painel o calendário e os cards já refletem o dia", async () => {
+  await enviarNoPainel("/importacao/confirmar");
+  const apos = await painelDe().innerText();
+  await enviarNoPainel("/propostas/gerar");
+  await enviarNoPainel("/propostas/aprovar-e-aplicar-prontas");
+  await d.keyboard.press("Escape"); await d.waitForTimeout(1500);
+  await d.click('nav [data-aba-saipos="presencial"]'); await d.waitForSelector("[data-cal-dia]"); await d.waitForTimeout(400);
+  const pres = await d.getAttribute('[data-cal-dia="2026-11-09"]', "aria-label");
+  await d.click('nav [data-aba-saipos="anota"]'); await d.waitForSelector("[data-cal-dia]"); await d.waitForTimeout(400);
+  const anota = await d.getAttribute('[data-cal-dia="2026-11-09"]', "aria-label");
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-saipos-calendario.png`, fullPage: true });
+  const ok = /Importado|importad/i.test(apos) && /Relatório importado/.test(pres) && /faturamento R\$ 50,00/.test(pres) && /Relatório importado/.test(anota) && /faturamento R\$ 25,00/.test(anota);
+  return ok ? "" : `FALHA:pres=${pres} anota=${anota}`;
+});
+await checar("Importações", "SAIPOS: o mesmo arquivo de novo é a mesma importação (sem duplicar no histórico nem nas vendas)", async () => {
+  await abrirImportacoesSaipos();
+  const antes = await d.locator("[data-importacoes-canal] tbody tr").count();
+  await enviarArquivo(ARQ_DIA_9, "2026-11-09", "2026-11-09");
+  const t = await painelDe().innerText();
+  await d.keyboard.press("Escape"); await d.waitForTimeout(1200);
+  await abrirImportacoesSaipos();
+  const depois = await d.locator("[data-importacoes-canal] tbody tr").count();
+  return antes === depois && /Importado/i.test(t) ? `${antes} linha(s) antes e depois` : `FALHA:antes=${antes} depois=${depois}`;
+});
+await checar("Importações", "SAIPOS: o iFood e a 99Food do relatório não viram faturamento nos calendários desses canais", async () => {
+  for (const [rota, rotuloEsperado] of [["ifood", /Relatório importado/], ["noventa-e-nove-food", /Relatório importado/]]) {
+    await irPara(d, rota, "[data-aba-canal]"); await d.waitForSelector("[data-cal-dia]", { timeout: 10000 }); await d.waitForTimeout(400);
+    const r = await d.getAttribute('[data-cal-dia="2026-11-09"]', "aria-label");
+    if (rotuloEsperado.test(r) && rota !== "ifood") return `FALHA:${rota}: ${r}`;
+    if (/faturamento R\$/.test(r)) return `FALHA:${rota} mostra faturamento do dia 09: ${r}`;
+  }
+  return "";
+});
+await checar("Importações", "iFood › Importações: demonstrativo oficial disponível; apuração em arquivo e relatório de pedidos INDISPONÍVEIS com motivo; sem envio de arquivo", async () => {
+  await irPara(d, "ifood", "[data-aba-canal]"); await d.click('[data-aba-canal="importacoes"]'); await d.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await d.waitForTimeout(300);
+  const t = await d.locator("[data-importacoes-canal]").innerText();
+  const ok = (await d.locator(".formato--ok").count()) === 1 && (await d.locator(".formato--off").count()) === 2 && /contrato sintético/.test(t) && /não existe leitor/.test(t)
+    && (await d.locator("form[data-acao$='/importacao/receber']").count()) === 0 && (await d.locator("form[data-previa-demonstrativo]").count()) === 1;
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-ifood.png`, fullPage: true });
+  return ok ? "" : "FALHA:formatos ou formulário de arquivo inesperados";
+});
+const preencherDemonstrativo = async (v) => {
+  const f = d.locator("form[data-previa-demonstrativo]");
+  for (const [k, val] of Object.entries(v)) await f.locator(`[name=${k}]`).fill(val);
+  await f.locator("button[type=submit]").click(); await d.waitForSelector("#painel:not([hidden])", { timeout: 10000 });
+  await d.waitForFunction(() => /Prévia do demonstrativo/.test(document.querySelector("#painel")?.innerText ?? ""), null, { timeout: 8000 }); await d.waitForTimeout(500);
+};
+const DEM = { periodoInicio: "2026-11-09", periodoFim: "2026-11-11", vendas: "500,00", comissoes: "60,00", taxaPagamento: "10,00", mensalidade: "0,00", servicosEPromocoes: "20,00", ajustes: "0,00", liquido: "410,00", origem: "Demonstrativo fictício (demonstração)", justificativa: "Demonstrativo sintético da demonstração" };
+await checar("Importações", "iFood: a prévia mostra período, faturamento, comissões, taxas, ajustes, repasse e pendências; conta que NÃO fecha bloqueia; período sobreposto bloqueia", async () => {
+  await preencherDemonstrativo({ ...DEM, liquido: "400,00" });
+  const ruim = await painelDe().innerText(); const formRuim = await d.locator("#painel form[data-acao$='/demonstrativo-ifood']").count();
+  await d.keyboard.press("Escape");
+  await preencherDemonstrativo({ ...DEM, periodoInicio: "2026-11-05", periodoFim: "2026-11-10" });
+  const sobre = await painelDe().innerText(); const formSobre = await d.locator("#painel form[data-acao$='/demonstrativo-ifood']").count();
+  await d.keyboard.press("Escape");
+  await preencherDemonstrativo(DEM);
+  const boa = await painelDe().innerText();
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-ifood-previa.png`, fullPage: true });
+  const ok = /A conta não fecha/.test(ruim) && formRuim === 0 && /se sobrepõe/.test(sobre) && formSobre === 0
+    && /A conta fecha/.test(boa) && /09\/11\/2026 a 11\/11\/2026/.test(boa) && /R\$ 500,00/.test(boa) && /R\$ 60,00/.test(boa) && /R\$ 410,00/.test(boa) && /Repasse previsto/.test(boa) && /detalhamento por dia depende do relatório oficial de pedidos/.test(boa);
+  return ok ? "" : `FALHA:ruim=${/não fecha/.test(ruim)}/${formRuim} sobre=${/sobrepõe/.test(sobre)}/${formSobre}`;
+});
+await checar("Importações", "iFood: confirmar registra o demonstrativo e o calendário do iFood passa a cobrir o período (sem valor por dia)", async () => {
+  await enviarNoPainel("/demonstrativo-ifood");
+  await d.waitForTimeout(600);
+  await d.click('[data-aba-canal="resumo"]'); await d.waitForSelector("[data-cal-dia]", { timeout: 10000 }); await d.waitForTimeout(400);
+  const rotulo = await d.getAttribute('[data-cal-dia="2026-11-10"]', "aria-label");
+  const celula = await d.locator('[data-cal-dia="2026-11-10"]').innerText();
+  await d.click('[data-aba-canal="importacoes"]'); await d.waitForSelector("[data-importacoes-canal]"); await d.waitForTimeout(300);
+  const hist = await d.locator("[data-importacoes-canal]").innerText();
+  const ok = /Relatório importado/.test(rotulo) && !/R\$/.test(celula) && /09\/11\/2026 a 11\/11\/2026/.test(hist);
+  return ok ? "" : `FALHA:rotulo=${rotulo} historico=${/09\/11\/2026 a 11\/11\/2026/.test(hist)}`;
+});
+await checar("Importações", "99Food › Importações: envio BLOQUEADO (campos e botão desabilitados), motivo claro e nenhum formato aceito", async () => {
+  await irPara(d, "noventa-e-nove-food", "[data-aba-canal]"); await d.click('[data-aba-canal="importacoes"]'); await d.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await d.waitForTimeout(300);
+  const t = await d.locator("[data-importacoes-canal]").innerText();
+  const botaoOff = await d.locator("form[data-envio-bloqueado] button[type=submit]").isDisabled();
+  const arquivoOff = await d.locator("form[data-envio-bloqueado] input[type=file]").isDisabled();
+  const funcionais = await d.locator("form[data-acao$='/importacao/receber']").count();
+  await d.screenshot({ path: `${SHOTS}/d-importacoes-99food.png`, fullPage: true });
+  const ok = botaoOff && arquivoOff && funcionais === 0 && /validar o primeiro relatório oficial/.test(t) && (await d.locator(".formato--ok").count()) === 0 && /Nenhuma importação/.test(t);
+  return ok ? "" : `FALHA:botaoOff=${botaoOff} arquivoOff=${arquivoOff} funcionais=${funcionais}`;
+});
+await checar("Importações", "perfil só leitura: vê formatos e histórico, mas não tem formulário de envio nem de demonstrativo", async () => {
+  const g = await novaPagina(1366, 900, "gestor");
+  await irPara(g, "saipos", "[data-aba-saipos]"); await g.fill("#filtro-competencia", "2026-11"); await g.waitForTimeout(800);
+  await g.click('nav [data-aba-saipos="importacoes"]'); await g.waitForSelector("[data-importacoes-canal]", { timeout: 10000 });
+  const s = await g.locator("[data-importacoes-canal]").innerText(); const fs = await g.locator("form[data-acao$='/importacao/receber']").count();
+  await irPara(g, "ifood", "[data-aba-canal]"); await g.click('[data-aba-canal="importacoes"]'); await g.waitForSelector("[data-importacoes-canal]", { timeout: 10000 });
+  const i = await g.locator("[data-importacoes-canal]").innerText(); const fd = await g.locator("form[data-previa-demonstrativo]").count();
+  await g.context().close();
+  return fs === 0 && fd === 0 && /não tem permissão para importar/.test(s) && /Histórico de importações SAIPOS/.test(s) && /não tem permissão para registrar/.test(i) ? "" : `FALHA:forms=${fs}/${fd}`;
+});
+
 // ---- teclado e acessibilidade básica
 await irPara(d, "saipos", "[data-aba-saipos]");
 await checar("Acessibilidade", "foco visível por teclado nas abas e botões com nome acessível", async () => {
@@ -455,6 +595,19 @@ await checar("Celular 390px", "calendário: sete colunas dentro da tela, dia toc
   await m.screenshot({ path: `${SHOTS}/m-calendario-dia.png`, fullPage: true });
   const ok = caixa.esq >= 0 && caixa.dir <= 390 && larguraDoDia >= 36 && /SAIPOS — Presencial/.test(painel) && (await semRolagemHorizontal(m));
   return ok ? `célula de ${larguraDoDia}px` : `FALHA:caixa=${JSON.stringify(caixa)} celula=${larguraDoDia}`;
+});
+await checar("Celular 390px", "Importações dos três canais: sem rolagem horizontal, campos e abas utilizáveis", async () => {
+  const falhas = [];
+  await irPara(m, "saipos", "[data-aba-saipos]"); await m.fill("#filtro-competencia", "2026-11"); await m.waitForTimeout(800);
+  await m.click('nav [data-aba-saipos="importacoes"]'); await m.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await m.waitForTimeout(300);
+  await m.screenshot({ path: `${SHOTS}/m-importacoes-saipos.png`, fullPage: true });
+  if (!(await semRolagemHorizontal(m))) falhas.push("saipos");
+  for (const rota of ["ifood", "noventa-e-nove-food"]) {
+    await irPara(m, rota, "[data-aba-canal]"); await m.click('[data-aba-canal="importacoes"]'); await m.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await m.waitForTimeout(300);
+    await m.screenshot({ path: `${SHOTS}/m-importacoes-${rota}.png`, fullPage: true });
+    if (!(await semRolagemHorizontal(m))) falhas.push(rota);
+  }
+  return falhas.length ? `FALHA:rolagem horizontal em ${falhas.join(", ")}` : "";
 });
 await checar("Console", "sem erros de JavaScript no celular", async () => m.diagnosticos.pagina.length === 0);
 await m.context().close();

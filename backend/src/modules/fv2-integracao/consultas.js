@@ -4,6 +4,8 @@
 // homologação e reabertura NÃO estão aqui: só entram quando as dependências (cofre com antimalware, MFA comprovado em
 // login real, matriz aprovada) estiverem comprovadas.
 
+import { centavos } from "./escritas.js"; // mesma leitura de "1.234,56" da ação de registro (a prévia e o registro não podem divergir)
+
 const INDICADORES = new Set(["FATURAMENTO_BRUTO_PROPRIO", "FATURAMENTO_LIQUIDO_GERENCIAL", "DEDUCOES_COMERCIAIS", "RECEITA_LIQUIDA_COMERCIAL", "CUSTOS_OPERACIONAIS", "RESULTADO_APOS_CUSTOS", "DESPESAS_OPERACIONAIS", "RESULTADO_FINANCEIRO", "DEMAIS_EFEITOS_GERENCIAIS", "RESULTADO_GERENCIAL"]);
 const NUMERO = /^\d{1,9}$/;
 const NENHUM = "00000000-0000-4000-8000-000000000000";
@@ -131,6 +133,13 @@ export const CONSULTAS = Object.freeze({
   "/canal-plataforma": (n, c, p) => n.consultarCanalPlataforma(c, { canal: p.canal, competencia: p.competencia }),
   // Fase 10 (doc 47): calendário de controle de faturamento — UMA consulta mensal consolidada por canal.
   "/calendario-faturamento": (n, c, p) => n.consultarCalendarioDeFaturamento(c, { canal: p.canal, mes: p.mes }),
+  // Fase 11 (doc 48): importações por canal (formatos, estado de cada um e histórico) e a PRÉVIA do demonstrativo oficial do iFood.
+  "/importacoes-canal": (n, c, p) => n.consultarImportacoesDoCanal(c, { canal: p.canal }),
+  "/previa-demonstrativo-ifood": (n, c, p) => n.previaDoDemonstrativoIfood(c, {
+    periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, vendasCentavos: centavos(p.vendas), comissoesCentavos: centavos(p.comissoes || "0,00"), taxaPagamentoCentavos: centavos(p.taxaPagamento || "0,00"),
+    mensalidadeCentavos: centavos(p.mensalidade || "0,00"), servicosEPromocoesCentavos: centavos(p.servicosEPromocoes || "0,00"), ajustesCentavos: centavos(p.ajustes || "0,00"),
+    liquidoInformadoCentavos: centavos(p.liquido), origem: p.origem, justificativa: p.justificativa || "Prévia: justificativa informada na confirmação.",
+  }),
   "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),

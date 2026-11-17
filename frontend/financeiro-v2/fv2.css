@@ -489,6 +489,17 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
   .resumo--calendario { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .legenda--estados { gap: 6px 12px; font-size: 12px; }
 }
+/* ------------------------------------------------------------------ importações dentro da página do canal (doc 48) */
+.imp-canal { display: grid; gap: 16px; margin: 0 0 24px; }
+.imp-canal > h2 { margin: 0; font-size: 18px; }
+.imp-canal h3 { margin: 0 0 8px; font-size: 15px; }
+.formatos-canal { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.formato { padding: 10px 14px; border: 1px solid var(--linha); border-left: 4px solid var(--ok); border-radius: var(--raio-sm); background: var(--card); }
+.formato--off { border-left-color: var(--linha-forte); border-style: dashed; background: transparent; }
+.formato-topo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.formato p { margin: 4px 0 0; }
+.imp-envio--bloqueado fieldset { opacity: .55; border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; } .imp-envio--bloqueado .acoes-form { display: flex; justify-content: flex-end; }
+.imp-envio .passos { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0 0 12px; padding: 0 0 0 18px; font-size: 13px; color: var(--suave); } .imp-envio .passos li { padding-left: 2px; }
 @media (max-width: 760px) {
   .grade-2, .grade-3 { grid-template-columns: minmax(0, 1fr); }
   .linha-fechamento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }

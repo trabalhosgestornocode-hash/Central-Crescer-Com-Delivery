@@ -95,10 +95,13 @@ export const SAIPOS_VENDAS = definirFonte({
     const porCanal = {};
     for (const r of registros.filter(validos)) porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] = somar(porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] ?? 0, r.valorCentavos);
     const cancelados = registros.filter((r) => r.dados.cancelado);
+    // Quantos pedidos válidos de cada canal (a prévia por canal mostra valor E quantidade; iFood e 99Food só como conferência).
+    const pedidosPorCanal = {};
+    for (const r of registros.filter(validos)) { const k = r.dados.canal ?? "NAO_IDENTIFICADO"; pedidosPorCanal[k] = (pedidosPorCanal[k] ?? 0) + 1; }
     return {
       controles: {
-        faturamentoCentavos: total.encontrado, pedidosValidos: registros.length - cancelados.length,
-        canceladosCentavos: cancelados.reduce((s, r) => somar(s, r.valorCentavos), 0), porCanal,
+        faturamentoCentavos: total.encontrado, pedidosValidos: registros.length - cancelados.length, pedidosCancelados: cancelados.length,
+        canceladosCentavos: cancelados.reduce((s, r) => somar(s, r.valorCentavos), 0), porCanal, pedidosPorCanal,
       },
       divergencias: [...divergencias, ...total.divergencias],
     };

@@ -9,6 +9,7 @@ import { operacoesDeFechamentoManual } from "./fechamentoManual.js";
 import { operacoesDoCanalSaipos } from "./canalSaipos.js";
 import { operacoesDoCanalPlataforma } from "./canalPlataforma.js";
 import { operacoesDoCalendarioFaturamento } from "./calendarioFaturamento.js";
+import { operacoesDeImportacoesPorCanal } from "./importacoesPorCanal.js";
 import { operacoesDoDemonstrativoIfood } from "./demonstrativoIfood.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesDeCompetencia } from "./competencias.js";
@@ -80,6 +81,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDoCanalSaipos(base),
     ...operacoesDoCanalPlataforma(base),
     ...operacoesDoCalendarioFaturamento(base),
+    ...operacoesDeImportacoesPorCanal(base, { fontes }),
     ...operacoesDoDemonstrativoIfood(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

@@ -3,6 +3,7 @@
 // núcleo (nenhum cálculo de dinheiro aqui). Taxa pendente nunca aparece como zero; estimativa nunca aparece como recebido.
 import { dataBR, esc, moeda, percentual } from "./formatar.js";
 import { calendarioCanal } from "./telasCalendarioCanais.js";
+import { importacoesDoCanal } from "./telasImportacoesCanais.js";
 
 const valor = (c) => `<span class="${c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor"}">${esc(moeda(c))}</span>`;
 const selo = (rotulo, classe, titulo = "") => `<span class="selo selo--${classe}"${titulo ? ` title="${esc(titulo)}"` : ""}>${esc(rotulo)}</span>`;
@@ -105,14 +106,7 @@ export function saipos(d, f, ctx = {}) {
   const calendario = () => calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null });
   if (aba === "presencial") return `${topo}<p class="aviso">Vendas presenciais (fichas) do relatório SAIPOS. Pix da maquininha do iFood é presencial — não é o canal iFood.</p>${calendario()}${cardsDoCanal(d.cards?.BALCAO, { canal: "BALCAO", ...periodo })}`;
   if (aba === "anota") return `${topo}<p class="aviso">Pedidos do Anota Aí: faturamento separado do Presencial.</p>${calendario()}${cardsDoCanal(d.cards?.ANOTA_AI, { canal: "ANOTA_AI", ...periodo })}`;
-  if (aba === "importacoes") {
-    const pode = tem(ctx.permissoes, "financeiro_v2.importar");
-    return `${topo}<section class="card"><div class="card-topo"><h2>Relatórios importados</h2>${pode ? '<button type="button" class="botao" data-detalhe="importar:saipos">Importar relatório</button>' : ""}</div>
-<p class="nota">Use "SAIPOS — Vendas por período (XLSX)". Reimportar o mesmo arquivo ou um período sobreposto não duplica vendas.</p>
-${d.importacoes?.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Importações SAIPOS do período</caption><thead><tr><th scope="col">Relatório</th><th scope="col">Período</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
-${d.importacoes.map((i) => `<tr>${td("Relatório", esc(i.tipoRelatorio === "SAIPOS_VENDAS" ? "Vendas por período" : i.tipoRelatorio === "SAIPOS_FORMAS_PAGAMENTO" ? "Formas de pagamento" : i.tipoRelatorio), "esquerda")}${td("Período", `${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}`)}${td("Situação", esc(i.estado.replaceAll("_", " ").toLowerCase()))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">Ver prévia e propostas</button>`)}</tr>`).join("")}
-</tbody></table></div>` : nenhum("Nenhum relatório SAIPOS importado que cubra o período.")}</section>`;
-  }
+  if (aba === "importacoes") return `${topo}${importacoesDoCanal(ctx.importacoes, { erro: ctx.importacoesErro ?? null, periodoPadrao: { inicio: f.inicio, fim: f.fim } })}`;
   if (aba === "conferencias") {
     return `${topo}<section class="card"><h2>Pendências das importações</h2>
 ${d.divergencias?.length ? `<ul class="lista-simples">${d.divergencias.map((x) => `<li><span><strong>${esc(x.codigo.replaceAll("_", " ").toLowerCase())}</strong><br><span class="nota">${esc(x.exemplo)}</span></span><span>${x.quantidade} · ${valor(x.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhuma pendência nas importações do período.")}
@@ -263,13 +257,16 @@ export function plataforma(d, ctx = {}) {
 ${d.historico.map((x) => { const [r, c] = REPASSE[x.situacaoRepasse] ?? [x.situacaoRepasse, "neutro"]; return `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Bruto", valor(x.brutoCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Recebido", valor(x.repasseRecebidoCentavos))}${td("Repasse", selo(r, c))}</tr>`; }).join("")}
 </tbody></table></div>` : nenhum(ifood ? "Nenhum demonstrativo oficial registrado." : "Nenhum relatório oficial importado.");
   const cs2 = d.conferenciaSaipos;
-  return `${cabecalho(nome, `Faturamento pela fonte oficial · ${esc(d.competencia ?? "")}`)}
+  const aba = ctx.aba === "importacoes" ? "importacoes" : "resumo";
+  const abasDoCanal = `<nav class="abas abas--botoes" aria-label="Seções de ${esc(nome)}">${[["resumo", "Resumo"], ["importacoes", "Importações"]].map(([k, t]) => `<button type="button" data-aba-canal="${k}"${k === aba ? ' aria-current="page"' : ""}>${t}</button>`).join("")}</nav>`;
+  if (aba === "importacoes") return `${cabecalho(nome, `Importações pela fonte oficial · ${esc(d.competencia ?? "")}`)}${abasDoCanal}${importacoesDoCanal(ctx.importacoes, { erro: ctx.importacoesErro ?? null })}`;
+  return `${cabecalho(nome, `Faturamento pela fonte oficial · ${esc(d.competencia ?? "")}`)}${abasDoCanal}
 <p>${selo(rs, cs)}${d.fonteOficial ? ` <span class="nota">Fonte: ${esc(d.fonteOficial)}</span>` : ""}</p>
 ${d.dependeDeRelatorioOficial ? '<p class="aviso">Os relatórios oficiais da 99Food ainda não foram fornecidos: a área está pronta, mas nenhum número é presumido. Os valores aparecerão quando o leitor do arquivo real for implementado.</p>' : ""}
 ${calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null })}
 <section class="resumo" aria-label="Números do canal ${esc(nome)}">${cards}</section>
 ${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de conciliação</h2><ul class="lista-simples">${d.pendencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${p.valorCentavos ? valor(p.valorCentavos) : ""}</li>`).join("")}</ul></section>` : ""}
-<section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<a class="botao-link" href="#/configuracoes">Registrar demonstrativo (Configurações → Taxas Stone)</a>' : ""}</div>${historico}</section>
+<section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<button type="button" class="botao-link" data-aba-canal="importacoes">Registrar demonstrativo (aba Importações)</button>' : ""}</div>${historico}</section>
 <section class="card"><h2>Pedidos no relatório SAIPOS — só conferência</h2><p class="nota">${cs2 ? `${cs2.pedidos} pedido(s) · ${cs2.cancelados} cancelado(s) · ${esc(moeda(cs2.totalCentavos))}` : "—"}. Não entram no faturamento: a SAIPOS não é fonte oficial ${ifood ? "do iFood" : "da 99Food"}.</p></section>`;
 }
 
