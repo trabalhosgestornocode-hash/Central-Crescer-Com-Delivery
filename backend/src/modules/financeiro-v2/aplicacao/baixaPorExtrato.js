@@ -14,11 +14,15 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, SENTIDO, SITUACAO_LIQUIDACAO, SITUACAO_MOVIMENTACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
-import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
+import { formatarBRL, proporcao, somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { diasEntre } from "../dominio/tempo.js";
 import { aceitaEscrita } from "../dominio/fechamento.js";
 import { competenciaDe } from "../dominio/tempo.js";
 import { aplicarLiquidacao } from "../dominio/titulos.js";
+import { CATEGORIA_JUROS_E_MULTAS, cadeiaDoSistema } from "../dominio/planoDeContas.js";
+import { CODIGO as COD } from "../dominio/erros.js";
+import { baseNaTransacao } from "./base.js";
+import { operacoesEconomicas } from "./economico.js";
 import { validarPreviaDeVinculo, validarVinculoDeExtrato } from "../contratos/comandos.js";
 
 /** Por que uma saída não pode receber baixa de conta (null = pode). */
@@ -107,13 +111,19 @@ export function operacoesDeBaixaPorExtrato(b) {
           const docsDaConta = (await tx.listar(cx, TIPO.VINCULO_DOCUMENTAL, { onde: { registroTipo: TIPO.OBRIGACAO, registroId: o.id } })).map((v) => v.documentoId);
           const docAutomatico = !antecipacao && m.documentoId ? await tx.obter(cx, TIPO.DOCUMENTO, m.documentoId) : null;
           const diferenca = subtrair(disponivel, valor);
+          // Sobra que PODE ser juro/multa: saída maior que o saldo. Nada é escolhido sozinho; a pessoa decide na confirmação.
+          const sobra = subtrair(disponivel, o.saldoCentavos);
+          const limiteJuros = limiteDeJurosSemJustificativa(o.valorBaseCentavos);
+          const juros = !inelegivel && o.saldoCentavos > 0 && sobra > 0
+            ? { sobraCentavos: sobra, categoria: cadeiaDoSistema(CATEGORIA_JUROS_E_MULTAS).at(-1).nome, competencia: competenciaDe(m.dataEfetiva), limiteSemJustificativaCentavos: limiteJuros, acimaDoLimite: sobra > limiteJuros, justificativaMinima: JUSTIFICATIVA_MINIMA_JUROS, permissaoExigida: ACAO.CORRIGIR, voceTemPermissao: cx.permissoes.includes(ACAO.CORRIGIR) }
+            : null;
           escolhida = {
             id: m.id, versao: m.versao, data: m.dataEfetiva, conta: contas.get(m.contaId) ?? "Conta", descricao: m.descricao ?? null, valorCentavos: m.valorCentavos, alocadoCentavos: m.alocadoCentavos, disponivelCentavos: disponivel,
             historico, evidencia: { conciliacaoConfirmadaComEvidencia: conc ? conc.id : null, documentosDaSaida: historico.documentoIds, documentosDaConta: docsDaConta, exigeDocumento: Boolean(antecipacao) || (!conc && !docAutomatico), documentoAutomatico: docAutomatico ? { id: docAutomatico.id, tipo: docAutomatico.tipo, descricao: docAutomatico.descricao ?? null, periodoInicio: docAutomatico.periodoInicio ?? null, periodoFim: docAutomatico.periodoFim ?? null } : null, tiposAceitos: antecipacao ? DOCUMENTOS_DE_ANTECIPACAO : null },
             // 09: alerta de PAGAMENTO ANTECIPADO — a pessoa confere beneficiário e valor no comprovante e identifica a antecipação.
             antecipacao: antecipacao ? { ...antecipacao, contraparte, justificativaMinima: JUSTIFICATIVA_MINIMA_ANTECIPACAO,
               alerta: `A saída (${antecipacao.dataSaida}) é ${antecipacao.dias} dia(s) ANTERIOR à emissão da conta (${antecipacao.dataEmissao}). Só vincule se for pagamento antecipado comprovado deste beneficiário: valor e data parecidos não provam o vínculo.` } : null,
-            valorPropostoCentavos: valor, bloqueios,
+            valorPropostoCentavos: valor, bloqueios, juros,
             efeito: {
               obrigacao: { saldoAntesCentavos: o.saldoCentavos, saldoDepoisCentavos: subtrair(o.saldoCentavos, valor), quitada: subtrair(o.saldoCentavos, valor) === 0 },
               saida: { disponivelAntesCentavos: disponivel, disponivelDepoisCentavos: diferenca },
@@ -134,6 +144,36 @@ export function operacoesDeBaixaPorExtrato(b) {
       return b.executar(ctx, ACAO.VINCULAR_PAGAMENTO, (cx, tx) => baixarSaidaNaTransacao(b, tx, cx, c));
     },
   };
+}
+
+/** Juro/multa acima de 10% do valor da conta exige justificativa detalhada (provavelmente não é só juro). */
+export const LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL = 10;
+export const JUSTIFICATIVA_MINIMA_JUROS = 30;
+export const limiteDeJurosSemJustificativa = (valorOriginalCentavos) => proporcao(valorOriginalCentavos, LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL, 100);
+
+/**
+ * JURO/MULTA descoberto na baixa: a parte do valor vinculado que passa do saldo da conta vira AJUSTE da própria conta
+ * (categoria "Juros e multas pagos a fornecedores", despesa financeira, competência do PAGAMENTO), na MESMA transação da
+ * baixa. Só quita a conta inteira (o valor sem os juros é igual ao saldo) e só vem de saída que cobre os dois valores.
+ */
+async function lancarJurosDaBaixa(b, tx, cx, c, mov) {
+  if (c.alocacoes.length !== 1) falhar(COD.ENTRADA_INVALIDA, "Juros ou multa só se classificam numa baixa de uma única conta.", { campo: "jurosCentavos" });
+  if (!(cx.permissoes ?? []).includes(ACAO.CORRIGIR)) falhar(COD.PERMISSAO_INSUFICIENTE, "Classificar juros ou multa exige também a permissão de corrigir contas.", { acaoExigida: ACAO.CORRIGIR });
+  const [a] = c.alocacoes;
+  const o = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar");
+  if (o.situacao === SITUACAO_TITULO.CANCELADA || !(o.saldoCentavos > 0)) falhar(COD.ENTRADA_INVALIDA, "Só uma conta em aberto recebe juros ou multa.", { campo: "jurosCentavos" });
+  if (c.jurosCentavos >= a.valorCentavos) falhar(COD.ENTRADA_INVALIDA, "O juro não pode ser o valor inteiro vinculado.", { campo: "jurosCentavos" });
+  const principal = subtrair(a.valorCentavos, c.jurosCentavos);
+  if (principal !== o.saldoCentavos) falhar(COD.ENTRADA_INVALIDA, "Juros ou multa só se classificam quando a baixa quita a conta: o valor sem os juros precisa ser igual ao saldo em aberto.", { campo: "jurosCentavos", saldoCentavos: o.saldoCentavos, principalCentavos: principal });
+  if (c.jurosCentavos > limiteDeJurosSemJustificativa(o.valorBaseCentavos) && c.justificativa.trim().length < JUSTIFICATIVA_MINIMA_JUROS) {
+    falhar(COD.ENTRADA_INVALIDA, `O juro passa de ${LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL}% do valor da conta: explique o motivo (mínimo ${JUSTIFICATIVA_MINIMA_JUROS} caracteres).`, { motivo: "JUROS_ACIMA_DO_USUAL", campo: "justificativa" });
+  }
+  const documentoId = c.documentoId ?? mov.documentoId ?? null;
+  await b.categoriaDoSistema(tx, cx, CATEGORIA_JUROS_E_MULTAS); // existe em qualquer unidade, mesmo em plano implantado antes dela
+  return operacoesEconomicas(baseNaTransacao(b, tx, cx)).registrarAjuste(cx, {
+    alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.jurosCentavos, categoria: CATEGORIA_JUROS_E_MULTAS, competencia: competenciaDe(mov.dataEfetiva),
+    motivo: `Juros/multa pagos ao fornecedor (conta ${formatarBRL(o.valorBaseCentavos)} + ${formatarBRL(c.jurosCentavos)}): ${c.justificativa}`.slice(0, 500), ...(documentoId ? { documentoId } : {}),
+  });
 }
 
 /**
@@ -164,6 +204,8 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   if (total > disponivel) falhar(CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO, "O total vinculado supera o saldo ainda não vinculado da saída.", { disponivelCentavos: disponivel, totalCentavos: total });
   // Contas: travadas em ordem (sem impasse), carregadas no escopo (outra unidade simplesmente não existe aqui).
   for (const id of c.alocacoes.map((a) => a.obrigacaoId).sort()) await tx.travar(cx, `obrigacao:${id}`, "EXCLUSIVA");
+  // Juros/multa vira ajuste da conta ANTES de carregá-la: a baixa abaixo já enxerga o saldo com os juros.
+  const juros = c.jurosCentavos > 0 ? await lancarJurosDaBaixa(b, tx, cx, c, mov) : null;
   const contas = [];
   for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
   // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
@@ -217,7 +259,7 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
     }
   }
   return {
-    repetido: false, movimentacao, liquidacoes, titulos,
-    efeito: { novasSaidas: 0, novasDespesas: 0, vinculadoCentavos: total, disponivelDepoisCentavos: subtrair(disponivel, total) },
+    repetido: false, movimentacao, liquidacoes, titulos, ...(juros ? { juros: { ajuste: juros.ajuste, lancamento: juros.lancamento } } : {}),
+    efeito: { novasSaidas: 0, novasDespesas: juros ? 1 : 0, ...(juros ? { jurosCentavos: c.jurosCentavos } : {}), vinculadoCentavos: total, disponivelDepoisCentavos: subtrair(disponivel, total) },
   };
 }

@@ -65,6 +65,8 @@ export const CATEGORIA_DESPESA_A_CLASSIFICAR = "DESPESAS_A_CLASSIFICAR";
  * de categoria (recebível não gera receita) — são marcados `anteriorAAbertura`.
  */
 export const CATEGORIA_TITULOS_ANTERIORES = "TITULOS_ANTERIORES_A_ABERTURA";
+/** Juros e multas cobrados por um fornecedor além do valor da conta (descobertos ao baixar pelo extrato). Despesa financeira; criada sob demanda. */
+export const CATEGORIA_JUROS_E_MULTAS = "JUROS_E_MULTAS_DE_FORNECEDORES";
 
 /** Modelo genérico: serve a qualquer empresa. As categorias `doSistema` são usadas pelo próprio núcleo. */
 const BASE = [
@@ -99,6 +101,7 @@ const BASE = [
   g("DESPESAS_FINANCEIRAS", "Despesas financeiras", C.DESPESAS_FINANCEIRAS),
   f("JUROS_E_TARIFAS_BANCARIAS", "Juros e tarifas bancárias", "DESPESAS_FINANCEIRAS"),
   f("TAXAS_ANTECIPACAO", "Taxas de antecipação de recebíveis", "DESPESAS_FINANCEIRAS", { exigeDocumento: true }),
+  f(CATEGORIA_JUROS_E_MULTAS, "Juros e multas pagos a fornecedores", "DESPESAS_FINANCEIRAS", { doSistema: true }),
   g("TRIBUTOS", "Tributos", C.TRIBUTOS),
   f("TRIBUTOS_SOBRE_VENDAS", "Tributos sobre vendas", "TRIBUTOS", { natureza: N.DEDUCAO }),
   f("TRIBUTOS_DIVERSOS", "Outros tributos e taxas", "TRIBUTOS"),

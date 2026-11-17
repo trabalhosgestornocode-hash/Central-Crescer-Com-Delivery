@@ -51,6 +51,19 @@ const historico = (lista = []) => (lista.length ? `<ol class="historico">${lista
 const fechar = (titulo) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(titulo)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar detalhe">×</button></div>`;
 
 // ------------------------------------------------------------------------------------------------- contas a pagar
+/** Etiqueta de data: dia em destaque, mês e ano pequenos. Texto completo para leitor de tela. */
+const MES_CURTO = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const etiquetaDeData = (iso) => {
+  if (!iso) return "—";
+  const [a, m, d] = String(iso).split("-");
+  return `<span class="data-etiqueta"><span class="sr">${esc(dataBR(iso))}</span><span aria-hidden="true" class="data-etiqueta__dia">${esc(d)}</span><span aria-hidden="true" class="data-etiqueta__mes">${esc(MES_CURTO[Number(m) - 1] ?? "")} ${esc(String(a).slice(2))}</span></span>`;
+};
+/** Barra de quanto da conta já foi paga (só exibição da razão pago/original; o dinheiro vem pronto do backend). */
+const barraDePago = (x) => {
+  if (!(x.pagoCentavos > 0) || !(x.valorOriginalCentavos > 0)) return "";
+  const pct = Math.min(100, Math.round((x.pagoCentavos / x.valorOriginalCentavos) * 100));
+  return `<span class="barra-pago" role="img" aria-label="${pct}% já pago"><span style="width:${pct}%"></span></span>`;
+};
 export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
   const o = r.opcoesDeRegistro;
@@ -84,8 +97,8 @@ ${registrar}
 </form>
 ${r.recorrenciasSemRegistro?.length ? `<p class="aviso aviso--alerta">Recorrência sem registro: ${r.recorrenciasSemRegistro.map((x) => `${esc(x.fornecedor ?? "")} · ${esc(descricaoLegivel(x.descricao))} (${esc(dataBR(x.data))})`).join("; ")}. Nada foi lançado automaticamente.</p>` : ""}
 <section class="card" aria-labelledby="t-lista-pagar"><h2 id="t-lista-pagar" class="sr">Lista de contas a pagar</h2>
-${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Contas a pagar</caption><thead><tr><th scope="col">Vencimento</th><th scope="col">Fornecedor e descrição</th><th scope="col">Original</th><th scope="col">Pago</th><th scope="col">Saldo</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
-${r.itens.map((x) => `<tr>${td("Vencimento", esc(dataBR(x.vencimento)))}${td("Fornecedor", `<strong>${esc(x.fornecedor?.nome ?? "Fornecedor não identificado")}</strong><br><span class="nota">${esc(descricaoLegivel(x.descricao))}${x.parcela?.total > 1 ? ` · parcela ${x.parcela.numero}/${x.parcela.total}` : ""}${x.recorrencia ? " · recorrente" : ""} · ${esc(x.categoria?.nome ?? "sem categoria")} · ${esc(competencia(x.competencia))}${x.competenciaHomologada ? " (homologada)" : ""}</span>${x.pendencias.includes("SEM_DOCUMENTO") ? ` <span class="selo selo--alerta">sem documento</span> <a class="botao-link" href="#/conferencias?competencia=${esc(x.competencia)}&amp;revisar=OBRIGACAO:${esc(x.id)}:DOCUMENTO">Pendência</a>` : ""}${x.efeitoNaDre === "FORA_ATE_CLASSIFICAR" ? ' <span class="selo selo--alerta" title="A dívida existe, mas a natureza econômica não está comprovada: fica fora da DRE até ser classificada.">fora da DRE até classificar</span>' : ""}`, "esquerda")}${td("Original", valor(x.valorOriginalCentavos))}${td("Pago", valor(x.pagoCentavos))}${td("Saldo", valor(x.saldoCentavos))}${td("Situação", selo(x.situacao))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="pagar:${esc(x.id)}">Detalhar</button>`)}</tr>`).join("")}
+${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes tabela--contas"><caption class="sr">Contas a pagar</caption><thead><tr><th scope="col">Vencimento</th><th scope="col">Fornecedor e descrição</th><th scope="col">Original</th><th scope="col">Pago</th><th scope="col">Saldo</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
+${r.itens.map((x) => `<tr class="linha-conta linha-conta--${esc(situacaoTitulo(x.situacao).classe)}">${td("Vencimento", etiquetaDeData(x.vencimento), "col-data")}${td("Fornecedor", `<strong>${esc(x.fornecedor?.nome ?? "Fornecedor não identificado")}</strong><br><span class="nota">${esc(descricaoLegivel(x.descricao))}${x.parcela?.total > 1 ? ` · parcela ${x.parcela.numero}/${x.parcela.total}` : ""}${x.recorrencia ? " · recorrente" : ""} · ${esc(x.categoria?.nome ?? "sem categoria")} · ${esc(competencia(x.competencia))}${x.competenciaHomologada ? " (homologada)" : ""}</span>${x.pendencias.includes("SEM_DOCUMENTO") ? ` <span class="selo selo--alerta">sem documento</span> <a class="botao-link" href="#/conferencias?competencia=${esc(x.competencia)}&amp;revisar=OBRIGACAO:${esc(x.id)}:DOCUMENTO">Pendência</a>` : ""}${x.efeitoNaDre === "FORA_ATE_CLASSIFICAR" ? ' <span class="selo selo--alerta" title="A dívida existe, mas a natureza econômica não está comprovada: fica fora da DRE até ser classificada.">fora da DRE até classificar</span>' : ""}`, "esquerda")}${td("Original", valor(x.valorOriginalCentavos))}${td("Pago", `${valor(x.pagoCentavos)}${barraDePago(x)}`)}${td("Saldo", valor(x.saldoCentavos))}${td("Situação", selo(x.situacao))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="pagar:${esc(x.id)}">Detalhar</button>`)}</tr>`).join("")}
 </tbody></table></div>` : nenhum("Nenhuma conta a pagar com estes filtros.")}
 ${paginacao(r.paginacao, "contas-a-pagar")}
 </section>
@@ -210,6 +223,21 @@ ${blocoCorrigir}
 <h3>Histórico</h3>${historico(d.historico)}`;
 }
 
+/**
+ * A saída é maior que a conta: a pessoa decide o que é a diferença. Nada vem marcado sozinho (valor igual não prova que é juro).
+ * "Juros ou multa" vira ajuste da própria conta, na mesma gravação da baixa; "deixar" mantém a sobra como saída a classificar.
+ */
+function blocoDeJuros(e, saldoDaConta) {
+  const j = e.juros;
+  if (!j) return "";
+  const sobra = moeda(j.sobraCentavos);
+  if (!j.voceTemPermissao) return `<p class="aviso">A saída é ${esc(sobra)} maior que a conta. A diferença continua como saída a classificar. Para lançá-la como juros ou multa, a baixa exige também a permissão "corrigir contas".</p>`;
+  const opcao = (valorDoCampo, titulo, texto) => `<label class="escolha-diferenca"><input type="radio" name="juros" value="${esc(valorDoCampo)}" required><span><strong>${esc(titulo)}</strong><span class="nota">${texto}</span></span></label>`;
+  return `<fieldset class="diferenca-saida"><legend>A saída é ${esc(sobra)} maior que a conta. O que é essa diferença?</legend><div class="diferenca-saida__opcoes">
+${opcao(inteiroEmMoeda(j.sobraCentavos), "Juros ou multa deste pagamento", `Entram ${esc(sobra)} em ${esc(j.categoria)} (despesas financeiras), em ${esc(competencia(j.competencia))}. A conta é quitada com ${esc(moeda(saldoDaConta + j.sobraCentavos))} e a despesa original não muda.${j.acimaDoLimite ? ` <strong>Passa de 10% do valor da conta:</strong> explique o motivo na observação (mínimo ${esc(String(j.justificativaMinima))} caracteres).` : ""}`)}
+${opcao("0", "Deixar sem classificar por enquanto", `Os ${esc(sobra)} continuam como saída a classificar em Caixa e Bancos. Nada é lançado como juros.`)}</div></fieldset>`;
+}
+
 /** Prévia + confirmação do vínculo de UMA saída do extrato com a conta (o comprovante é o próprio extrato). */
 export function detalheVinculoExtrato(d, ctx = {}) {
   const o = d.obrigacao;
@@ -228,8 +256,9 @@ export function detalheVinculoExtrato(d, ctx = {}) {
     : '<p class="aviso">Escolha o documento que comprova este pagamento (comprovante ou boleto pago). Sem ele a baixa é recusada.</p>';
   const precisaEscolher = Boolean(ant) || (e.evidencia.exigeDocumento && !auto);
   const form = pode ? formAcao({ embutido: true, url: "/api/fv2/acoes/obrigacoes/vincular-extrato", rotulo: "Confirmar baixa", recarregar: `vinculo:${o.id}|${e.id}`,
-    aviso: "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova e nenhuma despesa nova são criadas.",
+    aviso: e.juros?.voceTemPermissao ? "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova é criada; só entra despesa nova se eu escolhi juros ou multa acima." : "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova e nenhuma despesa nova são criadas.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(o.id)}"><input type="hidden" name="movimentacao" value="${esc(e.id)}"><input type="hidden" name="versao" value="${esc(String(e.versao))}">
+${blocoDeJuros(e, e.efeito.obrigacao.saldoAntesCentavos)}
 <label>Valor a vincular (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(inteiroEmMoeda(e.valorPropostoCentavos))}" required></label>
 ${precisaEscolher ? `<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.filter((x) => !ant || (e.evidencia.tiposAceitos ?? []).includes(x.tipo)).map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>` : ""}
 <label>Observação <input name="justificativa" required maxlength="500"${ant ? ` minlength="${esc(String(ant.justificativaMinima))}"` : ` value="Pago conforme o extrato de ${esc(dataBR(e.data))}"`}></label>
@@ -251,7 +280,7 @@ ${form}
 <ul class="mini">
   <li>Disponível na saída: ${valor(e.efeito.saida.disponivelAntesCentavos)} → ${valor(e.efeito.saida.disponivelDepoisCentavos)}.</li>
   <li>${esc(e.efeito.banco)}</li><li>${esc(e.efeito.dre)}</li><li>${esc(e.efeito.fluxo)}</li>
-  ${e.efeito.diferenca ? `<li>Sobra da saída: ${valor(e.efeito.saida.disponivelDepoisCentavos)} continua como saída a classificar — nada é lançado como taxa, juro ou desconto.</li>` : ""}
+  ${e.efeito.diferenca ? (e.juros ? `<li>Sobra da saída: ${valor(e.juros.sobraCentavos)}. Você escolhe acima: lançar como juros ou multa da conta, ou deixar como saída a classificar. Nada é lançado como juros sem a sua escolha.</li>` : `<li>Sobra da saída: ${valor(e.efeito.saida.disponivelDepoisCentavos)} continua como saída a classificar — nada é lançado como taxa, juro ou desconto.</li>`) : ""}
 </ul>
 <h3>Histórico desta saída</h3>
 ${e.historico.liquidacoes.length ? `<ul class="lista-simples">${e.historico.liquidacoes.map((l) => `<li><span>${esc(dataBR(l.dataEfetiva))} · baixa de outra conta${l.viaExtrato ? " (vínculo do extrato)" : ""}</span>${valor(l.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma baixa anterior com esta saída.")}
@@ -429,27 +458,36 @@ ${paginacao(r.paginacao, "caixa-e-bancos")}
 const SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 export function calendario(cal, { selecionado = null } = {}) {
   const deslocamento = (cal.dias[0].diaDaSemana + 6) % 7;
-  const marca = (n, classe, rotulo) => (n ? `<span class="marca-dia marca-dia--${classe}" title="${esc(rotulo)}">${n}</span>` : "");
+  // Marcador compacto: ponto de status + quantidade (o rótulo completo vai no title e no aria-label da célula).
+  const marca = (n, classe, rotulo) => (n ? `<span class="cal-chip cal-chip--${classe}" title="${esc(`${n} ${rotulo}`)}"><i aria-hidden="true"></i>${n}</span>` : "");
+  // Situação principal do dia: o que mais pede atenção define a faixa lateral.
+  const situacaoDoDia = (d) => (d.vencidas.quantidade ? "erro" : d.aVencer.quantidade ? "info" : d.pagas.quantidade ? "ok" : d.recorrentesPrevistas.quantidade ? "alerta" : "livre");
+  const rotuloLegenda = (classe, texto) => `<li><span class="cal-chip cal-chip--${classe}"><i aria-hidden="true"></i></span>${texto}</li>`;
   return `${cabecalho("Calendário financeiro", `${esc(competencia(cal.mes))} · posição em ${esc(dataBR(cal.dataBase))}`)}
 ${abas("calendario")}
 <div class="cal-nav"><button type="button" class="botao" data-mes="-1" aria-label="Mês anterior">‹ Anterior</button><strong>${esc(competencia(cal.mes))}</strong><button type="button" class="botao" data-mes="1" aria-label="Próximo mês">Próximo ›</button></div>
-<section class="resumo" aria-label="Totais do mês">
-  ${card("A vencer", valor(cal.totais.aVencerCentavos))}${card("Vencido em aberto", valor(cal.totais.vencidoCentavos))}${card("Pago no mês", valor(cal.totais.pagoCentavos))}${card("Recorrências previstas", valor(cal.totais.recorrentePrevistoCentavos), "Estimadas pelo último valor da série; não são contas lançadas.")}
+<section class="resumo resumo--status" aria-label="Totais do mês">
+  <div class="resumo-item resumo-item--info">${card("A vencer", valor(cal.totais.aVencerCentavos))}</div><div class="resumo-item resumo-item--erro">${card("Vencido em aberto", valor(cal.totais.vencidoCentavos))}</div><div class="resumo-item resumo-item--ok">${card("Pago no mês", valor(cal.totais.pagoCentavos))}</div><div class="resumo-item resumo-item--alerta">${card("Recorrências previstas", valor(cal.totais.recorrentePrevistoCentavos), "Estimadas pelo último valor da série; não são contas lançadas.")}</div>
 </section>
-<ul class="legenda legenda--cal"><li><span class="marca-dia marca-dia--info" aria-hidden="true"></span> vencendo</li><li><span class="marca-dia marca-dia--erro" aria-hidden="true"></span> vencidas</li><li><span class="marca-dia marca-dia--ok" aria-hidden="true"></span> pagamentos</li><li><span class="marca-dia marca-dia--alerta" aria-hidden="true"></span> recorrentes previstas</li></ul>
+<div class="cal-layout">
+<div class="cal-bloco">
+<ul class="legenda legenda--cal">${rotuloLegenda("info", "vencendo")}${rotuloLegenda("erro", "vencidas")}${rotuloLegenda("ok", "pagamentos")}${rotuloLegenda("alerta", "recorrentes previstas")}</ul>
 <div class="calendario" role="grid" aria-label="Dias de ${esc(competencia(cal.mes))}">
-  ${SEMANA.map((s) => `<div class="cal-cab" role="columnheader">${s}</div>`).join("")}
+  ${SEMANA.map((s, i) => `<div class="cal-cab${i > 4 ? " cal-cab--fim" : ""}" role="columnheader">${s}</div>`).join("")}
   ${'<div class="cal-vazio" aria-hidden="true"></div>'.repeat(deslocamento)}
   ${cal.dias.map((d) => {
     const algo = d.titulos.length + d.pagamentos.length + d.recorrentes.length;
-    return `<button type="button" role="gridcell" class="cal-dia${d.hoje ? " cal-dia--hoje" : ""}${algo ? "" : " cal-dia--livre"}${d.data === selecionado ? " cal-dia--sel" : ""}" data-dia="${esc(d.data)}" aria-pressed="${d.data === selecionado}" aria-label="${esc(dataBR(d.data))}: ${d.aVencer.quantidade} vencendo, ${d.vencidas.quantidade} vencida(s), ${d.pagas.quantidade} pagamento(s), ${d.recorrentesPrevistas.quantidade} recorrente(s)${d.emAbertoCentavos ? `, em aberto ${moeda(d.emAbertoCentavos)}` : ""}">
+    const fimDeSemana = d.diaDaSemana === 0 || d.diaDaSemana === 6;
+    return `<button type="button" role="gridcell" class="cal-dia${d.hoje ? " cal-dia--hoje" : ""}${algo ? ` cal-dia--${situacaoDoDia(d)}` : " cal-dia--livre"}${fimDeSemana ? " cal-dia--fim" : ""}${d.data === selecionado ? " cal-dia--sel" : ""}" data-dia="${esc(d.data)}" aria-pressed="${d.data === selecionado}" aria-label="${esc(dataBR(d.data))}${d.hoje ? " (hoje)" : ""}: ${d.aVencer.quantidade} vencendo, ${d.vencidas.quantidade} vencida(s), ${d.pagas.quantidade} pagamento(s), ${d.recorrentesPrevistas.quantidade} recorrente(s)${d.emAbertoCentavos ? `, em aberto ${moeda(d.emAbertoCentavos)}` : ""}">
       <span class="cal-num">${Number(d.data.slice(8))}</span>
-      <span class="cal-marcas">${marca(d.aVencer.quantidade, "info", "vencendo")}${marca(d.vencidas.quantidade, "erro", "vencidas")}${marca(d.pagas.quantidade, "ok", "pagamentos")}${marca(d.recorrentesPrevistas.quantidade, "alerta", "recorrentes")}</span>
       ${d.emAbertoCentavos ? `<span class="cal-valor">${esc(moeda(d.emAbertoCentavos))}</span>` : ""}
+      <span class="cal-marcas">${marca(d.vencidas.quantidade, "erro", "vencida(s)")}${marca(d.aVencer.quantidade, "info", "vencendo")}${marca(d.pagas.quantidade, "ok", "pagamento(s)")}${marca(d.recorrentesPrevistas.quantidade, "alerta", "recorrente(s) prevista(s)")}</span>
     </button>`;
   }).join("")}
 </div>
-<section id="dia-detalhe" class="card" aria-live="polite">${selecionado ? diaDoCalendario(cal.dias.find((d) => d.data === selecionado)) : '<p class="nota">Toque em um dia para ver as contas.</p>'}</section>`;
+</div>
+<section id="dia-detalhe" class="card cal-painel" aria-live="polite">${selecionado ? diaDoCalendario(cal.dias.find((d) => d.data === selecionado)) : '<p class="cal-painel__vazio"><strong>Escolha um dia</strong>Toque em um dia do calendário para ver as contas e dar baixa.</p>'}</section>
+</div>`;
 }
 
 // ------------------------------------------------------------------------------------------------- fluxo de caixa

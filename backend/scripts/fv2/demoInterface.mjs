@@ -330,11 +330,16 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       ...(b.chave ? { fonte: { sistema: "MANUAL", idExterno: `formulario:${String(b.chave).slice(0, 60)}` } } : {}),
     }) },
     // 08E (F-2): vincular saída JÁ registrada (extrato) à conta — nenhuma saída nova, nenhuma despesa nova.
-    "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa", "pagamentoAntecipado"], fazer: (ctx, b) => nucleo.vincularPagamentoDoExtrato(ctx, {
-      movimentacaoId: id(b.movimentacao), versaoMovimentacao: /^\d{1,9}$/.test(String(b.versao ?? "")) ? Number(b.versao) : b.versao,
-      alocacoes: [{ obrigacaoId: id(b.obrigacao), valorCentavos: centavos(b.valor) }], ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true,
-      ...(b.pagamentoAntecipado === "on" || b.pagamentoAntecipado === true || b.pagamentoAntecipado === "true" ? { pagamentoAntecipado: true } : {}),
-    }) },
+    // `valor` = o que quita a conta; `juros` (opcional) = juro/multa além dela. A saída paga os dois, numa só transação (igual à rota real).
+    "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "juros", "documento", "justificativa", "pagamentoAntecipado"], fazer: (ctx, b) => {
+      const juros = b.juros === undefined || b.juros === null || String(b.juros).trim() === "" ? 0 : centavos(b.juros);
+      return nucleo.vincularPagamentoDoExtrato(ctx, {
+        movimentacaoId: id(b.movimentacao), versaoMovimentacao: /^\d{1,9}$/.test(String(b.versao ?? "")) ? Number(b.versao) : b.versao,
+        alocacoes: [{ obrigacaoId: id(b.obrigacao), valorCentavos: centavos(b.valor) + juros }], ...(juros > 0 ? { jurosCentavos: juros } : {}),
+        ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true,
+        ...(b.pagamentoAntecipado === "on" || b.pagamentoAntecipado === true || b.pagamentoAntecipado === "true" ? { pagamentoAntecipado: true } : {}),
+      });
+    } },
     // 08E (F-1): documentar UMA pendência no fechamento (decisão + o que falta). Documentar não resolve.
     "/api/fv2/acoes/pendencias/documentar": { campos: ["competencia", "chave", "descricao", "impacto", "decisao", "documentacaoFaltante", "justificativa"], fazer: (ctx, b) => nucleo.documentarPendenciaDoFechamento(ctx, {
       competencia: b.competencia, ...(b.justificativa ? { justificativa: b.justificativa } : {}),

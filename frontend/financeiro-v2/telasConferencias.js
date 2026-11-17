@@ -614,6 +614,7 @@ export function resultadoDaAcao(r) {
   if (d.importacao) return `Arquivo recebido: ${esc(ESTADOS_IMPORTACAO[d.importacao.estado]?.rotulo ?? d.importacao.estado)}.`;
   if (d.proposta && d.efeitos) return `Proposta aplicada: ${d.efeitos.length} registro(s) criado(s) numa única transação.`;
   if (d.criadas !== undefined) return `${d.criadas} criada(s), ${d.existentes ?? 0} já existente(s)${d.bloqueadasPorHomologacao ? `, ${d.bloqueadasPorHomologacao} não criada(s) por competência homologada` : ""}.`;
+  if (d.efeito?.novasSaidas === 0 && d.liquidacoes && d.efeito.jurosCentavos) return `Baixa vinculada à saída do extrato e conta quitada. Juros ou multa de ${esc(moeda(d.efeito.jurosCentavos))} lançados como despesa financeira da conta (competência do pagamento). Nenhuma saída nova; disponível na saída: ${esc(moeda(d.efeito.disponivelDepoisCentavos))}.`;
   if (d.efeito?.novasSaidas === 0 && d.liquidacoes) return `Baixa vinculada à saída do extrato: ${esc(moeda(d.efeito.vinculadoCentavos))}. Nenhuma saída nova, nenhuma despesa nova; disponível na saída: ${esc(moeda(d.efeito.disponivelDepoisCentavos))}.`;
   if (d.pendencia && d.avaliacao !== undefined) return `Pendência documentada no fechamento: ${esc(SITUACAO_NO_FECHAMENTO[d.avaliacao?.situacao]?.rotulo ?? "registrada")}. Documentar não resolve a pendência.`;
   if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}${d.versao.comRessalvas ? " com ressalvas" : ""}. Versão nº ${d.versao.numero} registrada.`;
