@@ -1,5 +1,9 @@
 # 43 — Duas falhas de testes de frontend que já existiam na main (diagnóstico)
 
+> **Situação em 17/11/2026 (Fase 09): RESOLVIDO.** O commit `f625a69` atualizou o texto esperado no teste 08E
+> ("Como esta conta foi paga?") e passou o total em aberto do dia a vir do servidor (sem soma na tela). Na suíte completa do
+> frontend desta branch os dois testes passam (0 falhas). O texto abaixo fica como registro do diagnóstico original.
+
 > Registradas à parte para não serem confundidas com regressões das Fases 02–06. Elas falham na `main` (232d56a) sem
 > nenhuma mudança desta branch. **Não foram corrigidas aqui**: a correção pede decisão sobre o texto e a regra da tela.
 

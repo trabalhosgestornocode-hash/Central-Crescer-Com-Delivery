@@ -1,6 +1,6 @@
 // Fase 04 (doc 42) — fechamento manual de caixa: registro (com correção auditada) e consulta com a comparação diária.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { EVENTO_HISTORICO, SITUACAO_VENDA, TIPO } from "../dominio/catalogos.js";
+import { EVENTO_HISTORICO, SITUACAO_CONCILIACAO, SITUACAO_VENDA, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { calcularFechamento, compararDia, validarFechamentoManual } from "../dominio/fechamentoManual.js";
 import { competenciaDe, exigirData } from "../dominio/tempo.js";
@@ -102,7 +102,24 @@ export function operacoesDeFechamentoManual(b) {
       const provisorias = await b.consultar(ctx, async (cx, tx) => {
         const lista = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal } })).filter((v) => v.dataVenda === data && ehProvisoria(v));
         const pagamentos = await tx.listar(cx, TIPO.PAGAMENTO_VENDA);
-        return lista.map((v) => ({ ...v, entradasEmConta: pagamentos.filter((p) => p.vendaId === v.id && p.movimentacaoId && p.situacao === "VALIDO") }));
+        const doDia = lista.map((v) => ({ ...v, entradasEmConta: pagamentos.filter((p) => p.vendaId === v.id && p.movimentacaoId && p.situacao === "VALIDO") }));
+        // Tudo o que impediria a substituição é conferido ANTES de alterar qualquer coisa (cada estorno é uma transação própria:
+        // recusar no meio deixaria o dinheiro estornado e a venda ainda ativa).
+        let repasseRecebido = 0;
+        let entradaConciliada = 0;
+        for (const v of doDia) {
+          for (const p of pagamentos.filter((x) => x.vendaId === v.id && x.situacao !== "CANCELADO")) {
+            if (p.recebivelId && ((await tx.obter(cx, TIPO.RECEBIVEL, p.recebivelId))?.liquidadoCentavos ?? 0) > 0) repasseRecebido += 1;
+          }
+          for (const p of v.entradasEmConta) {
+            if ((await tx.obter(cx, TIPO.MOVIMENTACAO, p.movimentacaoId))?.situacaoConciliacao !== SITUACAO_CONCILIACAO.NAO_CONCILIADA) entradaConciliada += 1;
+          }
+        }
+        return { doDia, repasseRecebido, entradaConciliada };
+      }).then(({ doDia, repasseRecebido, entradaConciliada }) => {
+        if (repasseRecebido) falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "Parte do faturamento provisório já foi recebida (repasse conciliado). Nada foi alterado: estorne a liquidação antes de substituir.", { motivo: "REPASSE_JA_RECEBIDO", repasses: repasseRecebido });
+        if (entradaConciliada) falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "Uma entrada do faturamento provisório já está conciliada com o extrato. Nada foi alterado: revise a conciliação antes de substituir.", { motivo: "ENTRADA_CONCILIADA", entradas: entradaConciliada });
+        return doDia;
       });
       if (!provisorias.length) falhar(CODIGO.NAO_ENCONTRADO, "Não há faturamento manual provisório ativo neste dia e canal.");
       const canceladas = [];

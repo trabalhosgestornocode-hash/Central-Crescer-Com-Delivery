@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
 import { ESCRITAS } from "../../src/modules/fv2-integracao/escritas.js";
 import { calcularFechamento, validarFechamentoManual } from "../../src/modules/financeiro-v2/dominio/fechamentoManual.js";
-import { ORG_B, UNI_B, ctx, montar, rejeita } from "./helpers/cenario.js";
+import { ORG_B, UNI_B, ctx, entrada, montar, montarComCadastros, rejeita } from "./helpers/cenario.js";
 import { xlsx } from "./helpers/formatos.js";
 
 const c = ctx();
@@ -145,4 +145,26 @@ test("faturamento manual × importação: a importação do mesmo dia é recusad
   assert.equal(await receita(n), 19000, "agora só a importação: o provisório saiu");
   // Com venda importada no dia, novo faturamento manual é recusado.
   await rejeita(faturar(n, { caixa: "2" }), CODIGO.OPERACAO_INVALIDA);
+});
+
+test("substituição: repasse já recebido recusa ANTES de alterar (nada fica meio estornado) e vale depois de estornar a liquidação", async () => {
+  const { nucleo: n, c: cc, banco } = await montarComCadastros();
+  const WW = (k, b) => ESCRITAS[k].fazer(n, cc, b);
+  await WW("/configuracoes/unidade", { nomeExibicao: "U", justificativa: "Teste." });
+  await WW("/configuracoes/operadoras", { codigo: "MAQUININHA_IFOOD", nome: "Maq", processador: "MAQUININHA_IFOOD", inicio: "2026-01-01", modalidades: "PIX", justificativa: "Sintético." });
+  await WW("/configuracoes/taxas-contratadas", { operadora: "MAQUININHA_IFOOD", vigenciaInicio: "2026-01-01", fonte: "Fictícia", taxas: "PIX;PIX;0,80", justificativa: "Sintético." });
+  const man = await WW("/faturamento-manual/registrar", { data: "2026-09-05", caixa: "1", canal: "BALCAO", justificativa: "Sem relatório ainda (sintético)", din_vendas: "50,00", f_PIX_MAQUININHA_IFOOD_inf: "100,00" });
+  const { movimentacao } = await n.registrarMovimentacao(cc, entrada(banco.id, 9920));
+  const { liquidacoes: [liq] } = await n.registrarLiquidacao(cc, { movimentacaoId: movimentacao.id, alocacoes: [{ alvoTipo: "RECEBIVEL", alvoId: man.recebiveis[0].id, valorCentavos: 9920 }] });
+  const situacoes = async () => ({
+    venda: (await n.consultarRegistros(cc, { tipo: "VENDA" })).map((v) => v.situacao),
+    pagamentos: (await n.consultarRegistros(cc, { tipo: "PAGAMENTO_VENDA" })).map((p) => `${p.forma}:${p.situacao}`).sort(),
+  });
+  const antes = await situacoes();
+  await rejeita(WW("/faturamento-manual/substituir", { data: "2026-09-05", canal: "BALCAO", justificativa: "Relatório oficial chegou (sintético)." }), CODIGO.ESTORNO_EXIGE_COMPENSACAO);
+  assert.deepEqual(await situacoes(), antes, "a recusa não deixa o dinheiro estornado com a venda ainda ativa");
+  await n.estornarLiquidacao(cc, { liquidacaoId: liq.id, justificativa: "Repasse devolvido (sintético)" });
+  const s = await WW("/faturamento-manual/substituir", { data: "2026-09-05", canal: "BALCAO", justificativa: "Relatório oficial chegou (sintético)." });
+  assert.equal(s.canceladas, 1);
+  assert.deepEqual((await situacoes()).venda, ["CANCELADA"]);
 });
