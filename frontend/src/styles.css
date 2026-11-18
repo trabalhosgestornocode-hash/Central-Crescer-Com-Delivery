@@ -845,6 +845,7 @@ body {
 
 /* ===================== TOPBAR VIVA ===================== */
 .relogio { font-size: 13.5px; font-weight: 600; color: var(--texto); font-variant-numeric: tabular-nums; letter-spacing: .3px; }
+.sync-status[hidden] { display: none; }
 .sync-status { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--cinza); white-space: nowrap; }
 .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cinza-claro); box-shadow: 0 0 0 3px rgba(154,165,160,.18); }
 .sync-status[data-estado="ok"] .sync-dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(14,157,87,.2); }

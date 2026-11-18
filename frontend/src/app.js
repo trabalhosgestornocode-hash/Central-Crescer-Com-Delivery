@@ -157,9 +157,15 @@ function iniciarRelogio() {
   setInterval(upd, 1000);
 }
 
+/** Produtos/CMV contratado? (impersonação enxerga tudo, como no backend). Sem o módulo, /cmv responde 403 e a tela não tem o que sincronizar. */
+function empresaTemModuloCmv() {
+  const s = state.sessao;
+  return !s || s.impersonando || !Array.isArray(s.modulos) || !s.modulos.length || s.modulos.includes("products_cmv");
+}
+
 function setSync(estado, texto) {
   const box = el("#sync-status");
-  if (box) box.dataset.estado = estado;
+  if (box) { box.dataset.estado = estado; box.hidden = !state.moduloCmv; }
   const t = el("#sync-text");
   if (t) t.textContent = texto;
 }
@@ -179,9 +185,9 @@ function atualizarNotif() {
 // (ver configuracoes.js), com permissão própria.
 const VALOR_OFICIAL = "__oficial__";
 function popularTabelas() {
-  // Empresa própria não usa tabela comercial: some o seletor de canal/tabela do topo.
+  // Empresa própria (sem tabela comercial) ou sem o módulo Produtos/CMV: some o seletor de canal/tabela do topo.
   const filtros = el(".global-filtros");
-  if (filtros) filtros.hidden = !state.exigeTabela;
+  if (filtros) filtros.hidden = !state.exigeTabela || !state.moduloCmv;
   const sel = el("#tabela");
   const oficial = state.tabelasOficiais[state.canal];
   const rotuloOficial = oficial ? `★ Tabela oficial (${oficial})` : "★ Tabela oficial (não configurada)";
@@ -231,6 +237,12 @@ function definirComparacao(valorSelecionado) {
 // padrão de proteção que vendas.js#carregarSecao e api.js#chamar já usam.
 async function carregar() {
   const g = geracaoContexto();
+  if (!empresaTemModuloCmv()) { // nada a sincronizar: sem "Falha na sincronização" para quem não usa Produtos/CMV
+    state.moduloCmv = false; state.carregando = false; state.erro = null; state.erroCodigo = null; state.linhas = [];
+    setSync("ok", ""); popularTabelas(); atualizarNotif(); renderRotaAtual();
+    return;
+  }
+  state.moduloCmv = true;
   state.carregando = true;
   state.erro = null;
   setSync("sync", "Sincronizando…");
@@ -252,6 +264,10 @@ async function carregar() {
     // "Tabela comercial não configurada" não é uma falha de rede — é um
     // estado real e esperado (unidade pendente de configurar). Mostra a
     // mensagem certa, sem o banner genérico de "falha na sincronização".
+    if (e.status === 403 && /não contratado/i.test(e.message ?? "")) { // sessão antiga: o módulo saiu do plano
+      state.moduloCmv = false; state.erro = null; state.erroCodigo = null; state.linhas = [];
+      setSync("ok", ""); return;
+    }
     state.erro = e.message;
     state.erroCodigo = e.codigo ?? null;
     state.linhas = [];
