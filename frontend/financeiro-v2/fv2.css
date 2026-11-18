@@ -36,7 +36,7 @@
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--texto); font: 15px/1.55 Inter, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
 h1, h2, h3, h4 { line-height: 1.25; }
-.pular { position: absolute; left: -999px; } .pular:focus { left: 8px; top: 8px; background: var(--card); padding: 8px 12px; z-index: 30; border-radius: var(--raio-sm); }
+.pular { position: absolute; left: -999px; } .pular:focus { left: 8px; top: 8px; background: var(--card); padding: 8px 12px; min-height: 44px; display: inline-flex; align-items: center; z-index: 30; border-radius: var(--raio-sm); }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .faixa-demo { background: var(--alerta-bg); color: var(--alerta); text-align: center; font-size: 12px; font-weight: 500; padding: 5px 8px; }
 :focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
@@ -743,6 +743,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 /* ------------------------------------------------------------------ toque (celular/tablet): alvos de pelo menos 44 px, sem esconder nada */
 @media (max-width: 760px), (pointer: coarse) {
   .navegacao a { min-height: 44px; display: flex; align-items: center; }
+  .filtros > a { min-height: 44px; display: inline-flex; align-items: center; }
   .layout button, .layout select, .layout input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), .layout a.botao, .layout a.botao-link, .layout .botao-link { min-height: 44px; }
   .layout button.botao-link, .layout a.botao-link { display: inline-flex; align-items: center; justify-content: center; padding-block: 8px; }
 }

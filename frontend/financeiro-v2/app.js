@@ -1,7 +1,7 @@
 // Aplicação do Financeiro v2 (demonstração local): roteamento por hash, filtros, carregamento sem flash de dados antigos,
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
-import { criarConsultor, definirTransporte, enviar } from "./consulta.js";
+import { criarConsultor, definirTransporte, enviar, invalidarCache } from "./consulta.js";
 import { aquecerCredenciais, credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro } from "./plataforma.js";
 import * as adm from "./telasAdministracao.js";
 import * as conf from "./telasConferencias.js";
@@ -101,6 +101,7 @@ function modoHomologacao(usuario) {
   sair.type = "button";
   sair.textContent = "Sair";
   sair.addEventListener("click", async () => {
+    invalidarCache(); // ao encerrar a sessão, nada financeiro fica guardado na aba
     await fetch("/api/fv2/logout", { method: "POST", headers: { "content-type": "application/json" }, body: "{}", credentials: "same-origin" });
     window.location.assign("/entrar");
   });
@@ -569,6 +570,8 @@ function aplicarFiltroLocal(form) {
 }
 
 document.addEventListener("click", (e) => {
+  // "Tentar novamente" (erro de LEITURA) e "Atualizar dados": relê só a tela atual, na mesma unidade, competência e filtros. Nunca reenvia gravação.
+  if (e.target.closest("[data-tentar-novamente], #atualizar-dados")) { invalidarCache(); carregar(); return; }
   const alternar = e.target.closest("[data-alternar]");
   if (alternar) {
     const alvo = document.getElementById(alternar.getAttribute("aria-controls"));
@@ -671,6 +674,6 @@ document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[d
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; carregar(); });
 const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
-$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); carregar(); });
-$("#filtro-sessao").addEventListener("change", (e) => { estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
+$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); invalidarCache(); carregar(); });
+$("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
 rotear();

@@ -73,3 +73,24 @@ test("cabeçalho do HTML: favicon oficial versionado, título, e aviso de demons
   const css = await readFile(new URL("../../../frontend/financeiro-v2/fv2.css", import.meta.url), "utf8");
   assert.match(css, /data-modo="plataforma"\][^{]*faixa-demo[^{]*\{[^}]*display:\s*none/);
 });
+
+test("erro de leitura oferece 'Tentar novamente' (só no estado de erro); cache é esvaziado ao sair, trocar sessão/unidade e atualizar", async () => {
+  const telas = await readFile(new URL("../../../frontend/financeiro-v2/telas.js", import.meta.url), "utf8");
+  assert.match(telas, /tipo === "erro" \? '<p><button type="button" class="botao" data-tentar-novamente>Tentar novamente<\/button><\/p>'/);
+  const app = await readFile(new URL("../../../frontend/financeiro-v2/app.js", import.meta.url), "utf8");
+  assert.match(app, /closest\("\[data-tentar-novamente\], #atualizar-dados"\)\) \{ invalidarCache\(\); carregar\(\); return; \}/);
+  assert.match(app, /invalidarCache\(\); \/\/ ao encerrar a sessão/);
+  assert.match(app, /#filtro-unidade"\)\.addEventListener\("change", \(e\) => \{[^}]*invalidarCache\(\)/);
+  assert.match(app, /#filtro-sessao"\)\.addEventListener\("change", \(e\) => \{ invalidarCache\(\)/);
+  // O reenvio nunca é automático: nenhum laço de repetição em torno de enviar().
+  assert.doesNotMatch(app, /setInterval|retry|tentarDeNovo/i);
+  const html = await readFile(new URL("../../../frontend/financeiro-v2/index.html", import.meta.url), "utf8");
+  assert.match(html, /id="atualizar-dados"/);
+});
+
+test("nada financeiro é guardado de forma persistente no navegador (sem localStorage/sessionStorage/IndexedDB/cookie nos módulos de dados)", async () => {
+  for (const arq of ["consulta.js", "app.js", "telas.js", "telasTesouraria.js"]) {
+    const src = await readFile(new URL(`../../../frontend/financeiro-v2/${arq}`, import.meta.url), "utf8");
+    assert.doesNotMatch(src, /localStorage\.setItem|sessionStorage\.setItem|indexedDB|document\.cookie\s*=/, arq);
+  }
+});

@@ -275,8 +275,11 @@ await checar("Calendário", "navegação entre meses: uma consulta por mês, out
   const semRegistroEmDezembro = await d.locator("[data-cal-dia]:has-text('Sem registro')").count();
   await d.click("[data-mes='-1']"); await d.waitForTimeout(900);
   const consultas = chamadasDoCalendario - antes;
-  const ok = out === 31 && /outubro/i.test(titulo) && dez === 31 && semRegistroEmDezembro === 0 && consultas === 4;
-  return ok ? `${consultas} consultas para 4 mudanças de mês` : `FALHA:out=${out} titulo=${titulo} dez=${dez} semRegistro=${semRegistroEmDezembro} consultas=${consultas}`;
+  const ok = out === 31 && /outubro/i.test(titulo) && dez === 31 && semRegistroEmDezembro === 0
+    // Cache de 15 s por consulta (consulta.js): os 2 meses ainda não carregados (outubro e dezembro) fazem 1 consulta cada; voltar a um mês
+    // carregado há segundos não consulta de novo. A intenção do teste continua: no MÁXIMO uma consulta por mudança de mês (nada de N+1).
+    && consultas >= 2 && consultas <= 4;
+  return ok ? `${consultas} consultas para 4 mudanças de mês (2 meses novos; os retornos saem do cache)` : `FALHA:out=${out} titulo=${titulo} dez=${dez} semRegistro=${semRegistroEmDezembro} consultas=${consultas}`;
 });
 await checar("Calendário", "escolher um dia abre o painel (canal, data, origem, valores, importações, ações) sem nova consulta", async () => {
   const antes = chamadasDoCalendario;
