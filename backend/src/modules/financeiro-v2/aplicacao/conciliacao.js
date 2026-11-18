@@ -2,12 +2,14 @@
 // (ex.: um repasse no extrato ↔ vários recebíveis; uma venda ↔ a transação do processador).
 // Nesta execução NÃO há conciliação automática: candidatas são criadas e decididas por uma pessoa responsável.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { EVENTO_HISTORICO, RELACAO_CORRESPONDENCIA, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_MOVIMENTACAO, SITUACAO_REGISTRO_FONTE, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
+import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, RELACAO_CORRESPONDENCIA, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_MOVIMENTACAO, SITUACAO_REGISTRO_FONTE, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
 import { competenciaDe } from "../dominio/tempo.js";
+import { baseNaTransacao } from "./base.js";
 import { baixarSaidaNaTransacao } from "./baixaPorExtrato.js";
+import { operacoesDeCaixa } from "./caixa.js";
 import { exigirLista, exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
 /** Competência de um registro conciliável (movimentação pela data efetiva; os demais pela própria competência). */
@@ -150,6 +152,12 @@ export function operacoesDeConciliacao(b) {
           if (ref.tipo === TIPO.MOVIMENTACAO) {
             await b.alterar(tx, cx, TIPO.MOVIMENTACAO, registro, { situacaoConciliacao: total === limite ? SITUACAO_CONCILIACAO.CONCILIADA : SITUACAO_CONCILIACAO.PARCIAL }, EVENTO_HISTORICO.CONCILIACAO);
           }
+        }
+        // Repasse iFood × crédito que já está na conta: a confirmação autorizada liquida o recebível com a movimentação existente.
+        if (corr.relacao === RELACAO_CORRESPONDENCIA.IFOOD_X_UNICRED) {
+          const recebivel = refs(corr).find((r) => r.tipo === TIPO.RECEBIVEL);
+          const credito = refs(corr).find((r) => r.tipo === TIPO.MOVIMENTACAO);
+          if (recebivel && credito) await operacoesDeCaixa(baseNaTransacao(b, tx, cx)).registrarLiquidacao(cx, { movimentacaoId: credito.id, alocacoes: [{ alvoTipo: ALVO_LIQUIDACAO.RECEBIVEL, alvoId: recebivel.id, valorCentavos: recebivel.valorCentavos }] });
         }
         if (c.baixar) {
           const todos = [...(corr.ladoA ?? []), ...(corr.ladoB ?? [])];

@@ -84,7 +84,7 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
         const tem = (a) => (ctx.permissoes ?? []).includes(a);
         return {
           canal, hoje, unidade: { nome: config?.nomeExibicao ?? null },
-          acoes: { importar: tem(ACAO.IMPORTAR), confirmar: tem(ACAO.CONFIRMAR_IMPORTACAO) || tem(ACAO.IMPORTAR), registrarDemonstrativo: tem(ACAO.REGISTRAR), aplicarConciliacao: tem(ACAO.APLICAR) },
+          acoes: { importar: tem(ACAO.IMPORTAR), confirmar: tem(ACAO.CONFIRMAR_IMPORTACAO) || tem(ACAO.IMPORTAR), registrarDemonstrativo: tem(ACAO.REGISTRAR) },
           formatos, historico: importacoes, demonstrativos, porEstado,
           estadosAguardando: [ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR],
           algumFormatoDisponivel: formatos.some((f) => f.disponivel),

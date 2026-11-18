@@ -103,3 +103,11 @@ test("arquivo de outra loja é recusado e layout antigo não é interpretado", (
   const antigo = analisarArquivo({ bytes: new TextEncoder().encode("Data;Tipo;Valor\n2026-11-03;Venda;10,00"), adaptador: IFOOD_CONCILIACAO, periodo: PERIODO });
   assert.equal(antigo.reconhecido, false);
 });
+
+test("cabeçalho com outra grafia é lido sem derrubar a análise e o saldo continua conferido", () => {
+  const trocar = (b) => new TextDecoder().decode(b).replace("valor_transacao", "VALOR_TRANSACAO");
+  const a = analisarArquivo({ bytes: new TextEncoder().encode(trocar(arquivo(pedidoA()))), adaptador: IFOOD_CONCILIACAO, periodo: PERIODO, estabelecimentosDaUnidade: ["LOJA-1"] });
+  assert.deepEqual([a.reconhecido, a.erros.length, a.divergencias.length], [true, 0, 0]);
+  const ruim = analisarArquivo({ bytes: new TextEncoder().encode(trocar(arquivo(pedidoA(99)))), adaptador: IFOOD_CONCILIACAO, periodo: PERIODO, estabelecimentosDaUnidade: ["LOJA-1"] });
+  assert.ok(ruim.divergencias.some((d) => d.codigo === "TOTAL_NAO_CONFERE"));
+});

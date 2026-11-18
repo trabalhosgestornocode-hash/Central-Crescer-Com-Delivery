@@ -295,14 +295,14 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
     // Fases 04–06: as MESMAS ações da plataforma (fechamento manual, operadoras e taxas, lote de propostas prontas).
-    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/vendas/demonstrativo-ifood", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar"]
+    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/vendas/demonstrativo-ifood", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar", "/importacao/ifood-conciliacao/classificar", "/conciliacoes/gerar-repasses-ifood"]
       .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, ["/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar"].includes(k) ? { ...b, importacao: id(b.importacao) } : b) }])),
     // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
     // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.
     ...Object.fromEntries(Object.entries(escritasDaAbertura({ hoje: () => m.tempo.hojeEm(relogio()), ref: id })).filter(([k]) => k !== "/conciliacoes/gerar").map(([k, e]) => [`/api/fv2/acoes${k}`, { campos: e.campos, fazer: (ctx, b) => e.fazer(nucleo, ctx, b) }])),
-    "/api/fv2/acoes/importacao/receber": { campos: ["arquivo", "tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao"], fazer: (ctx, b) => {
+    "/api/fv2/acoes/importacao/receber": { campos: ["arquivo", "tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao", "substitui"], fazer: (ctx, b) => {
       // Fase 11: as páginas dos canais enviam o arquivo escolhido (SINTÉTICO, no seu computador) pelo MESMO caminho da plataforma.
-      if (b.arquivoBase64) return ESCRITAS["/importacao/receber"].fazer(nucleo, ctx, b);
+      if (b.arquivoBase64) return ESCRITAS["/importacao/receber"].fazer(nucleo, ctx, b.substitui ? { ...b, substitui: id(b.substitui) } : b);
       const arq = CATALOGO.find((x) => x.id === b.arquivo);
       if (!arq) throw Object.assign(new Error("Arquivo fora do catálogo sintético da demonstração."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
       return nucleo.receberArquivoParaImportacao(ctx, { fonte: arq.fonte, tipoRelatorio: arq.tipoRelatorio, tipoMime: "application/octet-stream", conteudo: arq.conteudo(), periodoInicio: arq.periodoInicio, periodoFim: arq.periodoFim, descricao: arq.nome });

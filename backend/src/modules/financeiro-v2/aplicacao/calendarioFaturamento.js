@@ -189,7 +189,8 @@ async function fonteIfood(tx, cx, { inicio, fim, hoje }) {
       if (oficial.saipos && oficial.saipos.diferencaCentavos) dia.divergencias.push({ codigo: "DIFERENCA_SAIPOS_IFOOD", diferencaCentavos: oficial.saipos.diferencaCentavos, mensagem: "Produtos na SAIPOS diferentes do relatório oficial do iFood: pendente de conferência." });
       if (oficial.saipos && (oficial.saipos.soNoIfood || oficial.saipos.soNaSaipos)) dia.divergencias.push({ codigo: "PEDIDOS_DIFERENTES_SAIPOS_IFOOD", quantidade: oficial.saipos.soNoIfood + oficial.saipos.soNaSaipos, mensagem: "Há pedidos em só uma das fontes." });
       if (!oficial.saipos) dia.pendencias.push({ codigo: "SAIPOS_NAO_IMPORTADA", quantidade: 1, mensagem: "Relatório da SAIPOS deste dia ainda não importado para conferência." });
-      for (const r of oficial.repasses.filter((x) => x.situacao !== "RECEBIDO")) dia.pendencias.push({ codigo: `REPASSE_${r.situacao}`, quantidade: 1, mensagem: `Repasse previsto para ${r.dataPrevista.split("-").reverse().join("/")}: aguardando confirmação pelo extrato.` });
+      for (const r of oficial.repasses.filter((x) => x.situacao === "DIVERGENTE")) dia.divergencias.push({ codigo: "REPASSE_DIVERGENTE", quantidade: 1, mensagem: `Repasse previsto para ${r.dataPrevista.split("-").reverse().join("/")}: crédito do extrato com valor diferente.` });
+      for (const r of oficial.repasses.filter((x) => !["RECEBIDO", "SEM_SALDO", "DIVERGENTE"].includes(x.situacao))) dia.pendencias.push({ codigo: `REPASSE_${r.situacao}`, quantidade: 1, mensagem: `Repasse previsto para ${r.dataPrevista.split("-").reverse().join("/")}: aguardando confirmação pelo extrato.` });
     }
     if (peds) {
       dia.conferenciaSaipos = { pedidos: peds, natureza: "SO_CONFERENCIA" };
@@ -198,6 +199,7 @@ async function fonteIfood(tx, cx, { inicio, fim, hoje }) {
     if (dia.pendencias.length) dia.estados.add(ESTADO_DIA.CONFERENCIA_PENDENTE);
     if (dia.divergencias.length) dia.estados.add(ESTADO_DIA.DIVERGENCIA);
     if (cobrem.length === 1 && cobrem[0].situacaoRepasse === "RECEBIDO" && !fora.length) dia.estados.add(ESTADO_DIA.CONCILIADO);
+    if (oficial?.situacaoConferencia === "CONCILIADO" && !dia.pendencias.length && !dia.divergencias.length) dia.estados.add(ESTADO_DIA.CONCILIADO);
     return dia;
   };
   return { base, cobertura, diaria: Boolean(conciliacao) };

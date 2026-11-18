@@ -349,7 +349,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
 }
 
 /** 06D: trava compartilhada da competência (mesma transação) e diz se ela está homologada. */
-async function competenciaHomologada(tx, cx, competencia) {
+export async function competenciaHomologada(tx, cx, competencia) {
   if (!competencia) return false;
   await tx.travar(cx, `competencia:${competencia}`, "COMPARTILHADA");
   const [c] = await tx.listar(cx, TIPO.COMPETENCIA, { onde: { competencia } });

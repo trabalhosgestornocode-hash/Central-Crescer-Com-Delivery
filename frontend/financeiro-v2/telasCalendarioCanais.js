@@ -27,7 +27,7 @@ const CONFERENCIA = Object.freeze({
   AGUARDANDO_EXTRATO: "Aguardando extrato: recebimento ainda não confirmado", PARCIAL: "Parcial: só parte foi recebida",
 });
 const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood" });
-const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível" });
+const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível", SEM_SALDO: "Sem saldo a receber", DIVERGENTE: "Crédito com diferença" });
 const ORIGEM_DA_MARCACAO = Object.freeze({ DATA: "Marcado para esta data", DIA_DA_SEMANA: "Marcado para este dia da semana" });
 
 const chip = (e) => { const x = ESTADOS[e]; return `<span class="est est--${x.classe}" title="${esc(x.rotulo)}"><span aria-hidden="true">${x.glifo}</span><span class="sr">${esc(x.rotulo)}</span></span>`; };
@@ -115,7 +115,7 @@ ${r.semPagamento.vendas ? `<dt>Sem pagamento identificado</dt><dd>${r.semPagamen
 <dt>Conferência</dt><dd>${esc(CONFERENCIA[r.conferencia] ?? "Sem pagamento para conferir")}</dd></dl>`;
 }
 
-const CONFERENCIA_IFOOD = Object.freeze({ NAO_APLICADO: "Importado, ainda não aplicado", SEM_SAIPOS: "SAIPOS ainda não importada", DIVERGENTE: "Diferença com a SAIPOS pendente", CONFERIDO: "Conferido com a SAIPOS" });
+const CONFERENCIA_IFOOD = Object.freeze({ IMPORTADO: "Importado, ainda não aplicado", AGUARDANDO_CONFERENCIA: "Aguardando conferência", DIVERGENTE: "Divergente: diferença pendente", CONCILIADO: "Conciliado" });
 function oficialDoIfood(o) {
   const repasses = o.repasses.map((r) => `${esc(dataBR(r.dataPrevista))} (${esc(REPASSE[r.situacao] ?? r.situacao)})`).join(", ");
   return `<dl class="ficha ficha--compacta">

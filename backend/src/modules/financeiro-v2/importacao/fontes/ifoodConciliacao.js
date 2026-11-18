@@ -81,25 +81,64 @@ export const IFOOD_CONCILIACAO = definirFonte({
   },
 });
 
-const novoTotal = () => ({ pedidos: 0, pedidosCancelados: 0, itensCentavos: 0, entregaLojaCentavos: 0, promocaoLojaCentavos: 0, promocaoIfoodCentavos: 0, comissaoCentavos: 0, transacaoCentavos: 0, sobDemandaCentavos: 0, anunciosCentavos: 0, taxasDoClienteCentavos: 0, liquidoCentavos: 0 });
+const novoTotal = () => ({ pedidos: 0, pedidosCancelados: 0, movimentos: 0, itensCentavos: 0, entregaLojaCentavos: 0, promocaoLojaCentavos: 0, promocaoIfoodCentavos: 0, comissaoCentavos: 0, transacaoCentavos: 0, sobDemandaCentavos: 0, anunciosCentavos: 0, taxasDoClienteCentavos: 0, classificadosCentavos: 0, semClassificacaoCentavos: 0, liquidoCentavos: 0 });
 function acumular(alvo, parcela) { for (const k of Object.keys(alvo)) alvo[k] += parcela[k] ?? 0; return alvo; }
 
-/** Consolida os movimentos por pedido, dia e repasse. Cada componente entra uma vez; a cesta, uma vez por pedido. */
-export function consolidarConciliacaoIfood(registros, { conferirSaldos = true } = {}) {
+/** Chaves das decisões de classificação: uma por descrição desconhecida e uma por pedido sem a venda original. */
+export const chaveDeDescricao = (descricao) => `descricao:${rotulo(descricao)}`;
+export const chaveDePedidoSemVenda = (pedido) => `pedido-sem-venda:${pedido}`;
+/** O leitor aceita variações do cabeçalho; a cópia da linha guarda o rótulo exatamente como veio no arquivo. */
+function valorDoSaldo(r) {
+  const coluna = Object.keys(r.original ?? {}).find((k) => rotulo(k) === "valor transacao");
+  return centavos(r.original?.[coluna], "valor_transacao");
+}
+const CAMPO_SEM_PEDIDO = Object.freeze({ [C.COMISSAO]: "comissaoCentavos", [C.TRANSACAO]: "transacaoCentavos", [C.ENTREGA_SOB_DEMANDA]: "sobDemandaCentavos", [C.ANUNCIOS]: "anunciosCentavos" });
+const CAMPO_DO_PEDIDO = Object.freeze({ [C.ENTRADA]: "entrada", [C.PROMOCAO_LOJA]: "promoLoja", [C.PROMOCAO_IFOOD]: "promoIfood", [C.COMISSAO]: "comissao", [C.TRANSACAO]: "transacao", [C.ENTREGA_SOB_DEMANDA]: "sobDemanda", [C.ANUNCIOS]: "anuncios", [C.TAXA_DO_CLIENTE]: "taxasCliente" });
+
+/**
+ * Consolida os movimentos por pedido, dia e repasse. Cada componente entra uma vez; a cesta, uma vez por pedido.
+ * Pedido sem a linha de venda nos movimentos recebidos não gera receita: o valor fica pendente até a venda original ser
+ * importada ou até uma decisão autorizada. Lançamento desconhecido nunca some: fica pendente, com o valor, até ser classificado.
+ * @param {object} [o]
+ * @param {boolean} [o.conferirSaldos] confere o saldo informado (só faz sentido dentro de um único arquivo)
+ * @param {Map<string,string>} [o.classificacoes] chave da pendência → código da categoria decidida
+ */
+export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, classificacoes = new Map() } = {}) {
   const divergencias = [];
   const pedidos = new Map();
   const dias = new Map();
+  const classificadosDoDia = new Map();
+  const ciclosDoDia = new Map();
+  const pendentes = new Map();
   const repasses = new Map();
   const saldos = new Map();
   const total = novoTotal();
   const pedidosRecebidosDireto = new Set();
   let recebidoDiretoCentavos = 0;
+  let foraDoRepasseCentavos = 0;
+  const noDia = (dia, parcela) => { acumular(total, parcela); dias.set(dia, acumular(dias.get(dia) ?? novoTotal(), parcela)); };
+  const anotarCiclos = (dia, ciclos) => { const s = ciclosDoDia.get(dia) ?? new Set(); for (const c of ciclos) s.add(c); ciclosDoDia.set(dia, s); };
+  /** Valor sem regra própria: entra no líquido e vai para a categoria decidida ou para a lista de pendências. */
+  function alocar(dia, { chave, tipo, descricao, valor, movimentos = 0 }) {
+    const categoria = classificacoes.get(chave);
+    if (categoria) {
+      const doDia = classificadosDoDia.get(dia) ?? {};
+      doDia[categoria] = (doDia[categoria] ?? 0) + valor;
+      classificadosDoDia.set(dia, doDia);
+    } else {
+      const p = pendentes.get(chave) ?? { chave, tipo, descricao, quantidade: 0, valorCentavos: 0 };
+      p.quantidade += 1; p.valorCentavos += valor;
+      pendentes.set(chave, p);
+    }
+    noDia(dia, { movimentos, liquidoCentavos: valor, [categoria ? "classificadosCentavos" : "semClassificacaoCentavos"]: valor });
+  }
   for (const r of registros) {
     const d = r.dados;
-    if (d.componente === "NAO_RECONHECIDO") divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Lançamento "${d.descricaoOriginal}" sem classificação definida.`, linha: r.linha });
+    const dataDaLinha = r.data ?? r.dataReferencia; // na leitura do banco o campo se chama dataReferencia
+    if (d.componente === "NAO_RECONHECIDO" && !classificacoes.has(chaveDeDescricao(d.descricaoOriginal))) divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Lançamento "${d.descricaoOriginal}" sem classificação definida.`, linha: r.linha });
     if (d.competenciaInformada !== r.competencia) divergencias.push({ codigo: DIVERGENCIA.PERIODO_DO_DOCUMENTO, mensagem: `Competência ${d.competenciaInformada} diferente da data do faturamento.`, linha: r.linha });
     // O saldo de um ciclo aberto cresce a cada exportação: fica fora da identidade do movimento e só confere dentro do arquivo.
-    const informado = conferirSaldos ? centavos(r.original?.valor_transacao, "valor_transacao") : 0;
+    const informado = conferirSaldos ? valorDoSaldo(r) : 0;
     const saldo = saldos.get(d.idSaldo) ?? { informado, soma: 0 };
     if (saldo.informado !== informado) divergencias.push({ codigo: DIVERGENCIA.TOTAL_NAO_CONFERE, mensagem: `Saldo ${d.idSaldo} com valores diferentes entre as linhas.`, linha: r.linha });
     if (d.impactaRepasse) saldo.soma += r.valorCentavos;
@@ -110,50 +149,72 @@ export function consolidarConciliacaoIfood(registros, { conferirSaldos = true } 
     repasse.saldos.add(d.idSaldo);
     repasses.set(chaveRepasse, repasse);
     if (d.componente === C.ENTRADA && !d.impactaRepasse) { recebidoDiretoCentavos += r.valorCentavos; pedidosRecebidosDireto.add(d.pedido); }
+    const semRegra = !CAMPO_DO_PEDIDO[d.componente];
+    if (semRegra && !d.impactaRepasse) foraDoRepasseCentavos += r.valorCentavos;
     if (!d.pedido) {
-      const parcela = { anunciosCentavos: d.componente === C.ANUNCIOS ? r.valorCentavos : 0, liquidoCentavos: r.valorCentavos };
-      acumular(total, parcela);
-      const dia = r.data ?? r.dataReferencia; // na leitura do banco o campo se chama dataReferencia
-      dias.set(dia, acumular(dias.get(dia) ?? novoTotal(), parcela));
+      anotarCiclos(dataDaLinha, [chaveRepasse]);
+      const campo = CAMPO_SEM_PEDIDO[d.componente];
+      if (campo) noDia(dataDaLinha, { movimentos: 1, [campo]: r.valorCentavos, liquidoCentavos: r.valorCentavos });
+      else {
+        if (!semRegra && !d.impactaRepasse && d.componente !== C.ENTRADA) foraDoRepasseCentavos += r.valorCentavos;
+        alocar(dataDaLinha, { chave: chaveDeDescricao(d.descricaoOriginal), tipo: "LANCAMENTO_DESCONHECIDO", descricao: d.descricaoOriginal, valor: r.valorCentavos, movimentos: 1 });
+      }
       continue;
     }
-    const p = pedidos.get(d.pedido) ?? { data: d.dataPedido, cestaCentavos: d.cestaCentavos, fatos: new Set(), entrada: 0, entradaParcial: 0, promoLoja: 0, promoIfood: 0, comissao: 0, transacao: 0, sobDemanda: 0, taxasCliente: 0 };
+    const p = pedidos.get(d.pedido) ?? { curto: d.pedidoCurto, data: d.dataPedido, ultimoMovimento: dataDaLinha, cestaCentavos: d.cestaCentavos, fatos: new Set(), ciclos: new Set(), desconhecidos: [], movimentos: 0, entrada: 0, entradaParcial: 0, promoLoja: 0, promoIfood: 0, comissao: 0, transacao: 0, sobDemanda: 0, anuncios: 0, taxasCliente: 0 };
     if (p.cestaCentavos !== d.cestaCentavos) divergencias.push({ codigo: DIVERGENCIA.TOTAL_NAO_CONFERE, mensagem: "Pedido com valores de cesta diferentes entre as linhas.", linha: r.linha });
+    if (dataDaLinha > p.ultimoMovimento) p.ultimoMovimento = dataDaLinha;
+    p.movimentos += 1;
     p.fatos.add(rotulo(d.fatoGerador));
-    const campo = { [C.ENTRADA]: "entrada", [C.PROMOCAO_LOJA]: "promoLoja", [C.PROMOCAO_IFOOD]: "promoIfood", [C.COMISSAO]: "comissao", [C.TRANSACAO]: "transacao", [C.ENTREGA_SOB_DEMANDA]: "sobDemanda", [C.TAXA_DO_CLIENTE]: "taxasCliente" }[d.componente];
+    p.ciclos.add(chaveRepasse);
+    const campo = CAMPO_DO_PEDIDO[d.componente];
     if (campo) p[campo] += r.valorCentavos;
+    else p.desconhecidos.push({ chave: chaveDeDescricao(d.descricaoOriginal), tipo: "LANCAMENTO_DESCONHECIDO", descricao: d.descricaoOriginal, valor: r.valorCentavos });
     if (d.componente === C.ENTRADA && rotulo(d.fatoGerador) === "cancelamento parcial") p.entradaParcial += r.valorCentavos;
     pedidos.set(d.pedido, p);
   }
   if (conferirSaldos) for (const [id, s] of saldos) if (s.soma !== s.informado) divergencias.push(diferenca(DIVERGENCIA.TOTAL_NAO_CONFERE, `A soma das linhas do saldo ${id} não fecha com o valor informado pelo iFood.`, s.informado, s.soma));
-  const situacoes = { VENDA: 0, CANCELADO_TOTAL: 0, CANCELADO_PARCIAL: 0 };
+  const situacoes = { VENDA: 0, CANCELADO_TOTAL: 0, CANCELADO_PARCIAL: 0, SEM_VENDA_ORIGINAL: 0 };
   let cestaInformadaCentavos = 0;
   const listaDePedidos = [];
   for (const [pedido, p] of pedidos) {
+    const temVenda = p.fatos.has("venda");
     const cancelado = p.fatos.has("cancelamento total");
+    const financeiro = p.entrada + p.promoIfood + p.taxasCliente + p.comissao + p.transacao;
+    const dia = temVenda ? p.data : p.ultimoMovimento;
+    anotarCiclos(dia, p.ciclos);
+    for (const x of p.desconhecidos) alocar(dia, x);
+    if (!temVenda) {
+      situacoes.SEM_VENDA_ORIGINAL += 1;
+      if (financeiro) alocar(dia, { chave: chaveDePedidoSemVenda(pedido), tipo: "PEDIDO_SEM_VENDA_ORIGINAL", descricao: `Pedido ${p.curto ?? pedido} sem a venda original nos relatórios importados`, valor: financeiro });
+      noDia(dia, { movimentos: p.movimentos, sobDemandaCentavos: p.sobDemanda, anunciosCentavos: p.anuncios, liquidoCentavos: p.sobDemanda + p.anuncios });
+      listaDePedidos.push({ pedido, data: dia, cancelado, semVenda: true, itensCentavos: 0 });
+      continue;
+    }
     situacoes[cancelado ? "CANCELADO_TOTAL" : p.fatos.has("cancelamento parcial") ? "CANCELADO_PARCIAL" : "VENDA"] += 1;
     cestaInformadaCentavos += p.cestaCentavos;
+    if (cancelado && financeiro) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: `Pedido ${p.curto ?? pedido} cancelado com saldo restante: conferir antes de aplicar.` });
     const itens = cancelado ? 0 : p.cestaCentavos + p.entradaParcial;
     // A entrega da loja não vem em coluna própria: é o que o cliente pagou além dos itens, das promoções e das taxas retidas.
     const entrega = cancelado ? 0 : p.entrada - itens - p.promoLoja + p.promoIfood + p.taxasCliente;
     if (entrega < 0) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: "Pedido com composição negativa de entrega: conferir." });
-    const parcela = {
-      pedidos: 1, pedidosCancelados: cancelado ? 1 : 0, itensCentavos: itens, entregaLojaCentavos: entrega, promocaoLojaCentavos: p.promoLoja, promocaoIfoodCentavos: p.promoIfood,
-      comissaoCentavos: p.comissao, transacaoCentavos: p.transacao, sobDemandaCentavos: p.sobDemanda, taxasDoClienteCentavos: p.taxasCliente,
-      liquidoCentavos: itens + entrega + p.promoLoja + p.comissao + p.transacao + p.sobDemanda,
-    };
-    acumular(total, parcela);
-    dias.set(p.data, acumular(dias.get(p.data) ?? novoTotal(), parcela));
-    listaDePedidos.push({ pedido, data: p.data, cancelado, itensCentavos: itens });
+    noDia(dia, {
+      pedidos: 1, pedidosCancelados: cancelado ? 1 : 0, movimentos: p.movimentos, itensCentavos: itens, entregaLojaCentavos: entrega, promocaoLojaCentavos: cancelado ? 0 : p.promoLoja, promocaoIfoodCentavos: p.promoIfood,
+      comissaoCentavos: cancelado ? 0 : p.comissao, transacaoCentavos: cancelado ? 0 : p.transacao, sobDemandaCentavos: p.sobDemanda, anunciosCentavos: p.anuncios, taxasDoClienteCentavos: p.taxasCliente,
+      liquidoCentavos: (cancelado ? financeiro : itens + entrega + p.promoLoja + p.comissao + p.transacao) + p.sobDemanda + p.anuncios,
+    });
+    listaDePedidos.push({ pedido, data: dia, cancelado, semVenda: false, itensCentavos: itens });
   }
   const repassePrevistoCentavos = [...repasses.values()].reduce((s, r) => s + r.previstoCentavos, 0);
-  if (total.liquidoCentavos !== repassePrevistoCentavos + recebidoDiretoCentavos) divergencias.push(diferenca(DIVERGENCIA.TOTAL_NAO_CONFERE, "O líquido não fecha com repasse previsto + recebido direto.", repassePrevistoCentavos + recebidoDiretoCentavos, total.liquidoCentavos));
+  const esperado = repassePrevistoCentavos + recebidoDiretoCentavos + foraDoRepasseCentavos;
+  if (total.liquidoCentavos !== esperado) divergencias.push(diferenca(DIVERGENCIA.TOTAL_NAO_CONFERE, "O líquido não fecha com repasse previsto + recebido direto.", esperado, total.liquidoCentavos));
   return {
     divergencias,
     pedidos: listaDePedidos,
     resumo: {
       movimentos: registros.length, situacoes, cestaInformadaCentavos, total, recebidoDiretoCentavos, pedidosRecebidosDireto: pedidosRecebidosDireto.size, repassePrevistoCentavos, saldos: saldos.size,
-      dias: [...dias.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([data, v]) => ({ data, ...v })),
+      pendenciasDeClassificacao: [...pendentes.values()].filter((p) => p.valorCentavos !== 0).sort((a, x) => a.chave.localeCompare(x.chave)),
+      dias: [...dias.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([data, v]) => ({ data, ...v, classificados: classificadosDoDia.get(data) ?? {}, ciclos: [...(ciclosDoDia.get(data) ?? [])].sort() })),
       repasses: [...repasses.values()].sort((a, b) => a.dataPrevista.localeCompare(b.dataPrevista)).map((r) => ({ ...r, saldos: r.saldos.size })),
     },
   };
