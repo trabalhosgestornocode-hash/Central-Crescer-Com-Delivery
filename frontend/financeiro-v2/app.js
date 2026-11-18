@@ -602,7 +602,9 @@ document.addEventListener("click", (e) => {
   if (dia && estado.calendario) {
     estado.diaSelecionado = dia.dataset.dia;
     for (const b of document.querySelectorAll("[data-dia]")) { b.classList.toggle("cal-dia--sel", b === dia); b.setAttribute("aria-pressed", String(b === dia)); }
-    $("#dia-detalhe").innerHTML = tes.diaDoCalendario(estado.calendario.dias.find((d) => d.data === estado.diaSelecionado));
+    const detalhe = $("#dia-detalhe");
+    detalhe.innerHTML = tes.diaDoCalendario(estado.calendario.dias.find((d) => d.data === estado.diaSelecionado));
+    detalhe.scrollIntoView({ block: "nearest", behavior: "smooth" });
     return;
   }
   if (e.target.closest("[data-fechar-painel]") || e.target.id === "painel") fecharPainel();
