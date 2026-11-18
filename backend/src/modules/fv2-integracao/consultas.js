@@ -95,10 +95,16 @@ export const CONSULTAS = Object.freeze({
   },
   "/conta-a-pagar": async (n, c, p) => ({
     ...(await n.detalharContaAPagar(c, { id: id(p) })),
+    entregadorProprio: await n.resumoDoEntregadorDaConta(c, { obrigacaoId: id(p) }),
     contasParaPagar: (await n.consultarRegistros(c, { tipo: "CONTA" })).filter((x) => x.ativa).map((x) => ({ id: x.id, nome: x.nome, tipo: x.tipo })),
     vinculoExtrato: await n.previaDoVinculoDoExtrato(c, { obrigacaoId: id(p) }),
     fornecedores: (await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => ({ id: x.id, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
   }),
+  // Entregadores Próprios: painel único da área, prévia sem efeito, demonstrativo da semana e histórico do entregador.
+  "/entregadores": (n, c, p) => n.consultarEntregadoresProprios(c, filtro(p, ["semana", "mes", "entregador", "situacao"])),
+  "/entregadores/previa": (n, c, p) => n.previaDoFechamentoSemanal(c, { inicio: p.inicio }),
+  "/entregadores/fechamento": (n, c, p) => n.detalharFechamentoDoEntregador(c, { inicio: p.inicio, entregador: p.entregador }),
+  "/entregadores/pessoa": (n, c, p) => n.consultarEntregador(c, { entregador: p.entregador }),
   "/contas-a-receber": (n, c, p) => n.consultarContasAReceber(c, filtro(p, ["competencia", "previstoDe", "previstoAte", "processador", "canal", "tipo", "situacao", ...PAGINA], PAGINA)),
   "/posicao-a-receber": (n, c, p) => n.consultarPosicaoAReceber(c, filtro(p, ["competencia", ...PAGINA], PAGINA)),
   "/conta-a-receber": (n, c, p) => n.detalharContaAReceber(c, { id: id(p) }),

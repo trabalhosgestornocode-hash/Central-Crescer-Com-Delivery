@@ -92,10 +92,10 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
 
   /** Contexto verificado + núcleo com escopo SÓ da unidade da sessão. */
   async function preparar(sessao, opcoes = {}) {
-    const { adaptador, repositorio, relogio } = obter();
+    const { adaptador, repositorio, relogio, entregadores } = obter();
     const c = await adaptador.contexto(sessao, opcoes);
     const nucleo = criarNucleoFinanceiro({
-      repositorio, ...(relogio ? { relogio } : {}), exigirConcessaoPersistida: true, cofre: cofreTemporario,
+      repositorio, ...(relogio ? { relogio } : {}), exigirConcessaoPersistida: true, cofre: cofreTemporario, entregadores,
       escoposAutorizados: [{ organizacaoId: c.contexto.organizacaoId, unidadeId: c.contexto.unidadeId }],
     });
     return { c, nucleo };
@@ -160,7 +160,7 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
   // doc 37: só o recebimento de arquivo para importação aceita corpo maior (arquivo em base64, até 5 MiB decodificado).
   const corpoDeArquivo = json({ limit: "8mb", strict: true });
   for (const [caminho, escrita] of Object.entries(ESCRITAS)) {
-    r.post(`/acoes${caminho}`, caminho === "/importacao/receber" ? corpoDeArquivo : corpoJson, async (req, res) => {
+    r.post(`/acoes${caminho}`, ["/importacao/receber", "/entregadores/documento"].includes(caminho) ? corpoDeArquivo : corpoJson, async (req, res) => {
       try {
         // Ações só por JSON (formulário/navegador sem script não dispara) e sem campos fora da lista.
         if (!req.is("application/json")) throw recusa(415, "TIPO_DE_CONTEUDO", "Envie a ação como JSON.");

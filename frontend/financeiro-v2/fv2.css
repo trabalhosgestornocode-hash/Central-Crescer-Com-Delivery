@@ -785,3 +785,19 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .painel-taxas-kpis .card--alerta { border-color: var(--alerta); background: var(--alerta-bg); }
 .painel-operadora { border-top: 1px solid var(--linha); padding: 8px 0; }
 .painel-operadora > summary { cursor: pointer; font-size: 14px; padding: 4px 0; }
+
+/* Entregadores Próprios */
+.ent-ciclo { list-style: none; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 0; padding: 0; }
+.ent-ciclo li { display: flex; flex-direction: column; gap: 2px; padding-left: 10px; border-left: 2px solid var(--linha-forte); }
+.ent-pendencias { margin: 12px 0 0; color: var(--alerta); }
+.ent-indicadores { margin-bottom: 20px; }
+.ent-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.ent-card { margin: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ent-card .card-topo { width: 100%; }
+.ent-card__valor { margin: 4px 0 0; font-size: 22px; font-weight: 650; }
+.ent-dias { list-style: none; width: 100%; margin: 8px 0; padding: 8px 0 0; border-top: 1px solid var(--linha); font-size: 13px; }
+.ent-dias li { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+.ent-acao form { display: grid; gap: 12px; margin-top: 12px; }
+.ent-acao fieldset { display: grid; gap: 6px; border: 1px solid var(--linha); border-radius: var(--raio-sm); }
+@media (max-width: 760px) { .ent-ciclo { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ent-cards { grid-template-columns: minmax(0, 1fr); } }
+@media print { .navegacao, .filtros, .painel-cabeca button, .ent-acao, .ent-demonstrativo button { display: none !important; } .painel-fundo { position: static; background: none; } .painel { position: static; width: auto; box-shadow: none; } }

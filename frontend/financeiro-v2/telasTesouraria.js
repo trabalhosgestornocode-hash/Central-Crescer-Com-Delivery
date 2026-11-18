@@ -1,6 +1,7 @@
 // Telas de tesouraria do Financeiro v2 (Execução 06A) como funções PURAS: dados das consultas → HTML escapado.
 // Nenhuma fórmula financeira: totais, saldos, situações e projeções chegam prontos do backend.
 // Documentos aparecem como "registrado, não acessível nesta versão" — nunca há link, arquivo ou caminho.
+import { blocoNaConta } from "./telasEntregadores.js";
 import {
   CATEGORIAS_BANCARIAS, EVENTOS, MOTIVOS_PARCIAL, NATUREZAS_FLUXO, OPERACOES_CAIXA, SITUACOES_TITULO, TIPOS_DOCUMENTO, TIPOS_RECEBIVEL, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal,
   nomeDevedor, situacaoTitulo,
@@ -200,6 +201,7 @@ ${d.lancamento ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir-valor", tit
 <label>Valor correto (R$) <input name="novoValor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(inteiroEmMoeda(t.valorOriginalCentavos + (t.ajustesCentavos ?? 0)))}" required></label>
 <label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}</details>` : "";
   return `${fechar("Conta a pagar")}
+${blocoNaConta(d.entregadorProprio)}
 ${heroDaConta(t)}
 ${comoDarBaixa(d, ctx)}
 <h3>Pagamentos</h3>
