@@ -147,6 +147,7 @@ export const CONSULTAS = Object.freeze({
   "/sangrias-despesa": (n, c, p) => n.previaSangriasComoDespesa(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }),
   // Fase 11 (doc 48): importações por canal (formatos, estado de cada um e histórico) e a PRÉVIA do demonstrativo oficial do iFood.
   "/importacoes-canal": (n, c, p) => n.consultarImportacoesDoCanal(c, { canal: p.canal }),
+  "/versoes-relatorio-99food": (n, c, p) => n.listarVersoesDoDia99Food(c, { data: p.data }),
   "/previa-relatorio-99food": (n, c, p) => n.previaDoRelatorio99Food(c, { importacaoId: p.importacao }),
   "/previa-conciliacao-ifood": (n, c, p) => n.previaDaConciliacaoIfood(c, { importacaoId: p.importacao }),
   "/movimentos-conciliacao-ifood": (n, c, p) => n.listarMovimentosDaConciliacaoIfood(c, { data: p.data }),

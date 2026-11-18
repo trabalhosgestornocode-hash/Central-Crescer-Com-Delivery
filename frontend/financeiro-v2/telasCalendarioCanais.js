@@ -126,11 +126,11 @@ function oficialDoIfood(o) {
 <dt>Conferência</dt><dd>${esc(CONFERENCIA_IFOOD[o.situacaoConferencia] ?? o.situacaoConferencia)}</dd><dt>Repasse previsto</dt><dd>${repasses || "—"}</dd></dl>`;
 }
 
-const CONFERENCIA_99FOOD = Object.freeze({ IMPORTADO: "Importado, ainda não aplicado", AGUARDANDO_CONFERENCIA: "Pendente de conferência", DIVERGENTE: "Divergente: diferença pendente", CONCILIADO: "Conciliado" });
+const CONFERENCIA_99FOOD = Object.freeze({ IMPORTADO: "Importado, ainda não aplicado", AGUARDANDO_CONFERENCIA: "Pendente de conferência", DIVERGENTE: "Divergente: pendente de conferência", CONCILIADO: "Conciliado" });
 function oficialDa99Food(o) {
   return `<dl class="ficha ficha--compacta">
 <dt>Vendas</dt><dd>${o.quantidade}</dd><dt>Vendas de itens</dt><dd>${valor(o.itensCentavos)}</dd><dt>Comissões</dt><dd>${valor(o.comissaoCentavos)}</dd><dt>Taxas de processamento</dt><dd>${valor(o.processamentoCentavos)}</dd>
-<dt>Marketing</dt><dd>${valor(o.marketingCentavos)}</dd><dt>Recompensas (em conferência)</dt><dd>${valor(o.recompensasCentavos)}</dd><dt>Repasse informado</dt><dd>${valor(o.repasseCentavos)} <span class="nota">sem data de pagamento</span></dd>
+<dt>Marketing</dt><dd>${valor(o.marketingCentavos)}</dd><dt>Recompensas (em conferência)</dt><dd>${valor(o.recompensasCentavos)}</dd><dt>Resultado preliminar</dt><dd>${valor(o.composicaoCentavos)}</dd><dt>Repasse informado</dt><dd>${valor(o.repasseCentavos)} <span class="nota">sem data de pagamento</span></dd><dt>Diferença do dia</dt><dd>${valor(o.diferencaRepasseCentavos)}</dd>
 <dt>Importação</dt><dd>${esc(o.aplicado ? "Aplicada ao Financeiro" : "Importada")}</dd><dt>Conferência</dt><dd>${esc(CONFERENCIA_99FOOD[o.situacaoConferencia] ?? o.situacaoConferencia)}</dd></dl>`;
 }
 

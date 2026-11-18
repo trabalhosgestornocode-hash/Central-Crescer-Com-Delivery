@@ -244,7 +244,7 @@ export function plataforma(d, ctx = {}) {
   const nome = ifood ? "iFood" : "99Food";
   const [rs, cs] = SITUACAO_PLATAFORMA[d.situacao] ?? [d.situacao, "neutro"];
   const t = d.totais;
-  const v = (k) => (t ? valor(t[k]) : depende());
+  const v = (k) => (!t ? depende() : t[k] === null ? '<span class="nota">Não informado no relatório</span>' : valor(t[k]));
   const cards = [
     ["Faturamento bruto", v("brutoCentavos"), "Vendas do período pelo relatório oficial da plataforma."],
     ["Pedidos e cancelamentos", t && t.pedidos !== null ? `${t.pedidos}${t.cancelamentos === null ? "" : ` · ${t.cancelamentos}`}` : depende("Depende do relatório de pedidos"), t?.observacaoPedidos ?? "O relatório oficial de pedidos ainda não é importado."],
@@ -253,7 +253,7 @@ export function plataforma(d, ctx = {}) {
     ["Taxas", v("taxasCentavos"), "Taxa de transação do pagamento online."],
     ["Mensalidade", v("mensalidadesCentavos"), "Mensalidade da plataforma no período."],
     ["Ajustes", v("ajustesCentavos"), "Ajustes informados pela plataforma."],
-    ...(t?.marketingCentavos !== undefined ? [["Marketing", v("marketingCentavos"), "Despesas de marketing informadas pela 99Food."], ["Resultado do canal", v("resultadoCentavos"), "Vendas de itens − taxas − comissões − marketing."], ["Recompensas (em conferência)", v("recompensasCentavos"), "Valor informado pela plataforma. Não entra na DRE até confirmar como compõe as vendas ou o repasse."]] : []),
+    ...(t?.marketingCentavos !== undefined ? [["Marketing", v("marketingCentavos"), "Despesas de marketing informadas pela 99Food."], ["Resultado gerencial preliminar", v("resultadoPreliminarCentavos"), "Vendas de itens − taxas − comissões − marketing. Pode mudar quando a diferença para o repasse for explicada."], ["Diferença em conferência", v("diferencaRepasseCentavos"), `Resultado preliminar − repasse informado. ${t?.diasDivergentes ?? 0} dia(s) divergente(s). Não é receita nem despesa.`], ["Recompensas (em conferência)", v("recompensasCentavos"), "Valor informado pela plataforma. Não entra na DRE até confirmar como compõe as vendas ou o repasse."]] : []),
     [t?.marketingCentavos !== undefined ? "Repasse informado" : "Repasse previsto", v("repassePrevistoCentavos"), t?.marketingCentavos !== undefined ? "Valor informado pela 99Food, sem data de pagamento. Não é recebível nem depósito." : "Líquido a receber da plataforma (recebível). Não é depósito."],
     ["Repasse recebido", t ? (t.repasseRecebidoCentavos ? valor(t.repasseRecebidoCentavos) : '<span class="nota">Nenhum repasse confirmado</span>') : depende(), "Só o que já foi liquidado com a entrada no banco."],
   ].map(([titulo, conteudo, exp]) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(titulo)}</h3>${explicar(titulo, exp)}</div><p>${conteudo}</p></article>`).join("");

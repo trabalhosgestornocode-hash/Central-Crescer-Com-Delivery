@@ -2,7 +2,6 @@
 // O arquivo não traz pedidos individuais, data de pagamento nem identificador do repasse: nada disso é presumido.
 // O relatório não informa como as recompensas e a receita de ofertas compõem o repasse. Esses valores ficam guardados e
 // visíveis, mas não viram receita nem despesa; a diferença para o repasse informado fica em conferência.
-import { rotulo } from "../leitor.js";
 import { DIVERGENCIA, diferenca } from "../motor.js";
 import { col, definirFonte } from "./comum.js";
 
@@ -16,6 +15,8 @@ export const NOVENTA_E_NOVE_FOOD_RELATORIO = definirFonte({
   descricao: "relatório oficial da 99Food (dados da loja)",
   formatosHomologados: ["xlsx"],
   aceitaZip: true,
+  guardarConflitos: true, // o dia corrigido fica disponível para uma decisão registrada
+  substituicaoCompleta: true, // versão corrigida precisa trazer todos os dias da versão anterior
   colunas: {
     data: col(["Data"]), nome: col(["Nome do estabelecimento"]), loja: col(["ID do loja", "ID da loja"]), cidade: col(["Cidade"], false),
     itens: col(["Vendas de itens"]), processamento: col(["Taxas de processamento de pagamento"]), comissao: col(["Despesas de comissão"]),
@@ -53,12 +54,12 @@ export const NOVENTA_E_NOVE_FOOD_RELATORIO = definirFonte({
       const d = r.dados;
       if (Math.abs(d.medioCentavos * d.quantidade - d.itensCentavos) > TOLERANCIA_POR_VENDA_CENTAVOS * Math.max(d.quantidade, 1)) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: `Em ${r.data}, vendas de itens não fecham com a quantidade × valor médio.`, linha: r.linha });
     }
-    if (total.diferencaRepasseCentavos) divergencias.push(diferenca(DIVERGENCIA.TOTAL_NAO_CONFERE, "O repasse informado não fecha com vendas − taxas − comissões − marketing: a diferença fica em conferência.", total.repasseCentavos, total.composicaoCentavos));
+    if (total.diasDivergentes) divergencias.push(diferenca(DIVERGENCIA.TOTAL_NAO_CONFERE, `Em ${total.diasDivergentes} dia(s), o repasse informado não fecha com vendas − taxas − comissões − marketing: as diferenças ficam em conferência.`, total.repasseCentavos, total.composicaoCentavos, { diasDivergentes: total.diasDivergentes, somaAbsolutaCentavos: total.somaAbsolutaDiferencasCentavos }));
     return { controles: { relatorio99Food: { total, lojas, dias } }, divergencias };
   },
 });
 
-const novoTotal = () => ({ dias: 0, quantidade: 0, itensCentavos: 0, processamentoCentavos: 0, comissaoCentavos: 0, marketingCentavos: 0, recompensasCentavos: 0, receitaOfertaCentavos: 0, repasseCentavos: 0, composicaoCentavos: 0, diferencaRepasseCentavos: 0 });
+const novoTotal = () => ({ dias: 0, quantidade: 0, itensCentavos: 0, processamentoCentavos: 0, comissaoCentavos: 0, marketingCentavos: 0, recompensasCentavos: 0, receitaOfertaCentavos: 0, repasseCentavos: 0, composicaoCentavos: 0, diferencaRepasseCentavos: 0, diasDivergentes: 0, somaAbsolutaDiferencasCentavos: 0 });
 
 /** Totais por dia e do período, sempre a partir das linhas do relatório. */
 export function consolidar99Food(registros) {
@@ -67,7 +68,8 @@ export function consolidar99Food(registros) {
   const dias = [...registros].map((r) => {
     const d = r.dados;
     const composicaoCentavos = d.itensCentavos - d.processamentoCentavos - d.comissaoCentavos - d.marketingCentavos;
-    const dia = { data: r.data ?? r.dataReferencia, dias: 1, quantidade: d.quantidade, itensCentavos: d.itensCentavos, processamentoCentavos: d.processamentoCentavos, comissaoCentavos: d.comissaoCentavos, marketingCentavos: d.marketingCentavos, recompensasCentavos: d.recompensasCentavos, receitaOfertaCentavos: d.receitaOfertaCentavos, repasseCentavos: d.repasseCentavos, composicaoCentavos, diferencaRepasseCentavos: composicaoCentavos - d.repasseCentavos };
+    const diferencaRepasseCentavos = composicaoCentavos - d.repasseCentavos;
+    const dia = { data: r.data ?? r.dataReferencia, dias: 1, quantidade: d.quantidade, itensCentavos: d.itensCentavos, processamentoCentavos: d.processamentoCentavos, comissaoCentavos: d.comissaoCentavos, marketingCentavos: d.marketingCentavos, recompensasCentavos: d.recompensasCentavos, receitaOfertaCentavos: d.receitaOfertaCentavos, repasseCentavos: d.repasseCentavos, composicaoCentavos, diferencaRepasseCentavos, diasDivergentes: diferencaRepasseCentavos ? 1 : 0, somaAbsolutaDiferencasCentavos: Math.abs(diferencaRepasseCentavos) };
     for (const k of Object.keys(total)) total[k] += dia[k];
     lojas.set(d.estabelecimento, { id: d.estabelecimento, nome: d.nomeDaLoja, cidade: d.cidade });
     return dia;
@@ -75,5 +77,4 @@ export function consolidar99Food(registros) {
   return { total, dias, lojas: [...lojas.values()] };
 }
 
-export const mesmaLoja = (a, b) => rotulo(a) === rotulo(b);
 export const FONTES_99FOOD = Object.freeze([NOVENTA_E_NOVE_FOOD_RELATORIO]);

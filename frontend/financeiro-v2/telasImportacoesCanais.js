@@ -119,24 +119,44 @@ ${historico(d)}</div>`;
 
 // ------------------------------------------------------------------------------------- painel: efeitos do relatório 99Food
 /** `p` = resposta de /previa-relatorio-99food. A conta vem pronta do servidor. */
-export function previaDoRelatorio99Food(p, { podeAplicar = false } = {}) {
+function vinculoDaLoja99Food(p, pode) {
+  if (p.lojaVinculada) return `<p class="nota">Loja vinculada a esta unidade: ${esc(p.lojaVinculada.nome)} · ID ${esc(p.lojaVinculada.id)}.</p>`;
+  if (!pode) return '<p class="aviso">A loja ainda não foi vinculada. Vincular exige a permissão "Configurar".</p>';
+  return `<h3>Vincular a loja a esta unidade</h3><form class="acao" data-acao="/api/fv2/acoes/importacao/99food/vincular-loja" data-recarregar="lista"><input type="hidden" name="importacao" value="${esc(p.importacaoId)}">
+<label>Digite o ID oficial da loja na 99Food <input type="text" name="lojaId" inputmode="numeric" maxlength="40" autocomplete="off" required></label>
+<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que esta loja pertence a esta unidade.</label>
+<button type="submit" class="botao">Vincular loja</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
+}
+function correcaoDoDia99Food(c, pode) {
+  const linha = (t, k) => `<tr>${td("Campo", esc(t), "esquerda")}${td("Versão efetiva", valor(c.vigente[k]))}${td("Versão recebida", valor(c.informado[k]))}</tr>`;
+  const decidir = (decisao, rotulo) => `<form class="acao" data-acao="/api/fv2/acoes/importacao/99food/decidir-correcao" data-recarregar="lista"><input type="hidden" name="importacao" value="${esc(c.importacaoId)}"><input type="hidden" name="data" value="${esc(c.data)}"><input type="hidden" name="decisao" value="${decisao}">
+<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label><label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo esta decisão.</label><button type="submit" class="botao">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
+  return `<h4>${esc(dataBR(c.data))}</h4><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Versões do dia ${esc(dataBR(c.data))}</caption><thead><tr><th scope="col">Campo</th><th scope="col">Versão efetiva</th><th scope="col">Versão recebida</th></tr></thead><tbody>${linha("Vendas de itens", "itensCentavos")}${linha("Taxas", "processamentoCentavos")}${linha("Comissões", "comissaoCentavos")}${linha("Marketing", "marketingCentavos")}${linha("Repasse", "repasseCentavos")}</tbody></table></div>${pode ? decidir("ADOTAR", "Adotar a versão recebida") + decidir("MANTER", "Manter a versão efetiva") : ""}`;
+}
+
+export function previaDoRelatorio99Food(p, { podeAplicar = false, podeVincular = false, podeDecidir = false } = {}) {
   const v = p.valores;
-  const dre = [["Vendas de itens", v.vendasCentavos], ["Taxas de processamento", -v.processamentoCentavos], ["Comissões", -v.comissoesCentavos], ["Marketing", -v.marketingCentavos], ["Resultado do canal", v.resultadoCentavos]];
-  const conferir = [["Recompensas da plataforma", v.recompensasCentavos], ["Receita de pedidos em oferta", v.receitaOfertaCentavos], ["Repasse informado", v.repasseInformadoCentavos], ["Diferença a conferir", v.diferencaRepasseCentavos]];
+  const dre = [["Vendas de itens", v.vendasCentavos], ["Taxas de processamento", -v.processamentoCentavos], ["Comissões", -v.comissoesCentavos], ["Marketing", -v.marketingCentavos], ["Resultado gerencial preliminar", v.resultadoPreliminarCentavos]];
+  const conferir = [["Recompensas da plataforma", v.recompensasCentavos], ["Receita de pedidos em oferta", v.receitaOfertaCentavos], ["Repasse informado", v.repasseInformadoCentavos]];
+  const div = p.divergencias;
   const conf = p.conferenciaSaipos;
   const form = p.podeAplicar && podeAplicar ? `<form class="acao" data-acao="/api/fv2/acoes/importacao/99food/aplicar" data-recarregar="lista"><input type="hidden" name="importacao" value="${esc(p.importacaoId)}">
 <label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>
-${p.exigeAceiteDaDiferenca ? '<label class="caixa-marcar"><input type="checkbox" name="aceitarDiferencaDeRepasse" required> Entendo que a diferença para o repasse informado fica em conferência.</label>' : ""}
+${p.exigeAceiteDaDiferenca ? '<label class="caixa-marcar"><input type="checkbox" name="aceitarDiferencaDeRepasse" required> Entendo que as diferenças para o repasse informado ficam em conferência.</label>' : ""}
 <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Conferi os valores e autorizo lançar no Financeiro.</label>
 <button type="submit" class="botao botao--primario">Aplicar ao Financeiro</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>` : "";
-  const dias = p.valoresDiarios.map((d) => `<tr>${td("Dia", esc(dataBR(d.data)), "esquerda")}${td("Vendas", String(d.quantidade))}${td("Itens", valor(d.itensCentavos))}${td("Taxas", valor(d.processamentoCentavos))}${td("Comissões", valor(d.comissaoCentavos))}${td("Marketing", valor(d.marketingCentavos))}${td("Recompensas", valor(d.recompensasCentavos))}${td("Repasse", valor(d.repasseCentavos))}</tr>`).join("");
+  const dias = p.valoresDiarios.map((d) => `<tr>${td("Dia", esc(dataBR(d.data)), "esquerda")}${td("Vendas", String(d.quantidade))}${td("Itens", valor(d.itensCentavos))}${td("Taxas", valor(d.processamentoCentavos))}${td("Comissões", valor(d.comissaoCentavos))}${td("Marketing", valor(d.marketingCentavos))}${td("Recompensas", valor(d.recompensasCentavos))}${td("Repasse", valor(d.repasseCentavos))}${td("Diferença", valor(d.diferencaRepasseCentavos))}</tr>`).join("");
   return `${fechar("Relatório 99Food: conferir antes de aplicar")}
 <p class="nota">${esc(p.loja?.nome ?? "Loja")} · ${esc(p.loja?.cidade ?? "")} · ID ${esc(p.loja?.id ?? "—")}<br>${esc(dataBR(p.periodo.inicio))} a ${esc(dataBR(p.periodo.fim))} · ${p.dias} dia(s) · ${p.quantidade} venda(s). Nada foi gravado ainda.</p>
 <h3>Entra na DRE</h3><dl class="ficha ficha--compacta">${dre.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}</dl>
 <h3>Fica em conferência</h3><dl class="ficha ficha--compacta">${conferir.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}</dl>
-<p class="nota">O relatório não informa data nem ciclo do repasse: nada vira recebível nem crédito no banco.</p>
-<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · ${conf.diasDivergentes.length} com diferença · ${conf.diasSemSaipos.length} sem pedidos 99Food na SAIPOS.</p>
-<h3>Valores por dia</h3><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Valores diários do relatório da 99Food</caption><thead><tr><th scope="col">Dia</th><th scope="col">Vendas</th><th scope="col">Itens</th><th scope="col">Taxas</th><th scope="col">Comissões</th><th scope="col">Marketing</th><th scope="col">Recompensas</th><th scope="col">Repasse</th></tr></thead><tbody>${dias}</tbody></table></div>
+<h3>Diferença entre o resultado preliminar e o repasse</h3><dl class="ficha ficha--compacta"><dt>Dias divergentes</dt><dd>${div.diasDivergentes}</dd><dt>Soma algébrica das diferenças</dt><dd>${valor(div.somaAlgebricaCentavos)}</dd><dt>Soma dos valores absolutos</dt><dd>${valor(div.somaAbsolutaCentavos)}</dd><dt>Situação</dt><dd>${esc(div.diasDivergentes ? "Pendente de conferência" : "Sem diferença")}</dd></dl>
+<p class="nota">A diferença não é receita nem despesa. O relatório não informa data nem ciclo do repasse: nada vira recebível nem crédito no banco.</p>
+${vinculoDaLoja99Food(p, podeVincular)}
+${p.correcoesPendentes.length ? `<h3>Correções para decidir</h3>${p.correcoesPendentes.map((c) => correcaoDoDia99Food(c, podeDecidir)).join("")}` : ""}
+<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · ${conf.diasDivergentes.length} com diferença · ${conf.diasSemSaipos.length} sem pedidos 99Food na SAIPOS · ${conf.diasSoNaSaipos.length} só na SAIPOS.</p>
+<h3>Valores por dia</h3><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Valores diários do relatório da 99Food</caption><thead><tr><th scope="col">Dia</th><th scope="col">Vendas</th><th scope="col">Itens</th><th scope="col">Taxas</th><th scope="col">Comissões</th><th scope="col">Marketing</th><th scope="col">Recompensas</th><th scope="col">Repasse</th><th scope="col">Diferença</th></tr></thead><tbody>${dias}</tbody></table></div>
 ${p.bloqueios.length ? `<h3>O que impede aplicar</h3>${lista(p.bloqueios.map((b) => `<li><span>${esc(b.mensagem)}</span></li>`))}` : ""}
 ${p.avisos.length ? `<h3>Avisos</h3>${lista(p.avisos.map((a) => `<li><span>${esc(a.mensagem)}</span></li>`))}` : ""}
 <p class="nota">Lançamentos: ${p.lancamentos.criar} novo(s), ${p.lancamentos.manter} já aplicado(s), ${p.lancamentos.cancelar} a substituir.</p>${form}`;

@@ -65,17 +65,18 @@ export function operacoesDoCanalPlataforma(b) {
             const v = (k) => soma(aplicados, (x) => x[k]);
             const pendencias = [];
             if (aplicados.length < dias.length) pendencias.push({ codigo: "RELATORIO_NAO_APLICADO", mensagem: `${dias.length - aplicados.length} dia(s) do relatório oficial ainda não aplicado(s) ao Financeiro: fora dos totais abaixo.` });
-            if (v("diferencaRepasseCentavos")) pendencias.push({ codigo: "REPASSE_EM_CONFERENCIA", mensagem: "O repasse informado não fecha com os lançamentos: a diferença fica em conferência.", valorCentavos: v("diferencaRepasseCentavos") });
+            if (v("diasDivergentes")) pendencias.push({ codigo: "REPASSE_99FOOD_EM_CONFERENCIA", mensagem: `${v("diasDivergentes")} dia(s) com resultado preliminar diferente do repasse informado. Soma absoluta das diferenças em conferência:`, valorCentavos: v("somaAbsolutaDiferencasCentavos") });
             if (aplicados.length) pendencias.push({ codigo: "REPASSE_SEM_CICLO", mensagem: "O relatório não informa data nem ciclo do repasse: nada foi marcado como a receber ou recebido." });
+            if (relatorio.conferenciaSaipos.diasSoNaSaipos.length) pendencias.push({ codigo: "PEDIDOS_99FOOD_SO_NA_SAIPOS", mensagem: `${relatorio.conferenciaSaipos.diasSoNaSaipos.length} dia(s) com pedidos 99Food só na SAIPOS: o relatório oficial não traz esses dias.` });
             if (relatorio.conferenciaSaipos.diasDivergentes.length) pendencias.push({ codigo: "DIFERENCA_SAIPOS_99FOOD", mensagem: `${relatorio.conferenciaSaipos.diasDivergentes.length} dia(s) com diferença entre a SAIPOS e o relatório oficial: pendente de conferência.` });
             const ate = dias.map((d) => d.data).sort();
             return {
               canal, competencia, fonteOficial: "Relatório oficial da 99Food", situacao: relatorio.situacao, dependeDeRelatorioOficial: false,
               totais: aplicados.length ? {
-                brutoCentavos: v("itensCentavos"), comissoesCentavos: v("comissaoCentavos"), taxasCentavos: v("processamentoCentavos"), mensalidadesCentavos: 0, descontosEPromocoesCentavos: 0, ajustesCentavos: 0, marketingCentavos: v("marketingCentavos"), recompensasCentavos: v("recompensasCentavos"), receitaOfertaCentavos: v("receitaOfertaCentavos"),
-                resultadoCentavos: v("composicaoCentavos"), diferencaRepasseCentavos: v("diferencaRepasseCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: 0, saldoAReceberCentavos: null, pedidos: v("quantidade"), cancelamentos: null, observacaoPedidos: "Vendas informadas por dia no relatório oficial, sem pedidos individuais.",
+                brutoCentavos: v("itensCentavos"), comissoesCentavos: v("comissaoCentavos"), taxasCentavos: v("processamentoCentavos"), mensalidadesCentavos: null, descontosEPromocoesCentavos: null, ajustesCentavos: null, marketingCentavos: v("marketingCentavos"), recompensasCentavos: v("recompensasCentavos"), receitaOfertaCentavos: v("receitaOfertaCentavos"),
+                resultadoPreliminarCentavos: v("composicaoCentavos"), diferencaRepasseCentavos: v("diferencaRepasseCentavos"), diasDivergentes: v("diasDivergentes"), somaAbsolutaDiferencasCentavos: v("somaAbsolutaDiferencasCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: 0, saldoAReceberCentavos: null, pedidos: v("quantidade"), cancelamentos: null, observacaoPedidos: "Vendas informadas por dia no relatório oficial, sem pedidos individuais.",
               } : null,
-              demonstrativos: [], historico: aplicados.length ? [{ periodoInicio: ate[0], periodoFim: ate.at(-1), brutoCentavos: v("itensCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: null, situacaoRepasse: "SEM_CICLO" }] : [], conferenciaSaipos, pendencias, relatorio99Food: { loja: relatorio.lojas[0] ?? null, conferenciaSaipos: relatorio.conferenciaSaipos, diasImportados: dias.length, diasAplicados: aplicados.length },
+              demonstrativos: [], historico: aplicados.length ? [{ periodoInicio: ate[0], periodoFim: ate.at(-1), brutoCentavos: v("itensCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: null, situacaoRepasse: "SEM_CICLO" }] : [], conferenciaSaipos, pendencias, relatorio99Food: { loja: relatorio.lojas[0] ?? null, divergencias: relatorio.divergencias, conferenciaSaipos: relatorio.conferenciaSaipos, diasImportados: dias.length, diasAplicados: aplicados.length },
             };
           }
           return {

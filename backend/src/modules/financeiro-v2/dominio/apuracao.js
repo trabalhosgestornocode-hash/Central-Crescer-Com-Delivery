@@ -121,6 +121,20 @@ export function apurar(d, p) {
   for (const m of d.movimentacoes.filter((x) => x.situacao === SITUACAO_MOVIMENTACAO.VALIDA && competenciaDe(x.dataEfetiva) === comp && x.sentido === "SAIDA" && x.alocadoCentavos < x.valorCentavos && !x.transferenciaId && !x.estornoId && !x.pagamentoId)) {
     pendencias.push({ tipo: "SAIDA_SEM_CLASSIFICACAO", gravidade: "CLASSIFICACAO", afeta: ["RESULTADO_GERENCIAL"], valorCentavos: subtrair(m.valorCentavos, m.alocadoCentavos), movimentacaoId: m.id, mensagem: "Saída bancária sem obrigação vinculada: pode ser despesa ainda não reconhecida." });
   }
+  // 99Food: cada dia confere sozinho o resultado calculado com o repasse informado. A diferença é só aviso: nunca vira lançamento.
+  const dias99Food = ativos.filter((l) => l.relatorio99Food?.componente === "VENDAS" && l.relatorio99Food.diferencaRepasseCentavos !== undefined).map((l) => l.relatorio99Food);
+  const divergentes99Food = dias99Food.filter((x) => x.diferencaRepasseCentavos !== 0);
+  if (divergentes99Food.length) {
+    const reais = (c) => { const t = String(Math.abs(c)).padStart(3, "0"); return `${c < 0 ? "−" : ""}R$ ${t.slice(0, -2).replace(/\B(?=(\d{3})+$)/g, ".")},${t.slice(-2)}`; };
+    const total = (k) => dias99Food.reduce((s, x) => somar(s, x[k]), 0);
+    const algebrica = total("diferencaRepasseCentavos");
+    const absoluta = divergentes99Food.reduce((s, x) => somar(s, Math.abs(x.diferencaRepasseCentavos)), 0);
+    pendencias.push({
+      tipo: "REPASSE_99FOOD_EM_CONFERENCIA", gravidade: "PARCIAL", afeta: ["RESULTADO_GERENCIAL"], canal: "NOVENTA_E_NOVE_FOOD", valorCentavos: algebrica,
+      resultadoPreliminarCentavos: total("resultadoPreliminarCentavos"), repasseInformadoCentavos: total("repasseInformadoCentavos"), diasDivergentes: divergentes99Food.length, somaAbsolutaCentavos: absoluta,
+      mensagem: `99Food: resultado gerencial preliminar de ${reais(total("resultadoPreliminarCentavos"))} difere do repasse informado de ${reais(total("repasseInformadoCentavos"))} em ${divergentes99Food.length} dia(s). Diferença líquida de ${reais(algebrica)} (soma absoluta de ${reais(absoluta)}), pendente de conferência: não é receita nem despesa.`,
+    });
+  }
   // Sobreposição agregado × pedidos no mesmo dia: uma operação nunca pode contar duas vezes.
   const diasAgregados = new Set(ativos.filter((l) => l.natureza === N.RECEITA && !l.canal && l.origem?.tipo === TIPO.PROPOSTA).map((l) => l.dataOperacao));
   for (const dia of diasAgregados) {

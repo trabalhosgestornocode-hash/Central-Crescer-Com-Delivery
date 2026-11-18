@@ -370,6 +370,8 @@ export const ESCRITAS = Object.freeze({
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/ifood-conciliacao/aplicar": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.aplicarConciliacaoIfood(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+  "/importacao/99food/vincular-loja": { campos: ["importacao", "lojaId", "justificativa"], fazer: (n, c, b) => n.vincularLoja99Food(c, { importacaoId: id(b.importacao), lojaId: b.lojaId, justificativa: b.justificativa }) },
+  "/importacao/99food/decidir-correcao": { campos: ["importacao", "data", "decisao", "justificativa"], fazer: (n, c, b) => n.decidirCorrecao99Food(c, { importacaoId: id(b.importacao), data: b.data, decisao: b.decisao, justificativa: b.justificativa }) },
   "/importacao/99food/aplicar": { campos: ["importacao", "justificativa", "aceitarDiferencaDeRepasse"], fazer: (n, c, b) => n.aplicarRelatorio99Food(c, { importacaoId: id(b.importacao), justificativa: b.justificativa, ...(marcado(b.aceitarDiferencaDeRepasse) ? { aceitarDiferencaDeRepasse: true } : {}) }) },
   "/importacao/ifood-conciliacao/classificar": { campos: ["chave", "categoria", "justificativa"], fazer: (n, c, b) => n.classificarLancamentoIfood(c, { chave: b.chave, categoria: b.categoria, justificativa: b.justificativa }) },
   "/conciliacoes/gerar-repasses-ifood": { campos: [], fazer: (n, c) => n.gerarCandidatasDeRepasseIfood(c, {}) },

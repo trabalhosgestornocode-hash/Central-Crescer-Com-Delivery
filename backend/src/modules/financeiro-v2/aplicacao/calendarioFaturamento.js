@@ -221,9 +221,11 @@ async function fonte99Food(tx, cx, { inicio, fim }) {
       if (!oficial.aplicado) dia.pendencias.push({ codigo: "RELATORIO_NAO_APLICADO", quantidade: 1, mensagem: "Relatório oficial importado, ainda não aplicado ao Financeiro." });
       if (oficial.saipos && (oficial.saipos.diferencaPedidos || oficial.saipos.diferencaItensCentavos)) dia.divergencias.push({ codigo: "DIFERENCA_SAIPOS_99FOOD", diferencaCentavos: oficial.saipos.diferencaItensCentavos, mensagem: `SAIPOS com ${oficial.saipos.pedidos} pedido(s) e relatório oficial com ${oficial.quantidade}: pendente de conferência.` });
       if (!oficial.saipos) dia.pendencias.push({ codigo: "SAIPOS_SEM_PEDIDOS_99FOOD", quantidade: 1, mensagem: "A SAIPOS não tem pedidos 99Food neste dia para comparar." });
-      if (oficial.diferencaRepasseCentavos) dia.pendencias.push({ codigo: "REPASSE_EM_CONFERENCIA", quantidade: 1, mensagem: "O repasse informado não fecha com os lançamentos do dia: em conferência." });
+      if (oficial.diferencaRepasseCentavos) dia.divergencias.push({ codigo: "REPASSE_99FOOD_DIVERGENTE", diferencaCentavos: oficial.diferencaRepasseCentavos, mensagem: "O resultado preliminar do dia não fecha com o repasse informado: pendente de conferência." });
       dia.pendencias.push({ codigo: "REPASSE_SEM_CICLO", quantidade: 1, mensagem: "Repasse informado sem data e sem ciclo oficial: aguardando identificação no extrato." });
     } else dia.observacoes.push("Nenhum relatório oficial da 99Food importado: o dia aparece sem dados (não é zero confirmado).");
+    const soNaSaipos = relatorio?.soNaSaipos.get(data);
+    if (soNaSaipos) dia.pendencias.push({ codigo: "PEDIDOS_99FOOD_SO_NA_SAIPOS", quantidade: soNaSaipos.pedidos, mensagem: "Há pedidos 99Food na SAIPOS neste dia, mas o relatório oficial não traz o dia." });
     if (!lista.length) { if (dia.pendencias.length) dia.estados.add(ESTADO_DIA.CONFERENCIA_PENDENTE); if (dia.divergencias.length) dia.estados.add(ESTADO_DIA.DIVERGENCIA); return dia; }
     const provisorias = lista.filter(ehProvisoria);
     const daSaipos = lista.filter((v) => v.fonte?.sistema === "SAIPOS");

@@ -413,6 +413,8 @@ export function operacoesDeFormacao(b) {
     if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
     if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
     if (!corteConferido) await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
+    // A 99Food só fatura pelo relatório oficial: proposta antiga da SAIPOS nunca vira receita, em qualquer ordem de importação.
+    if ([OP.VENDA, OP.VENDA_AGREGADA].includes(p.operacao) && p.comando?.canal === "NOVENTA_E_NOVE_FOOD") falhar(CODIGO.OPERACAO_INVALIDA, "Venda 99Food da SAIPOS é só conferência: o faturamento deste canal vem do relatório oficial da 99Food.", { propostaId: p.id });
     const conflito = await conflitoDeGranularidade(tx, cx, p);
     if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
     if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
