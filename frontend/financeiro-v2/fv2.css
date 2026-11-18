@@ -741,7 +741,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .imp-dica { margin-top: 2px; font-size: 12.5px; color: var(--suave); }
 
 /* ------------------------------------------------------------------ toque (celular/tablet): alvos de pelo menos 44 px, sem esconder nada */
-@media (max-width: 760px), (pointer: coarse) {
+@media (pointer: coarse), (max-width: 760px) {
   .navegacao a { min-height: 44px; display: flex; align-items: center; }
   .filtros > a { min-height: 44px; display: inline-flex; align-items: center; }
   .layout button, .layout select, .layout input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), .layout a.botao, .layout a.botao-link, .layout .botao-link { min-height: 44px; }
