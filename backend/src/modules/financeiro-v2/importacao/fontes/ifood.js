@@ -10,6 +10,7 @@ import { somar } from "../../dominio/dinheiro.js";
 import { rotulo } from "../leitor.js";
 import { DIVERGENCIA, diferenca } from "../motor.js";
 import { classificarPorPalavras, col, definirFonte } from "./comum.js";
+import { IFOOD_CONCILIACAO } from "./ifoodConciliacao.js";
 
 /** componente → { categoriaSugerida, efeito } . efeito: RESULTADO (entra no resultado) | LIQUIDACAO (é o dinheiro do repasse). */
 export const COMPONENTES_IFOOD = Object.freeze({
@@ -132,4 +133,4 @@ export function composicaoIfood(componentes) {
   return r;
 }
 
-export const FONTES_IFOOD = Object.freeze([IFOOD_APURACAO]);
+export const FONTES_IFOOD = Object.freeze([IFOOD_APURACAO, IFOOD_CONCILIACAO]);

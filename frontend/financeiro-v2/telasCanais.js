@@ -233,6 +233,7 @@ ${lista}`;
 const SITUACAO_PLATAFORMA = Object.freeze({
   PRELIMINAR: ["Preliminar — sem demonstrativo oficial", "alerta"], CONFIRMADO: ["Confirmado pela fonte oficial", "ok"],
   CONFIRMADO_COM_REPASSE_PENDENTE: ["Confirmado · repasse pendente", "info"], SEM_FONTE_OFICIAL: ["Sem relatório oficial", "neutro"],
+  IMPORTADO: ["Importado · ainda não aplicado", "alerta"], AGUARDANDO_CONFERENCIA: ["Aguardando conferência", "info"], DIVERGENTE: ["Divergente", "erro"], CONCILIADO: ["Conciliado", "ok"],
 });
 const REPASSE = Object.freeze({ RECEBIDO: ["Recebido", "ok"], PARCIAL: ["Parcial", "alerta"], PREVISTO: ["Previsto", "info"], ATRASADO: ["Atrasado", "erro"], SEM_RECEBIVEL: ["Sem recebível", "neutro"] });
 const depende = (texto = "Depende do relatório oficial") => `<span class="valor valor--desconhecido">${esc(texto)}</span>`;
@@ -268,6 +269,8 @@ ${d.dependeDeRelatorioOficial ? '<p class="aviso">Os relatórios oficiais da 99F
 ${calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null })}
 <section class="resumo" aria-label="Números do canal ${esc(nome)}">${cards}</section>
 ${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de conciliação</h2><ul class="lista-simples">${d.pendencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${p.valorCentavos ? valor(p.valorCentavos) : ""}</li>`).join("")}</ul></section>` : ""}
+${ifood && d.conciliacao && tem(ctx.permissoes, "financeiro_v2.conciliar") ? `<section class="card"><h2>Repasses × extrato</h2><p class="nota">Procura, nos créditos que já estão na conta, os que podem ser estes repasses. Nada é baixado aqui: a confirmação é feita em Importações e Conferências.</p>
+<form class="acao" data-acao="/api/fv2/acoes/conciliacoes/gerar-repasses-ifood" data-recarregar="lista"><label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Quero procurar os créditos no extrato.</label><button type="submit" class="botao">Procurar créditos no extrato</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>` : ""}
 <section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<button type="button" class="botao-link" data-aba-canal="importacoes">Registrar demonstrativo (aba Importações)</button>' : ""}</div>${historico}</section>
 <section class="card"><h2>Pedidos no relatório SAIPOS — só conferência</h2><p class="nota">${cs2 ? `${cs2.pedidos} pedido(s) · ${cs2.cancelados} cancelado(s) · ${esc(moeda(cs2.totalCentavos))}` : "—"}. Não entram no faturamento: a SAIPOS não é fonte oficial ${ifood ? "do iFood" : "da 99Food"}.</p></section>`;
 }

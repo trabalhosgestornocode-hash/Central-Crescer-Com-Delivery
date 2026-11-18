@@ -13,6 +13,7 @@ import { operacoesDoCanalPlataforma } from "./canalPlataforma.js";
 import { operacoesDoCalendarioFaturamento } from "./calendarioFaturamento.js";
 import { operacoesDeImportacoesPorCanal } from "./importacoesPorCanal.js";
 import { operacoesDoDemonstrativoIfood } from "./demonstrativoIfood.js";
+import { operacoesDaConciliacaoIfood } from "./conciliacaoIfood.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesDeCompetencia } from "./competencias.js";
 import { operacoesDeConciliacao } from "./conciliacao.js";
@@ -93,6 +94,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDoCalendarioFaturamento(base),
     ...operacoesDeImportacoesPorCanal(base, { fontes }),
     ...operacoesDoDemonstrativoIfood(base),
+    ...operacoesDaConciliacaoIfood(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeVendasERecebimentos(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

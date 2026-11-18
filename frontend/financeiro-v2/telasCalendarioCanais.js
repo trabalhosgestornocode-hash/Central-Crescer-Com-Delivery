@@ -26,8 +26,8 @@ const CONFERENCIA = Object.freeze({
   CONCILIADO: "Conciliado: recebido igual ao esperado", DIVERGENTE: "Divergente: recebido diferente do esperado", PENDENTE: "Pendente: há taxa ou recebimento sem confirmação",
   AGUARDANDO_EXTRATO: "Aguardando extrato: recebimento ainda não confirmado", PARCIAL: "Parcial: só parte foi recebida",
 });
-const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa" });
-const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível" });
+const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood" });
+const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível", SEM_SALDO: "Sem saldo a receber", DIVERGENTE: "Crédito com diferença" });
 const ORIGEM_DA_MARCACAO = Object.freeze({ DATA: "Marcado para esta data", DIA_DA_SEMANA: "Marcado para este dia da semana" });
 
 const chip = (e) => { const x = ESTADOS[e]; return `<span class="est est--${x.classe}" title="${esc(x.rotulo)}"><span aria-hidden="true">${x.glifo}</span><span class="sr">${esc(x.rotulo)}</span></span>`; };
@@ -115,7 +115,19 @@ ${r.semPagamento.vendas ? `<dt>Sem pagamento identificado</dt><dd>${r.semPagamen
 <dt>Conferência</dt><dd>${esc(CONFERENCIA[r.conferencia] ?? "Sem pagamento para conferir")}</dd></dl>`;
 }
 
+const CONFERENCIA_IFOOD = Object.freeze({ IMPORTADO: "Importado, ainda não aplicado", AGUARDANDO_CONFERENCIA: "Aguardando conferência", DIVERGENTE: "Divergente: diferença pendente", CONCILIADO: "Conciliado" });
+function oficialDoIfood(o) {
+  const repasses = o.repasses.map((r) => `${esc(dataBR(r.dataPrevista))} (${esc(REPASSE[r.situacao] ?? r.situacao)})`).join(", ");
+  return `<dl class="ficha ficha--compacta">
+<dt>Pedidos</dt><dd>${o.pedidos}${o.pedidosCancelados ? `, sendo ${o.pedidosCancelados} ${o.pedidosCancelados === 1 ? "cancelado" : "cancelados"}` : ""}</dd>
+<dt>Faturamento</dt><dd>${valor(o.faturamentoCentavos)}</dd><dt>Produtos</dt><dd>${valor(o.produtosCentavos)}</dd><dt>Entregas da loja</dt><dd>${valor(o.entregasCentavos)}</dd>
+<dt>Descontos da loja</dt><dd>${valor(o.descontosCentavos)}</dd><dt>Comissões</dt><dd>${valor(o.comissoesCentavos)}</dd><dt>Taxas</dt><dd>${valor(o.taxasCentavos)}</dd>
+<dt>Ajustes (anúncios e entrega sob demanda)</dt><dd>${valor(o.ajustesCentavos)}</dd><dt>Valor líquido</dt><dd>${valor(o.liquidoCentavos)}</dd>
+<dt>Conferência</dt><dd>${esc(CONFERENCIA_IFOOD[o.situacaoConferencia] ?? o.situacaoConferencia)}</dd><dt>Repasse previsto</dt><dd>${repasses || "—"}</dd></dl>`;
+}
+
 function periodosDoIfood(d) {
+  if (d.ifoodOficial) return oficialDoIfood(d.ifoodOficial);
   const c = d.cobertura;
   if (!c) return '<p class="nota">Nenhum demonstrativo oficial cobre este dia.</p>';
   return `<p class="aviso">${esc(c.mensagem)}</p>${lista(c.periodos.map((p) => `<li><span><strong>${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}</strong><br><span class="nota">Valores do PERÍODO inteiro, não deste dia</span></span>
@@ -150,7 +162,7 @@ function marcarSemOperacao(d, cal) {
       campos: `${oculto}<input type="hidden" name="situacao" value="OPERA"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>` })}`;
   }
   if (d.semOperacao?.origem === "DIA_DA_SEMANA") return `<h3>Dia sem operação</h3><p class="nota">${esc(ORIGEM_DA_MARCACAO.DIA_DA_SEMANA)} (${esc(DIA_POR_EXTENSO[d.diaDaSemana])}). Para mudar, use "Dias sem operação" abaixo do calendário.</p>`;
-  if (d.registro || d.cobertura || d.antesDoControle) return "";
+  if (d.registro || d.cobertura || d.ifoodOficial || d.antesDoControle) return "";
   return `<h3>Este dia não teve operação?</h3>${formulario({
     url, titulo: "Marcar este dia como sem operação", rotulo: "Marcar sem operação", aviso: "Confirmo: neste dia a empresa não operou neste canal (fica registrado com a justificativa).",
     campos: `${oculto}<input type="hidden" name="situacao" value="SEM_OPERACAO"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required placeholder="Ex.: loja fechada por feriado"></label>` })}`;
@@ -168,7 +180,7 @@ export function diaDoCanal(d, cal) {
   const obs = d.observacoes.length ? `<p class="nota">${esc(d.observacoes.join(" "))}</p>` : "";
   const sped = d.conferenciaSaipos ? `<p class="nota">${d.conferenciaSaipos.pedidos} pedido(s) iFood no relatório SAIPOS: só conferência, não é faturamento.</p>` : "";
   const valores = cal.canal === "IFOOD" ? periodosDoIfood(d) : cal.canal === "NOVENTA_E_NOVE_FOOD" ? (d.registro ? `<dl class="ficha ficha--compacta"><dt>Faturamento registrado</dt><dd>${valor(d.registro.brutoCentavos)}</dd><dt>Vendas</dt><dd>${d.registro.vendas}</dd></dl><p class="nota">Não vem de relatório oficial da 99Food.</p>` : '<p class="nota">Sem dados da 99Food neste dia. Sem relatório oficial importado, isso não é zero confirmado.</p>') : valoresSaipos(d);
-  const origem = cal.canal === "IFOOD" ? "Demonstrativo oficial do iFood" : cal.canal === "NOVENTA_E_NOVE_FOOD" ? "Relatório oficial da 99Food (ainda não importado)" : d.registro ? [d.registro.origem.SAIPOS ? "Relatório SAIPOS" : null, d.registro.origem.MANUAL ? "Registro manual (equipe)" : null].filter(Boolean).join(" e ") : d.fechamento ? "Fechamento manual (equipe)" : "—";
+  const origem = cal.canal === "IFOOD" ? (d.ifoodOficial ? "Relatório de Conciliação Financeira do iFood" : "Demonstrativo oficial do iFood") : cal.canal === "NOVENTA_E_NOVE_FOOD" ? "Relatório oficial da 99Food (ainda não importado)" : d.registro ? [d.registro.origem.SAIPOS ? "Relatório SAIPOS" : null, d.registro.origem.MANUAL ? "Registro manual (equipe)" : null].filter(Boolean).join(" e ") : d.fechamento ? "Fechamento manual (equipe)" : "—";
   return `<header class="cal-detalhe-cab"><h3>${esc(NOME_DO_CANAL[cal.canal])} · ${esc(dataPorExtenso(d))}</h3></header>
 <ul class="lista-estados">${estados}</ul>
 <dl class="ficha ficha--compacta"><dt>Canal</dt><dd>${esc(NOME_DO_CANAL[cal.canal])}</dd><dt>Data</dt><dd>${esc(dataPorExtenso(d))}</dd><dt>Origem da informação</dt><dd>${esc(origem)}</dd></dl>

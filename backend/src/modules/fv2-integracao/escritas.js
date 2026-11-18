@@ -23,7 +23,7 @@ const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !=
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
 export const FONTE_DO_RELATORIO = Object.freeze({
-  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", SAIPOS_MOVIMENTOS_CAIXA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
+  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", SAIPOS_MOVIMENTOS_CAIXA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED", IFOOD_CONCILIACAO: "IFOOD",
 });
 const MIME_DA_EXTENSAO = Object.freeze({ pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
 /** Base64 estrito → bytes (até 5 MiB). */
@@ -193,12 +193,12 @@ function corpoDoFechamento(b) {
 export const ESCRITAS = Object.freeze({
   // doc 37: importação SEM GUARDA do arquivo (o cofre documental segue desligado): o arquivo é lido, conferido e descartado;
   // ficam a impressão digital (SHA-256) e as linhas extraídas. A fonte vem do tipo de relatório (lista fechada).
-  "/importacao/receber": { campos: ["tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao"], fazer: (n, c, b) => {
+  "/importacao/receber": { campos: ["tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao", "substitui"], fazer: (n, c, b) => {
     const fonte = FONTE_DO_RELATORIO[b.tipoRelatorio];
     if (!fonte) throw erroDeEntrada("Escolha um dos relatórios aceitos.", CODIGO.ENTRADA_INVALIDA, "tipoRelatorio");
     const conteudo = arquivoDoBase64(b.arquivoBase64);
     const tipoMime = MIME_DA_EXTENSAO[String(b.nomeArquivo ?? "").toLowerCase().split(".").pop()] ?? (typeof b.tipoMime === "string" && b.tipoMime ? b.tipoMime : "application/octet-stream");
-    return n.receberArquivoParaImportacao(c, { fonte, tipoRelatorio: b.tipoRelatorio, tipoMime, conteudo, periodoInicio: b.periodoInicio, periodoFim: b.periodoFim,
+    return n.receberArquivoParaImportacao(c, { fonte, tipoRelatorio: b.tipoRelatorio, tipoMime, conteudo, periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, ...(b.substitui ? { substituiImportacaoId: id(b.substitui) } : {}),
       descricao: `${String(b.nomeArquivo ?? "arquivo").slice(0, 120)} (arquivo não guardado: só a impressão digital e as linhas extraídas)` });
   } },
   // Entregadores Próprios: fechamento, duplicidade, documentos, conferência, liberação e divergências. Nenhuma ação paga nada.
@@ -369,6 +369,9 @@ export const ESCRITAS = Object.freeze({
     ...(b.nome ? { nome: b.nome } : {}), ...(b.observacao !== undefined ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
+  "/importacao/ifood-conciliacao/aplicar": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.aplicarConciliacaoIfood(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+  "/importacao/ifood-conciliacao/classificar": { campos: ["chave", "categoria", "justificativa"], fazer: (n, c, b) => n.classificarLancamentoIfood(c, { chave: b.chave, categoria: b.categoria, justificativa: b.justificativa }) },
+  "/conciliacoes/gerar-repasses-ifood": { campos: [], fazer: (n, c) => n.gerarCandidatasDeRepasseIfood(c, {}) },
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
   "/importacao/estornar-taxas": { campos: ["importacao", "competencia", "justificativa"], fazer: (n, c, b) => n.estornarTaxasDoPeriodo(c, { importacaoId: id(b.importacao), competencia: b.competencia, justificativa: b.justificativa }) },
   // doc 38: demonstrativo OFICIAL do iFood do período (faturamento do canal iFood; retenções; ajustes; líquido conferido).

@@ -24,6 +24,13 @@ function formatosDoCanal(d) {
 }
 
 // -------------------------------------------------------------------------------------------------- envio de arquivo
+/** Versão corrigida do relatório do iFood: escolha explícita. Sem escolha, o arquivo é complementar e nada anterior é retirado. */
+function substituiveis(d) {
+  const lista = (d.historico ?? []).filter((i) => i.tipoRelatorio === "IFOOD_CONCILIACAO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado));
+  if (!lista.length) return "";
+  return `<label class="campo--largo">Este arquivo corrige outro? <select name="substitui"><option value="">Não: é um relatório novo ou complementar</option>${lista.map((i) => `<option value="${esc(i.id)}">Sim: substitui ${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}</option>`).join("")}</select></label>`;
+}
+
 function formularioDeArquivo(d, ctx) {
   const aceitos = d.formatos.filter((f) => f.aceitaArquivo);
   const nome = NOME_DO_CANAL[d.canal];
@@ -53,6 +60,7 @@ function formularioDeArquivo(d, ctx) {
   <label>Início do período <input type="date" name="periodoInicio" value="${esc(hoje.inicio)}" required></label>
   <label>Fim do período <input type="date" name="periodoFim" value="${esc(hoje.fim)}" required></label>
   <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept=".xlsx,.pdf,.csv" required></label>
+  ${substituiveis(d)}
   </div>
   <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado da ${esc(nome)}, do período informado, para a unidade ${esc(d.unidade?.nome ?? "")}. Nada entra no financeiro antes da confirmação da prévia.</label>
   <div class="acoes-form"><button type="submit" class="botao botao--primario">Enviar e gerar a prévia</button></div>
@@ -89,7 +97,7 @@ function historico(d) {
     const [rotulo, classe] = ESTADO[i.estado] ?? [i.estado, "neutro"];
     return `<tr>${td("Período", `${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}`, "esquerda")}${td("Relatório", esc(i.relatorio), "esquerda")}${td("Situação", selo(rotulo, classe))}
 ${td("Erros", String(i.erros))}${td("Divergências", String(i.divergencias))}${td("Já existentes", String(i.jaExistentes))}
-${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">${i.estado === "PRONTO_PARA_IMPORTAR" ? "Conferir prévia e confirmar" : "Ver prévia e propostas"}</button>`)}</tr>`;
+${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">${i.estado === "PRONTO_PARA_IMPORTAR" ? "Conferir prévia e confirmar" : "Ver prévia e propostas"}</button>${i.tipoRelatorio === "IFOOD_CONCILIACAO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado) ? `<button type="button" class="botao-link" data-detalhe="conciliacao-ifood:${esc(i.id)}">Conferir e aplicar ao Financeiro</button>` : ""}`)}</tr>`;
   }).join("");
   const demos = d.canal === "IFOOD" ? (d.demonstrativos.length ? `<h4>Demonstrativos oficiais registrados</h4><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Demonstrativos oficiais do iFood</caption><thead><tr><th scope="col">Período</th><th scope="col">Faturamento</th><th scope="col">Comissões</th><th scope="col">Taxas</th><th scope="col">Ajustes</th><th scope="col">Repasse previsto</th><th scope="col">Repasse</th></tr></thead><tbody>
 ${d.demonstrativos.map((x) => `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Faturamento", valor(x.brutoCentavos))}${td("Comissões", valor(x.comissoesCentavos))}${td("Taxas", valor(x.taxasCentavos))}${td("Ajustes", valor(x.ajustesCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Repasse", esc(REPASSE[x.situacaoRepasse] ?? x.situacaoRepasse))}</tr>`).join("")}</tbody></table></div>` : '<p class="nota">Nenhum demonstrativo oficial registrado.</p>') : "";
@@ -107,6 +115,37 @@ ${formatosDoCanal(d)}
 ${d.canal === "IFOOD" ? formularioDoDemonstrativo(d) : ""}
 ${formularioDeArquivo(d, ctx)}
 ${historico(d)}</div>`;
+}
+
+// ------------------------------------------------------------------------------------- painel: efeitos da conciliação iFood
+/** `p` = resposta de /previa-conciliacao-ifood. Só mostra: a conta vem pronta do servidor. */
+function formularioDeClassificacao(x, categorias, pode) {
+  const cabeca = `<p><strong>${esc(x.descricao)}</strong><br><span class="nota">${x.quantidade} lançamento(s) · ${esc(moeda(x.valorCentavos))}</span></p>`;
+  if (!pode) return `${cabeca}<p class="nota">Classificar exige a permissão "Configurar".</p>`;
+  const opcoes = categorias.filter((c) => (c.natureza === "RECEITA") === (x.valorCentavos > 0));
+  return `${cabeca}<form class="acao" data-acao="/api/fv2/acoes/importacao/ifood-conciliacao/classificar" data-recarregar="lista"><input type="hidden" name="chave" value="${esc(x.chave)}">
+<label>Categoria <select name="categoria" required><option value="">Escolha</option>${opcoes.map((c) => `<option value="${esc(c.codigo)}">${esc(c.nome)}</option>`).join("")}</select></label>
+<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo esta classificação.</label><button type="submit" class="botao">Classificar</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
+}
+
+export function previaDaConciliacaoIfood(p, { podeAplicar = false, podeClassificar = false } = {}) {
+  const v = p.valores;
+  const linhas = [["Produtos", v.produtosCentavos], ["Entregas da loja", v.entregasCentavos], ["Faturamento", v.faturamentoCentavos], ["Promoções da loja", -v.promocoesLojaCentavos], ["Comissões", -v.comissoesCentavos], ["Taxa de transação", -v.taxaTransacaoCentavos], ["Entrega sob demanda", -v.entregaSobDemandaCentavos], ["Anúncios", -v.anunciosCentavos], ["Líquido", v.liquidoCentavos]];
+  const conf = p.conferenciaSaipos;
+  const form = p.podeAplicar && podeAplicar ? `<form class="acao" data-acao="/api/fv2/acoes/importacao/ifood-conciliacao/aplicar" data-recarregar="lista"><input type="hidden" name="importacao" value="${esc(p.importacaoId)}">
+<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Conferi os valores e autorizo lançar no Financeiro.</label>
+<button type="submit" class="botao botao--primario">Aplicar ao Financeiro</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>` : "";
+  return `${fechar("Conciliação iFood: conferir antes de aplicar")}
+<p class="nota">${esc(dataBR(p.periodo.inicio))} a ${esc(dataBR(p.periodo.fim))} · ${p.pedidos} pedido(s) · ${p.movimentos} movimento(s). Nada foi gravado ainda.</p>
+<dl class="ficha ficha--compacta">${linhas.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}<dt>Repasse previsto</dt><dd>${valor(v.repassePrevistoCentavos)}</dd><dt>Pago direto à loja (já no faturamento)</dt><dd>${valor(v.recebidoDiretoCentavos)}</dd></dl>
+<h3>Repasses previstos</h3>${lista(p.repasses.itens.map((r) => `<li><span>${esc(dataBR(r.dataPrevista))}<br><span class="nota">Apuração de ${esc(dataBR(r.apuracaoInicio))} a ${esc(dataBR(r.apuracaoFim))}</span></span>${valor(r.previstoCentavos)}</li>`))}
+<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · diferença em produtos: ${esc(moeda(conf.diferencaCentavos))} · fica pendente de conferência.</p>
+${p.bloqueios.length ? `<h3>O que impede aplicar</h3>${lista(p.bloqueios.map((b) => `<li><span>${esc(b.mensagem)}</span></li>`))}` : ""}
+${(p.pendenciasDeClassificacao ?? []).length ? `<h3>Classificar antes de aplicar</h3>${p.pendenciasDeClassificacao.map((x) => formularioDeClassificacao(x, p.categoriasPermitidas ?? [], podeClassificar)).join("")}` : ""}
+${(p.avisos ?? []).length ? `<h3>Avisos</h3>${lista(p.avisos.map((a) => `<li><span>${esc(a.mensagem)}</span></li>`))}` : ""}
+<p class="nota">Lançamentos: ${p.lancamentos.criar} novo(s), ${p.lancamentos.manter} já aplicado(s), ${p.lancamentos.cancelar} a substituir.</p>${form}`;
 }
 
 // ------------------------------------------------------------------------------------- painel: prévia do demonstrativo

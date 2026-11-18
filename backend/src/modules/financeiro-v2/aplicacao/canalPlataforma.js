@@ -7,8 +7,9 @@
 //   - PRELIMINAR × CONFIRMADO: valor do demonstrativo = confirmado pela fonte; repasse = previsto até haver liquidação registrada.
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
-import { exigirCompetencia } from "../dominio/tempo.js";
+import { exigirCompetencia, primeiroDiaDe, ultimoDiaDe } from "../dominio/tempo.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
+import { leituraDaConciliacaoIfood } from "./conciliacaoIfood.js";
 
 const CATEGORIAS = Object.freeze({
   COMISSOES_IFOOD: "comissoesCentavos", TAXAS_DE_PROCESSAMENTO: "taxasCentavos", MENSALIDADE_IFOOD: "mensalidadesCentavos", DESCONTOS_A_CLASSIFICAR: "descontosEPromocoesCentavos",
@@ -66,9 +67,33 @@ export function operacoesDoCanalPlataforma(b) {
         const daCompetencia = todos.filter((d) => d.competencia === competencia);
         // Receita do canal iFood que NÃO veio do demonstrativo (ex.: venda SAIPOS anterior à regra, lançamento manual): sinalizada.
         const foraDaFonte = (await tx.listar(cx, TIPO.LANCAMENTO, { onde: { canal: "IFOOD", competencia } }))
-          .filter((l) => l.situacao === "ATIVO" && l.categoria === "VENDA_IFOOD" && !l.demonstrativoIfood);
+          .filter((l) => l.situacao === "ATIVO" && l.categoria === "VENDA_IFOOD" && !l.demonstrativoIfood && !l.conciliacaoIfood);
         const outrasOrigens = { lancamentos: foraDaFonte.length, valorCentavos: soma(foraDaFonte, (l) => l.valorCentavos), porSistema: Object.fromEntries([...new Set(foraDaFonte.map((l) => l.fonte?.sistema ?? "SEM_FONTE"))].map((k) => [k, soma(foraDaFonte.filter((l) => (l.fonte?.sistema ?? "SEM_FONTE") === k), (l) => l.valorCentavos)])) };
+        const conciliacao = await leituraDaConciliacaoIfood(tx, cx, { inicio: primeiroDiaDe(competencia), fim: ultimoDiaDe(competencia), hoje });
         const pendencias = [];
+        if (conciliacao) {
+          // Só o que foi aplicado entra nos totais; demonstrativo válido de outros dias da competência soma, sem repetir período.
+          const dias = [...conciliacao.porDia.values()];
+          const aplicados = dias.filter((x) => x.aplicado);
+          const v = (k) => soma(aplicados, (x) => x[k]);
+          const dem = (k) => soma(daCompetencia, (x) => x[k]);
+          const recebiveis = [...conciliacao.recebiveis.values()].filter((r) => r.competencia === competencia);
+          const previsto = soma(recebiveis, (r) => r.valorBaseCentavos) + dem("repassePrevistoCentavos");
+          const recebido = soma(recebiveis, (r) => r.liquidadoCentavos) + dem("repasseRecebidoCentavos");
+          const naoAplicados = dias.length - aplicados.length;
+          if (naoAplicados) pendencias.push({ codigo: "CONCILIACAO_NAO_APLICADA", mensagem: `${naoAplicados} dia(s) do relatório oficial ainda não aplicado(s) ao Financeiro: fora dos totais abaixo.` });
+          if (conciliacao.conferenciaSaipos.diferencaCentavos) pendencias.push({ codigo: "DIFERENCA_SAIPOS_IFOOD", mensagem: "Diferença entre SAIPOS e relatório oficial do iFood: pendente de conferência.", valorCentavos: conciliacao.conferenciaSaipos.diferencaCentavos });
+          if (foraDaFonte.length) pendencias.push({ codigo: "RECEITA_IFOOD_FORA_DA_FONTE_OFICIAL", mensagem: `${foraDaFonte.length} lançamento(s) de receita iFood não vieram do relatório oficial.`, valorCentavos: soma(foraDaFonte, (l) => l.valorCentavos) });
+          return {
+            canal, competencia, fonteOficial: "Relatório de Conciliação Financeira do iFood", situacao: conciliacao.situacao, dependeDeRelatorioOficial: false,
+            totais: aplicados.length || daCompetencia.length ? {
+              brutoCentavos: v("faturamentoCentavos") + dem("brutoCentavos"), produtosCentavos: v("produtosCentavos"), entregasCentavos: v("entregasCentavos"), comissoesCentavos: v("comissoesCentavos") + dem("comissoesCentavos"), taxasCentavos: v("taxasCentavos") + dem("taxasCentavos"), mensalidadesCentavos: dem("mensalidadesCentavos"),
+              descontosEPromocoesCentavos: v("descontosCentavos") + dem("descontosEPromocoesCentavos"), ajustesCentavos: dem("ajustesCentavos") - v("ajustesCentavos"), liquidoCentavos: v("liquidoCentavos") + dem("liquidoInformadoCentavos"), recebidoDiretoCentavos: conciliacao.resumo.recebidoDiretoCentavos,
+              repassePrevistoCentavos: previsto, repasseRecebidoCentavos: recebido, saldoAReceberCentavos: previsto - recebido, pedidos: v("pedidos") - v("pedidosCancelados"), cancelamentos: v("pedidosCancelados"), observacaoPedidos: "Pedidos e cancelamentos do relatório oficial de conciliação.",
+            } : null,
+            demonstrativos: daCompetencia, historico: todos, conferenciaSaipos, outrasOrigens, pendencias, conciliacao: { conferenciaSaipos: conciliacao.conferenciaSaipos, repasses: conciliacao.resumo.repasses, diasImportados: dias.length, diasAplicados: aplicados.length },
+          };
+        }
         if (foraDaFonte.length) pendencias.push({ codigo: "RECEITA_IFOOD_FORA_DA_FONTE_OFICIAL", mensagem: `${foraDaFonte.length} lançamento(s) de receita iFood nesta competência não vieram do demonstrativo oficial (origens: ${Object.keys(outrasOrigens.porSistema).join(", ")}). Revisar: a regra é faturamento iFood só pela fonte oficial; a correção depende de autorização.`, valorCentavos: outrasOrigens.valorCentavos });
         if (!daCompetencia.length) pendencias.push({ codigo: "DEMONSTRATIVO_AUSENTE", mensagem: "Sem demonstrativo oficial do iFood nesta competência: o faturamento do canal não está confirmado (não é zero)." });
         for (const d of daCompetencia.filter((x) => x.situacaoRepasse === "ATRASADO")) pendencias.push({ codigo: "REPASSE_ATRASADO", mensagem: `Repasse do período ${d.periodoInicio} a ${d.periodoFim} previsto para ${d.dataPrevista} ainda com saldo.`, valorCentavos: d.saldoAReceberCentavos });
