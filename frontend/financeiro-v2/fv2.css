@@ -648,10 +648,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .cal-painel { margin: 0; }
 .cal-painel__vazio { margin: 0; display: grid; gap: 4px; color: var(--suave); font-size: 14px; }
 .cal-painel__vazio strong { color: var(--texto); font-size: 16px; font-weight: 650; }
-@media (min-width: 1100px) {
-  .cal-layout { grid-template-columns: minmax(0, 1fr) 360px; }
-  .cal-painel { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
-}
+/* Painel do dia sempre ABAIXO do calendário (preferência do usuário, 17/11): sem coluna lateral em telas largas. */
 
 .legenda--cal { gap: 6px 18px; }
 .legenda--cal li { color: var(--suave); }
