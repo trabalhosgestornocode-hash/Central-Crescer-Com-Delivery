@@ -40,7 +40,7 @@ async function unidade(opcoes = {}) {
   return { n, W, caixa, subir, confirmar, aplicar, canal, calendario };
 }
 
-test("formatos por canal: SAIPOS pronto; iFood só o demonstrativo oficial; 99Food nada disponível (sem formato presumido)", async () => {
+test("formatos por canal: SAIPOS pronto; iFood pela conciliação oficial e pelo demonstrativo; 99Food nada disponível (sem formato presumido)", async () => {
   const { canal } = await unidade();
   const s = await canal("SAIPOS");
   assert.equal(s.unidade.nome, "Unidade sintética");
@@ -49,9 +49,9 @@ test("formatos por canal: SAIPOS pronto; iFood só o demonstrativo oficial; 99Fo
   const vendas = s.formatos[0];
   assert.deepEqual([vendas.principal, vendas.homologado, vendas.extensoesHomologadas], [true, true, ["xlsx"]], "o leitor real da Fase 03");
   const i = await canal("IFOOD");
-  assert.deepEqual(i.formatos.map((f) => [f.id, f.disponivel, f.aceitaArquivo]), [["IFOOD_DEMONSTRATIVO", true, false], ["IFOOD_APURACAO", false, false], ["IFOOD_PEDIDOS", false, false]]);
-  assert.match(i.formatos[1].motivo, /contrato sintético/);
-  assert.match(i.formatos[2].motivo, /não existe leitor/);
+  assert.deepEqual(i.formatos.map((f) => [f.id, f.disponivel, f.aceitaArquivo]), [["IFOOD_CONCILIACAO", true, true], ["IFOOD_DEMONSTRATIVO", true, false], ["IFOOD_APURACAO", false, false], ["IFOOD_PEDIDOS", false, false]]);
+  assert.match(i.formatos[2].motivo, /contrato sintético/);
+  assert.match(i.formatos[3].motivo, /não existe leitor/);
   const n99 = await canal("NOVENTA_E_NOVE_FOOD");
   assert.equal(n99.algumFormatoDisponivel, false);
   assert.ok(n99.formatos.every((f) => !f.disponivel && !f.aceitaArquivo));

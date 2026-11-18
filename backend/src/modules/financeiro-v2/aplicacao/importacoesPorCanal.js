@@ -32,7 +32,10 @@ export const FORMATOS_POR_CANAL = Object.freeze({
       dica: "Na SAIPOS: Lançamentos financeiros, categoria Frente de Caixa, descrição Retirada (para reforços, descrição Reforço). Exporte em XLSX." },
   ]),
   IFOOD: Object.freeze([
-    { id: "IFOOD_DEMONSTRATIVO", tipoRelatorio: null, nome: "Demonstrativo financeiro oficial do iFood", principal: true, arquivo: false, disponivel: true, modo: "DEMONSTRATIVO",
+    { id: "IFOOD_CONCILIACAO", tipoRelatorio: "IFOOD_CONCILIACAO", nome: "Conciliação Financeira do iFood (XLSX)", principal: true, arquivo: true, disponivel: true,
+      descricao: "Relatório oficial por movimento. Importar só guarda as linhas; depois a prévia mostra o faturamento, as despesas e os repasses antes de aplicar ao Financeiro.",
+      dica: "No Portal do Parceiro do iFood: Financeiro, Conciliação. Exporte o mês em XLSX." },
+    { id: "IFOOD_DEMONSTRATIVO", tipoRelatorio: null, nome: "Demonstrativo financeiro oficial do iFood", principal: false, arquivo: false, disponivel: true, modo: "DEMONSTRATIVO",
       descricao: "Você informa os valores do demonstrativo oficial do período. O sistema confere a conta, mostra a prévia e só então registra o faturamento, as retenções e o repasse previsto." },
     { id: "IFOOD_APURACAO", tipoRelatorio: "IFOOD_APURACAO", nome: "Apuração financeira do iFood (arquivo)", principal: false, arquivo: false, disponivel: false,
       motivo: "O leitor deste arquivo existe só como contrato sintético: ainda não foi validado com um arquivo oficial real. O envio fica bloqueado até essa validação." },
@@ -81,7 +84,7 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
         const tem = (a) => (ctx.permissoes ?? []).includes(a);
         return {
           canal, hoje, unidade: { nome: config?.nomeExibicao ?? null },
-          acoes: { importar: tem(ACAO.IMPORTAR), confirmar: tem(ACAO.CONFIRMAR_IMPORTACAO) || tem(ACAO.IMPORTAR), registrarDemonstrativo: tem(ACAO.REGISTRAR) },
+          acoes: { importar: tem(ACAO.IMPORTAR), confirmar: tem(ACAO.CONFIRMAR_IMPORTACAO) || tem(ACAO.IMPORTAR), registrarDemonstrativo: tem(ACAO.REGISTRAR), aplicarConciliacao: tem(ACAO.APLICAR) },
           formatos, historico: importacoes, demonstrativos, porEstado,
           estadosAguardando: [ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR],
           algumFormatoDisponivel: formatos.some((f) => f.disponivel),

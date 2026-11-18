@@ -73,6 +73,7 @@ const BASE = [
   g("RECEITA_OPERACIONAL", "Receita operacional", C.RECEITA_OPERACIONAL),
   f("VENDA_BALCAO", "Vendas no balcão", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_IFOOD", "Vendas pelo iFood", "RECEITA_OPERACIONAL", { doSistema: true }),
+  f("ENTREGAS_IFOOD", "Entregas da loja pelo iFood", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_ANOTA_AI", "Vendas pelo Anota AI", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_NOVENTA_E_NOVE_FOOD", "Vendas pela 99Food", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_OUTRO", "Vendas por outros canais", "RECEITA_OPERACIONAL", { doSistema: true }),

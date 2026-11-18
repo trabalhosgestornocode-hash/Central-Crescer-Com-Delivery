@@ -172,7 +172,7 @@ test("payload REAL do backend renderiza as três seções, com os estados certos
   assert.match(s, /Movimentações de Frente de Caixa/);
   assert.match(s, /Unidade sintética/);
   const i = imp.importacoesDoCanal(await CONSULTAS["/importacoes-canal"](n, c, { canal: "IFOOD" }));
-  assert.equal((i.match(/formato--ok/g) ?? []).length, 1);
+  assert.equal((i.match(/formato--ok/g) ?? []).length, 2);
   assert.equal((i.match(/formato--off/g) ?? []).length, 2);
   const x = imp.importacoesDoCanal(await CONSULTAS["/importacoes-canal"](n, c, { canal: "NOVENTA_E_NOVE_FOOD" }));
   assert.equal((x.match(/formato--ok/g) ?? []).length, 0);

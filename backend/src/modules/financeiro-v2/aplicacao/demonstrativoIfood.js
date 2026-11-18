@@ -19,8 +19,12 @@ export const chaveDoDemonstrativoIfood = (inicio, fim) => `demonstrativo-ifood:$
 /** Demonstrativo iFood ATIVO que cobre a data (para a granularidade única na formação). */
 export async function demonstrativoIfoodQueCobre(tx, cx, data) {
   const ls = await tx.listar(cx, TIPO.LANCAMENTO, { onde: { competencia: competenciaDe(data), categoria: CATEGORIA_DE_VENDA.IFOOD, situacao: SITUACAO_LANCAMENTO.ATIVO } });
-  return ls.find((l) => l.demonstrativoIfood && l.demonstrativoIfood.periodoInicio <= data && data <= l.demonstrativoIfood.periodoFim) ?? null;
+  return ls.find((l) => (l.demonstrativoIfood && l.demonstrativoIfood.periodoInicio <= data && data <= l.demonstrativoIfood.periodoFim) || l.conciliacaoIfood?.dia === data) ?? null;
 }
+
+/** Dias do período já cobertos pelo relatório oficial de conciliação do iFood. */
+const conciliacaoNoPeriodo = async (tx, cx, c) => (await tx.listar(cx, TIPO.LANCAMENTO, { onde: { canal: "IFOOD" } }))
+  .some((l) => l.situacao === SITUACAO_LANCAMENTO.ATIVO && l.conciliacaoIfood && c.periodoInicio <= l.conciliacaoIfood.dia && l.conciliacaoIfood.dia <= c.periodoFim);
 
 /** Valida e normaliza. `exigirFechar:false` devolve também o demonstrativo que NÃO fecha (para a prévia mostrar a diferença). */
 function validar(e, { exigirFechar = true } = {}) {
@@ -76,6 +80,7 @@ export function operacoesDoDemonstrativoIfood(b) {
         if (!ja) {
           const sobrepostos = await demonstrativosQueSobrepoem(tx, cx, c, chave);
           if (sobrepostos.length) bloqueios.push({ codigo: "PERIODO_SOBREPOSTO", mensagem: `O período se sobrepõe ao demonstrativo de ${sobrepostos[0].demonstrativoIfood.periodoInicio} a ${sobrepostos[0].demonstrativoIfood.periodoFim}: o faturamento seria somado duas vezes.` });
+          if (await conciliacaoNoPeriodo(tx, cx, c)) bloqueios.push({ codigo: "CONCILIACAO_NO_PERIODO", mensagem: "O relatório oficial de conciliação do iFood já cobre dias deste período: o faturamento seria somado duas vezes." });
           const saipos = await vendasIfoodAplicadasNoPeriodo(tx, cx, c);
           if (saipos.length) bloqueios.push({ codigo: "VENDAS_IFOOD_DA_SAIPOS_APLICADAS", mensagem: "Já há vendas iFood aplicadas a partir da SAIPOS neste período: a SAIPOS não é a fonte do iFood. Reverta-as antes de usar o demonstrativo oficial." });
           try { await b.exigirCompetenciaEditavel(tx, cx, competencia); } catch (e) { bloqueios.push({ codigo: "COMPETENCIA_NAO_EDITAVEL", mensagem: e?.message ?? "A competência não aceita novos lançamentos." }); }
@@ -110,6 +115,7 @@ export function operacoesDoDemonstrativoIfood(b) {
         // Um período diferente que se sobrepõe a outro demonstrativo ativo somaria o faturamento duas vezes.
         const sobrepostos = await demonstrativosQueSobrepoem(tx, cx, c, chave);
         if (sobrepostos.length) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "O período se sobrepõe a outro demonstrativo iFood já registrado: o mesmo faturamento seria somado duas vezes.", { periodoInicio: sobrepostos[0].demonstrativoIfood.periodoInicio, periodoFim: sobrepostos[0].demonstrativoIfood.periodoFim });
+        if (await conciliacaoNoPeriodo(tx, cx, c)) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "O relatório oficial de conciliação do iFood já cobre dias deste período: o faturamento seria somado duas vezes.");
         // Granularidade única: nenhuma venda nem agregado do iFood aplicados no período.
         const conflitos = await vendasIfoodAplicadasNoPeriodo(tx, cx, c);
         if (conflitos.length) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já há vendas iFood aplicadas no período (SAIPOS): reverta o agregado antes de usar o demonstrativo oficial.", { propostaId: conflitos[0].id });
