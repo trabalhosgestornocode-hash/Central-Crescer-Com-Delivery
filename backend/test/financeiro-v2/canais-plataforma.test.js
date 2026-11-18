@@ -38,6 +38,8 @@ test("99Food: sem fonte oficial nada é presumido; a SAIPOS não vira faturament
   const { nucleo: n } = montar();
   const r = await n.consultarCanalPlataforma(c, { canal: "NOVENTA_E_NOVE_FOOD", competencia: "2026-09" });
   assert.deepEqual([r.situacao, r.dependeDeRelatorioOficial, r.totais], ["SEM_FONTE_OFICIAL", true, null]);
+  assert.match(r.pendencias[0].mensagem, /importação do arquivo Dados da loja/);
+  assert.doesNotMatch(r.pendencias[0].mensagem, /amostra real/);
   assert.equal(r.conferenciaSaipos.natureza, "SO_CONFERENCIA");
 });
 
