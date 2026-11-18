@@ -53,8 +53,44 @@ test("operadoras: histórico, versões de taxas e ações só para quem configur
   assert.match(adm, /0,80%/);
   assert.match(adm, /Histórico \(1\)/);
   assert.match(adm, /operadoras\/situacao/);
-  assert.match(adm, /Nova tabela de taxas/);
+  assert.match(adm, /Nova versão das taxas/);
+  assert.match(adm, /name="tx\|PIX\|PIX" value="0,80"/, "a grade vem preenchida com a tabela atual");
   assert.doesNotMatch(can.operadorasTaxas(d, { permissoes: ["financeiro_v2.ver"] }), /data-acao=/);
+});
+
+test("operadoras (18/11): grade bandeira × modalidade só com as modalidades da operadora; vazio = não configurada", () => {
+  const pag = { codigo: "PAGBANK", nome: "PagBank Sintética", processador: "PAGBANK", inicio: "2026-11-17", encerramento: null, modalidades: ["CREDITO_A_VISTA", "DEBITO", "PIX"], situacao: "ATIVA", historico: [], tabelas: [] };
+  const html = can.operadorasTaxas({ operadoras: [pag] }, { permissoes: ["financeiro_v2.configurar"] });
+  assert.match(html, /Taxas pendentes/);
+  assert.match(html, /Informar taxas/);
+  assert.match(html, /data-grade-taxas/);
+  for (const n of ["tx|DEBITO|MASTERCARD", "tx|CREDITO_A_VISTA|ELO", "tx|PIX|PIX", "tf|DEBITO|VISA"]) assert.ok(html.includes(`name="${n}"`), n);
+  assert.ok(!html.includes('name="tx|VOUCHER|'), "voucher não aparece se a operadora não recebe voucher");
+  assert.match(html, /value="2026-11-17"/, "sem tabela, a vigência sugerida é o início da operadora");
+  assert.match(html, /data-replicar-taxa="DEBITO"/);
+  // cadastro: modalidades em caixas de marcar
+  assert.match(html, /type="checkbox" name="modalidades" value="DEBITO" checked data-multiplo/);
+  assert.match(html, /type="checkbox" name="modalidades" value="VOUCHER" data-multiplo/);
+  // com tabela: quadro de leitura mostra "não configurada" onde falta (nunca zero)
+  const comTabela = { ...pag, tabelas: [{ vigenciaInicio: "2026-11-17", vigenciaFim: null, fonte: "Sintética", taxas: [{ modalidade: "DEBITO", bandeira: "MASTERCARD", milesimos: 1420 }, { modalidade: "CREDITO_A_VISTA", bandeira: "AMEX", milesimos: 4750, tarifaFixaCentavos: 10 }] }] };
+  const h2 = can.operadorasTaxas({ operadoras: [comTabela] }, { permissoes: ["financeiro_v2.ver"] });
+  assert.match(h2, /1,42%/);
+  assert.match(h2, /4,75% \+ R\$\s?0,10/);
+  assert.match(h2, /não configurada/);
+  assert.doesNotMatch(h2, /0,00%/);
+  // inativa: sem formulário de taxas
+  assert.doesNotMatch(can.operadorasTaxas({ operadoras: [{ ...pag, situacao: "INATIVA" }] }, { permissoes: ["financeiro_v2.configurar"] }), /data-grade-taxas/);
+});
+
+test("grade de taxas → texto do servidor: só campos preenchidos, vírgula, tarifa opcional, erros sem envio", () => {
+  const ok = can.textoDaGradeDeTaxas([["tx|DEBITO|MASTERCARD", "1,42"], ["tx|DEBITO|VISA", "1.42"], ["tx|DEBITO|ELO", ""], ["tx|CREDITO_A_VISTA|AMEX", "4,75"], ["tf|CREDITO_A_VISTA|AMEX", "0,10"], ["tx|PIX|PIX", "0,5"], ["tf|DEBITO|ELO", ""]]);
+  assert.deepEqual(ok.erros, []);
+  assert.equal(ok.texto, ["DEBITO;MASTERCARD;1,42", "DEBITO;VISA;1,42", "CREDITO_A_VISTA;AMEX;4,75;0,10", "PIX;PIX;0,5"].join("\n"));
+  assert.match(can.textoDaGradeDeTaxas([["tx|DEBITO|VISA", "abc"]]).erros[0], /inválida/);
+  assert.match(can.textoDaGradeDeTaxas([["tf|DEBITO|VISA", "0,10"]]).erros[0], /tarifa fixa sem taxa/);
+  assert.match(can.textoDaGradeDeTaxas([["tx|DEBITO|VISA", "0"]]).erros[0], /taxa 0 só com tarifa fixa/);
+  assert.equal(can.textoDaGradeDeTaxas([["tx|DEBITO|VISA", "0"], ["tf|DEBITO|VISA", "0,25"]]).texto, "DEBITO;VISA;0;0,25");
+  assert.match(can.textoDaGradeDeTaxas([]).erros[0], /ao menos uma taxa/);
 });
 
 test("menu Canais de faturamento e rotas; nenhuma soma de dinheiro nas telas novas", () => {
@@ -64,4 +100,20 @@ test("menu Canais de faturamento e rotas; nenhuma soma de dinheiro nas telas nov
   const src = arquivo("telasCanais.js");
   assert.ok(!/reduce\(|Centavos\s*[+-]\s*\w+Centavos/.test(src), "tela calculando dinheiro");
   assert.ok(!/<td(?![^>]*data-rotulo)[^>]*>/.test(src.replace(/const td = [^\n]+/, "").replace(/<tr><td>[^\n]*<\/td><\/tr>/g, "")), "td sem rótulo");
+});
+
+test("operadoras (18/11): painel do período por modalidade e operadora, com 'sem taxa configurada' em destaque", () => {
+  const linha = (bruto, taxa, semCalc = 0) => ({ quantidade: 1, brutoCentavos: bruto, brutoCalculadoCentavos: bruto - semCalc, taxaCentavos: taxa, liquidoEsperadoCentavos: bruto - semCalc - taxa, percentualEfetivoCentesimos: 142, brutoSemCalculoCentavos: semCalc });
+  const painel = { periodoInicio: "2026-11-01", periodoFim: "2026-11-30", natureza: "ESTIMATIVA", observacao: "Estimativa sintética.", total: linha(53000, 1152, 5000),
+    porModalidade: [{ modalidade: "DEBITO", ...linha(20000, 242) }, { modalidade: "PIX", ...linha(8000, 40) }],
+    operadoras: [{ operadora: "PAGBANK", total: linha(23000, 140, 5000), modalidades: [{ modalidade: "CREDITO_A_VISTA", ...linha(5000, 0, 5000), bandeiras: [{ bandeira: "ELO", ...linha(5000, 0, 5000) }] }] }] };
+  const ops = [{ codigo: "PAGBANK", nome: "PagBank Sintética", processador: "PAGBANK", inicio: "2026-11-10", encerramento: null, modalidades: ["DEBITO"], situacao: "ATIVA", historico: [], tabelas: [] }];
+  const html = can.operadorasTaxas({ operadoras: ops, painel }, { permissoes: ["financeiro_v2.ver"], filtro: { inicio: "2026-11-01", fim: "2026-11-30" } });
+  for (const t of ["Painel do período", "Bruto nas maquininhas", "Taxas estimadas", "Líquido esperado", "Sem taxa configurada", "Por modalidade", "Por operadora", "PagBank Sintética", "Débito", "Pix", "Elo", "não é despesa lançada na DRE"]) assert.ok(html.includes(t), t);
+  assert.match(html, /data-filtro-local="operadoras-taxas"/);
+  assert.match(html, /value="2026-11-01"/);
+  assert.match(html, /R\$\s?530,00/);
+  assert.match(html, /R\$\s?11,52/);
+  // sem painel (consulta sem período): a tela continua funcionando
+  assert.doesNotMatch(can.operadorasTaxas({ operadoras: ops }, { permissoes: ["financeiro_v2.ver"] }), /Painel do período/);
 });

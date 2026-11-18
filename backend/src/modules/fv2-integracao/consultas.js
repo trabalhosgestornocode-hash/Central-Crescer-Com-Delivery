@@ -123,7 +123,8 @@ export const CONSULTAS = Object.freeze({
   // doc 35: taxas contratadas × cobradas (Stone), por modalidade e bandeira, transação a transação.
   "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),
   // Fase 02 (doc 40): operadoras e o líquido esperado (ESTIMATIVA) por modalidade × bandeira do período.
-  "/operadoras": (n, c) => n.consultarOperadoras(c),
+  // 18/11/2026: com período, traz também o painel (bruto, taxa estimada e líquido por operadora e modalidade).
+  "/operadoras": async (n, c, p) => ({ ...(await n.consultarOperadoras(c)), ...(p.periodoInicio && p.periodoFim ? { painel: await n.consultarTaxasPorOperadora(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }) } : {}) }),
   "/vendas/liquido-esperado": (n, c, p) => n.consultarLiquidoEsperado(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, ...(p.canal ? { canal: p.canal } : {}), ...(p.modalidade ? { modalidade: p.modalidade } : {}), ...(p.chave ? { chave: p.chave } : {}) }),
   // Fases 04/05 (docs 42/43): área SAIPOS (resumo + cards de Presencial e Anota Aí) e fechamento manual com a comparação diária.
   "/saipos": async (n, c, p) => {
