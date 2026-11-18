@@ -152,7 +152,15 @@ function consultaDaRota() {
       const periodo = { competencia: undefined, periodoInicio: f.inicio, periodoFim: f.fim };
       return f.aba === "fechamento" ? `/api/fv2/fechamento-manual?${qs(periodo)}` : `/api/fv2/saipos?${qs(periodo)}`;
     }
-    case "operadoras-taxas": return `/api/fv2/operadoras?${qs({ competencia: undefined })}`;
+    case "operadoras-taxas": {
+      // 18/11/2026: período do painel — o escolhido; senão o mês da competência (até a data-base, se for o mês corrente).
+      if (f.competenciaBase !== estado.competencia || !f.inicio || !f.fim) {
+        const fimMes = fimDoMes(estado.competencia);
+        Object.assign(f, { competenciaBase: estado.competencia, inicio: inicioDoMes(estado.competencia), fim: estado.dataBase && estado.dataBase >= inicioDoMes(estado.competencia) && estado.dataBase < fimMes ? estado.dataBase : fimMes });
+        estado.filtros["operadoras-taxas"] = f;
+      }
+      return `/api/fv2/operadoras?${qs({ competencia: undefined, periodoInicio: f.inicio, periodoFim: f.fim })}`;
+    }
     case "ifood": case "noventa-e-nove-food": return `/api/fv2/canal-plataforma?${qs({ canal: estado.rota === "ifood" ? "IFOOD" : "NOVENTA_E_NOVE_FOOD" })}`;
     case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
@@ -189,7 +197,7 @@ function desenhar(dados) {
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
     case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade(), ...contextoDoCalendario(), ...contextoDasImportacoes(), abrirProvisorio: estado.filtros.saipos?.foco === "provisorio" });
-    case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade() });
+    case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade(), filtro: estado.filtros["operadoras-taxas"] ?? {} });
     case "ifood": case "noventa-e-nove-food": return can.plataforma(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
     case "configuracoes": {
       const perm = permissoesDaUnidade();
@@ -395,8 +403,18 @@ async function arquivoEmBase64(arquivo) {
 async function executarAcao(form) {
   const saida = form.querySelector(".resultado-acao");
   const botao = form.querySelector('button[type="submit"]');
-  const dados = Object.fromEntries([...new FormData(form).entries()].filter(([, v]) => typeof v === "string"));
+  const entradas = [...new FormData(form).entries()].filter(([, v]) => typeof v === "string");
+  // 18/11/2026: grade de taxas (campos "tx|MOD|BANDEIRA" e "tf|MOD|BANDEIRA") vira o texto que o servidor valida.
+  const daGrade = (k) => k.startsWith("tx|") || k.startsWith("tf|");
+  const dados = Object.fromEntries(entradas.filter(([k]) => !daGrade(k)));
+  // Caixas de marcar com o mesmo nome (data-multiplo): todos os valores marcados, separados por vírgula.
+  for (const nome of new Set([...form.querySelectorAll("[data-multiplo]")].map((x) => x.name))) dados[nome] = new FormData(form).getAll(nome).join(",");
   if (!form.querySelector('[name="confirmar"]')?.checked) { saida.textContent = "Marque a confirmação para continuar."; return; }
+  if (form.hasAttribute("data-grade-taxas")) {
+    const g = can.textoDaGradeDeTaxas(entradas.filter(([k]) => daGrade(k)));
+    if (g.erros.length) { saida.textContent = g.erros.join(" "); return; }
+    dados.taxas = g.texto;
+  }
   const corpo = { ...dados, confirmar: true, unidade: estado.unidade };
   if (form.hasAttribute("data-envio-evidencia")) {
     const arquivo = form.querySelector('input[type="file"]')?.files?.[0];
@@ -522,6 +540,7 @@ function aplicarFiltroLocal(form) {
   const anterior = estado.filtros[rota] ?? {};
   estado.filtros[rota] = { ...dados, soCompetencia: form.querySelector('[name="soCompetencia"]')?.checked ?? false };
   if (rota === "saipos") estado.filtros.saipos.competenciaBase = estado.competencia; // período escolhido vale para a competência atual
+  if (rota === "operadoras-taxas") estado.filtros[rota].competenciaBase = estado.competencia;
   if (rota === "vendas-e-recebimentos") {
     // Valor digitado em reais → centavos por texto (sem ponto flutuante); inválido é ignorado.
     estado.filtros[rota].valorMinimoCentavos = ven.reaisParaCentavos(dados.valorMinimo);
@@ -605,6 +624,15 @@ document.addEventListener("click", (e) => {
     const detalhe = $("#dia-detalhe");
     detalhe.innerHTML = tes.diaDoCalendario(estado.calendario.dias.find((d) => d.data === estado.diaSelecionado));
     detalhe.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  // 18/11/2026: "Aplicar a todas" — copia a taxa digitada para todas as bandeiras da modalidade (só preenche a tela).
+  const replicar = e.target.closest("[data-replicar-taxa]");
+  if (replicar) {
+    const form = replicar.closest("form");
+    const mod = replicar.dataset.replicarTaxa;
+    const v = form.querySelector(`[data-replicar-valor="${mod}"]`)?.value.trim() ?? "";
+    for (const campo of form.querySelectorAll(`input[name^="tx|${mod}|"]`)) campo.value = v;
     return;
   }
   if (e.target.closest("[data-fechar-painel]") || e.target.id === "painel") fecharPainel();

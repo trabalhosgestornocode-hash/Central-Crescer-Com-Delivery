@@ -212,6 +212,35 @@ export function operacoesDeVendas(b) {
       });
     },
 
+    /**
+     * 18/11/2026 — painel de Operadoras e Taxas: o mesmo líquido esperado (ESTIMATIVA) do período, agrupado por OPERADORA e
+     * modalidade (todos os canais). Formas sem operadora (dinheiro, repasse de app) ficam fora. Totais calculados AQUI.
+     */
+    consultarTaxasPorOperadora(ctx, entrada = {}) {
+      semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim"], "consulta");
+      const inicio = exigirData(entrada.periodoInicio, "periodoInicio");
+      const fim = exigirData(entrada.periodoFim, "periodoFim");
+      if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
+      return b.consultar(ctx, async (cx, tx) => {
+        const itens = (await itensDoLiquidoEsperado(tx, cx, { inicio, fim })).filter((x) => x.situacao !== SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA);
+        const totalDe = (lista) => (lista.length ? resumoPorModalidade(lista.map((x) => ({ ...x, modalidade: "TOTAL", bandeira: "TOTAL" })))[0] : null);
+        const porModalidade = (lista) => resumoPorModalidade(lista).map(({ bandeiras: _b, ...r }) => r);
+        const grupos = new Map();
+        for (const x of itens) {
+          const k = x.operadora ?? (x.situacao === SITUACAO_TAXA_ESTIMADA.OPERADORA_AMBIGUA ? "AMBIGUA" : "SEM_OPERADORA");
+          if (!grupos.has(k)) grupos.set(k, []);
+          grupos.get(k).push(x);
+        }
+        const operadoras = [...grupos].map(([operadora, lista]) => ({ operadora, total: totalDe(lista), modalidades: resumoPorModalidade(lista) }))
+          .sort((a, x) => x.total.brutoCentavos - a.total.brutoCentavos);
+        return {
+          periodoInicio: inicio, periodoFim: fim, natureza: "ESTIMATIVA",
+          observacao: "Taxa estimada pela tabela vigente na data de cada venda. Não é despesa lançada nem valor recebido.",
+          total: totalDe(itens), porModalidade: porModalidade(itens), operadoras,
+        };
+      });
+    },
+
     /** Venda: UM canal, zero ou mais pagamentos. Gera a receita (uma única vez) e o efeito de cada pagamento. */
     registrarVenda(ctx, entrada) {
       const c = validarVenda(entrada);
