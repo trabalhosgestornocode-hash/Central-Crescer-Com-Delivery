@@ -98,7 +98,8 @@ test("DRE: lançamentos uma vez, recompensas fora e pendência explícita da 99F
   const l = await ativos(n);
   assert.deepEqual(["VENDAS", "PROCESSAMENTO", "COMISSOES", "MARKETING"].map((k) => soma(l, k)), [15050, 300, 1500, 500]);
   assert.equal(l.length, 7, "nenhum lançamento cobre a diferença");
-  assert.deepEqual([...new Set(l.map((x) => x.categoria))].sort(), ["ANUNCIOS_E_DIVULGACAO", "COMISSOES_DE_PLATAFORMA", "TAXAS_DE_PROCESSAMENTO", "VENDA_NOVENTA_E_NOVE_FOOD"]);
+  assert.deepEqual([...new Set(l.map((x) => x.categoria))].sort(), ["ANUNCIOS_99FOOD", "COMISSOES_DE_PLATAFORMA", "TAXAS_DE_PROCESSAMENTO", "VENDA_NOVENTA_E_NOVE_FOOD"]);
+  assert.deepEqual([...new Set(l.filter((x) => x.relatorio99Food.componente === "MARKETING").map((x) => [x.categoria, x.classificacao, x.natureza].join("|")))], ["ANUNCIOS_99FOOD|MARKETING|DESPESA"], "marketing da 99Food tem categoria própria");
   const a = await n.apurarCompetencia(c, { competencia: "2026-11" });
   assert.equal(a.indicadores.RESULTADO_GERENCIAL.valorCentavos, 12750, "a diferença não altera o resultado");
   const pend = a.pendencias.find((x) => x.tipo === "REPASSE_99FOOD_EM_CONFERENCIA");

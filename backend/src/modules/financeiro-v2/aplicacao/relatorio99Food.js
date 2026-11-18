@@ -18,7 +18,7 @@ const COMPONENTES = Object.freeze([
   { componente: "VENDAS", campo: "itensCentavos", sistema: "VENDA_NOVENTA_E_NOVE_FOOD", descricao: "Vendas de itens na 99Food", retido: false },
   { componente: "PROCESSAMENTO", campo: "processamentoCentavos", categoria: "TAXAS_DE_PROCESSAMENTO", descricao: "Taxas de processamento da 99Food", retido: true },
   { componente: "COMISSOES", campo: "comissaoCentavos", categoria: "COMISSOES_DE_PLATAFORMA", descricao: "Comissões da 99Food", retido: true },
-  { componente: "MARKETING", campo: "marketingCentavos", categoria: "ANUNCIOS_E_DIVULGACAO", descricao: "Marketing na 99Food", retido: true },
+  { componente: "MARKETING", campo: "marketingCentavos", sistema: "ANUNCIOS_99FOOD", descricao: "Marketing na 99Food", retido: true },
 ]);
 const dataBR = (d) => d.split("-").reverse().join("/");
 const soma = (lista, f) => lista.reduce((s, x) => s + (f(x) ?? 0), 0);
