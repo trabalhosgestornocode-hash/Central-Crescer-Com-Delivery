@@ -291,6 +291,13 @@ ${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes
 }
 
 /** Dia do calendário: cada conta é um cartão com a ação principal ao lado. */
+/** Conta semanal de entregador: a nota fiscal já foi enviada? (campo calculado no servidor; outras contas não mostram nada) */
+function notaDoEntregador(t) {
+  if (!t.notaEntregador) return "";
+  const ok = t.notaEntregador.enviada === true;
+  return `<span class="nota-chip nota-chip--${ok ? "ok" : "pendente"}" title="${ok ? "A nota fiscal desta semana já foi enviada" : "A nota fiscal desta semana ainda não foi enviada"}">${ok ? "Nota enviada" : "Nota pendente"}</span>`;
+}
+
 export function diaDoCalendario(d) {
   if (!d) return "";
   const dia = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${d.data}T12:00:00Z`));
@@ -300,7 +307,7 @@ export function diaDoCalendario(d) {
     const quitada = !(t.saldoCentavos > 0);
     return `<li class="conta-dia${quitada ? " conta-dia--quitada" : ""}"><div class="conta-dia__txt"><strong>${esc(t.fornecedor ?? "Fornecedor não identificado")}</strong><span>${esc(descricaoLegivel(t.descricao))}${t.parcela?.total > 1 ? ` (${t.parcela.numero}/${t.parcela.total})` : ""}${t.recorrente ? " · recorrente" : ""}</span></div>
 <div class="conta-dia__val"><span class="conta-dia__valor">${esc(moeda(t.saldoCentavos))}</span>${selo(t.situacao)}</div>
-<button type="button" class="botao${quitada ? "" : " botao--primario"} conta-dia__acao" data-detalhe="pagar:${esc(t.id)}">${quitada ? "Ver conta" : "Dar baixa"}</button></li>`;
+<div class="conta-dia__acao">${notaDoEntregador(t)}<button type="button" class="botao${quitada ? "" : " botao--primario"}" data-detalhe="pagar:${esc(t.id)}">${quitada ? "Ver conta" : "Dar baixa"}</button></div></li>`;
   };
   return `<div class="dia-cab"><h2>${esc(dia)}</h2>${d.titulos.length ? `<p class="dia-resumo">${d.titulos.length} conta(s) vencendo${totalAberto ? ` · <strong>${esc(moeda(totalAberto))}</strong> em aberto` : " · tudo pago"}</p>` : ""}</div>
 ${d.titulos.length ? `<ul class="contas-dia">${d.titulos.map(cartao).join("")}</ul>` : ""}

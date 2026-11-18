@@ -14,6 +14,7 @@ import {
   validarAberturaDeCaixa, validarDetalheDeTitulo, validarFechamentoDeCaixa, validarFiltroAPagar, validarFiltroAReceber, validarFiltroCaixaEBancos,
   validarFiltroCalendario, validarFiltroFluxo, validarPosicaoAReceber, validarFiltroResumo, validarOperacaoDeCaixa, validarSaldoDeConta,
 } from "../contratos/tesouraria.js";
+import { SITUACAO_DOCUMENTAL } from "../dominio/entregadoresProprios.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { exigirEquivalencia } from "./cargaDaCompetencia.js";
@@ -36,14 +37,31 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
       competencias: await l(TIPO.COMPETENCIA), propostas: await l(TIPO.PROPOSTA), estornos: await l(TIPO.ESTORNO),
     };
   }
+  /**
+   * Calendário: nas contas semanais dos entregadores próprios, informa se a nota fiscal já foi enviada (`notaEntregador`).
+   * Só leitura; nota rejeitada conta como pendente. Contas de outros fornecedores não recebem o campo.
+   */
+  async function marcarNotaDeEntregador(cal, cx, tx) {
+    const fechamentos = await tx.listar(cx, TIPO.FECHAMENTO_ENTREGADOR);
+    if (!fechamentos.length) return cal;
+    const pendente = new Set([SITUACAO_DOCUMENTAL.AGUARDANDO_NF, SITUACAO_DOCUMENTAL.NF_REJEITADA]);
+    const porConta = new Map();
+    for (const f of fechamentos) {
+      const enviada = !pendente.has(f.situacaoDocumental);
+      for (const id of [f.obrigacaoId, ...(f.dados?.complementos ?? []).map((c) => c.obrigacaoId)]) if (id) porConta.set(id, enviada);
+    }
+    const marca = (t) => (porConta.has(t.id) ? { ...t, notaEntregador: { enviada: porConta.get(t.id) } } : t);
+    return { ...cal, dias: cal.dias.map((d) => (d.titulos.some((t) => porConta.has(t.id)) ? { ...d, titulos: d.titulos.map(marca) } : d)) };
+  }
+
   // 08D: no modo de conferência (testes), cada consulta calcula também com a carga completa e exige igualdade.
-  const consulta = (validar, calcular, carregador = carregarTesouraria, tela = "tesouraria") => (ctx, e) => {
+  const consulta = (validar, calcular, carregador = carregarTesouraria, tela = "tesouraria", enriquecer = null) => (ctx, e) => {
     const filtro = validar(e);
     return b.consultar(ctx, async (cx, tx) => {
       const hoje = b.hoje();
       const r = calcular(await (cargaCompleta ? carregar : carregador)(cx, tx, filtro), hoje, filtro);
       if (conferirCarga && !cargaCompleta) exigirEquivalencia(r, calcular(await carregar(cx, tx), hoje, filtro), tela);
-      return r;
+      return enriquecer ? enriquecer(r, cx, tx) : r;
     });
   };
 
@@ -252,7 +270,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     // 09C — posição a receber no fim da competência (histórica: pagamentos e estornos posteriores não a mudam).
     consultarPosicaoAReceber: consulta(validarPosicaoAReceber, (d, _hoje, f) => posicaoAReceberEm(d, f.competencia, f), carregarPosicaoAReceber, "posição a receber"),
     consultarFluxoDeCaixa: consulta(validarFiltroFluxo, fluxoDeCaixa, carregarTesouraria, "fluxo de caixa"),
-    consultarCalendarioFinanceiro: consulta(validarFiltroCalendario, calendarioFinanceiro, carregarTesouraria, "calendário"),
+    consultarCalendarioFinanceiro: consulta(validarFiltroCalendario, calendarioFinanceiro, carregarTesouraria, "calendário", marcarNotaDeEntregador),
     consultarResumoFinanceiro: consulta(validarFiltroResumo, resumoFinanceiro, carregarResumo, "visão geral (resumo)"),
 
     /** Conta a pagar → parcelas do mesmo grupo → pagamentos → documentos → histórico. */
