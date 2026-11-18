@@ -14,7 +14,7 @@ do $$ declare n int; begin
 end $$;
 set local search_path = financeiro_v2, pg_catalog;
 
--- ------------------------------------------------------------------------- 0026_entregadores_proprios.sql (arquivo b45d3bc03041afbbac20df3682fb94158b61931815ecd75104094394f1619ace)
+-- ------------------------------------------------------------------------- 0026_entregadores_proprios.sql (arquivo 787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312)
 grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
 -- =====================================================================================================================
 -- Financeiro v2 — migração 0026: ENTREGADORES PRÓPRIOS (fechamento semanal a partir do parser Foody Delivery)
@@ -151,8 +151,58 @@ create or replace function fv2_tabela_do_tipo(p_tipo text) returns regclass lang
     when 'CANAL_PROCESSADOR' then 'fv2_canal_processador' when 'CONFIGURACAO_UNIDADE' then 'fv2_configuracao_unidade'
     when 'ABERTURA' then 'fv2_abertura' when 'FECHAMENTO_CAIXA' then 'fv2_fechamento_caixa'
     when 'SEMANA_ENTREGADORES' then 'fv2_semana_entregadores' when 'FECHAMENTO_ENTREGADOR' then 'fv2_fechamento_entregador'
+    when 'EXTRA_ENTREGADOR' then 'fv2_extra_entregador'
   end::regclass
 $$;
+
+-- Serviços extras: valores fora das taxas do parser. A conta e a saída continuam nas tabelas próprias; aqui fica só o vínculo.
+create table fv2_extra_entregador (
+  seq                bigint generated always as identity,
+  id                 uuid not null primary key,
+  organizacao_id     uuid not null,
+  unidade_id         uuid not null,
+  versao             integer not null check (versao >= 1),
+  criado_em          timestamptz not null,
+  criado_por         uuid not null,
+  atualizado_em      timestamptz not null,
+  atualizado_por     uuid not null,
+  chave_idempotencia text not null check (length(chave_idempotencia) between 1 and 400),
+  impressao          text,
+  extras             jsonb not null default '{}'::jsonb check (jsonb_typeof(extras) = 'object'),
+  entregador_chave   text not null check (length(btrim(entregador_chave)) between 1 and 200),
+  entregador_nome    text not null check (length(btrim(entregador_nome)) between 1 and 200),
+  data_servico       date not null,
+  semana_inicio      date not null check (extract(isodow from semana_inicio) = 1),
+  descricao          text not null check (length(btrim(descricao)) between 1 and 300),
+  valor_centavos     bigint not null check (valor_centavos > 0),
+  situacao           text not null check (situacao in ('PENDENTE', 'PAGO', 'PAGO_AGUARDANDO_VINCULO', 'CANCELADO')),
+  obrigacao_id       uuid,
+  movimentacao_id    uuid,
+  dados              jsonb not null check (jsonb_typeof(dados) = 'object'),
+  unique (organizacao_id, unidade_id, id),
+  check (data_servico between semana_inicio and semana_inicio + 6),
+  check (atualizado_em >= criado_em)
+);
+alter table fv2_extra_entregador add constraint fv2_extra_entregador_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
+create unique index fv2_extra_entregador_chave_uq on fv2_extra_entregador (organizacao_id, unidade_id, chave_idempotencia);
+create unique index fv2_extra_entregador_obrigacao_uq on fv2_extra_entregador (organizacao_id, unidade_id, obrigacao_id) where obrigacao_id is not null and situacao <> 'CANCELADO';
+create index fv2_extra_entregador_semana on fv2_extra_entregador (organizacao_id, unidade_id, semana_inicio);
+create trigger fv2_extra_entregador_sem_delete before delete on fv2_extra_entregador for each row execute function fv2_proibir_exclusao();
+create trigger fv2_extra_entregador_sem_truncate before truncate on fv2_extra_entregador for each statement execute function fv2_proibir_exclusao();
+create trigger fv2_extra_entregador_versao before update on fv2_extra_entregador for each row execute function fv2_guardar_versao();
+create constraint trigger fv2_extra_entregador_historico after insert or update on fv2_extra_entregador deferrable initially deferred
+  for each row execute function fv2_exigir_historico('EXTRA_ENTREGADOR');
+alter table fv2_extra_entregador enable row level security;
+alter table fv2_extra_entregador force row level security;
+create policy fv2_extra_entregador_escopo on fv2_extra_entregador
+  using (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
+  with check (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()));
+create policy fv2_extra_entregador_ler on fv2_extra_entregador as restrictive for select using ((select fv2_sessao_operacional()));
+create policy fv2_extra_entregador_incluir on fv2_extra_entregador as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar'])));
+create policy fv2_extra_entregador_alterar on fv2_extra_entregador as restrictive for update
+  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])))
+  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])));
+grant select, insert, update on fv2_extra_entregador to fv2_app;
 
 -- Identidade técnica do fechamento semanal: pode criar fechamento e conta a pagar, e NADA que mova dinheiro ou altere permissões.
 create function fv2_bloquear_identidade_de_automacao() returns trigger language plpgsql as $$
@@ -163,13 +213,13 @@ begin
   return coalesce(new, old);
 end $$;
 do $$ declare t text; begin
-  foreach t in array array['fv2_movimentacao', 'fv2_liquidacao', 'fv2_transferencia', 'fv2_ajuste', 'fv2_estorno', 'fv2_saldo_conta', 'fv2_sessao_caixa', 'fv2_concessao', 'fv2_conta', 'fv2_competencia'] loop
+  foreach t in array array['fv2_extra_entregador', 'fv2_movimentacao', 'fv2_liquidacao', 'fv2_transferencia', 'fv2_ajuste', 'fv2_estorno', 'fv2_saldo_conta', 'fv2_sessao_caixa', 'fv2_concessao', 'fv2_conta', 'fv2_competencia'] loop
     execute format('create trigger %I before insert or update on %I for each row execute function fv2_bloquear_identidade_de_automacao()', t || '_sem_automacao', t);
   end loop;
 end $$;
 create trigger fv2_obrigacao_sem_automacao before update on fv2_obrigacao for each row execute function fv2_bloquear_identidade_de_automacao();
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0026_entregadores_proprios.sql', 'b45d3bc03041afbbac20df3682fb94158b61931815ecd75104094394f1619ace', 'b45d3bc03041afbbac20df3682fb94158b61931815ecd75104094394f1619ace');
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0026_entregadores_proprios.sql', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312');
 
 do $$ declare f record; begin
   -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o

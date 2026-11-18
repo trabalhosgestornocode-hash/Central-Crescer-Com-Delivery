@@ -403,3 +403,24 @@ test("banco: o agendador fecha a semana e cria a conta, mas não paga, não baix
   assert.equal((await m.n.consultarCaixaEBancos(m.c, { inicio: "2026-11-01", fim: "2026-11-30" })).movimentos.length, 0);
   assert.equal((await m.n.consultarContasAPagar(m.c, {})).totais.saldoCentavos, 2400);
 });
+
+test("pedido adiado fica na semana da entrega, vence na quarta escolhida e não duplica valor nem despesa", async () => {
+  const a = { ...base(), entregas: [entrega(10, "Normal", "2026-11-05", 45200), entrega(11, "Normal", "2026-11-05", 1300), entrega(12, "Sozinho", "2026-11-06", 800)] };
+  const m = await preparado({ apuracao: a, agora: "2026-11-18T15:00:00.000Z", inicioDaOperacao: "2026-11-23" });
+  const adiamentos = [{ numeroPedido: "11", vencimento: "2026-11-25" }, { numeroPedido: "12", vencimento: "2026-11-25" }];
+  await rejeita(m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, reconciliacao: true, justificativa: "Teste.", adiamentos: [{ numeroPedido: "11", vencimento: "2026-11-24" }] }), CODIGO.DATA_INVALIDA);
+  await rejeita(m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, reconciliacao: true, justificativa: "Teste.", adiamentos: [{ numeroPedido: "99", vencimento: "2026-11-25" }] }), CODIGO.ENTRADA_INVALIDA);
+  const r = await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, reconciliacao: true, justificativa: "Pagamento combinado para 25/11.", adiamentos });
+  assert.deepEqual([r.contasCriadas, r.totalCentavos], [3, 47300]);
+  const contas = (await m.n.consultarContasAPagar(m.c, {})).itens.map((t) => [t.fornecedor.nome, t.vencimento, t.saldoCentavos, t.competencia]).sort();
+  assert.deepEqual(contas, [["Normal", "2026-11-11", 45200, "2026-11"], ["Normal", "2026-11-25", 1300, "2026-11"], ["Sozinho", "2026-11-25", 800, "2026-11"]]);
+  const f = await m.n.detalharFechamentoDoEntregador(m.c, { inicio: SEG, entregador: "normal" });
+  assert.equal(f.valorCentavos, 46500);
+  const repetido = await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, reconciliacao: true, justificativa: "Repetição.", adiamentos });
+  assert.deepEqual([repetido.repetido, (await m.n.consultarContasAPagar(m.c, {})).quantidade], [true, 3]);
+  const lanc = (await m.n.consultarRegistros(m.c, { tipo: "LANCAMENTO" })).filter((l) => l.categoria === "ENTREGADORES_PROPRIOS");
+  assert.equal(lanc.reduce((t, l) => t + l.valorCentavos, 0), 47300);
+  const banco = await m.n.configurarContaFinanceira(m.c, { tipo: "BANCARIA", nome: "Banco Teste", instituicao: "Teste" });
+  const adiada = (await m.n.consultarContasAPagar(m.c, {})).itens.find((t) => t.vencimento === "2026-11-25" && t.fornecedor.nome === "Normal");
+  await assert.rejects(m.n.pagarContaAPagar(m.c, { obrigacaoId: adiada.id, contaId: banco.id, dataEfetiva: "2026-11-18", valorCentavos: 1300 }), (e) => e.detalhes?.motivo === "ENTREGADOR_SEM_LIBERACAO_DOCUMENTAL");
+});

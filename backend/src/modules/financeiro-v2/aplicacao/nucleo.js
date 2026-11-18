@@ -35,6 +35,7 @@ import { operacoesDeReclassificacao } from "./reclassificacao.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
 import { operacoesDeEntregadoresProprios } from "./entregadoresProprios.js";
+import { operacoesDeExtras } from "./extrasEntregadores.js";
 
 /**
  * @param {object} deps
@@ -80,6 +81,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeBaixaPorExtrato(base),
     ...operacoesDeEntregadoresProprios(base, { acessosNegados, ...(entregadores ?? {}) }),
+    ...operacoesDeExtras(base),
     ...operacoesDeFormacao(base),
     ...operacoesDeAbertura(base),
     ...operacoesDeTaxasContratadas(base),

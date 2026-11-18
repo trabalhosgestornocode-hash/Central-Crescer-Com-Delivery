@@ -15,13 +15,14 @@ import {
   chaveDaSemana, chaveDeRegistro, chaveDoFechamento, compararComFechamento, competenciaDaSemana, consolidar, contasManuaisCandidatas, descricaoDaConta, exigirSegunda, exigirTransicao,
   idExternoDaConta, pastaDoDocumento, pendenciasDaApuracao, rotuloDaSemana, semanaDe, semanaEncerrada, situacaoDoPagamento,
 } from "../dominio/entregadoresProprios.js";
-import { hojeEm, somarDias } from "../dominio/tempo.js";
+import { diaDaSemana, exigirData, hojeEm, somarDias } from "../dominio/tempo.js";
 import { exigirTexto, exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { exigirCentavos } from "../dominio/dinheiro.js";
 import { exigirFormatoDeEvidencia } from "../dominio/evidencias.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesDeCofreDocumental } from "./cofreDocumental.js";
 import { operacoesEconomicas } from "./economico.js";
+import { resumoDaSemana, visaoDoExtra } from "./extrasEntregadores.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 
 const CONFERENCIAS = Object.freeze(["emitente", "tomador", "periodo", "valor", "numero", "duplicidade"]);
@@ -73,6 +74,30 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     return r.obrigacoes[0];
   }
 
+  /** Pedidos da semana que uma pessoa decidiu pagar em outra quarta-feira. O pedido continua na semana em que foi entregue. */
+  function validarAdiamentos(e, inicio, justificativa) {
+    if (e.adiamentos === undefined) return new Map();
+    if (!justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Adiar o pagamento de pedidos exige justificativa.", { campo: "justificativa" });
+    const mapa = new Map();
+    for (const a of e.adiamentos) {
+      const vencimento = exigirData(a?.vencimento, "vencimento");
+      if (diaDaSemana(vencimento) !== 3 || vencimento <= semanaDe(inicio).vencimento) falhar(CODIGO.DATA_INVALIDA, "O pagamento adiado precisa cair em uma quarta-feira posterior ao vencimento da semana.", { campo: "vencimento" });
+      mapa.set(exigirTexto(String(a?.numeroPedido ?? ""), "numeroPedido", { max: 40 }), vencimento);
+    }
+    return mapa;
+  }
+  const dividirAdiados = (itens, adiados) => itens.filter((i) => i.tipo === "ENTREGA" && adiados.has(String(i.numeroPedido))).map((i) => ({ numeroPedido: String(i.numeroPedido), vencimento: adiados.get(String(i.numeroPedido)), valorCentavos: i.valorCentavos }));
+  /** Uma conta por entregador e quarta-feira de pagamento, ligada ao mesmo fechamento semanal. */
+  async function criarContasAdiadas(tx, cx, g, inicio, chave, adiamentos) {
+    const contas = [];
+    for (const vencimento of [...new Set(adiamentos.map((a) => a.vencimento))].sort()) {
+      const valorCentavos = somarLista(adiamentos.filter((a) => a.vencimento === vencimento), (a) => a.valorCentavos);
+      const conta = await criarConta(tx, cx, g, inicio, { valorCentavos, vencimento, idExterno: `${idExternoDaConta(chave)}:a${vencimento.replaceAll("-", "")}`, descricao: `${descricaoDaConta(g.nome, inicio)} — pagamento adiado para ${vencimento.slice(8, 10)}/${vencimento.slice(5, 7)}` });
+      contas.push({ obrigacaoId: conta.id, valorCentavos, vencimento, tipo: "ADIAMENTO" });
+    }
+    return contas;
+  }
+
   async function bloqueiosDaTransacao(tx, cx, inicio) {
     const p = [];
     if (!(await b.categoriaPorCodigo(tx, cx, CATEGORIA_ENTREGADORES))) p.push({ codigo: CODIGO_PENDENCIA.CATEGORIA_AUSENTE, mensagem: "A categoria Entregadores Próprios (Motoboys) não existe no plano de contas desta unidade." });
@@ -91,6 +116,8 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     if (historica && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Reconciliação de semana histórica exige justificativa.", { campo: "justificativa" });
     if ((e.aceitarDiasSemDados === true || e.aceitarTriagem === true) && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Aceitar dia sem dados ou triagem pendente exige justificativa.", { campo: "justificativa" });
     if (e.aceitarTriagem === true && origem !== "MANUAL") falhar(CODIGO.OPERACAO_INVALIDA, "Só uma pessoa pode aceitar triagem pendente.");
+    if (e.adiamentos !== undefined && origem !== "MANUAL") falhar(CODIGO.OPERACAO_INVALIDA, "Só uma pessoa pode adiar o pagamento de pedidos.");
+    const adiados = validarAdiamentos(e, inicio, justificativa);
     const apuracao = await apurar(cx0, inicio);
     return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
       await tx.travar(cx, chaveDaSemana(inicio), "EXCLUSIVA");
@@ -103,20 +130,28 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         return { situacao: semana.situacao, pendencias, contasCriadas: 0, semana };
       }
       const grupos = consolidar(apuracao.entregas).filter((g) => g.valorCentavos > 0);
-      const [obrigacoes, contrapartes, lancamentos] = [await tx.listar(cx, TIPO.OBRIGACAO), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
+      const dosExtras = new Set((await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).map((x) => x.obrigacaoId).filter(Boolean)); // extra reconhecido não é duplicidade das taxas
+      const [obrigacoes, contrapartes, lancamentos] = [(await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => !dosExtras.has(o.id)), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
       const s = semanaDe(inicio);
       let contasCriadas = 0;
       const fechamentos = [];
+      const encontrados = new Set(grupos.flatMap((g) => dividirAdiados(g.itens, adiados).map((a) => a.numeroPedido)));
+      const ausentes = [...adiados.keys()].filter((n) => !encontrados.has(n));
+      if (ausentes.length) falhar(CODIGO.ENTRADA_INVALIDA, "Há pedido adiado que não pertence às entregas elegíveis desta semana.", { campo: "adiamentos", ausentes });
       for (const g of grupos) {
         const chave = chaveDoFechamento({ organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId, entregadorChave: g.chave, inicio });
         if (await tx.buscarPorChave(cx, TIPO.FECHAMENTO_ENTREGADOR, chaveDeRegistro(chave))) continue;
         const candidatas = contasManuaisCandidatas({ nome: g.nome, inicio, obrigacoes, contrapartes, lancamentos });
-        const conta = candidatas.length ? null : await criarConta(tx, cx, g, inicio, { idExterno: idExternoDaConta(chave) });
-        if (conta) contasCriadas += 1;
+        const adiamentos = dividirAdiados(g.itens, adiados);
+        const principal = g.valorCentavos - somarLista(adiamentos, (a) => a.valorCentavos);
+        const contaPrincipal = candidatas.length || principal <= 0 ? null : await criarConta(tx, cx, g, inicio, { valorCentavos: principal, idExterno: idExternoDaConta(chave) });
+        const contasAdiadas = candidatas.length ? [] : await criarContasAdiadas(tx, cx, g, inicio, chave, adiamentos);
+        const conta = contaPrincipal ?? (contasAdiadas[0] ? { id: contasAdiadas[0].obrigacaoId } : null);
+        contasCriadas += (contaPrincipal ? 1 : 0) + contasAdiadas.length;
         fechamentos.push(await b.criar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, {
           semanaInicio: s.inicio, semanaFim: s.fim, vencimento: s.vencimento, entregadorChave: g.chave, entregadorNome: g.nome, obrigacaoId: conta?.id ?? null, valorCentavos: g.valorCentavos, entregas: g.entregas,
           situacaoDocumental: DOC.AGUARDANDO_NF, chaveIdempotencia: chaveDeRegistro(chave), impressao: null,
-          dados: { chaveEstavel: chave, referencia: g.referencia, entregasCentavos: g.entregasCentavos, ajustesCentavos: g.ajustesCentavos, porDia: g.porDia, itens: g.itens, notas: [], conferencias: [], duplicidade: candidatas.length ? { situacao: "ABERTA", candidatas } : null, complementos: [] },
+          dados: { chaveEstavel: chave, referencia: g.referencia, entregasCentavos: g.entregasCentavos, ajustesCentavos: g.ajustesCentavos, porDia: g.porDia, itens: g.itens, notas: [], conferencias: [], duplicidade: candidatas.length ? { situacao: "ABERTA", candidatas } : null, adiamentos, complementos: contasAdiadas },
         }, "Retrato da apuração semanal do parser Foody Delivery."));
       }
       const semana = await gravarSemana(tx, cx, inicio, SITUACAO_SEMANA.CONSOLIDADA, { pendencias: [], ultimaExecucao: execucao, consolidadoEm: b.agora(), origem, ...(historica ? { reconciliacao: { justificativa, por: cx.usuarioId } } : {}), ...(e.aceitarDiasSemDados === true ? { diasSemDadosAceitos: justificativa } : {}), ...(e.aceitarTriagem === true ? { triagemAceita: justificativa } : {}), retrato: grupos.map(({ chave, nome, valorCentavos, itens }) => ({ chave, nome, valorCentavos, itens })), divergencias: [] }, justificativa ?? "Semana consolidada a partir do parser Foody Delivery.");
@@ -176,6 +211,18 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         const emAberto = filtrados.filter((f) => ![SITUACAO_PAGAMENTO.PAGO, SITUACAO_PAGAMENTO.CANCELADO].includes(f.situacaoPagamento) && f.obrigacaoId);
         const proximaQuarta = dia <= semanaDe(somarDias(atual.inicio, -7)).vencimento ? semanaDe(somarDias(atual.inicio, -7)).vencimento : atual.vencimento;
         const soma = (lista) => somarLista(lista, (f) => f.saldoCentavos ?? f.valorCentavos);
+        const extras = (await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).filter((x) => x.situacao !== "CANCELADO").map((x) => visaoDoExtra(x, obrigacoes)).sort((a, x) => x.data.localeCompare(a.data));
+        const fechadosDaSemana = fechamentos.filter((f) => f.semanaInicio === selecionada.inicio);
+        const pagoDaTaxa = (f) => Math.min(f.valorCentavos, (f.dados.complementos ?? []).filter((x) => x.tipo === "ADIAMENTO" && x.obrigacaoId !== f.obrigacaoId).reduce((t, x) => t + (obrigacoes.get(x.obrigacaoId)?.liquidadoCentavos ?? 0), 0) + (obrigacoes.get(f.obrigacaoId)?.liquidadoCentavos ?? 0) + (obrigacoes.get((f.dados.contaManual ?? f.dados.duplicidade?.contaManual)?.obrigacaoId)?.liquidadoCentavos ?? 0));
+        const taxas = consolidada ? fechadosDaSemana.map((f) => ({ chave: f.entregadorChave, nome: f.entregadorNome, valorCentavos: f.valorCentavos, pagoCentavos: pagoDaTaxa(f) })) : grupos.map((g) => ({ chave: g.chave, nome: g.nome, valorCentavos: g.valorCentavos, pagoCentavos: 0 }));
+        const resumoSemana = resumoDaSemana(taxas, extras.filter((x) => x.semanaInicio === selecionada.inicio), fechadosDaSemana.filter((f) => f.situacaoDocumental !== DOC.LIBERADO_PAGAMENTO).length);
+        const vinculadas = new Set(extras.map((x) => x.obrigacaoId).filter(Boolean));
+        const contrapartes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x.nome]));
+        const naSemana = (d) => d >= selecionada.inicio && d <= selecionada.fim;
+        const origensDeExtra = {
+          contas: [...obrigacoes.values()].filter((o) => o.situacao !== "CANCELADA" && !vinculadas.has(o.id) && !String(o.fonte?.idExterno ?? "").startsWith("entregador-semana:") && (naSemana(o.dataEmissao) || naSemana(o.vencimento))).map((o) => ({ id: o.id, data: o.vencimento, descricao: o.descricao, fornecedor: contrapartes.get(o.contraparteId) ?? null, valorCentavos: o.valorBaseCentavos + o.ajustesCentavos, saldoCentavos: o.saldoCentavos })),
+          saidas: (await tx.listar(cx, TIPO.MOVIMENTACAO, { onde: { sentido: "SAIDA", situacao: "VALIDA" } })).filter((m) => naSemana(m.dataEfetiva) && !m.transferenciaId && m.alocadoCentavos < m.valorCentavos).map((m) => ({ id: m.id, data: m.dataEfetiva, descricao: m.descricao ?? "", livreCentavos: m.valorCentavos - m.alocadoCentavos })),
+        };
         const cards = new Map();
         for (const g of grupos) cards.set(g.chave, { chave: g.chave, nome: g.nome, referencia: g.referencia ?? null, valorSemanaCentavos: g.valorCentavos, entregasSemana: g.entregas, porDia: g.porDia, aPagarCentavos: 0, aguardandoNota: 0 });
         for (const f of todos) {
@@ -189,14 +236,14 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
           semana: { ...selecionada, rotulo: rotuloDaSemana(selecionada.inicio), situacao, provisoria: !consolidada, pendencias: registro?.dados?.pendencias ?? (apuracao.disponivel && semanaEncerrada(selecionada.inicio, dia) ? pendenciasDaApuracao(apuracao, selecionada.inicio) : []), dias: apuracao.dias ?? [], fonteDisponivel: apuracao.disponivel, motivoDaFonte: apuracao.motivo ?? null, atualizadoEm: apuracao.atualizadoEm ?? null, historica: !inicioDaOperacao || selecionada.inicio < inicioDaOperacao, divergencias: registro?.dados?.divergencias ?? [] },
           indicadores: {
             acumuladoSemanaCentavos: somarLista(grupos, (g) => g.valorCentavos), entregadoresAtivos: grupos.length, entregas: somarLista(grupos, (g) => g.entregas),
-            proximaQuarta: { data: proximaQuarta, quantidade: emAberto.filter((f) => f.vencimento === proximaQuarta).length, valorCentavos: soma(emAberto.filter((f) => f.vencimento === proximaQuarta)) },
+            proximaQuarta: (() => { const contas = [...obrigacoes.values()].filter((o) => String(o.fonte?.idExterno ?? "").startsWith("entregador-semana:") && o.vencimento === proximaQuarta && o.situacao !== "CANCELADA" && o.saldoCentavos > 0); return { data: proximaQuarta, quantidade: contas.length, valorCentavos: somarLista(contas, (o) => o.saldoCentavos) }; })(),
             aguardandoNotaCentavos: soma(emAberto.filter((f) => [DOC.AGUARDANDO_NF, DOC.NF_REJEITADA, DOC.NF_RECEBIDA, DOC.NF_EM_CONFERENCIA].includes(f.situacaoDocumental))),
             liberadoCentavos: soma(emAberto.filter((f) => f.situacaoDocumental === DOC.LIBERADO_PAGAMENTO)), vencidoCentavos: soma(emAberto.filter((f) => f.situacaoPagamento === SITUACAO_PAGAMENTO.VENCIDO)),
             pagoCentavos: somarLista(filtrados, (f) => f.pagoCentavos),
           },
           entregadores: [...cards.values()].sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR")), fechamentos: filtrados,
           semanas: semanas.map((s) => ({ inicio: s.semanaInicio, rotulo: rotuloDaSemana(s.semanaInicio), situacao: s.situacao, pendencias: s.dados.pendencias?.length ?? 0, divergenciasAbertas: (s.dados.divergencias ?? []).filter((d) => d.situacao === "ABERTA").length, origem: s.dados.origem ?? s.dados.ultimaExecucao?.origem ?? null })).sort((a, b2) => b2.inicio.localeCompare(a.inicio)),
-          cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes,
+          extras, resumoSemana, origensDeExtra, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes,
         };
       });
     },
@@ -228,7 +275,9 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
           ? (await tx.listar(cx, TIPO.MOVIMENTACAO, { onde: { sentido: "SAIDA", situacao: "VALIDA" } })).filter((m) => m.dataEfetiva >= f.semanaFim && m.dataEfetiva <= somarDias(f.vencimento, 7) && m.alocadoCentavos < m.valorCentavos)
             .sort((a, x) => a.dataEfetiva.localeCompare(x.dataEfetiva)).map((m) => ({ id: m.id, data: m.dataEfetiva, valorCentavos: m.valorCentavos, livreCentavos: m.valorCentavos - m.alocadoCentavos, descricao: m.descricao ?? "" }))
           : [];
-        return { dataBase: hoje(), semanaHistorica: historica, saidasDoExtrato, ...visaoDoFechamento(f, o, hoje(), documentos), porDia: f.dados.porDia, itens: f.dados.itens, notas: f.dados.notas ?? [], conferencias: f.dados.conferencias ?? [], complementos: f.dados.complementos ?? [], historico, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes };
+        const contasDosExtras = new Map((await tx.listar(cx, TIPO.OBRIGACAO)).map((c) => [c.id, c]));
+        const extras = (await tx.listar(cx, TIPO.EXTRA_ENTREGADOR, { onde: { entregadorChave: f.entregadorChave, semanaInicio: f.semanaInicio } })).filter((x) => x.situacao !== "CANCELADO").map((x) => visaoDoExtra(x, contasDosExtras));
+        return { dataBase: hoje(), semanaHistorica: historica, saidasDoExtrato, extras, ...visaoDoFechamento(f, o, hoje(), documentos), porDia: f.dados.porDia, itens: f.dados.itens, notas: f.dados.notas ?? [], conferencias: f.dados.conferencias ?? [], complementos: f.dados.complementos ?? [], historico, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes };
       });
     },
 
@@ -257,7 +306,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     },
 
     fecharSemanaDeEntregadores(ctx, e = {}) {
-      semCamposDesconhecidos(e, ["inicio", "reconciliacao", "aceitarDiasSemDados", "aceitarTriagem", "justificativa"], "fechamento");
+      semCamposDesconhecidos(e, ["inicio", "reconciliacao", "aceitarDiasSemDados", "aceitarTriagem", "adiamentos", "justificativa"], "fechamento");
       return fechar(ctx, e, "MANUAL");
     },
     verificarAlteracoesDaSemana(ctx, e = {}) {
@@ -304,16 +353,18 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
           if (!candidata) falhar(CODIGO.ENTRADA_INVALIDA, "Escolha uma das contas manuais encontradas para esta semana.", { campo: "obrigacaoManualId" });
           return b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { dados: { ...f.dados, duplicidade: base, contaManual: candidata } }, EVENTO_HISTORICO.CORRECAO, justificativa);
         }
-        let saldoDaSemana = f.valorCentavos;
+        const adiamentos = f.dados.adiamentos ?? [];
+        let saldoDaSemana = f.valorCentavos - somarLista(adiamentos, (a) => a.valorCentavos);
         if (decisao === DECISAO_DUPLICIDADE.GERAR_DIFERENCA) {
           const manual = f.dados.duplicidade.candidatas.find((c) => c.obrigacaoId === e.obrigacaoManualId);
           if (!manual) falhar(CODIGO.ENTRADA_INVALIDA, "Escolha a conta manual que já cobre parte desta semana.", { campo: "obrigacaoManualId" });
-          saldoDaSemana = f.valorCentavos - manual.valorCentavos;
+          saldoDaSemana -= manual.valorCentavos;
           if (saldoDaSemana <= 0) falhar(CODIGO.OPERACAO_INVALIDA, "A conta manual já cobre todo o valor da semana: vincule-a em vez de gerar diferença.");
           base.contaManual = manual;
         }
-        const conta = await criarConta(tx, cx, { nome: f.entregadorNome, valorCentavos: saldoDaSemana }, f.semanaInicio, { valorCentavos: saldoDaSemana, idExterno: idExternoDaConta(f.dados.chaveEstavel), ...(saldoDaSemana !== f.valorCentavos ? { descricao: `${descricaoDaConta(f.entregadorNome, f.semanaInicio)} — saldo além da conta manual` } : {}) });
-        return b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { obrigacaoId: conta.id, dados: { ...f.dados, duplicidade: base } }, EVENTO_HISTORICO.CORRECAO, justificativa);
+        const conta = await criarConta(tx, cx, { nome: f.entregadorNome, valorCentavos: saldoDaSemana }, f.semanaInicio, { valorCentavos: saldoDaSemana, idExterno: idExternoDaConta(f.dados.chaveEstavel), ...(decisao === DECISAO_DUPLICIDADE.GERAR_DIFERENCA ? { descricao: `${descricaoDaConta(f.entregadorNome, f.semanaInicio)} — saldo além da conta manual` } : {}) });
+        const contasAdiadas = await criarContasAdiadas(tx, cx, { nome: f.entregadorNome }, f.semanaInicio, f.dados.chaveEstavel, adiamentos);
+        return b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { obrigacaoId: conta.id, dados: { ...f.dados, duplicidade: base, complementos: [...(f.dados.complementos ?? []), ...contasAdiadas] } }, EVENTO_HISTORICO.CORRECAO, justificativa);
       });
     },
 
