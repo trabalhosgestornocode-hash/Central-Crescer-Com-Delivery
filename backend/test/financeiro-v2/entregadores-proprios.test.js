@@ -443,3 +443,13 @@ test("pedido adiado fica na semana da entrega, vence na quarta escolhida e não 
   const adiada = (await m.n.consultarContasAPagar(m.c, {})).itens.find((t) => t.vencimento === "2026-11-25" && t.fornecedor.nome === "Normal");
   await assert.rejects(m.n.pagarContaAPagar(m.c, { obrigacaoId: adiada.id, contaId: banco.id, dataEfetiva: "2026-11-18", valorCentavos: 1300 }), (e) => e.detalhes?.motivo === "ENTREGADOR_SEM_LIBERACAO_DOCUMENTAL");
 });
+
+test("calendário: conta de entregador mostra se a nota foi enviada (pendente até anexar)", async () => {
+  const m = await preparado();
+  await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG });
+  const titulos = async () => (await m.n.consultarCalendarioFinanceiro(m.c, { mes: "2026-11" })).dias.find((d) => d.data === "2026-11-11").titulos;
+  assert.deepEqual((await titulos()).map((t) => t.notaEntregador), [{ enviada: false }, { enviada: false }]);
+  await m.n.anexarDocumentoDoEntregador(m.c, nota());
+  const marcas = Object.fromEntries((await titulos()).map((t) => [t.fornecedor, t.notaEntregador.enviada]));
+  assert.deepEqual(marcas, { Mauricio: true, Rafael: false });
+});
