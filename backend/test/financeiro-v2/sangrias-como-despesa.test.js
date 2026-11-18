@@ -169,3 +169,69 @@ test("competência homologada: a retirada desse mês falha com motivo, as outras
   const p = await previa(c, "2026-10-01", "2026-11-30");
   assert.deepEqual([p.resumo.novas.quantidade, p.resumo.jaLancadasPelaImportacao.quantidade], [1, 1], "a de outubro continua NOVA (pendente), a de novembro já foi lançada");
 });
+
+// ============================ Como o dono realmente lançou: outros fornecedores e conta que SOMA retiradas ============================
+async function cenarioDoDono() {
+  const u = await unidade();
+  const { n, caixa } = u;
+  const fornecedores = new Map();
+  const doFornecedor = async (nome) => { if (!fornecedores.has(nome)) fornecedores.set(nome, await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome })); return fornecedores.get(nome); };
+  /** Conta lançada à mão em QUALQUER fornecedor, paga em dinheiro pelo caixa na data. */
+  const lancadaPeloDono = async (nome, data, valor, descricao, contaId = caixa.id, categoria = "OUTRAS_DESPESAS") => {
+    const f = await doFornecedor(nome);
+    const o = (await n.registrarObrigacao(c, { contraparteId: f.id, valorOriginalCentavos: valor, categoria, descricao, competencia: data.slice(0, 7), dataEmissao: data, vencimento: data })).obrigacoes[0];
+    await n.pagarContaAPagar(c, { obrigacaoId: o.id, contaId, dataEfetiva: data, valorCentavos: valor });
+    return o;
+  };
+  return { ...u, lancadaPeloDono };
+}
+
+test("CASO REAL: contas em outros fornecedores e uma conta que é a SOMA de duas retiradas NÃO são lançadas de novo — só as realmente novas", async () => {
+  const { n, importar, previa, lancar, estado, resultado, lancadaPeloDono } = await cenarioDoDono();
+  await lancadaPeloDono("SANGRIAS", "2026-11-06", 7550, "compra de espátula + chaves");
+  await lancadaPeloDono("Fornecedor A", "2026-11-08", 14000, "Diária Evento + Diária Operador", undefined, "SALARIOS_E_ENCARGOS"); // = 100 + 40 do dia 08, numa conta só, em OUTRA categoria (diária)
+  await lancadaPeloDono("SANGRIAS", "2026-11-09", 1800, "Pilhas + taxa do entregador");
+  await lancadaPeloDono("SANGRIAS", "2026-11-11", 1225, "Taxas");
+  await lancadaPeloDono("Fornecedor B", "2026-11-12", 2500, "Taxas do entregador"); // = 25 do dia 12
+  await lancadaPeloDono("Fornecedor C", "2026-11-12", 2600, "descartáveis"); // = 26 do dia 12
+  await importar(RETIRADAS());
+  const p = await previa();
+  const por = (data) => p.itens.filter((i) => i.data === data);
+  assert.deepEqual(p.itens.filter((i) => i.situacao === "NOVA").map((i) => [i.data, i.valorCentavos]), [["2026-11-04", 2000], ["2026-11-15", 4500]], "só o dia 04 e o dia 15 são novos");
+  assert.deepEqual(por("2026-11-08").map((i) => [i.situacao, i.fornecedorDaConta, i.valorDaContaCentavos, i.retiradasNaConta]), [["JA_LANCADA_EM_CONTA_UNICA", "Fornecedor A", 14000, 2], ["JA_LANCADA_EM_CONTA_UNICA", "Fornecedor A", 14000, 2]], "120+50 do dono = 100+40 aqui: uma conta, duas retiradas");
+  assert.deepEqual(por("2026-11-08").map((i) => i.categoriaDaConta), ["Salários e encargos", "Salários e encargos"], "a diária está em outra categoria: a tela mostra qual, e NÃO a lança como Outras despesas");
+  assert.equal(por("2026-11-06")[0].categoriaDaConta, "Outras despesas");
+  assert.deepEqual(por("2026-11-12").map((i) => [i.situacao, i.fornecedorDaConta]), [["JA_LANCADA_MANUALMENTE", "Fornecedor B"], ["JA_LANCADA_MANUALMENTE", "Fornecedor C"]], "cada uma já está em outro fornecedor");
+  assert.deepEqual(por("2026-11-06").map((i) => [i.situacao, i.fornecedorDaConta]), [["JA_LANCADA_MANUALMENTE", "SANGRIAS"]]);
+  assert.deepEqual([p.resumo.novas.quantidade, p.resumo.novas.totalCentavos, p.resumo.jaLancadasManualmente.quantidade, p.resumo.emContaUnica.quantidade], [2, 6500, 7, 2]);
+  const antes = await estado();
+  const resultadoAntes = await resultado();
+  const r = await lancar();
+  assert.deepEqual([r.lancadas.length, r.falhas.length, r.jaLancadas], [2, 0, 7]);
+  const depois = await estado();
+  assert.deepEqual([depois.obrigacoes - antes.obrigacoes, depois.movimentacoes - antes.movimentacoes, depois.lancamentos - antes.lancamentos], [2, 2, 2], "só 2 contas novas: nada duplicado");
+  assert.equal(await resultado(), resultadoAntes - 6500, "a DRE cai só pelas 2 novas");
+  assert.deepEqual([(await previa()).resumo.novas.quantidade, (await previa()).resumo.jaLancadasPelaImportacao.quantidade], [0, 2]);
+  assert.deepEqual((await lancar()).lancadas, [], "repetir não lança nada");
+  assert.deepEqual(await n.verificarConservacao(c), []);
+});
+
+test("reconhecimento pelo pagamento em DINHEIRO do caixa: conta paga pelo BANCO com o mesmo valor, ou pagamento em dinheiro de outro valor, NÃO bloqueiam uma retirada nova", async () => {
+  const { n, importar, previa, lancadaPeloDono } = await cenarioDoDono();
+  const banco = await n.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco sintético", instituicao: "Banco" });
+  await lancadaPeloDono("Fornecedor D", "2026-11-04", 2000, "pago pelo BANCO, não pelo caixa", banco.id); // mesmo valor da retirada de 04, mas não é dinheiro do caixa
+  await lancadaPeloDono("Fornecedor E", "2026-11-15", 9999, "outra compra em dinheiro, valor diferente");
+  await importar(RETIRADAS());
+  const p = await previa();
+  assert.deepEqual(p.itens.filter((i) => i.situacao === "NOVA").map((i) => i.data), ["2026-11-04", "2026-11-06", "2026-11-08", "2026-11-08", "2026-11-09", "2026-11-11", "2026-11-12", "2026-11-12", "2026-11-15"], "nenhuma foi reconhecida por engano");
+});
+
+test("a soma só vale com o MESMO dia e valor exato; conta de dia diferente não casa; a mesma conta não cobre duas vezes", async () => {
+  const { importar, previa, lancadaPeloDono } = await cenarioDoDono();
+  await lancadaPeloDono("Fornecedor F", "2026-11-09", 14000, "mesmo valor da soma do dia 08, mas em outro dia");
+  await lancadaPeloDono("Fornecedor G", "2026-11-08", 14000, "soma do dia 08");
+  await importar(RETIRADAS());
+  const p = await previa();
+  assert.deepEqual(p.itens.filter((i) => i.data === "2026-11-08").map((i) => i.fornecedorDaConta), ["Fornecedor G", "Fornecedor G"]);
+  assert.deepEqual(p.itens.filter((i) => i.data === "2026-11-09").map((i) => i.situacao), ["NOVA"], "a conta de 140,00 do dia 09 não cobre a retirada de 18,00 do dia 09");
+});

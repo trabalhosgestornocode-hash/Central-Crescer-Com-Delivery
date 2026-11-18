@@ -334,7 +334,7 @@ function conflitosDeGranularidade(lista) {
   return `<p class="aviso aviso--alerta" role="alert"><strong>Atenção: conflito com outra importação.</strong> ${lista.map((x) => `${esc(x.relatorio)} de ${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))} já tem ${x.propostasAplicadas} proposta(s) aplicada(s)`).join("; ")}. Confirmar este arquivo é possível, mas a aplicação será recusada para não contar o mesmo faturamento duas vezes: reverta a anterior antes.</p>`;
 }
 
-const SITUACAO_RETIRADA = Object.freeze({ NOVA: ["Nova: será lançada", "info"], JA_LANCADA_MANUALMENTE: ["Já lançada à mão", "ok"], JA_LANCADA_PELA_IMPORTACAO: ["Já lançada pela importação", "ok"] });
+const SITUACAO_RETIRADA = Object.freeze({ NOVA: ["Nova: será lançada", "info"], JA_LANCADA_MANUALMENTE: ["Já lançada à mão", "ok"], JA_LANCADA_EM_CONTA_UNICA: ["Já lançada (somada em uma conta)", "ok"], JA_LANCADA_PELA_IMPORTACAO: ["Já lançada pela importação", "ok"] });
 /**
  * Retiradas de caixa → despesa paga em dinheiro (fornecedor Sangrias, Outras despesas, Caixa da loja). O servidor já separou o que é NOVO do que
  * já foi lançado (à mão ou pela importação): a tela só mostra e pede a confirmação. Nada é lançado ao importar.
@@ -343,7 +343,7 @@ function blocoSangriasComoDespesa(d, doc, ctx) {
   const s = d.sangriasComoDespesa;
   if (!s || !s.itens.length) return "";
   const r = s.resumo;
-  const linhas = s.itens.map((i) => { const [t, c] = SITUACAO_RETIRADA[i.situacao] ?? [i.situacao, "neutro"]; return `<tr><td data-rotulo="Data">${esc(dataBR(i.data))}</td><td data-rotulo="Valor">${esc(moeda(i.valorCentavos))}</td><td data-rotulo="Situação"><span class="selo selo--${c}">${esc(t)}</span></td><td data-rotulo="Conta já lançada" class="esquerda">${i.descricaoDaConta ? esc(i.descricaoDaConta) : '<span class="nota">—</span>'}</td></tr>`; }).join("");
+  const linhas = s.itens.map((i) => { const [t, c] = SITUACAO_RETIRADA[i.situacao] ?? [i.situacao, "neutro"]; return `<tr><td data-rotulo="Data">${esc(dataBR(i.data))}</td><td data-rotulo="Valor">${esc(moeda(i.valorCentavos))}</td><td data-rotulo="Situação"><span class="selo selo--${c}">${esc(t)}</span></td><td data-rotulo="Conta já lançada" class="esquerda">${i.fornecedorDaConta || i.descricaoDaConta ? `<strong>${esc(i.fornecedorDaConta ?? "")}</strong>${i.descricaoDaConta ? ` · ${esc(i.descricaoDaConta)}` : ""}${i.categoriaDaConta ? ` · <span class="nota">${esc(i.categoriaDaConta)}</span>` : ""}${i.situacao === "JA_LANCADA_EM_CONTA_UNICA" ? ` <span class="nota">(conta de ${esc(moeda(i.valorDaContaCentavos))} cobre ${i.retiradasNaConta} retiradas)</span>` : ""}` : '<span class="nota">—</span>'}</td></tr>`; }).join("");
   const podeLancar = tem(ctx.permissoes, "financeiro_v2.registrar") && s.voceTemPermissao;
   const form = r.novas.quantidade && s.conta && podeLancar ? acao({
     url: "/api/fv2/acoes/movimentos-caixa/lancar-despesas", rotulo: `Lançar ${r.novas.quantidade} retirada(s) como despesa paga`, recarregar: `documento:${doc.id}`,
