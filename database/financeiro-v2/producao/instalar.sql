@@ -1,6 +1,6 @@
 -- Financeiro v2 — INSTALAÇÃO no schema dedicado financeiro_v2 (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` (não superusuário, com CREATEROLE), numa ÚNICA transação. Qualquer falha desfaz tudo.
--- Migrações: 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql, 0026_entregadores_proprios.sql
+-- Migrações: 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql, 0026_entregadores_proprios.sql, 0027_bloqueio_automacao_definer.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -3891,6 +3891,34 @@ create trigger fv2_obrigacao_sem_automacao before update on fv2_obrigacao for ea
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
 insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0026_entregadores_proprios.sql', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312');
 
+-- ------------------------------------------------------------------------- 0027_bloqueio_automacao_definer.sql (arquivo 957abaa956fbb97a0b39f4549e43647e798ba8badc268955713f40b97332f25e)
+grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
+-- =====================================================================================================================
+-- Financeiro v2 — migração 0027: BLOQUEIO DA IDENTIDADE TÉCNICA independente de quem grava
+--
+-- Problema: o gatilho da 0026 consultava a sessão com os privilégios de quem gravava. Papéis sem acesso às sessões
+-- (como o instalador) recebiam "permission denied" e não conseguiam criar a concessão técnica.
+--
+-- O que muda (e o que NÃO muda):
+--   * A função do gatilho passa a rodar como fv2_guardiao, que já lê as sessões.
+--   * Nenhum papel ganha acesso a fv2__sessao_vigente.
+--   * A regra é a mesma: sessão da identidade técnica não altera as tabelas protegidas.
+--   * Nenhum dado é alterado.
+-- =====================================================================================================================
+
+create or replace function fv2_bloquear_identidade_de_automacao() returns trigger
+language plpgsql security definer set search_path = pg_catalog, financeiro_v2, pg_temp as $$
+begin
+  if (select usuario_id from fv2__sessao_vigente()) = '00000000-0000-4000-8000-00000000e7e9'::uuid then
+    raise exception 'FV2: a identidade técnica de entregadores não pode alterar %', tg_table_name using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end $$;
+alter function fv2_bloquear_identidade_de_automacao() owner to fv2_guardiao;
+revoke all on function fv2_bloquear_identidade_de_automacao() from public, fv2_app, fv2_autoridade;
+revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0027_bloqueio_automacao_definer.sql', '957abaa956fbb97a0b39f4549e43647e798ba8badc268955713f40b97332f25e', '957abaa956fbb97a0b39f4549e43647e798ba8badc268955713f40b97332f25e');
+
 -- ======================================================== A5: nenhuma função do módulo executável por PUBLIC
 do $$ declare f record; begin
   -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
@@ -3924,7 +3952,7 @@ do $$
 declare n int; txt text;
 begin
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 26 then raise exception 'FV2 pós: % migrações registradas (esperado 26)', n; end if;
+  if n <> 27 then raise exception 'FV2 pós: % migrações registradas (esperado 27)', n; end if;
   -- nada do módulo fora do schema dedicado
   select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace where c.relname like 'fv2\_%' and s.nspname <> 'financeiro_v2' and s.nspname not like 'pg\_%';
   if n > 0 then raise exception 'FV2 pós: % relações fv2_* fora do schema', n; end if;
