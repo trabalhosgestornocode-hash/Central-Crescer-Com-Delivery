@@ -336,6 +336,25 @@ test("banco: a identidade técnica não movimenta dinheiro nem altera permissõe
     await assert.rejects(comoAplicacao(interno, escopo, (cl) => cl.query(`insert into ${t} (id) values (gen_random_uuid())`), { token }), /identidade técnica|permission denied/, t);
   }
 });
+test("banco: o instalador sem acesso às sessões cria a concessão técnica, e a identidade segue bloqueada", { skip: !EM_POSTGRES }, async () => {
+  const m = await preparado();
+  const interno = await m.repositorio.interno();
+  const dono = await interno.dono();
+  const papel = `fv2_instalador_${process.pid}`;
+  await dono.query(`create role ${papel} nologin bypassrls; grant usage on schema financeiro_v2 to ${papel};
+    grant select, insert on all tables in schema financeiro_v2 to ${papel}; grant execute on all functions in schema financeiro_v2 to ${papel};
+    revoke execute on function financeiro_v2.fv2__sessao_vigente() from ${papel};`);
+  try {
+    await dono.query(`begin; set local role ${papel}; ${sqlConcessaoDeAutomacao(ORG_A, UNI_A)} commit;`);
+  } catch (e) { await dono.query("rollback"); throw e; } finally {
+    await dono.query(`drop owned by ${papel}; drop role ${papel};`);
+  }
+  const { rows } = await dono.query("select acoes from financeiro_v2.fv2_concessao where usuario_id = $1", [IDENTIDADE_DE_AUTOMACAO]);
+  assert.deepEqual(rows.map((r) => r.acoes), [["financeiro_v2.registrar", "financeiro_v2.ver"]]);
+  const escopo = { organizacaoId: ORG_A, unidadeId: UNI_A };
+  const token = await interno.sessoes.emitir({ ...escopo, usuarioId: IDENTIDADE_DE_AUTOMACAO, permissoes: ["financeiro_v2.ver", "financeiro_v2.registrar"] });
+  await assert.rejects(comoAplicacao(interno, escopo, (cl) => cl.query("insert into fv2_liquidacao (id) values (gen_random_uuid())"), { token }), /identidade técnica/);
+});
 test("ativação: semana 09 a 15/11 vence em 18/11 e o agendador não recria o histórico já reconciliado", async () => {
   assert.equal(semanaDe("2026-11-09").vencimento, "2026-11-18");
   const m = await preparado({ agora: "2026-11-18T15:00:00.000Z", inicioDaOperacao: "2026-11-23" });
