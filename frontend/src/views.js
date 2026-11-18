@@ -251,7 +251,7 @@ const linhaProduto = (r, i) => `
     <td>${canalLabel(r.canal)}</td>
     <td>${fmtTexto(r.tabela)}</td>
     <td class="prod-nome"><button class="prod-link" data-idx="${i}">${escapeHtml(r.nome)}</button>${r.desatualizado ? '<span class="badge">2024</span>' : ""}</td>
-    <td>${fmtTexto(r.tamanho)}</td>
+    <td>${fmtTexto(r.tamanho ?? (state.exigeTabela ? null : "Único"))}</td>
     <td class="num">${fmtMoeda(r.preco)}</td>
     <td class="num">${fmtMoeda(r.custo)}</td>
     <td class="num"><span class="pill ${r._status.classe}">${fmtPct(r.cmv_pct)}</span></td>

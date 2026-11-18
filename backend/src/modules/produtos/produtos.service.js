@@ -183,8 +183,23 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
         .from("produto_precos").select("canal, tabela, preco").eq("produto_id", id);
       const antesMap = new Map((precosAntes ?? []).map((p) => [`${p.canal}|${p.tabela ?? ""}`, Number(p.preco)]));
 
-      const { error } = await supabase.from("produto_precos").upsert(rows, { onConflict: "produto_id,canal,tabela" });
-      if (error) throw ApiError.badRequest(error.message);
+      // Preço SEM tabela (empresas próprias): NULL nunca conflita na UNIQUE(produto_id, canal, tabela), então o upsert
+      // duplicaria a linha a cada salvar. Atualiza a existente do canal ou insere.
+      const comTabela = rows.filter((r) => r.tabela !== null);
+      const semTabela = rows.filter((r) => r.tabela === null);
+      if (comTabela.length) {
+        const { error } = await supabase.from("produto_precos").upsert(comTabela, { onConflict: "produto_id,canal,tabela" });
+        if (error) throw ApiError.badRequest(error.message);
+      }
+      for (const r of semTabela) {
+        const { data: existente, error: eLer } = await supabase.from("produto_precos").select("id")
+          .eq("produto_id", id).eq("canal", r.canal).is("tabela", null).limit(1).maybeSingle();
+        if (eLer) throw ApiError.badRequest(eLer.message);
+        const { error } = existente
+          ? await supabase.from("produto_precos").update({ preco: r.preco, desatualizado: r.desatualizado, atualizado_em: new Date().toISOString() }).eq("id", existente.id)
+          : await supabase.from("produto_precos").insert(r);
+        if (error) throw ApiError.badRequest(error.message);
+      }
 
       for (const r of rows) {
         const de = antesMap.get(`${r.canal}|${r.tabela ?? ""}`);

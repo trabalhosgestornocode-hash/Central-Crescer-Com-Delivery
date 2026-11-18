@@ -185,10 +185,11 @@ function atualizarNotif() {
 // (ver configuracoes.js), com permissão própria.
 const VALOR_OFICIAL = "__oficial__";
 function popularTabelas() {
-  // Empresa própria (sem tabela comercial) ou sem o módulo Produtos/CMV: some o seletor de canal/tabela do topo.
+  // Sem o módulo Produtos/CMV some o bloco todo; empresa própria (sem tabela comercial) mantém o canal (Balcão/iFood) e só perde a tabela.
   const filtros = el(".global-filtros");
-  if (filtros) filtros.hidden = !state.exigeTabela || !state.moduloCmv;
+  if (filtros) filtros.hidden = !state.moduloCmv;
   const sel = el("#tabela");
+  sel.hidden = !state.exigeTabela;
   const oficial = state.tabelasOficiais[state.canal];
   const rotuloOficial = oficial ? `★ Tabela oficial (${oficial})` : "★ Tabela oficial (não configurada)";
   // Opções vindas do catálogo REAL da empresa (state.tabelasDisponiveis) — o

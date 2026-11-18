@@ -37,20 +37,22 @@ export function linhasCatalogoSemPreco() {
 }
 
 const rotuloCategoria = rotuloCategoriaFicha;
+const canalLabel = (c) => (c === "ifood" ? "iFood" : "Balcão");
 
 /** Mesma estrutura de colunas da linha de preço; o que não existe aparece como "—", nunca inventado. */
 export function linhaCatalogoHtml(r, i) {
   const it = r._catalogo;
   const s = seloHomologacao(it, fmtDataHora);
+  const final = !state.exigeTabela && it.natureza !== "preparacao"; // empresa própria: produto final tem canal e tamanho único
   const botoes = acoesTabela().filter((a) => !(a.chave === "simular" && r.custo == null)) // sem custo confiável não há o que simular
     .map((a) => `<button class="acao-btn${a.chave === "remover" ? " acao-perigo" : ""}" data-acao="${a.chave}" data-idx="${i}" title="${a.titulo}" aria-label="${a.titulo}">${a.icon}</button>`).join("");
   return `
   <tr class="pc-linha-catalogo">
     <td>${escapeHtml(rotuloCategoria(it.categoria))}</td>
-    <td>—</td><td>—</td>
+    <td>${final ? canalLabel(state.canal) : "—"}</td><td>—</td>
     <td class="prod-nome"><button class="prod-link" data-idx="${i}">${escapeHtml(r.nome)}</button>
       <small class="muted">${it.natureza === "preparacao" ? "Preparação intermediária" : "Produto final"} · sem preço de venda</small></td>
-    <td>—</td><td class="num">—</td>
+    <td>${final ? "Único" : "—"}</td><td class="num">—</td>
     <td class="num">${r.custo == null ? '<span class="pill muted" title="Ficha incompleta: custo não exibido">indisponível</span>' : `${fmtMoeda(r.custo)}<small class="cu-un"> ${rotuloCusto(it)}</small>`}</td>
     <td class="num">—</td><td class="num">—</td>
     <td><span class="pill ${s.classe}" title="${escapeHtml(s.detalhe)}">${s.texto}</span></td>
