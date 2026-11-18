@@ -20,6 +20,7 @@ import {
 import { divergenciasDeVendas, montarVisao } from "../dominio/vendasRecebimentos.js";
 import { paginar } from "../dominio/tesouraria.js";
 import { registrosDaCompetencia } from "./cargaDaCompetencia.js";
+import { previaDeSangriasNaTransacao } from "./sangriasComoDespesa.js";
 import {
   validarCompetenciaDaCentral, validarDetalhe, validarDetalheDePendencia, validarFiltroDeCorrespondencias, validarFiltroDeDocumentos, validarFiltroDePendencias,
   validarFiltroDePropostas,
@@ -203,6 +204,8 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
           conflitosDeGranularidade: await conflitosDeGranularidadeDaImportacao(tx, cx, imp),
           registrosPorTipo: (await tx.agregar(cx, TIPO.REGISTRO_FONTE, { onde: { importacaoId: id }, agruparPor: "tipoRegistro" })).map((x) => ({ tipo: x.grupo, quantidade: x.quantidade })),
           propostasGeradas: Object.fromEntries((await tx.agregar(cx, TIPO.PROPOSTA, { onde: { importacaoId: id }, agruparPor: "estado" })).map((x) => [x.grupo, x.quantidade])),
+          // Retiradas de caixa: o que dá para lançar como despesa paga em dinheiro (NOVO × já lançado à mão ou pela importação).
+          sangriasComoDespesa: imp.tipoRelatorio === "SAIPOS_MOVIMENTOS_CAIXA" && [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(imp.estado) ? await previaDeSangriasNaTransacao(tx, cx, imp.periodoInicio, imp.periodoFim) : null,
           limitacoes: [compatibilidadeDe(imp).texto, "Importar não confirma, não concilia e não homologa: os registros entram não conferidos e sem efeito financeiro."],
           acoes: { confirmar: imp.estado === ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR, exigeAceiteDePendencias: (pv?.totalDivergencias ?? 0) > 0, gerarPropostas: [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(imp.estado) && imp.tipoRelatorio !== "SAIPOS_MOVIMENTOS_CAIXA", permissaoExigida: ACAO.IMPORTAR },
           historico: (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.IMPORTACAO, registroId: id } })).map((h) => ({ evento: h.evento, em: h.em, estado: h.depois?.estado ?? null, justificativa: h.justificativa ?? null })),

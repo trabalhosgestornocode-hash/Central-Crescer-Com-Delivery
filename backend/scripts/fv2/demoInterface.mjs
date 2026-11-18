@@ -331,6 +331,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     }) },
     // 08E (F-2): vincular saída JÁ registrada (extrato) à conta — nenhuma saída nova, nenhuma despesa nova.
     // `valor` = o que quita a conta; `juros` (opcional) = juro/multa além dela. A saída paga os dois, numa só transação (igual à rota real).
+    // Retiradas de caixa → despesa paga em dinheiro (igual à rota real).
+    "/api/fv2/acoes/movimentos-caixa/lancar-despesas": { campos: ["periodoInicio", "periodoFim", "justificativa"], fazer: (ctx, b) => nucleo.lancarSangriasComoDespesa(ctx, { periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, ...(b.justificativa ? { justificativa: b.justificativa } : {}), confirmar: true }) },
     "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "juros", "documento", "justificativa", "pagamentoAntecipado"], fazer: (ctx, b) => {
       const juros = b.juros === undefined || b.juros === null || String(b.juros).trim() === "" ? 0 : centavos(b.juros);
       return nucleo.vincularPagamentoDoExtrato(ctx, {

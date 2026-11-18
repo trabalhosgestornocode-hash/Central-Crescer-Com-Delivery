@@ -257,6 +257,8 @@ export const ESCRITAS = Object.freeze({
     ...(b.identificador ? { identificador: String(b.identificador).slice(0, 60) } : {}),
     ...(b.chave ? { fonte: { sistema: "MANUAL", idExterno: `formulario:${id(b.chave)}` } } : {}),
   }) },
+  // Retiradas de caixa importadas da SAIPOS → despesa paga em dinheiro (fornecedor Sangrias, Outras despesas, Caixa da loja). Só o que é NOVO; nada duplica.
+  "/movimentos-caixa/lancar-despesas": { campos: ["periodoInicio", "periodoFim", "justificativa"], fazer: (n, c, b) => n.lancarSangriasComoDespesa(c, { periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, ...(b.justificativa ? { justificativa: b.justificativa } : {}), confirmar: true }) },
   // `valor` = o que quita a CONTA; `juros` (opcional) = juro/multa cobrado além dela. A saída paga os dois (valor + juros), numa só transação.
   "/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "juros", "documento", "justificativa", "pagamentoAntecipado"], fazer: (n, c, b) => {
     const juros = b.juros === undefined || b.juros === null || String(b.juros).trim() === "" ? 0 : centavos(b.juros);

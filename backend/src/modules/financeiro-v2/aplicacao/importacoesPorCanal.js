@@ -28,7 +28,7 @@ export const FORMATOS_POR_CANAL = Object.freeze({
     { id: "SAIPOS_FATURAMENTO_POR_DIA", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "Faturamento por dia (PDF)", principal: false, arquivo: true, disponivel: true,
       descricao: "Total por dia, sem pedidos nem canal. Receita agregada, quando a metodologia do valor está comprovada." },
     { id: "SAIPOS_MOVIMENTOS_CAIXA", tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", nome: "Movimentações de Frente de Caixa (XLSX do Financeiro)", principal: false, arquivo: true, disponivel: true,
-      descricao: "Sangrias, reforços e transferências em dinheiro. Não é faturamento: não altera vendas, recebíveis nem a DRE. Alimenta a conferência do fechamento e o calendário.",
+      descricao: "Retiradas (sangrias), reforços e transferências em dinheiro. Importar não lança nada. Depois você lança as retiradas como despesas pagas em dinheiro (fornecedor Sangrias, Outras despesas); reforço e transferência não são despesa. Nunca é faturamento.",
       dica: "Na SAIPOS: Lançamentos financeiros, categoria Frente de Caixa, descrição Retirada (para reforços, descrição Reforço). Exporte em XLSX." },
   ]),
   IFOOD: Object.freeze([

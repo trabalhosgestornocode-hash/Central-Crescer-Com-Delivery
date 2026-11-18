@@ -334,6 +334,34 @@ function conflitosDeGranularidade(lista) {
   return `<p class="aviso aviso--alerta" role="alert"><strong>Atenção: conflito com outra importação.</strong> ${lista.map((x) => `${esc(x.relatorio)} de ${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))} já tem ${x.propostasAplicadas} proposta(s) aplicada(s)`).join("; ")}. Confirmar este arquivo é possível, mas a aplicação será recusada para não contar o mesmo faturamento duas vezes: reverta a anterior antes.</p>`;
 }
 
+const SITUACAO_RETIRADA = Object.freeze({ NOVA: ["Nova: será lançada", "info"], JA_LANCADA_MANUALMENTE: ["Já lançada à mão", "ok"], JA_LANCADA_PELA_IMPORTACAO: ["Já lançada pela importação", "ok"] });
+/**
+ * Retiradas de caixa → despesa paga em dinheiro (fornecedor Sangrias, Outras despesas, Caixa da loja). O servidor já separou o que é NOVO do que
+ * já foi lançado (à mão ou pela importação): a tela só mostra e pede a confirmação. Nada é lançado ao importar.
+ */
+function blocoSangriasComoDespesa(d, doc, ctx) {
+  const s = d.sangriasComoDespesa;
+  if (!s || !s.itens.length) return "";
+  const r = s.resumo;
+  const linhas = s.itens.map((i) => { const [t, c] = SITUACAO_RETIRADA[i.situacao] ?? [i.situacao, "neutro"]; return `<tr><td data-rotulo="Data">${esc(dataBR(i.data))}</td><td data-rotulo="Valor">${esc(moeda(i.valorCentavos))}</td><td data-rotulo="Situação"><span class="selo selo--${c}">${esc(t)}</span></td><td data-rotulo="Conta já lançada" class="esquerda">${i.descricaoDaConta ? esc(i.descricaoDaConta) : '<span class="nota">—</span>'}</td></tr>`; }).join("");
+  const podeLancar = tem(ctx.permissoes, "financeiro_v2.registrar") && s.voceTemPermissao;
+  const form = r.novas.quantidade && s.conta && podeLancar ? acao({
+    url: "/api/fv2/acoes/movimentos-caixa/lancar-despesas", rotulo: `Lançar ${r.novas.quantidade} retirada(s) como despesa paga`, recarregar: `documento:${doc.id}`,
+    campos: `<input type="hidden" name="periodoInicio" value="${esc(s.periodoInicio)}"><input type="hidden" name="periodoFim" value="${esc(s.periodoFim)}">`,
+    aviso: `Confirmo: ${r.novas.quantidade} retirada(s) nova(s), ${moeda(r.novas.totalCentavos)} no total, viram conta paga em dinheiro pelo ${s.conta.nome} (fornecedor ${s.fornecedor}, Outras despesas). Isso entra na DRE. O que já foi lançado não é repetido.`,
+  }) : "";
+  const aviso = !r.novas.quantidade ? '<p class="nota">Nada novo a lançar: tudo o que consta no relatório já foi lançado.</p>'
+    : !s.conta ? `<p class="aviso aviso--alerta">${esc(s.motivoSemCaixa ?? "Não há caixa físico definido.")}</p>`
+    : !podeLancar ? '<p class="nota">Lançar exige a permissão "registrar".</p>' : "";
+  return `<section class="mov-caixa" aria-label="Lançar as retiradas como despesas">
+<h3>Lançar as retiradas como despesas pagas em dinheiro</h3>
+<p class="nota">${esc(s.efeito)}</p>
+<ul class="lista-simples"><li><span>Novas (serão lançadas)</span><span>${r.novas.quantidade} · ${esc(moeda(r.novas.totalCentavos))}</span></li><li><span>Já lançadas à mão (não serão repetidas)</span><span>${r.jaLancadasManualmente.quantidade} · ${esc(moeda(r.jaLancadasManualmente.totalCentavos))}</span></li><li><span>Já lançadas por esta importação</span><span>${r.jaLancadasPelaImportacao.quantidade} · ${esc(moeda(r.jaLancadasPelaImportacao.totalCentavos))}</span></li></ul>
+<details${r.novas.quantidade ? " open" : ""}><summary><strong>Conferir retirada por retirada</strong> (${s.itens.length})</summary><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Situação de cada retirada</caption><thead><tr><th scope="col">Data</th><th scope="col">Valor</th><th scope="col">Situação</th><th scope="col" class="esquerda">Conta já lançada</th></tr></thead><tbody>${linhas}</tbody></table></div></details>
+${aviso}${form}
+</section>`;
+}
+
 export function detalheDocumento(d, ctx = {}) {
   const doc = d.documento;
   const pv = d.previa;
@@ -346,7 +374,7 @@ export function detalheDocumento(d, ctx = {}) {
   <dt>Recebido em</dt><dd>${esc(dataBR(doc.recebidoEm))} · ${esc(doc.responsavel)}</dd>
   <dt>Versão</dt><dd>${doc.versao}${doc.substituiOutra ? " (substitui a anterior)" : ""}${doc.substituidaPorOutra ? " (substituída por outra versão)" : ""}</dd>
 </dl>
-${previaPorCanal(pv?.controles)}${previaDeMovimentos(pv?.controles)}${conflitosDeGranularidade(d.conflitosDeGranularidade)}
+${previaPorCanal(pv?.controles)}${previaDeMovimentos(pv?.controles)}${blocoSangriasComoDespesa(d, doc, ctx)}${conflitosDeGranularidade(d.conflitosDeGranularidade)}
 <h3>Prévia do motor de importação</h3>
 ${pv ? `<ul class="lista-simples">
   <li><span>Registros válidos (novos)</span><strong>${pv.validos ?? "—"}</strong></li>
@@ -611,6 +639,7 @@ export function resultadoDaAcao(r) {
   if (!r.ok) return `<span class="valor--negativo">Não foi feito: ${esc(r.mensagem)}</span>`;
   const d = r.dados ?? {};
   if (d.repetido) return "Nada novo foi gravado: esta operação já tinha sido feita (repetição segura).";
+  if (Array.isArray(d.lancadas) && "jaLancadas" in d) return `${d.lancadas.length} retirada(s) lançada(s) como despesa paga em dinheiro; ${d.jaLancadas} já estava(m) lançada(s) (não repetidas).${d.falhas?.length ? ` NÃO lançada(s): ${d.falhas.map((x) => `${dataBR(x.data)} (${esc(x.motivo)})`).join("; ")}.` : ""}`;
   if (d.importacao && d.relatorio) return `Importação confirmada: ${d.relatorio.inseridos} registro(s) gravado(s), sem efeito financeiro.`;
   if (d.importacao) return `Arquivo recebido: ${esc(ESTADOS_IMPORTACAO[d.importacao.estado]?.rotulo ?? d.importacao.estado)}.`;
   if (d.proposta && d.efeitos) return `Proposta aplicada: ${d.efeitos.length} registro(s) criado(s) numa única transação.`;

@@ -702,8 +702,11 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .linha-conta--erro .data-etiqueta { background: var(--erro-bg); border-color: transparent; } .linha-conta--erro .data-etiqueta__dia { color: var(--erro); }
 .linha-conta--ok .data-etiqueta { opacity: .75; }
 .linha-conta td[data-rotulo="Saldo"] .valor { font-weight: 700; }
-.barra-pago { display: block; height: 4px; margin-top: 6px; border-radius: 99px; background: var(--neutro-bg); overflow: hidden; min-width: 56px; }
-.barra-pago > span { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
+/* <progress> em vez de style inline (compatível com CSP estrita) */
+.barra-pago { display: block; width: 100%; min-width: 56px; height: 4px; margin-top: 6px; border: 0; border-radius: 99px; background: var(--neutro-bg); overflow: hidden; appearance: none; -webkit-appearance: none; }
+.barra-pago::-webkit-progress-bar { background: var(--neutro-bg); border-radius: 99px; }
+.barra-pago::-webkit-progress-value { background: var(--ok); border-radius: 99px; }
+.barra-pago::-moz-progress-bar { background: var(--ok); border-radius: 99px; }
 @media (max-width: 640px) {
   .linha-conta { border-left: 4px solid var(--faixa, var(--linha-forte)); }
   .linha-conta > td:first-child { box-shadow: none; }

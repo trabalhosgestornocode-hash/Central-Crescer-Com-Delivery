@@ -62,7 +62,7 @@ const etiquetaDeData = (iso) => {
 const barraDePago = (x) => {
   if (!(x.pagoCentavos > 0) || !(x.valorOriginalCentavos > 0)) return "";
   const pct = Math.min(100, Math.round((x.pagoCentavos / x.valorOriginalCentavos) * 100));
-  return `<span class="barra-pago" role="img" aria-label="${pct}% já pago"><span style="width:${pct}%"></span></span>`;
+  return `<progress class="barra-pago" max="100" value="${pct}" aria-label="${pct}% já pago">${pct}%</progress>`;
 };
 export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
