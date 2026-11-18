@@ -4,14 +4,35 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Crescer Com Delivery Financeiro</title>
-  <!-- Mesmo tema da plataforma: claro por padrão, escuro só quando a pessoa escolheu na Crescer (antes da pintura). -->
+  <meta name="description" content="Crescer Com Delivery Financeiro: faturamento, contas, caixa e DRE de cada unidade.">
+  <meta name="theme-color" content="#2a070b">
+  <!-- Identidade oficial do Crescer Com Delivery (o mesmo arquivo da plataforma). ?v= renova o ícone em cache quando ele mudar. -->
+  <link rel="icon" type="image/jpeg" href="/assets/logo-crescer-central.jpeg?v=1">
+  <link rel="apple-touch-icon" href="/assets/logo-crescer-central.jpeg?v=1">
+  <!-- Tema, ambiente (sem aviso de demonstração na plataforma), fontes sem bloqueio e pré-carga: tudo antes da primeira pintura. -->
   <script src="tema.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="fv2.css">
+  <!-- Pré-carga PLANA dos módulos: sem isso o navegador só descobre cada nível depois de baixar o anterior (cascata de 6 viagens). -->
+  <link rel="modulepreload" href="app.js">
+  <link rel="modulepreload" href="consulta.js">
+  <link rel="modulepreload" href="plataforma.js">
+  <link rel="modulepreload" href="formatar.js">
+  <link rel="modulepreload" href="telas.js">
+  <link rel="modulepreload" href="telasTesouraria.js">
+  <link rel="modulepreload" href="telasVendas.js">
+  <link rel="modulepreload" href="telasAdministracao.js">
+  <link rel="modulepreload" href="telasConferencias.js">
+  <link rel="modulepreload" href="telasCanais.js">
+  <link rel="modulepreload" href="telasCalendarioCanais.js">
+  <link rel="modulepreload" href="telasImportacoesCanais.js">
+  <link rel="modulepreload" href="telasAbertura.js">
+  <link rel="modulepreload" href="telasMovimentosCaixa.js">
 </head>
 <body>
   <a class="pular" href="#conteudo">Pular para o conteúdo</a>
+  <!-- Só da demonstração local: tema.js a esconde na plataforma antes da primeira pintura. -->
   <div class="faixa-demo" role="note">Ambiente demonstrativo local · dados sintéticos · não publicado</div>
   <div class="layout">
     <nav class="navegacao" aria-label="Crescer Com Delivery Financeiro">
@@ -74,7 +95,7 @@
           <option value="ausente">Sem sessão</option>
         </select></label>
       </form>
-      <main id="conteudo" tabindex="-1" aria-live="polite"></main>
+      <main id="conteudo" tabindex="-1" aria-live="polite"><div class="estado estado--carregando" role="status" aria-busy="true"><p>Carregando o Crescer Com Delivery Financeiro…</p></div></main>
     </div>
   </div>
   <div id="painel" class="painel-fundo" hidden>

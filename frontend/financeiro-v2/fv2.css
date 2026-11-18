@@ -739,3 +739,10 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .mov-caixa__lista summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 6px 0; }
 .mov-caixa .ficha dd { margin: 0; }
 .imp-dica { margin-top: 2px; font-size: 12.5px; color: var(--suave); }
+
+/* ------------------------------------------------------------------ toque (celular/tablet): alvos de pelo menos 44 px, sem esconder nada */
+@media (max-width: 760px), (pointer: coarse) {
+  .navegacao a { min-height: 44px; display: flex; align-items: center; }
+  .layout button, .layout select, .layout input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]), .layout a.botao, .layout a.botao-link, .layout .botao-link { min-height: 44px; }
+  .layout button.botao-link, .layout a.botao-link { display: inline-flex; align-items: center; justify-content: center; padding-block: 8px; }
+}
