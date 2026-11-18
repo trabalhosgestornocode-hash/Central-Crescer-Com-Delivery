@@ -11,6 +11,7 @@
 //   - Execução 09 — saída ANTERIOR à emissão da conta (pagamento antecipado): sem bloqueio absoluto por data, mas com
 //     alerta na prévia, identificação explícita, documento compatível (conciliação sozinha não basta), justificativa
 //     detalhada e marca auditável na liquidação; sem isso, recusa (o vínculo não é comprovável). Também no banco (0020).
+import { exigirPagamentoLiberado } from "./guardaEntregadores.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, SENTIDO, SITUACAO_LIQUIDACAO, SITUACAO_MOVIMENTACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
@@ -208,6 +209,7 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   const juros = c.jurosCentavos > 0 ? await lancarJurosDaBaixa(b, tx, cx, c, mov) : null;
   const contas = [];
   for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
+  for (const o of contas) await exigirPagamentoLiberado(tx, cx, o); // entregador próprio: só com nota e demonstrativo conferidos
   // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
   const documentoExplicito = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
   // 09: pagamento ANTECIPADO (saída anterior à emissão) — identificação explícita + documento compatível + justificativa.

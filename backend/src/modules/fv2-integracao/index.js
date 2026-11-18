@@ -10,13 +10,27 @@
 //   FV2_APP_POOL_MAX       (opcional) padrão 4 — o banco do projeto tem 60 conexões no total
 //   FV2_ESCRITA_HABILITADA=1      (opcional) libera as AÇÕES; sem ela, só consulta
 //   FV2_HOMOLOGACAO_HABILITADA=1  (opcional) só depois da matriz 24a aprovada; homologar exige ainda 2º fator recente
+import { AsyncLocalStorage } from "node:async_hooks";
 import pg from "pg";
-import { criarAdaptadorDaPlataforma, criarAdministracaoCorporativaPostgres, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
+import { criarAdaptadorDaPlataforma, criarAdministracaoCorporativaPostgres, criarNucleoFinanceiro, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
 import { criarClienteDoGateway } from "./clienteGateway.js";
 import { criarAutoridadeCoLocalizada } from "./autoridadeCoLocalizada.js";
 import { criarMfaPeloProvedor } from "./mfaPeloProvedor.js";
 import { criarAdministracaoDaPlataforma, criarConcessoesDaSessao, criarVinculosDaPlataforma } from "./portasPlataforma.js";
 import { criarRotasFinanceiroV2 } from "./rotas.js";
+import { criarFonteEntregadores } from "./fonteEntregadores.js";
+import { criarCofreNotasSupabase } from "./cofreNotasSupabase.js";
+import { criarAgendadorEntregadores, executarCiclo, lerConfiguracaoDoAgendador } from "./agendadorEntregadores.js";
+
+/** Marca o trecho executado pelo agendador: só ele recebe sessão de banco da identidade de automação. */
+const automacao = new AsyncLocalStorage();
+export function configuracaoDeEntregadores({ supabase, env = process.env }) {
+  const inicio = String(env.FV2_ENTREGADORES_INICIO ?? "");
+  const valido = /^\d{4}-\d{2}-\d{2}$/.test(inicio) && new Date(`${inicio}T12:00:00Z`).getUTCDay() === 1;
+  // Notas fiscais só com bucket privado configurado E aceite explícito de operar sem antimalware (decisão do proprietário).
+  const cofreDeNotas = env.FV2_ENTREGADORES_BUCKET && env.FV2_ENTREGADORES_COFRE_ACEITO === "1" ? criarCofreNotasSupabase({ supabase, bucket: env.FV2_ENTREGADORES_BUCKET }) : null;
+  return { fonte: criarFonteEntregadores({ db: supabase }), inicioDaOperacao: valido ? inicio : null, cofreDeNotas };
+}
 
 export { criarRotasFinanceiroV2 } from "./rotas.js";
 
@@ -43,6 +57,38 @@ export function lerConfiguracaoFv2(env = process.env) {
 export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, registrar = () => {} }) {
   const cfg = lerConfiguracaoFv2(env);
   if (!cfg.habilitado && cfg.motivo === "CONFIGURACAO_INCOMPLETA") registrar({ tipo: "FV2_DESLIGADO_POR_CONFIGURACAO", faltando: cfg.faltando });
+  let compartilhadas = null;
+  const montar = () => {
+    const ssl = cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
+    const pool = new pg.Pool({ connectionString: cfg.appUrl, max: cfg.poolMax, idleTimeoutMillis: 30000, ssl });
+    pool.on("error", () => {});
+    const obterUsuario = async (token) => {
+      const { data, error } = await supabase.auth.getUser(token);
+      return error ? null : data?.user ?? null;
+    };
+    const mfa = criarMfaPeloProvedor({ obterUsuario });
+    let sessoes;
+    let poolAutoridade = null;
+    if (cfg.modo === "local") {
+      // pool PRÓPRIO da autoridade (outro papel de login, máx. 2 conexões) — nunca o pool da aplicação
+      poolAutoridade = new pg.Pool({ connectionString: cfg.autoridadeUrl, max: 2, idleTimeoutMillis: 30000, ssl });
+      poolAutoridade.on("error", () => {});
+      const autoridade = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa, registrar });
+      // Agendador: sem requisição de pessoa. O BANCO continua exigindo concessão ativa da identidade de automação (FV020).
+      sessoes = { ...autoridade, emitir: async (e) => (automacao.getStore() === true
+        ? (await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, 300, "automacao:entregadores"])).rows[0].t
+        : autoridade.emitir(e)) };
+    } else {
+      sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
+    }
+    const repositorio = criarRepositorioPostgres({ pool, sessoes });
+    const vinculos = criarVinculosDaPlataforma(supabase);
+    const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
+    const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
+    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
+  };
+  const dependencias = () => (compartilhadas ??= montar());
+  dependenciasDaPlataforma = dependencias;
   return criarRotasFinanceiroV2({
     habilitado: cfg.habilitado,
     escritaHabilitada: cfg.habilitado && cfg.escritaHabilitada === true,
@@ -50,30 +96,26 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     // ativação (administrador inicial + liberação da unidade): ligar SÓ para ativar e desligar em seguida
     provisionamentoHabilitado: cfg.habilitado && env.FV2_PROVISIONAMENTO_HABILITADO === "1",
     registrar,
-    dependencias: () => {
-      const ssl = cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
-      const pool = new pg.Pool({ connectionString: cfg.appUrl, max: cfg.poolMax, idleTimeoutMillis: 30000, ssl });
-      pool.on("error", () => {});
-      const obterUsuario = async (token) => {
-        const { data, error } = await supabase.auth.getUser(token);
-        return error ? null : data?.user ?? null;
-      };
-      const mfa = criarMfaPeloProvedor({ obterUsuario });
-      let sessoes;
-      let poolAutoridade = null;
-      if (cfg.modo === "local") {
-        // pool PRÓPRIO da autoridade (outro papel de login, máx. 2 conexões) — nunca o pool da aplicação
-        poolAutoridade = new pg.Pool({ connectionString: cfg.autoridadeUrl, max: 2, idleTimeoutMillis: 30000, ssl });
-        poolAutoridade.on("error", () => {});
-        sessoes = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa, registrar });
-      } else {
-        sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
-      }
-      const repositorio = criarRepositorioPostgres({ pool, sessoes });
-      const vinculos = criarVinculosDaPlataforma(supabase);
-      const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
-      const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
-      return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null };
-    },
+    dependencias,
   });
 }
+
+let dependenciasDaPlataforma = null;
+let agendadorEntregadores = null;
+/** Chamado pelo server.js depois do listen. Desligado por padrão; nunca rejeita e nunca derruba o backend. */
+export async function iniciarEntregadoresEmbutido({ env = process.env, log = () => {}, efeitosPermitidos = false } = {}) {
+  const cfg = lerConfiguracaoDoAgendador(env);
+  if (!cfg.habilitado) return { habilitado: false, motivo: cfg.motivo };
+  if (!efeitosPermitidos) return { habilitado: false, motivo: "EFEITOS_EXTERNOS_BLOQUEADOS" };
+  if (!dependenciasDaPlataforma) return { habilitado: false, motivo: "ROTAS_NAO_MONTADAS" };
+  if (agendadorEntregadores) return { habilitado: true };
+  const obter = dependenciasDaPlataforma;
+  agendadorEntregadores = criarAgendadorEntregadores({ executar: () => executarCiclo({
+    unidades: cfg.unidades, registrar: (e) => log("info", "fv2.entregadores_ciclo", e), comAutomacao: (fn) => automacao.run(true, fn),
+    unidadeLiberada: async (u) => (await obter().liberacoes.consultar(u)).escrita === true,
+    criarNucleo: (u) => criarNucleoFinanceiro({ repositorio: obter().repositorio, exigirConcessaoPersistida: true, entregadores: obter().entregadores, escoposAutorizados: [{ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }] }),
+  }) });
+  agendadorEntregadores.iniciar();
+  return { habilitado: true };
+}
+export const pararEntregadoresEmbutido = () => agendadorEntregadores?.parar() ?? Promise.resolve();

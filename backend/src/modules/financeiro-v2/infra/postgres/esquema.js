@@ -168,6 +168,19 @@ export const ESQUEMA = Object.freeze({
   [TIPO.FECHAMENTO_CAIXA]: tabela("fv2_fechamento_caixa", {
     data: c("data", "data"), caixa: c("caixa"), situacao: c("situacao"), dados: c("dados", "json"), observacao: c("observacao"),
   }),
+  // 0026: entregadores próprios — estado da semana e retrato do fechamento por entregador.
+  [TIPO.SEMANA_ENTREGADORES]: tabela("fv2_semana_entregadores", {
+    semanaInicio: c("semana_inicio", "data"), semanaFim: c("semana_fim", "data"), situacao: c("situacao"), dados: c("dados", "json"),
+  }),
+  [TIPO.FECHAMENTO_ENTREGADOR]: tabela("fv2_fechamento_entregador", {
+    semanaInicio: c("semana_inicio", "data"), semanaFim: c("semana_fim", "data"), vencimento: c("vencimento", "data"), entregadorChave: c("entregador_chave"),
+    entregadorNome: c("entregador_nome"), obrigacaoId: c("obrigacao_id", "uuid"), valorCentavos: c("valor_centavos", "centavos"), entregas: c("entregas", "inteiro"),
+    situacaoDocumental: c("situacao_documental"), dados: c("dados", "json"),
+  }),
+  [TIPO.EXTRA_ENTREGADOR]: tabela("fv2_extra_entregador", {
+    entregadorChave: c("entregador_chave"), entregadorNome: c("entregador_nome"), dataServico: c("data_servico", "data"), semanaInicio: c("semana_inicio", "data"), descricao: c("descricao"),
+    valorCentavos: c("valor_centavos", "centavos"), situacao: c("situacao"), obrigacaoId: c("obrigacao_id", "uuid"), movimentacaoId: c("movimentacao_id", "uuid"), dados: c("dados", "json"),
+  }),
   [TIPO.ABERTURA]: tabela("fv2_abertura", {
     competenciaInicio: c("competencia_inicio"), dataDeCorte: c("data_de_corte", "data"), situacao: c("situacao"), observacao: c("observacao"),
   }),

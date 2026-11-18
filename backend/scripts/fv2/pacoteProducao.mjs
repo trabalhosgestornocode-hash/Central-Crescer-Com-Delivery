@@ -217,6 +217,22 @@ select organizacao_id, unidade_id, rotulo, criado_em from financeiro_v2.fv2_esco
 `;
 }
 
+/** Concessão mínima (ver + registrar) da identidade técnica de entregadores, em UMA unidade. Gera o SQL; não executa nada. */
+export function sqlConcessaoDeAutomacao(organizacaoId, unidadeId) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(organizacaoId) || !uuid.test(unidadeId)) throw new Error("IDs de empresa/unidade inválidos.");
+  const [o, u, p] = [organizacaoId.toLowerCase(), unidadeId.toLowerCase(), "00000000-0000-4000-8000-00000000e7e9"];
+  const just = "Identidade técnica exclusiva do fechamento semanal de entregadores próprios.";
+  return `set local search_path = ${S}, pg_catalog, public;
+with nova as (
+  insert into fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
+  values (gen_random_uuid(), '${o}', '${u}', 1, now(), '${EXECUTOR_BOOTSTRAP}', now(), '${EXECUTOR_BOOTSTRAP}', 'concessao:${p}', null, '{}'::jsonb, '${p}', '["financeiro_v2.registrar","financeiro_v2.ver"]'::jsonb, 'ATIVA', '${EXECUTOR_BOOTSTRAP}', ${literal(just)})
+  on conflict do nothing returning *)
+insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CRIACAO', null, jsonb_build_object('versao', 1, 'acoes', acoes, 'situacao', situacao), justificativa, concedido_por, now() from nova;
+`;
+}
+
 /** Executor sintético do bootstrap (não é conta da plataforma; o papel de banco real fica em papel_de_banco). */
 export const EXECUTOR_BOOTSTRAP = "00000000-0000-4000-8000-0000000b0075";
 
@@ -314,7 +330,7 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
  * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
  * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
  */
-export const BASE_INSTALADA = "0023";
+export const BASE_INSTALADA = "0025";
 export function atualizar(base = BASE_INSTALADA) {
   const ms = listarMigracoes();
   const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);

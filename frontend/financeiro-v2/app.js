@@ -11,6 +11,7 @@ import * as ven from "./telasVendas.js";
 import * as can from "./telasCanais.js";
 import * as calCanais from "./telasCalendarioCanais.js";
 import * as impCanais from "./telasImportacoesCanais.js";
+import * as ent from "./telasEntregadores.js";
 import { esc } from "./formatar.js";
 
 const $ = (s) => document.querySelector(s);
@@ -43,12 +44,12 @@ const estado = {
   impCanal: null,
 };
 function filtrosIniciais() {
-  return { saipos: { aba: "resumo" }, ifood: { aba: "resumo" }, "noventa-e-nove-food": { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
+  return { saipos: { aba: "resumo" }, ifood: { aba: "resumo" }, "noventa-e-nove-food": { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {}, "entregadores-proprios": { aba: "resumo" } };
 }
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["visao-geral", "dre", "saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "entregadores-proprios", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -154,6 +155,7 @@ function consultaDaRota() {
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
+    case "entregadores-proprios": return `/api/fv2/entregadores?${qs({ competencia: undefined, semana: f.semana, mes: f.mes, entregador: f.entregador, situacao: f.situacao })}`;
     case "saipos": {
       // Período da área SAIPOS: o escolhido; senão o mês da competência (até a data-base, se for o mês corrente).
       if (f.competenciaBase !== estado.competencia || !f.inicio || !f.fim) {
@@ -208,6 +210,7 @@ function desenhar(dados) {
   const f = estado.filtros[estado.rota] ?? {};
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
+    case "entregadores-proprios": return ent.entregadoresProprios(dados, f, { permissoes: permissoesDaUnidade() });
     case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade(), ...contextoDoCalendario(), ...contextoDasImportacoes(), abrirProvisorio: estado.filtros.saipos?.foco === "provisorio" });
     case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade(), filtro: estado.filtros["operadoras-taxas"] ?? {} });
     case "ifood": case "noventa-e-nove-food": return can.plataforma(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
@@ -349,6 +352,8 @@ function detalheDe(chave) {
   if (tipo === "card") { const [canal, modalidade, chave, periodoInicio, periodoFim] = id.split("|"); return [`/api/fv2/vendas/liquido-esperado?${qs({ competencia: undefined, canal, modalidade, chave, periodoInicio, periodoFim })}`, (d) => can.detalheDoCard(d)]; }
   // Fase 11: prévia do demonstrativo oficial do iFood — "demonstrativo:<valores digitados, em query string>" (nada é gravado).
   if (tipo === "demonstrativo") { const params = Object.fromEntries(new URLSearchParams(id)); return [`/api/fv2/previa-demonstrativo-ifood?${qs({ competencia: undefined, ...params })}`, (d) => impCanais.previaDoDemonstrativo(d, { params, podeRegistrar: permissoesDaUnidade().includes("financeiro_v2.registrar") })]; }
+  if (tipo === "entregador") { const c = id.indexOf("|"); return [`/api/fv2/entregadores/fechamento?${qs({ competencia: undefined, inicio: id.slice(0, c), entregador: id.slice(c + 1) })}`, (d) => { estado.demonstrativo = d; return ent.detalheDoFechamento(d); }]; }
+  if (tipo === "entregador-pessoa") return [`/api/fv2/entregadores/pessoa?${qs({ competencia: undefined, entregador: id })}`, (d) => ent.detalheDoEntregador(d)];
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
@@ -399,6 +404,16 @@ async function arquivoDoDocumento(id, finalidade, origem) {
   a.remove();
   if (area) area.textContent = "Download iniciado.";
   origem?.focus();
+}
+/** Nota ou comprovante do entregador: o servidor revalida a permissão e confere que o arquivo pertence a este fechamento. */
+async function baixarDocumentoDoEntregador(botao) {
+  const r = await enviar("/api/fv2/acoes/entregadores/documento/abrir", { inicio: botao.dataset.inicio, entregador: botao.dataset.entregador, documento: botao.dataset.entregadorDoc, confirmar: true, unidade: estado.unidade }, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
+  if (!r.ok) { botao.textContent = r.mensagem ?? "Arquivo indisponível"; return; }
+  const bytes = Uint8Array.from(atob(r.dados.conteudoBase64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = r.dados.nome; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 }
 function fecharPainel(restaurarFoco = true) {
   const painel = $("#painel");
@@ -569,6 +584,7 @@ function aplicarFiltroLocal(form) {
   }
   aviso?.remove();
   const anterior = estado.filtros[rota] ?? {};
+  if (rota === "entregadores-proprios" && dados.semanaLivre) { dados.semana = dados.semanaLivre; delete dados.semanaLivre; }
   estado.filtros[rota] = { ...dados, soCompetencia: form.querySelector('[name="soCompetencia"]')?.checked ?? false };
   if (rota === "saipos") estado.filtros.saipos.competenciaBase = estado.competencia; // período escolhido vale para a competência atual
   if (rota === "operadoras-taxas") estado.filtros[rota].competenciaBase = estado.competencia;
@@ -626,6 +642,10 @@ document.addEventListener("click", (e) => {
     carregar().then(() => document.querySelector(`[data-secao-config="${secaoConfig.dataset.secaoConfig}"]`)?.focus());
     return;
   }
+  const docEntregador = e.target.closest("[data-entregador-doc]");
+  if (docEntregador) { baixarDocumentoDoEntregador(docEntregador); return; }
+  if (e.target.closest("[data-copiar-demonstrativo]") && estado.demonstrativo) { navigator.clipboard?.writeText(ent.textoDoDemonstrativo(estado.demonstrativo, nomeUnidade())); e.target.textContent = "Texto copiado"; return; }
+  if (e.target.closest("[data-imprimir-demonstrativo]")) { window.print(); return; }
   const ver = e.target.closest("[data-documento-ver]");
   if (ver) { arquivoDoDocumento(ver.dataset.documentoVer, "visualizar", ver); return; }
   const baixar = e.target.closest("[data-documento-baixar]");

@@ -76,7 +76,7 @@ test("10 — o núcleo só é usado pela camada de integração e pelo gateway; 
   const fora = varrer(src, []).filter((p) => !p.startsWith(join(raiz, "")) && !relative(src, p).replaceAll("\\", "/").startsWith("modules/financeiro-v2/"));
   const usam = fora.filter((p) => /financeiro-v2/.test(readFileSync(p, "utf8"))).map((p) => relative(src, p).replaceAll("\\", "/"));
   // app.js só pode citar o caminho para o LIMITE DE CORPO do envio de relatório (nunca importar o núcleo).
-  const soLimiteDeCorpo = () => readFileSync(join(src, "app.js"), "utf8").split(/\r?\n/).filter((l) => /financeiro-v2/.test(l)).every((l) => /^\s*app\.use\("\/api\/v1\/financeiro-v2\/acoes\/importacao\/receber", express\.json\(\{ limit: LIMITES_CORPO\.financeiroV2Importacao \}\)\);$/.test(l));
+  const soLimiteDeCorpo = () => readFileSync(join(src, "app.js"), "utf8").split(/\r?\n/).filter((l) => /financeiro-v2/.test(l)).every((l) => /^\s*app\.use\("\/api\/v1\/financeiro-v2\/acoes\/(importacao\/receber|entregadores\/documento)", express\.json\(\{ limit: LIMITES_CORPO\.financeiroV2Importacao \}\)\);$/.test(l));
   const permitidos = (x) => x.startsWith("modules/fv2-integracao/") || x.startsWith("fv2-gateway/") || x === "routes.js" || (x === "app.js" && soLimiteDeCorpo());
   assert.deepEqual(usam.filter((x) => !permitidos(x)), []);
   const rotas = readFileSync(join(src, "routes.js"), "utf8");

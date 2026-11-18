@@ -13,6 +13,7 @@ import { aplicarLiquidacao, reverterLiquidacao } from "../dominio/titulos.js";
 import {
   validarEstornoLiquidacao, validarEstornoMovimentacao, validarEstornoTransferencia, validarLiquidacao, validarMovimentacao, validarTransferencia,
 } from "../contratos/comandos.js";
+import { exigirPagamentoLiberado } from "./guardaEntregadores.js";
 
 const tipoDoAlvo = (alvoTipo) => (alvoTipo === ALVO_LIQUIDACAO.OBRIGACAO ? TIPO.OBRIGACAO : TIPO.RECEBIVEL);
 
@@ -90,6 +91,7 @@ export function operacoesDeCaixa(b) {
           if (a.alvoTipo !== esperado) falhar(CODIGO.LIQUIDACAO_INCOMPATIVEL, "Saída só liquida obrigação; entrada só liquida recebível.");
           const tipo = tipoDoAlvo(a.alvoTipo);
           const alvo = await b.obterOuFalhar(tx, cx, tipo, a.alvoId, "Título");
+          if (tipo === TIPO.OBRIGACAO) await exigirPagamentoLiberado(tx, cx, alvo);
           const mudancas = aplicarLiquidacao(alvo, a.valorCentavos);
           liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, { movimentacaoId: mov.id, alvoTipo: a.alvoTipo, alvoId: a.alvoId, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva, situacao: SITUACAO_LIQUIDACAO.VALIDA }));
           titulos.push(await b.alterar(tx, cx, tipo, alvo, mudancas, EVENTO_HISTORICO.LIQUIDACAO));

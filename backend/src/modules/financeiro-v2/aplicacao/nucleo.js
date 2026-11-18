@@ -34,6 +34,8 @@ import { operacoesDeVendas } from "./vendas.js";
 import { operacoesDeReclassificacao } from "./reclassificacao.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
+import { operacoesDeEntregadoresProprios } from "./entregadoresProprios.js";
+import { operacoesDeExtras } from "./extrasEntregadores.js";
 
 /**
  * @param {object} deps
@@ -49,6 +51,7 @@ import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
  * @param {boolean} [deps.exigirConcessaoPersistida] 06D: confere a permissão contra a concessão GRAVADA em cada operação
  * @param {{verificar:(ato:object)=>Promise<{ok:boolean, autoridadeId?:string, nivelAutenticacao?:string}>}} [deps.autoridadeDeProvisionamento]
  *        06D/07B: autoridade externa, já autenticada (aal2), que atesta o administrador inicial de uma unidade
+ * @param {{fonte?:object, inicioDaOperacao?:string|null, cofreDeNotas?:object|null}} [deps.entregadores] apuração do parser (porta), primeira semana automática e cofre durável das notas
  * @param {boolean} [deps.cargaCompletaDeReferencia] 07B — SOMENTE testes de equivalência: as telas otimizadas voltam a
  *        ler o histórico inteiro, para comparar o resultado com a carga dirigida
  * @param {boolean} [deps.conferirCargaDirigida] 08C — SOMENTE testes: cada consulta otimizada também calcula com a carga
@@ -58,6 +61,7 @@ export function criarNucleoFinanceiro({
   repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo",
   cofre = null, fontes = criarRegistroDeFontes(), estabelecimentosDaUnidade = null, acessosNegados = criarRegistroDeAcessosNegadosMemoria(),
   exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null, cargaCompletaDeReferencia = false, conferirCargaDirigida = false,
+  entregadores = null,
 }) {
   exigirRepositorio(repositorio);
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
@@ -76,6 +80,8 @@ export function criarNucleoFinanceiro({
     ...operacoesDeCofreDocumental(base, { cofre, acessosNegados }),
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeBaixaPorExtrato(base),
+    ...operacoesDeEntregadoresProprios(base, { acessosNegados, ...(entregadores ?? {}) }),
+    ...operacoesDeExtras(base),
     ...operacoesDeFormacao(base),
     ...operacoesDeAbertura(base),
     ...operacoesDeTaxasContratadas(base),

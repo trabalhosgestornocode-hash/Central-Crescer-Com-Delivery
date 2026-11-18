@@ -15,6 +15,30 @@ import { ORIGEM } from "./foody.constants.js";
 import { reservarUnidade } from "./foody.trava.js";
 
 export const INTERVALO_PADRAO_MS = 6 * 60 * 60_000; // 4x por dia: suficiente para D-1..D-3
+/** Primeira coleta de D-1: 00:10 em Brasília (-03:00), dando tempo de a Foody registrar os últimos pedidos do dia. */
+export const MINUTOS_APOS_A_VIRADA = 10;
+/** Falha na coleta de D-1: nova tentativa em 15 minutos, sem esperar o próximo ciclo de 6 horas. */
+export const NOVA_TENTATIVA_MS = 15 * 60_000;
+const DIA_MS = 86_400_000;
+const OFFSET_BRASILIA_MS = 3 * 60 * 60_000;
+
+/** Milissegundos até o próximo 00:10 de Brasília. */
+export function msAteAVirada(agora = new Date()) {
+  const parede = agora.getTime() - OFFSET_BRASILIA_MS;
+  const alvo = Math.floor(parede / DIA_MS) * DIA_MS + MINUTOS_APOS_A_VIRADA * 60_000;
+  return (alvo > parede ? alvo : alvo + DIA_MS) - parede;
+}
+
+/** Próxima execução: o que vier primeiro entre o intervalo, a virada do dia e, se D-1 falhou, a nova tentativa. */
+export function proximoAtrasoMs({ agora = new Date(), intervaloMs = INTERVALO_PADRAO_MS, falhouOntem = false } = {}) {
+  return Math.min(intervaloMs, msAteAVirada(agora), ...(falhouOntem ? [NOVA_TENTATIVA_MS] : []));
+}
+
+/** D-1 de alguma unidade não foi coletado neste ciclo (parada do processo e unidade fora da allowlist não contam). */
+export function ontemFalhou(itens, agora = new Date()) {
+  const ontem = competenciasParaSincronizar(agora, 1)[0];
+  return (itens ?? []).some((i) => i.erro && !["INTERROMPIDO", "FORA_DA_ALLOWLIST", "FECHAMENTO_PENDENTE"].includes(i.erro) && (i.competencia === ontem || !i.competencia));
+}
 /** Reconciliação da conexão compartilhada: dias com fechamento pendente/decisão não aplicada são retomados até este limite. */
 export const DIAS_RECONCILIACAO = 35;
 const MOTIVO_RECONCILIACAO = {
@@ -84,19 +108,22 @@ async function cicloDaUnidade(u, { env, agora, executar, deps, deveParar, out })
  * @param {{unidades: () => Promise<Array<{organizacaoId, unidadeId}>>|Array, intervaloMs?, env?, agora?, executar?, deps?,
  *          aoTerminarCiclo?, temporizador?: {set, clear}}} p
  */
-export function criarAgendadorFoody({ unidades, intervaloMs = INTERVALO_PADRAO_MS, atrasoInicialMs = 0, env = process.env, agora = () => new Date(), executar, deps,
+export function criarAgendadorFoody({ unidades, intervaloMs = INTERVALO_PADRAO_MS, alinharComAVirada = false, atrasoInicialMs = 0, env = process.env, agora = () => new Date(), executar, deps,
   trava = false, aoTerminarCiclo = () => {}, aoFalharCiclo = () => {}, temporizador = { set: setTimeout, clear: clearTimeout } }) {
-  let ativo = false, pendente = null, rodando = null;
+  let ativo = false, pendente = null, rodando = null, falhouOntem = false;
   async function rodarCiclo() {
     try {
       if (!agendamentoPermitido(env)) { ativo = false; return; } // flag desligada em execução: para sozinho
       const lista = typeof unidades === "function" ? await unidades() : unidades;
-      aoTerminarCiclo(await executarCicloFoody({ unidades: lista, env, agora, executar, deps, trava, deveParar: () => !ativo }));
+      const itens = await executarCicloFoody({ unidades: lista, env, agora, executar, deps, trava, deveParar: () => !ativo });
+      falhouOntem = ontemFalhou(itens, agora());
+      aoTerminarCiclo(itens);
     } catch (e) {
+      falhouOntem = true;
       aoFalharCiclo(e);   // erro ao listar unidades etc.: o laço continua no próximo intervalo
     } finally {
       rodando = null;
-      if (ativo) pendente = temporizador.set(tique, intervaloMs);
+      if (ativo) pendente = temporizador.set(tique, alinharComAVirada ? proximoAtrasoMs({ agora: agora(), intervaloMs, falhouOntem }) : intervaloMs);
     }
   }
   function tique() {
@@ -114,7 +141,7 @@ export function criarAgendadorFoody({ unidades, intervaloMs = INTERVALO_PADRAO_M
       }
       if (ativo) return;
       ativo = true;
-      pendente = temporizador.set(tique, atrasoInicialMs);
+      pendente = temporizador.set(tique, alinharComAVirada ? Math.min(atrasoInicialMs, msAteAVirada(agora())) : atrasoInicialMs);
     },
     /** Para o laço; devolve uma promessa que resolve quando o dia em curso (se houver) terminar. */
     parar() { ativo = false; if (pendente) temporizador.clear(pendente); pendente = null; return rodando ?? Promise.resolve(); },

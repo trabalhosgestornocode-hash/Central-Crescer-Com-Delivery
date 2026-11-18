@@ -8,9 +8,9 @@ import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.r
 import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
 import { iniciarRelatoriosOperacionaisEmbutido, pararRelatoriosOperacionaisEmbutido } from "./worker-comunicacao/relatorios.embedded.js";
 import { iniciarFoodyEmbutido, pararFoodyEmbutido } from "./worker-foody/foody.embedded.js";
+import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
 import { totalUnidadesHomologacaoFinancial } from "./modules/ifood/ifoodFinancialHomologacao.js";
 import { iniciarServidorHttp } from "./servidor.lifecycle.js";
-import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
 import { lerAllowlistRetryResend } from "./modules/comunicacao/retryResendAllowlist.js";
 
 // Guarda de efeitos externos (ambiente/efeitosExternos.js): decide, ANTES das flags de cada rotina, se este processo pode
@@ -84,8 +84,15 @@ iniciarServidorHttp({
     iniciarFoodyEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {
       console.log(r.habilitado ? "   Foody: agendador ATIVO" : `   Foody: agendador DESABILITADO (${r.motivo})`);
     });
+
+    // Fechamento semanal de entregadores próprios: só com FV2_ENTREGADORES_AGENDADOR_HABILITADO=1, unidades configuradas e guarda de efeitos externos.
+    import("./modules/fv2-integracao/index.js")
+      .then((m) => m.iniciarEntregadoresEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados), efeitosPermitidos: avaliarEfeitosExternos(process.env).permitido }))
+      .then((r) => console.log(r.habilitado ? "   Entregadores próprios: agendador ATIVO" : `   Entregadores próprios: agendador DESABILITADO (${r.motivo})`))
+      .catch(() => console.log("   Entregadores próprios: agendador NÃO INICIADO"));
   },
   antesDeFechar: [
+    () => import("./modules/fv2-integracao/index.js").then((m) => m.pararEntregadoresEmbutido()).catch(() => {}),
     () => purgaInbox.parar(),
     (sinal) => pararWorkerComunicacaoEmbutido(sinal),
     (sinal) => pararEventsIfoodEmbutido(sinal),

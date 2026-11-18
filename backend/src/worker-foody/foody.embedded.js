@@ -7,7 +7,7 @@
 //   * segredo FOODY_CENTRAL_SECRET ausente/curto = não inicia (o token não poderia ser decifrado);
 //   * primeiro ciclo só depois de ATRASO_INICIAL_MS (deploy sobreposto não dispara coleta em dobro no boot) e cada unidade
 //     passa pela MESMA trava da sincronização manual (memória + EM_ANDAMENTO no banco);
-//   * D-1..D-3 a cada 6 h; dias congelados só por reconciliação explícita; limites de páginas/pedidos iguais aos da tela;
+//   * D-1 às 00:10 de Brasília (nova tentativa em 15 min se falhar) e D-1..D-3 a cada 6 h; dias congelados só por reconciliação explícita; limites de páginas/pedidos iguais aos da tela;
 //   * NUNCA envia mensagem e não alimenta indicador existente; logs só com contagens e códigos (nunca token, valores ou ids
 //     de pedido);
 //   * falhar aqui NUNCA derruba o backend; nunca registra handler de sinal: o shutdown é o do server.js.
@@ -54,7 +54,7 @@ export async function iniciarFoodyEmbutido({ env = process.env, log = () => {}, 
     const m = await (montar ?? montarPadrao)(env);
     const allow = lerFlagsFoody(env).unidades;
     const ag = m.criarAgendadorFoody({
-      env, atrasoInicialMs: m.atrasoInicialMs ?? ATRASO_INICIAL_MS, trava: true, temporizador: m.temporizador,
+      env, alinharComAVirada: true, atrasoInicialMs: m.atrasoInicialMs ?? ATRASO_INICIAL_MS, trava: true, temporizador: m.temporizador,
       deps: { repo: m.repo, seguranca: m.seguranca, limites: LIMITES_AGENDADOR, ...(m.criarCliente ? { criarCliente: m.criarCliente } : {}) },
       unidades: () => m.repo.listarConexoesAtivasDaAllowlist(allow),
       aoTerminarCiclo: (itens) => log("info", "foody.agendador_ciclo", resumirCiclo(itens)),

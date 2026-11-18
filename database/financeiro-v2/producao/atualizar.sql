@@ -1,91 +1,36 @@
 -- Financeiro v2 — ATUALIZAÇÃO do schema financeiro_v2 (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` (não superusuário), numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e hash): 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql
--- Novas: 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql
+-- Já instaladas (conferidas por nome e hash): 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql
+-- Novas: 0026_entregadores_proprios.sql
 
 do $$ declare n int; begin
   if not exists (select 1 from pg_namespace where nspname = 'financeiro_v2') then raise exception 'FV2 atualização: schema financeiro_v2 não existe — nada foi feito'; end if;
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 atualização: não aplicar como superusuário'; end if;
   if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 atualização: existe publicação FOR ALL TABLES — nada foi feito'; end if;
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 23 then raise exception 'FV2 atualização: % migrações registradas (esperado 23) — nada foi feito', n; end if;
-  select count(*) into n from financeiro_v2.fv2_migracao m join (values ('0001_fundacao.sql', 'ef5d9f835541d6fce2807109be1a5737813084bd94130f9714e5105b0e361427'), ('0002_importacoes.sql', 'd49d3b6bd531bf2d031e86a0ca0245a28632a6fa177017bcd4ff9433807c088a'), ('0003_concessoes.sql', 'a6e58f09056935eb2414f5d2119433e92e9919930eb88eb0e16acbd4bd076ec9'), ('0004_formacao.sql', 'ce5b6ecf822b69f86a4a6cd190d6dcad52c59ad33a0df0f07b398e9dd3d5b9bf'), ('0005_composicao_venda.sql', '8dbbc4296a95cc46648a38fb69ae407d5a41efdf5d1ced2c96c7f5bd408472d8'), ('0006_tesouraria.sql', 'f4170c545e077e9d44fcd03bb21aa0c3712ec0c154e5e54ef6bcc53d5a0232a8'), ('0007_saldo_referencia.sql', 'e27550c85b6b1d5195e1986e750aa944b64372e1690c8ab9481a634b48e6e21a'), ('0008_conferencias_indices.sql', '25042551aa6730531d8ce9a460ab64660ef95e8f71da4fb2228a53e8279c22e9'), ('0009_configuracoes_fechamento.sql', '7d986399161f897288d31772d6774f586c86ab29366e4dd4a330990fcc5e7e05'), ('0010_auditoria_posicao_posterior.sql', '45714c799f03d562136b1038b6a91809bd0414adc71a5fd2541784f2af4cf7f6'), ('0011_sessao_banco_e_concessoes.sql', 'f89aba0ad79f4bef458751ed0468d85f7bc9d850872a905e3ffb1a2cb2610c5d'), ('0012_permissao_por_acao.sql', 'cd0f8f8e3e2d05beaef02a7832ffd32765f5aa9ed1067208239c8f3b430f6fa2'), ('0013_acoes_granulares.sql', '23482b0a571c0f212470443dc1eae001c67dd70b3e4bb4aed96d5b2b489b22cc'), ('0014_reclassificacao.sql', '598cd8c434a5987747a58f64010a84642747b22a42ff54453f666924f5323e68'), ('0015_indices_carga_por_competencia.sql', '314227f5309c2bf0917d27d39b4dac8b31a1aa249220fdfee041f0721db1976a'), ('0016_envio_de_evidencias.sql', '161206c52160277c846fe32a8de0908bf177357561945df19ff73b3ae766a918'), ('0017_indices_seletivos.sql', '01666ecf61be707c262bde5867dce5380595d9a81a4226f5778e862d4ecf1926'), ('0018_fechamento_ressalvas_baixa_extrato.sql', '7a312af6949f039bb6ec7a21e8488f06eaf7dad7756a618e995334448daeaeec'), ('0019_com_pendencias_sem_contorno.sql', 'ca7d6fd943a640ce83afa8d96f79b70e6662e62d86fc5cb8bfaca05f49a629e1'), ('0020_baixa_antecipada.sql', '719f956225b03eb1a40b4a97c53a1803517bf5bd8e927ab3ffda10c4b54d3254'), ('0021_liberacao_por_unidade.sql', 'b24ed9c2e8f18e4f881f76d3e7e7f3d2bb3eec24637c1a40189e75073c1a4b64'), ('0022_abertura_da_unidade.sql', '43de10df4e73e9d53ecd01cc2607dd2629f8ec665a4fd2ca865ffcd819394a21'), ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23')) v(nome, sha) on v.nome = m.nome and v.sha = m.sha256;
-  if n <> 23 then raise exception 'FV2 atualização: migrações instaladas diferem do Git (nome/hash) — nada foi feito'; end if;
+  if n <> 25 then raise exception 'FV2 atualização: % migrações registradas (esperado 25) — nada foi feito', n; end if;
+  select count(*) into n from financeiro_v2.fv2_migracao m join (values ('0001_fundacao.sql', 'ef5d9f835541d6fce2807109be1a5737813084bd94130f9714e5105b0e361427'), ('0002_importacoes.sql', 'd49d3b6bd531bf2d031e86a0ca0245a28632a6fa177017bcd4ff9433807c088a'), ('0003_concessoes.sql', 'a6e58f09056935eb2414f5d2119433e92e9919930eb88eb0e16acbd4bd076ec9'), ('0004_formacao.sql', 'ce5b6ecf822b69f86a4a6cd190d6dcad52c59ad33a0df0f07b398e9dd3d5b9bf'), ('0005_composicao_venda.sql', '8dbbc4296a95cc46648a38fb69ae407d5a41efdf5d1ced2c96c7f5bd408472d8'), ('0006_tesouraria.sql', 'f4170c545e077e9d44fcd03bb21aa0c3712ec0c154e5e54ef6bcc53d5a0232a8'), ('0007_saldo_referencia.sql', 'e27550c85b6b1d5195e1986e750aa944b64372e1690c8ab9481a634b48e6e21a'), ('0008_conferencias_indices.sql', '25042551aa6730531d8ce9a460ab64660ef95e8f71da4fb2228a53e8279c22e9'), ('0009_configuracoes_fechamento.sql', '7d986399161f897288d31772d6774f586c86ab29366e4dd4a330990fcc5e7e05'), ('0010_auditoria_posicao_posterior.sql', '45714c799f03d562136b1038b6a91809bd0414adc71a5fd2541784f2af4cf7f6'), ('0011_sessao_banco_e_concessoes.sql', 'f89aba0ad79f4bef458751ed0468d85f7bc9d850872a905e3ffb1a2cb2610c5d'), ('0012_permissao_por_acao.sql', 'cd0f8f8e3e2d05beaef02a7832ffd32765f5aa9ed1067208239c8f3b430f6fa2'), ('0013_acoes_granulares.sql', '23482b0a571c0f212470443dc1eae001c67dd70b3e4bb4aed96d5b2b489b22cc'), ('0014_reclassificacao.sql', '598cd8c434a5987747a58f64010a84642747b22a42ff54453f666924f5323e68'), ('0015_indices_carga_por_competencia.sql', '314227f5309c2bf0917d27d39b4dac8b31a1aa249220fdfee041f0721db1976a'), ('0016_envio_de_evidencias.sql', '161206c52160277c846fe32a8de0908bf177357561945df19ff73b3ae766a918'), ('0017_indices_seletivos.sql', '01666ecf61be707c262bde5867dce5380595d9a81a4226f5778e862d4ecf1926'), ('0018_fechamento_ressalvas_baixa_extrato.sql', '7a312af6949f039bb6ec7a21e8488f06eaf7dad7756a618e995334448daeaeec'), ('0019_com_pendencias_sem_contorno.sql', 'ca7d6fd943a640ce83afa8d96f79b70e6662e62d86fc5cb8bfaca05f49a629e1'), ('0020_baixa_antecipada.sql', '719f956225b03eb1a40b4a97c53a1803517bf5bd8e927ab3ffda10c4b54d3254'), ('0021_liberacao_por_unidade.sql', 'b24ed9c2e8f18e4f881f76d3e7e7f3d2bb3eec24637c1a40189e75073c1a4b64'), ('0022_abertura_da_unidade.sql', '43de10df4e73e9d53ecd01cc2607dd2629f8ec665a4fd2ca865ffcd819394a21'), ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23'), ('0024_canais_e_operadoras.sql', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59'), ('0025_fechamento_manual_caixa.sql', 'ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2')) v(nome, sha) on v.nome = m.nome and v.sha = m.sha256;
+  if n <> 25 then raise exception 'FV2 atualização: migrações instaladas diferem do Git (nome/hash) — nada foi feito'; end if;
 end $$;
 set local search_path = financeiro_v2, pg_catalog;
 
--- ------------------------------------------------------------------------- 0024_canais_e_operadoras.sql (arquivo 06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59)
+-- ------------------------------------------------------------------------- 0026_entregadores_proprios.sql (arquivo 787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312)
 grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
 -- =====================================================================================================================
--- Financeiro v2 — migração 0024: CANAL 99FOOD e OPERADORAS de pagamento (Fase 02, doc 40)
+-- Financeiro v2 — migração 0026: ENTREGADORES PRÓPRIOS (fechamento semanal a partir do parser Foody Delivery)
 --
 -- Só é aplicada no PostgreSQL local isolado e, depois de autorizada, no schema dedicado. Não pertence a database/migrations/.
 --
 -- O que muda (e o que NÃO muda):
---   * canal NOVENTA_E_NOVE_FOOD passa a ser aceito (lançamento, venda, recebível, cadastro de canais). Os canais existentes
---     continuam iguais e nenhum registro é alterado.
---   * processadores PAGBANK, MAQUININHA_IFOOD (maquininha do iFood usada no balcão: operadora, não canal) e
---     NOVENTA_E_NOVE_FOOD (repasse do marketplace 99Food) passam a ser aceitos (pagamento, recebível, cadastro).
---   * Operadoras, tabelas de taxas e taxa estimada vivem nas extensões (`extras`) já existentes: nenhuma coluna nova.
---   * Só troca restrições CHECK por versões mais amplas: nenhuma linha atual deixa de valer.
--- =====================================================================================================================
-
-do $$
-declare
-  r record;
-begin
-  -- Remove as CHECK antigas de canal/processador (nomes gerados pelo PostgreSQL) — identificadas pela definição.
-  for r in
-    select c.conname, t.relname
-      from pg_constraint c
-      join pg_class t on t.oid = c.conrelid
-      join pg_namespace n on n.oid = t.relnamespace
-     where c.contype = 'c'
-       and n.nspname = current_schema()
-       and t.relname in ('fv2_lancamento', 'fv2_venda', 'fv2_pagamento_venda', 'fv2_recebivel', 'fv2_canal_processador')
-       and pg_get_constraintdef(c.oid) like '%ANOTA_AI%'
-  loop
-    execute format('alter table %I drop constraint %I', r.relname, r.conname);
-  end loop;
-end $$;
-
--- A varredura acima apaga TODA CHECK que cita 'ANOTA_AI' nessas tabelas, e isso inclui a da origem da venda (SAIPOS, IFOOD,
--- ANOTA_AI, MANUAL), que não deve mudar. Ela volta aqui, idêntica à da fundação (0001): nenhuma linha atual a viola.
-alter table fv2_venda add constraint fv2_venda_fonte_sistema_check
-  check (fonte_sistema in ('SAIPOS', 'IFOOD', 'ANOTA_AI', 'MANUAL'));
-
-alter table fv2_lancamento add constraint fv2_lancamento_canal_valido
-  check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
-alter table fv2_venda add constraint fv2_venda_canal_valido
-  check (canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
-alter table fv2_pagamento_venda add constraint fv2_pagamento_venda_processador_valido
-  check (processador is null or processador in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO'));
-alter table fv2_recebivel add constraint fv2_recebivel_processador_valido
-  check (processador is null or processador in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO'));
-alter table fv2_recebivel add constraint fv2_recebivel_canal_valido
-  check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
-alter table fv2_canal_processador add constraint fv2_canal_processador_codigo_base_valido
-  check ((papel = 'CANAL' and codigo_base in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'))
-      or (papel = 'PROCESSADOR' and codigo_base in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO')));
-revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0024_canais_e_operadoras.sql', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59');
-
--- ------------------------------------------------------------------------- 0025_fechamento_manual_caixa.sql (arquivo ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2)
-grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
--- =====================================================================================================================
--- Financeiro v2 — migração 0025: FECHAMENTO MANUAL DE CAIXA (Fase 04, doc 42)
---
--- Só é aplicada no PostgreSQL local isolado e, depois de autorizada, no schema dedicado. Não pertence a database/migrations/.
---
--- O que muda (e o que NÃO muda):
---   * Nova tabela fv2_fechamento_caixa: o fechamento que a equipe envia (um por dia × caixa), com as formas de pagamento,
---     esperado × informado × diferença e o dinheiro (abertura, vendas, retiradas, reforços, transferências).
---   * O fechamento é CONFERÊNCIA: não gera receita, lançamento nem movimentação (as vendas vêm das importações).
+--   * fv2_semana_entregadores: o estado de cada semana da unidade (pendente ou consolidada) e suas divergências posteriores.
+--   * fv2_fechamento_entregador: o retrato imutável do que foi apurado por entregador e semana + a conferência documental.
+--   * A entrega em si continua SÓ no parser: aqui fica apenas o retrato da semana encerrada, que sustenta o demonstrativo.
+--   * A conta a pagar continua em fv2_obrigacao: nenhuma tabela de pagamento nova, nenhum calendário paralelo.
 --   * Mesmas proteções das demais tabelas: escopo por empresa/unidade (RLS), sem exclusão, versão e histórico obrigatórios.
---   * Nada existente é alterado (só a função fv2_tabela_do_tipo ganha o tipo novo).
+--   * Nada existente é alterado (só a função fv2_tabela_do_tipo ganha os tipos novos).
 -- =====================================================================================================================
 
-create table fv2_fechamento_caixa (
+create table fv2_semana_entregadores (
   seq                bigint generated always as identity,
   id                 uuid not null primary key,
   organizacao_id     uuid not null,
@@ -98,36 +43,98 @@ create table fv2_fechamento_caixa (
   chave_idempotencia text check (chave_idempotencia is null or length(chave_idempotencia) between 1 and 400),
   impressao          text,
   extras             jsonb not null default '{}'::jsonb check (jsonb_typeof(extras) = 'object'),
-  data               date not null,
-  caixa              text not null check (length(btrim(caixa)) between 1 and 40),
-  situacao           text not null check (situacao in ('REGISTRADO', 'CONFERIDO')),
+  semana_inicio      date not null check (extract(isodow from semana_inicio) = 1),
+  semana_fim         date not null,
+  situacao           text not null check (situacao in ('PENDENTE', 'CONSOLIDADA')),
   dados              jsonb not null check (jsonb_typeof(dados) = 'object'),
-  observacao         text,
   unique (organizacao_id, unidade_id, id),
-  unique (organizacao_id, unidade_id, data, caixa),
+  unique (organizacao_id, unidade_id, semana_inicio),
+  check (semana_fim = semana_inicio + 6),
   check (atualizado_em >= criado_em)
 );
 
-alter table fv2_fechamento_caixa add constraint fv2_fechamento_caixa_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
-create unique index fv2_fechamento_caixa_chave_uq on fv2_fechamento_caixa (organizacao_id, unidade_id, chave_idempotencia) where chave_idempotencia is not null;
-create index fv2_fechamento_caixa_data on fv2_fechamento_caixa (organizacao_id, unidade_id, data);
-create trigger fv2_fechamento_caixa_sem_delete before delete on fv2_fechamento_caixa for each row execute function fv2_proibir_exclusao();
-create trigger fv2_fechamento_caixa_sem_truncate before truncate on fv2_fechamento_caixa for each statement execute function fv2_proibir_exclusao();
-create trigger fv2_fechamento_caixa_versao before update on fv2_fechamento_caixa for each row execute function fv2_guardar_versao();
-create constraint trigger fv2_fechamento_caixa_historico after insert or update on fv2_fechamento_caixa deferrable initially deferred
-  for each row execute function fv2_exigir_historico('FECHAMENTO_CAIXA');
+create table fv2_fechamento_entregador (
+  seq                 bigint generated always as identity,
+  id                  uuid not null primary key,
+  organizacao_id      uuid not null,
+  unidade_id          uuid not null,
+  versao              integer not null check (versao >= 1),
+  criado_em           timestamptz not null,
+  criado_por          uuid not null,
+  atualizado_em       timestamptz not null,
+  atualizado_por      uuid not null,
+  chave_idempotencia  text not null check (length(chave_idempotencia) between 1 and 400),
+  impressao           text,
+  extras              jsonb not null default '{}'::jsonb check (jsonb_typeof(extras) = 'object'),
+  semana_inicio       date not null check (extract(isodow from semana_inicio) = 1),
+  semana_fim          date not null,
+  vencimento          date not null,
+  entregador_chave    text not null check (length(btrim(entregador_chave)) between 1 and 200),
+  entregador_nome     text not null check (length(btrim(entregador_nome)) between 1 and 200),
+  obrigacao_id        uuid,
+  valor_centavos      bigint not null check (valor_centavos > 0),
+  entregas            integer not null check (entregas >= 0),
+  situacao_documental text not null check (situacao_documental in ('AGUARDANDO_NF', 'NF_RECEBIDA', 'NF_EM_CONFERENCIA', 'NF_APROVADA', 'NF_REJEITADA', 'LIBERADO_PAGAMENTO')),
+  dados               jsonb not null check (jsonb_typeof(dados) = 'object'),
+  unique (organizacao_id, unidade_id, id),
+  unique (organizacao_id, unidade_id, semana_inicio, entregador_chave),
+  check (semana_fim = semana_inicio + 6),
+  check (vencimento = semana_inicio + 9),
+  check (atualizado_em >= criado_em)
+);
 
-alter table fv2_fechamento_caixa enable row level security;
-alter table fv2_fechamento_caixa force row level security;
-create policy fv2_fechamento_caixa_escopo on fv2_fechamento_caixa
+alter table fv2_semana_entregadores add constraint fv2_semana_entregadores_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
+alter table fv2_fechamento_entregador add constraint fv2_fechamento_entregador_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
+create unique index fv2_semana_entregadores_chave_uq on fv2_semana_entregadores (organizacao_id, unidade_id, chave_idempotencia) where chave_idempotencia is not null;
+create unique index fv2_fechamento_entregador_chave_uq on fv2_fechamento_entregador (organizacao_id, unidade_id, chave_idempotencia);
+create unique index fv2_fechamento_entregador_obrigacao_uq on fv2_fechamento_entregador (organizacao_id, unidade_id, obrigacao_id) where obrigacao_id is not null;
+create index fv2_fechamento_entregador_vencimento on fv2_fechamento_entregador (organizacao_id, unidade_id, vencimento);
+
+create trigger fv2_semana_entregadores_sem_delete before delete on fv2_semana_entregadores for each row execute function fv2_proibir_exclusao();
+create trigger fv2_semana_entregadores_sem_truncate before truncate on fv2_semana_entregadores for each statement execute function fv2_proibir_exclusao();
+create trigger fv2_semana_entregadores_versao before update on fv2_semana_entregadores for each row execute function fv2_guardar_versao();
+create constraint trigger fv2_semana_entregadores_historico after insert or update on fv2_semana_entregadores deferrable initially deferred
+  for each row execute function fv2_exigir_historico('SEMANA_ENTREGADORES');
+create trigger fv2_fechamento_entregador_sem_delete before delete on fv2_fechamento_entregador for each row execute function fv2_proibir_exclusao();
+create trigger fv2_fechamento_entregador_sem_truncate before truncate on fv2_fechamento_entregador for each statement execute function fv2_proibir_exclusao();
+create trigger fv2_fechamento_entregador_versao before update on fv2_fechamento_entregador for each row execute function fv2_guardar_versao();
+create constraint trigger fv2_fechamento_entregador_historico after insert or update on fv2_fechamento_entregador deferrable initially deferred
+  for each row execute function fv2_exigir_historico('FECHAMENTO_ENTREGADOR');
+
+-- O valor apurado de um fechamento é imutável: diferença posterior vira divergência, ajuste ou conta complementar.
+create function fv2_fechamento_entregador_imutavel() returns trigger language plpgsql as $$
+begin
+  if new.valor_centavos <> old.valor_centavos or new.entregas <> old.entregas or new.semana_inicio <> old.semana_inicio
+     or new.entregador_chave <> old.entregador_chave or new.chave_idempotencia <> old.chave_idempotencia then
+    raise exception 'FV2: o valor apurado do fechamento semanal não pode ser alterado' using errcode = 'FV010';
+  end if;
+  return new;
+end $$;
+create trigger fv2_fechamento_entregador_valor before update on fv2_fechamento_entregador for each row execute function fv2_fechamento_entregador_imutavel();
+
+alter table fv2_semana_entregadores enable row level security;
+alter table fv2_semana_entregadores force row level security;
+create policy fv2_semana_entregadores_escopo on fv2_semana_entregadores
   using (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
   with check (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()));
-create policy fv2_fechamento_caixa_ler on fv2_fechamento_caixa as restrictive for select using ((select fv2_sessao_operacional()));
-create policy fv2_fechamento_caixa_incluir on fv2_fechamento_caixa as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar'])));
-create policy fv2_fechamento_caixa_alterar on fv2_fechamento_caixa as restrictive for update
-  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.conciliar'])))
-  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.conciliar'])));
-grant select, insert, update on fv2_fechamento_caixa to fv2_app;
+create policy fv2_semana_entregadores_ler on fv2_semana_entregadores as restrictive for select using ((select fv2_sessao_operacional()));
+create policy fv2_semana_entregadores_incluir on fv2_semana_entregadores as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar'])));
+create policy fv2_semana_entregadores_alterar on fv2_semana_entregadores as restrictive for update
+  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])))
+  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])));
+grant select, insert, update on fv2_semana_entregadores to fv2_app;
+
+alter table fv2_fechamento_entregador enable row level security;
+alter table fv2_fechamento_entregador force row level security;
+create policy fv2_fechamento_entregador_escopo on fv2_fechamento_entregador
+  using (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
+  with check (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()));
+create policy fv2_fechamento_entregador_ler on fv2_fechamento_entregador as restrictive for select using ((select fv2_sessao_operacional()));
+create policy fv2_fechamento_entregador_incluir on fv2_fechamento_entregador as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar'])));
+create policy fv2_fechamento_entregador_alterar on fv2_fechamento_entregador as restrictive for update
+  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.conciliar', 'financeiro_v2.enviar_documento'])))
+  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.conciliar', 'financeiro_v2.enviar_documento'])));
+grant select, insert, update on fv2_fechamento_entregador to fv2_app;
 
 create or replace function fv2_tabela_do_tipo(p_tipo text) returns regclass language sql immutable as $$
   select case p_tipo
@@ -143,10 +150,76 @@ create or replace function fv2_tabela_do_tipo(p_tipo text) returns regclass lang
     when 'VERSAO_FECHAMENTO' then 'fv2_versao_fechamento' when 'ATRIBUICAO_PENDENCIA' then 'fv2_atribuicao_pendencia'
     when 'CANAL_PROCESSADOR' then 'fv2_canal_processador' when 'CONFIGURACAO_UNIDADE' then 'fv2_configuracao_unidade'
     when 'ABERTURA' then 'fv2_abertura' when 'FECHAMENTO_CAIXA' then 'fv2_fechamento_caixa'
+    when 'SEMANA_ENTREGADORES' then 'fv2_semana_entregadores' when 'FECHAMENTO_ENTREGADOR' then 'fv2_fechamento_entregador'
+    when 'EXTRA_ENTREGADOR' then 'fv2_extra_entregador'
   end::regclass
 $$;
+
+-- Serviços extras: valores fora das taxas do parser. A conta e a saída continuam nas tabelas próprias; aqui fica só o vínculo.
+create table fv2_extra_entregador (
+  seq                bigint generated always as identity,
+  id                 uuid not null primary key,
+  organizacao_id     uuid not null,
+  unidade_id         uuid not null,
+  versao             integer not null check (versao >= 1),
+  criado_em          timestamptz not null,
+  criado_por         uuid not null,
+  atualizado_em      timestamptz not null,
+  atualizado_por     uuid not null,
+  chave_idempotencia text not null check (length(chave_idempotencia) between 1 and 400),
+  impressao          text,
+  extras             jsonb not null default '{}'::jsonb check (jsonb_typeof(extras) = 'object'),
+  entregador_chave   text not null check (length(btrim(entregador_chave)) between 1 and 200),
+  entregador_nome    text not null check (length(btrim(entregador_nome)) between 1 and 200),
+  data_servico       date not null,
+  semana_inicio      date not null check (extract(isodow from semana_inicio) = 1),
+  descricao          text not null check (length(btrim(descricao)) between 1 and 300),
+  valor_centavos     bigint not null check (valor_centavos > 0),
+  situacao           text not null check (situacao in ('PENDENTE', 'PAGO', 'PAGO_AGUARDANDO_VINCULO', 'CANCELADO')),
+  obrigacao_id       uuid,
+  movimentacao_id    uuid,
+  dados              jsonb not null check (jsonb_typeof(dados) = 'object'),
+  unique (organizacao_id, unidade_id, id),
+  check (data_servico between semana_inicio and semana_inicio + 6),
+  check (atualizado_em >= criado_em)
+);
+alter table fv2_extra_entregador add constraint fv2_extra_entregador_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
+create unique index fv2_extra_entregador_chave_uq on fv2_extra_entregador (organizacao_id, unidade_id, chave_idempotencia);
+create unique index fv2_extra_entregador_obrigacao_uq on fv2_extra_entregador (organizacao_id, unidade_id, obrigacao_id) where obrigacao_id is not null and situacao <> 'CANCELADO';
+create index fv2_extra_entregador_semana on fv2_extra_entregador (organizacao_id, unidade_id, semana_inicio);
+create trigger fv2_extra_entregador_sem_delete before delete on fv2_extra_entregador for each row execute function fv2_proibir_exclusao();
+create trigger fv2_extra_entregador_sem_truncate before truncate on fv2_extra_entregador for each statement execute function fv2_proibir_exclusao();
+create trigger fv2_extra_entregador_versao before update on fv2_extra_entregador for each row execute function fv2_guardar_versao();
+create constraint trigger fv2_extra_entregador_historico after insert or update on fv2_extra_entregador deferrable initially deferred
+  for each row execute function fv2_exigir_historico('EXTRA_ENTREGADOR');
+alter table fv2_extra_entregador enable row level security;
+alter table fv2_extra_entregador force row level security;
+create policy fv2_extra_entregador_escopo on fv2_extra_entregador
+  using (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
+  with check (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()));
+create policy fv2_extra_entregador_ler on fv2_extra_entregador as restrictive for select using ((select fv2_sessao_operacional()));
+create policy fv2_extra_entregador_incluir on fv2_extra_entregador as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar'])));
+create policy fv2_extra_entregador_alterar on fv2_extra_entregador as restrictive for update
+  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])))
+  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir'])));
+grant select, insert, update on fv2_extra_entregador to fv2_app;
+
+-- Identidade técnica do fechamento semanal: pode criar fechamento e conta a pagar, e NADA que mova dinheiro ou altere permissões.
+create function fv2_bloquear_identidade_de_automacao() returns trigger language plpgsql as $$
+begin
+  if fv2_usuario() = '00000000-0000-4000-8000-00000000e7e9'::uuid then
+    raise exception 'FV2: a identidade técnica de entregadores não pode alterar %', tg_table_name using errcode = '42501';
+  end if;
+  return coalesce(new, old);
+end $$;
+do $$ declare t text; begin
+  foreach t in array array['fv2_extra_entregador', 'fv2_movimentacao', 'fv2_liquidacao', 'fv2_transferencia', 'fv2_ajuste', 'fv2_estorno', 'fv2_saldo_conta', 'fv2_sessao_caixa', 'fv2_concessao', 'fv2_conta', 'fv2_competencia'] loop
+    execute format('create trigger %I before insert or update on %I for each row execute function fv2_bloquear_identidade_de_automacao()', t || '_sem_automacao', t);
+  end loop;
+end $$;
+create trigger fv2_obrigacao_sem_automacao before update on fv2_obrigacao for each row execute function fv2_bloquear_identidade_de_automacao();
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0025_fechamento_manual_caixa.sql', 'ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2', 'ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2');
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0026_entregadores_proprios.sql', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312');
 
 do $$ declare f record; begin
   -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
@@ -171,7 +244,7 @@ end $$;
 revoke fv2_guardiao from current_user;
 do $$ declare n int; txt text; begin
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 25 then raise exception 'FV2 pós: % migrações registradas (esperado 25)', n; end if;
+  if n <> 26 then raise exception 'FV2 pós: % migrações registradas (esperado 26)', n; end if;
   select string_agg(c.relname, ', ') into txt from pg_class c join pg_namespace s on s.oid = c.relnamespace
     where s.nspname = 'financeiro_v2' and c.relkind = 'r' and c.relname <> 'fv2_migracao'
       and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_administrador_corporativo','fv2_administrador_corporativo_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
