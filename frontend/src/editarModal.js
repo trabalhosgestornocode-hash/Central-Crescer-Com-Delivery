@@ -1,6 +1,7 @@
 // Modal de edição de produto: nome, categoria, status e preços.
 import { obterProduto, atualizarProduto } from "./api.js";
 import { fmtMoeda, fmtTexto, escapeHtml, toast } from "./utils.js";
+import { state } from "./state.js";
 
 const CANAL_LABEL = { balcao: "Balcão", ifood: "iFood", uber: "Uber", app: "App", outro: "Outro" };
 const TIPOS = [
@@ -37,17 +38,26 @@ export async function abrirEditarModal(produtoId) {
 }
 
 function render(p) {
-  const precoRows = (p.precos ?? []).length
-    ? p.precos.map((pr, i) => `
+  // Empresa própria (sem tabela comercial): sempre Balcão (primeiro) e iFood, um preço por canal, sem coluna Tabela.
+  // Preparação intermediária (vendavel === false) não tem preço de venda.
+  const propria = !state.exigeTabela;
+  const vendavel = p.vendavel !== false;
+  let precos = p.precos ?? [];
+  if (propria && vendavel) {
+    const sem = (c) => precos.find((x) => x.canal === c && !x.tabela) ?? { canal: c, tabela: null, preco: null, desatualizado: false };
+    precos = [sem("balcao"), sem("ifood"), ...precos.filter((x) => x.tabela || !["balcao", "ifood"].includes(x.canal))];
+  }
+  const precoRows = precos.length
+    ? precos.map((pr, i) => `
         <tr>
           <td>${CANAL_LABEL[pr.canal] || pr.canal}</td>
-          <td>${fmtTexto(pr.tabela)}</td>
+          ${propria ? "" : `<td>${fmtTexto(pr.tabela)}</td>`}
           <td class="num">
-            <input class="ed-preco" type="number" min="0" step="0.5" value="${pr.preco ?? ""}"
+            <input class="ed-preco" type="number" min="0" step="0.01" placeholder="0,00" value="${pr.preco ?? ""}"
               data-canal="${pr.canal}" data-tabela="${escapeHtml(pr.tabela ?? "")}" data-desat="${pr.desatualizado ? 1 : 0}" />
           </td>
         </tr>`).join("")
-    : `<tr><td colspan="3"><div class="estado"><p>Sem preços cadastrados.</p></div></td></tr>`;
+    : `<tr><td colspan="3"><div class="estado"><p>${propria && !vendavel ? "Preparação intermediária: não tem preço de venda." : "Sem preços cadastrados."}</p></div></td></tr>`;
 
   overlay.querySelector(".modal").innerHTML = `
     <button class="modal-close" aria-label="Fechar">×</button>
@@ -76,7 +86,7 @@ function render(p) {
     <div class="modal-sec-titulo">💵 Preços</div>
     <div class="tabela-wrap">
       <table class="grid grid-modal">
-        <thead><tr><th>Canal</th><th>Tabela</th><th class="num">Preço</th></tr></thead>
+        <thead><tr><th>Canal</th>${propria ? "" : "<th>Tabela</th>"}<th class="num">Preço</th></tr></thead>
         <tbody>${precoRows}</tbody>
       </table>
     </div>

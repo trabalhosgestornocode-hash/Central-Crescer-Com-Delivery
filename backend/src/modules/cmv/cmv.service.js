@@ -53,8 +53,10 @@ export async function listarMargensOficialOuComparacao(
   }
 
   if (!tabelaOficial && unidadeId && deps.exigeTabela && !(await deps.exigeTabela({ organizacaoId }))) {
-    // Empresa própria (sem modelo inicial Subway): não usa tabela comercial — sem erro, sem aviso, sem margem por tabela.
-    return { data: [], canal: canalResolvido, tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false };
+    // Empresa própria (sem modelo inicial Subway): não usa tabela comercial — sem erro nem aviso. O preço é um só por
+    // canal (Balcão, iFood), guardado sem tabela; devolve o que houver no canal.
+    const data = await deps.listarMargens({ organizacaoId, canal: canalResolvido });
+    return { data, canal: canalResolvido, tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false };
   }
 
   if (!tabelaOficial) {

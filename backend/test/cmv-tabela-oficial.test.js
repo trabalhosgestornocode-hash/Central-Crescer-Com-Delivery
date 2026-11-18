@@ -112,12 +112,14 @@ describe("listarMargensOficialOuComparacao", () => {
 
 describe("empresa própria (sem modelo inicial Subway) não exige tabela comercial", () => {
   const semTabela = async ({ canal }) => ({ canal, tabelaOficial: null });
-  const listarMargens = async () => { throw new Error("não deve ler margens"); };
+  const listarMargens = async (a) => { listarMargens.chamadas.push(a); return [{ produto_id: "p1", canal: a.canal, tabela: null, preco: 20 }]; };
+  listarMargens.chamadas = [];
 
-  test("sem tabela oficial e sem exigência: devolve vazio, sem erro", async () => {
-    const r = await listarMargensOficialOuComparacao({ organizacaoId: ORG_ID, unidadeId: UNIDADE_ID, canal: "balcao" },
+  test("sem tabela oficial e sem exigência: devolve os preços do canal (sem filtrar tabela), sem erro", async () => {
+    const r = await listarMargensOficialOuComparacao({ organizacaoId: ORG_ID, unidadeId: UNIDADE_ID, canal: "ifood" },
       { resolverTabela: semTabela, listarMargens, exigeTabela: async () => false });
-    assert.deepEqual(r, { data: [], canal: "balcao", tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false });
+    assert.deepEqual(listarMargens.chamadas.at(-1), { organizacaoId: ORG_ID, canal: "ifood" });
+    assert.deepEqual(r, { data: [{ produto_id: "p1", canal: "ifood", tabela: null, preco: 20 }], canal: "ifood", tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false });
   });
 
   test("franquia (exige tabela) sem tabela oficial continua com TABELA_NAO_CONFIGURADA", async () => {
