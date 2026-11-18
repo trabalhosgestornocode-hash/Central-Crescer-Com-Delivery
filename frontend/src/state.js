@@ -71,6 +71,10 @@ export const state = {
   // a troca REAL da tabela oficial.
   canal: "balcao",
   tabelasOficiais: { balcao: null, ifood: null },
+  // false = empresa própria (sem modelo inicial Subway): não usa tabela comercial; a tela esconde canal/tabela e avisos.
+  exigeTabela: true,
+  // false = a empresa não contratou Produtos/CMV: não há o que sincronizar, então nada de status "falha" no topo.
+  moduloCmv: true,
   // Catálogo de tabelas que a EMPRESA tem preço (opções do dropdown
   // "Comparar" e do seletor de nova tabela oficial). Vem do backend por
   // empresa — nunca uma lista global hardcoded. Preenchido em app.js#mostrarApp.
@@ -128,6 +132,8 @@ registrarResetDeContexto(() => {
   // navegador (ver comparacaoTabela.js) — nunca a de outra unidade.
   state.canal = "balcao";
   state.tabelasOficiais = { balcao: null, ifood: null };
+  state.exigeTabela = true;
+  state.moduloCmv = true;
   state.tabelasDisponiveis = { balcao: [], ifood: [] };
   state.tabelaComparacao = null;
 });
