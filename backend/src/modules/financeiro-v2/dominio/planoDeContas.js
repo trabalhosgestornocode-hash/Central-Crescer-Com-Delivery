@@ -97,6 +97,8 @@ const BASE = [
   f("SALARIOS_E_ENCARGOS", "Salários e encargos", "PESSOAL"),
   g("MARKETING", "Marketing", C.MARKETING),
   f("ANUNCIOS_E_DIVULGACAO", "Anúncios e divulgação", "MARKETING"),
+  // Marketing cobrado pela 99Food no relatório oficial: categoria própria, nunca misturada à publicidade da loja.
+  f("ANUNCIOS_99FOOD", "Anúncios 99Food", "MARKETING", { doSistema: true }),
   g("DESPESAS_PLATAFORMAS", "Despesas com plataformas", C.DESPESAS_PLATAFORMAS),
   f("MENSALIDADES_DE_PLATAFORMAS", "Mensalidades de plataformas", "DESPESAS_PLATAFORMAS"),
   g("DESPESAS_FINANCEIRAS", "Despesas financeiras", C.DESPESAS_FINANCEIRAS),
