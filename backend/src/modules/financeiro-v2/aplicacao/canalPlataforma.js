@@ -82,7 +82,7 @@ export function operacoesDoCanalPlataforma(b) {
           return {
             canal, competencia, fonteOficial: null, situacao: "SEM_FONTE_OFICIAL", dependeDeRelatorioOficial: true,
             totais: null, demonstrativos: [], historico: [], conferenciaSaipos,
-            pendencias: [{ codigo: "RELATORIO_OFICIAL_AUSENTE", mensagem: "Sem relatório oficial da 99Food: faturamento, comissões, taxas e repasses dependem da amostra real do arquivo (nada é presumido)." }],
+            pendencias: [{ codigo: "RELATORIO_OFICIAL_AUSENTE", mensagem: "Sem relatório oficial da 99Food nesta competência: faturamento, comissões, taxas e repasses dependem da importação do arquivo Dados da loja (nada é presumido)." }],
           };
         }
         const todos = await demonstrativosDoIfood(tx, cx, hoje);

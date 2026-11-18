@@ -266,7 +266,7 @@ ${d.historico.map((x) => { const [r, c] = REPASSE[x.situacaoRepasse] ?? [x.situa
   if (aba === "importacoes") return `${cabecalho(nome, `Importações pela fonte oficial · ${esc(d.competencia ?? "")}`)}${abasDoCanal}${importacoesDoCanal(ctx.importacoes, { erro: ctx.importacoesErro ?? null })}`;
   return `${cabecalho(nome, `Faturamento pela fonte oficial · ${esc(d.competencia ?? "")}`)}${abasDoCanal}
 <p>${selo(rs, cs)}${d.fonteOficial ? ` <span class="nota">Fonte: ${esc(d.fonteOficial)}</span>` : ""}</p>
-${d.dependeDeRelatorioOficial ? '<p class="aviso">Os relatórios oficiais da 99Food ainda não foram fornecidos: a área está pronta, mas nenhum número é presumido. Os valores aparecerão quando o leitor do arquivo real for implementado.</p>' : ""}
+${d.dependeDeRelatorioOficial ? '<p class="aviso">Ainda não há relatório oficial da 99Food nesta competência, e nenhum número é presumido. Para ver os valores, envie o arquivo Dados da loja na aba Importações.</p>' : ""}
 ${calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null })}
 <section class="resumo" aria-label="Números do canal ${esc(nome)}">${cards}</section>
 ${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de conciliação</h2><ul class="lista-simples">${d.pendencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${p.valorCentavos ? valor(p.valorCentavos) : ""}</li>`).join("")}</ul></section>` : ""}

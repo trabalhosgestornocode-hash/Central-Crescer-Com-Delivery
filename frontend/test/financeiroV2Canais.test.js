@@ -35,6 +35,8 @@ test("sem vendas: ausência de dados, nunca zero confirmado; iFood/99Food sem fo
   assert.match(ifood, /Preliminar/);
   const noventa = can.plataforma({ canal: "NOVENTA_E_NOVE_FOOD", competencia: "2026-11", situacao: "SEM_FONTE_OFICIAL", dependeDeRelatorioOficial: true, totais: null, historico: [], pendencias: [] });
   assert.match(noventa, /nenhum número é presumido/);
+  assert.match(noventa, /envie o arquivo Dados da loja na aba Importações/);
+  assert.doesNotMatch(noventa, /for implementado|ainda não foram fornecidos/);
   assert.match(noventa, /da 99Food/);
 });
 
