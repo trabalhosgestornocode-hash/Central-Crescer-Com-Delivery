@@ -89,7 +89,7 @@ describe("distribuição por operação (destino ATIVO + flag)", () => {
       pedidoApi({ uid: "x1", orderDetails: `${SUB}\n${DESCONHECIDO}`, date: `${D}T11:00:00-03:00` }),
       pedidoApi({ uid: "x2", orderDetails: `${ACAI}\n${DESCONHECIDO}`, date: `${D}T11:10:00-03:00` }),
       pedidoApi({ uid: "x3", orderDetails: `${SUB}\n${ACAI}`, date: `${D}T11:20:00-03:00` }),
-      pedidoApi({ uid: "x4", orderDetails: "", date: `${D}T11:30:00-03:00` }),
+      { ...pedidoApi({ uid: "x4", orderDetails: "", date: `${D}T11:30:00-03:00` }), despatchMode: "auto" },
     ];
     await sync();
     const motivos = ["x1", "x2", "x3", "x4"].map((u) => { const [p] = ativos(u); return [p.operacao, p.triagem_motivo, p.unidade_id]; });

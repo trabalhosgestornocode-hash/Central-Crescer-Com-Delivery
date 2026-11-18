@@ -10,7 +10,9 @@
 //   * linha SEM evidência (produto/complemento desconhecido) → o pedido inteiro vai para TRIAGEM, mesmo que as outras linhas
 //     sejam conhecidas (um item novo do Açaí junto de um sanduíche não pode levar dado do Açaí para a Subway);
 //   * evidências de operações diferentes (no pedido ou na mesma linha) → TRIAGEM por CONFLITO;
-//   * pedido sem linha → TRIAGEM por SEM_EVIDENCIA.
+//   * pedido sem descrição e com despacho manual na Foody → Açaí no Grau (regra do responsável, 18/11/2026: lançamento manual
+//     sem descrição é Açaí; no histórico, todo pedido sem descrição veio de lançamento manual);
+//   * qualquer outro pedido sem linha → TRIAGEM por SEM_EVIDENCIA.
 // Comparação de LINHA INTEIRA, nunca de palavra solta: "gotas de chocolate" é cobertura no Açaí e sabor de cookie na Subway.
 // O catálogo NÃO aprende em produção: só muda por PR (nova versão + teste de regressão com o hash).
 import { CATALOGO_OPERACAO } from "./foody.catalogo-operacao.js";
@@ -29,6 +31,7 @@ export const MOTIVO_TRIAGEM = Object.freeze({
  * Termos VALIDADOS (evidência independente do catálogo), por operação. Lista curta e explícita — cada termo com a origem.
  * Casamento por palavra inteira, sem acento/caixa.
  */
+const ORIGEM_FAMILIA = (n) => `confirmado pelo responsável em 18/11/2026; histórico: ${n} pedidos Subway e 0 dos 4.450 pedidos do Açaí`;
 export const TERMOS_VALIDADOS = Object.freeze({
   acai_no_grau: Object.freeze([
     Object.freeze({ termo: "acai", origem: "nome da operação; 0 ocorrências em pedidos Subway no histórico (15.330 pedidos)" }),
@@ -38,6 +41,28 @@ export const TERMOS_VALIDADOS = Object.freeze({
     Object.freeze({ termo: "subway", origem: "nome da operação; 0 ocorrências em pedidos Açaí no histórico" }),
     Object.freeze({ termo: "footlong", origem: "tamanho exclusivo do sanduíche Subway; 1.248 pedidos Subway e 0 do Açaí (nem em revisão) "
       + "no histórico de 15.336 pedidos (17/08–02/11/2026)" }),
+    // Lançamentos novos do cardápio ("sub frango ranch - novo!", "2 subs favoritos") não dependem mais de atualizar o catálogo.
+    Object.freeze({ termo: "sub", origem: "conferido em 18/11/2026: 9.802 pedidos Subway e 0 dos 4.450 pedidos do Açaí" }),
+    Object.freeze({ termo: "subs", origem: "conferido em 18/11/2026: 9.802 pedidos Subway e 0 dos 4.450 pedidos do Açaí" }),
+    // Famílias de produto confirmadas pelo responsável em 18/11/2026. "cookie" é só o singular: "creme de cookies" é do Açaí.
+    Object.freeze({ termo: "imperdiveis", origem: ORIGEM_FAMILIA(5614) }),
+    Object.freeze({ termo: "saladas?", origem: ORIGEM_FAMILIA(335) }),
+    Object.freeze({ termo: "cookie", origem: ORIGEM_FAMILIA(939) }),
+    Object.freeze({ termo: "kit com \\d+ cookies", origem: ORIGEM_FAMILIA(83) }),
+    Object.freeze({ termo: "cookies individuais", origem: ORIGEM_FAMILIA(87) }),
+    Object.freeze({ termo: "combos no precinho", origem: ORIGEM_FAMILIA(98) }),
+    Object.freeze({ termo: "combo do dia", origem: ORIGEM_FAMILIA(49) }),
+    Object.freeze({ termo: "aveia e mel", origem: ORIGEM_FAMILIA(1491) }),
+    Object.freeze({ termo: "integral com fibras", origem: ORIGEM_FAMILIA(2641) }),
+    Object.freeze({ termo: "frango", origem: ORIGEM_FAMILIA(8828) }),
+    Object.freeze({ termo: "steak", origem: ORIGEM_FAMILIA(7093) }),
+    Object.freeze({ termo: "carne seca", origem: ORIGEM_FAMILIA(204) }),
+    Object.freeze({ termo: "del valle", origem: ORIGEM_FAMILIA(198) }),
+    Object.freeze({ termo: "ice tea", origem: ORIGEM_FAMILIA(10) }),
+    Object.freeze({ termo: "batata rustica", origem: ORIGEM_FAMILIA(292) }),
+    Object.freeze({ termo: "molho extra", origem: ORIGEM_FAMILIA(11) }),
+    Object.freeze({ termo: "doritos", origem: ORIGEM_FAMILIA(80) }),
+    Object.freeze({ termo: "monster", origem: ORIGEM_FAMILIA(50) }),
   ]),
 });
 
@@ -91,7 +116,7 @@ export function linhasParaTriagem(detalhes, opcoes = {}) {
 
 /**
  * @param {string|null} detalhes texto `orderDetails` do pedido
- * @param {{catalogo?: object}} [opcoes] catálogo alternativo (só testes/avaliação)
+ * @param {{catalogo?: object, modoDespacho?: string|null}} [opcoes] catálogo alternativo (só testes/avaliação) e `despatchMode` da Foody
  * @returns {{ operacao: 'subway'|'acai_no_grau'|'triagem', motivo: string|null, linhas: number, desconhecidas: number,
  *   evidencias: {catalogo:number, termo:number}, catalogoVersao: string }}
  */
@@ -111,6 +136,7 @@ export function classificarPedidoCompartilhado(detalhes, opcoes = {}) {
     for (const o of ops) votos.add(o);
   }
   const base = { linhas: linhas.length, desconhecidas, evidencias: { catalogo: porCatalogo, termo: porTermo }, catalogoVersao: catalogo.versao };
+  if (linhas.length === 0 && String(opcoes.modoDespacho ?? "").trim().toLowerCase() === "manual") return { operacao: OPERACAO_COMPARTILHADA.ACAI_NO_GRAU, motivo: null, regra: "MANUAL_SEM_DESCRICAO", ...base };
   if (linhas.length === 0) return { operacao: RESULTADO_TRIAGEM, motivo: MOTIVO_TRIAGEM.SEM_EVIDENCIA, ...base };
   if (conflitoNaLinha || votos.size > 1) return { operacao: RESULTADO_TRIAGEM, motivo: MOTIVO_TRIAGEM.CONFLITO, ...base };
   if (desconhecidas > 0) return { operacao: RESULTADO_TRIAGEM, motivo: MOTIVO_TRIAGEM.ITEM_DESCONHECIDO, ...base };

@@ -167,7 +167,7 @@ describe("consumidores controlados", () => {
     assert.doesNotMatch(s, /supabase|createClient|psql|pg\b|fetch\(|\.from\(|process\.env/);
     const imports = [...s.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]).filter((i) => !i.startsWith("node:")).sort();
     assert.deepEqual(imports, ["../src/modules/foody/foody.catalogo-operacao.js", "../src/modules/foody/foody.catalogo-validadas.js",
-      "../src/modules/foody/foody.catalogo.gerador.js"]);
+      "../src/modules/foody/foody.catalogo.gerador.js", "../src/modules/foody/foody.classificacao.js"]);
     assert.doesNotMatch(semComentarios(readFileSync(join(MODULO, "foody.catalogo-validadas.js"), "utf8")), /import |\.from\(|fetch\(/, "lista pura");
   });
   test("server.js só alcança a camada Foody pela ponte embutida (sem import estático do módulo)", () => {

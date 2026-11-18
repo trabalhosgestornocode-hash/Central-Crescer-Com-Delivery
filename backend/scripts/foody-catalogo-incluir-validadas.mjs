@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { CATALOGO_OPERACAO } from "../src/modules/foody/foody.catalogo-operacao.js";
 import { LINHAS_VALIDADAS } from "../src/modules/foody/foody.catalogo-validadas.js";
+import { TERMOS_VALIDADOS } from "../src/modules/foody/foody.classificacao.js";
 import { incluirValidadas, renderizarCatalogo } from "../src/modules/foody/foody.catalogo.gerador.js";
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
@@ -16,11 +17,12 @@ if (!/^\d{4}-\d{2}-\d{2}\.\d+$/.test(versao ?? "") || versao <= CATALOGO_OPERACA
 }
 const saida = arg("saida") ?? join(dirname(fileURLToPath(import.meta.url)), "..", "src", "modules", "foody", "foody.catalogo-operacao.js");
 const r = incluirValidadas(CATALOGO_OPERACAO.linhas, LINHAS_VALIDADAS);
-if (r.incluidas === 0) { console.error("nenhuma linha nova: catálogo já contém todas as validadas (versão não muda)"); process.exit(3); }
+const termosAtuais = Object.fromEntries(Object.entries(TERMOS_VALIDADOS).map(([op, l]) => [op, l.map((x) => x.termo)]));
+if (r.incluidas === 0 && JSON.stringify(termosAtuais) === JSON.stringify(CATALOGO_OPERACAO.termosValidados)) { console.error("nenhuma linha nova: catálogo já contém todas as validadas (versão não muda)"); process.exit(3); }
 const corpo = {
   versao, hash: r.hash,
   origem: { ...CATALOGO_OPERACAO.origem, base: CATALOGO_OPERACAO.versao, validadasManualmente: LINHAS_VALIDADAS.length },
-  termosValidados: Object.fromEntries(Object.entries(CATALOGO_OPERACAO.termosValidados).map(([op, l]) => [op, [...l]])),
+  termosValidados: Object.fromEntries(Object.entries(TERMOS_VALIDADOS).map(([op, l]) => [op, l.map((x) => x.termo)])),
   linhas: r.linhas,
 };
 writeFileSync(saida, renderizarCatalogo(corpo), "utf8");

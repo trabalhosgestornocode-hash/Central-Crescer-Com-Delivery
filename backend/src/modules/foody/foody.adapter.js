@@ -130,7 +130,7 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, cata
   const nome = o.courier && typeof o.courier.courierName === "string" ? o.courier.courierName.trim() : "";
   const tipo = classificarTipoEntregador(o.courier);
   const detalhes = texto(o.orderDetails, 4000);
-  const op = compartilhado ? classificacaoCompartilhada(detalhes, catalogo) : classificarOperacao({ detalhesPedido: detalhes });
+  const op = compartilhado ? classificacaoCompartilhada(detalhes, catalogo, o.despatchMode) : classificarOperacao({ detalhesPedido: detalhes });
 
   const registro = {
     foody_uid: uid,
@@ -182,12 +182,12 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, cata
 }
 
 /** Classificação estrita → {operacao, motivo} no formato do adaptador. O motivo NUNCA cita produto (só contagens). */
-function classificacaoCompartilhada(detalhes, catalogo) {
-  const c = classificarPedidoCompartilhado(detalhes, catalogo ? { catalogo } : {});
+function classificacaoCompartilhada(detalhes, catalogo, modoDespacho) {
+  const c = classificarPedidoCompartilhado(detalhes, { ...(catalogo ? { catalogo } : {}), modoDespacho });
   const evid = `${c.linhas} linha(s): ${c.evidencias.catalogo} por catálogo, ${c.evidencias.termo} por termo validado, ${c.desconhecidas} desconhecida(s)`;
   return {
     operacao: c.operacao,
-    motivo: c.operacao === RESULTADO_TRIAGEM ? `Triagem (${c.motivo}) — catálogo ${c.catalogoVersao}; ${evid}.` : `Catálogo ${c.catalogoVersao}; ${evid}.`,
+    motivo: c.regra === "MANUAL_SEM_DESCRICAO" ? "Pedido lançado manualmente e sem descrição: regra do Açaí no Grau." : c.operacao === RESULTADO_TRIAGEM ? `Triagem (${c.motivo}) — catálogo ${c.catalogoVersao}; ${evid}.` : `Catálogo ${c.catalogoVersao}; ${evid}.`,
     triagemMotivo: c.operacao === RESULTADO_TRIAGEM ? c.motivo : null,
     catalogoVersao: c.catalogoVersao,
   };
