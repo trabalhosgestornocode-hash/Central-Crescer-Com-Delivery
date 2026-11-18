@@ -1,6 +1,6 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
-import { resolverTabelaComercialUnidade, normalizarCanalTabela } from "../../shared/tabelaComercial.js";
+import { resolverTabelaComercialUnidade, normalizarCanalTabela, empresaExigeTabelaComercial } from "../../shared/tabelaComercial.js";
 
 // Margem/CMV por produto x canal x tabela (view vw_produto_margem).
 //
@@ -42,7 +42,7 @@ export async function listarMargens({ organizacaoId, canal, tabela }) {
  */
 export async function listarMargensOficialOuComparacao(
   { organizacaoId, unidadeId, canal, tabelaComparacao },
-  deps = { resolverTabela: resolverTabelaComercialUnidade, listarMargens },
+  deps = { resolverTabela: resolverTabelaComercialUnidade, listarMargens, exigeTabela: empresaExigeTabelaComercial },
 ) {
   const canalResolvido = normalizarCanalTabela(canal);
   const { tabelaOficial } = await deps.resolverTabela({ unidadeId, canal: canalResolvido });
@@ -50,6 +50,11 @@ export async function listarMargensOficialOuComparacao(
   if (tabelaComparacao) {
     const data = await deps.listarMargens({ organizacaoId, canal: canalResolvido, tabela: tabelaComparacao });
     return { data, canal: canalResolvido, tabela: tabelaComparacao, tabelaOficial, comparando: true };
+  }
+
+  if (!tabelaOficial && unidadeId && deps.exigeTabela && !(await deps.exigeTabela({ organizacaoId }))) {
+    // Empresa própria (sem modelo inicial Subway): não usa tabela comercial — sem erro, sem aviso, sem margem por tabela.
+    return { data: [], canal: canalResolvido, tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false };
   }
 
   if (!tabelaOficial) {

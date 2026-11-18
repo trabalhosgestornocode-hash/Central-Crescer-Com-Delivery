@@ -92,3 +92,25 @@ export async function catalogoTabelasComerciais({ organizacaoId }, deps = {}) {
     ifood: [...set.ifood].sort((a, b) => a.localeCompare(b, "pt-BR")),
   };
 }
+
+/**
+ * A empresa PRECISA de tabela comercial oficial por unidade?
+ *
+ * Regra de negócio: só as franquias Subway usam as tabelas comerciais (A–F, AERO, Z…). Na criação da empresa
+ * escolhe-se um "modelo inicial" (organizacoes.modelo_origem_id): quem tem é Subway; quem não tem é empresa própria
+ * (Caramelle, Jah Açaí…) e nunca é cobrada de tabela. Guarda conservadora: uma empresa sem modelo inicial mas que JÁ
+ * tem tabelas cadastradas (franquia antiga) continua exigindo — o aviso some só onde não faz sentido.
+ * Na dúvida (erro de leitura, empresa desconhecida) devolve true: o comportamento anterior é preservado.
+ * @param {{organizacaoId: string|null|undefined}} p
+ * @param {{supabaseClient?: typeof supabase}} [deps]
+ * @returns {Promise<boolean>}
+ */
+export async function empresaExigeTabelaComercial({ organizacaoId }, deps = {}) {
+  if (!organizacaoId) return true;
+  const db = deps.supabaseClient ?? supabase;
+  const { data, error } = await db.from("organizacoes").select("modelo_origem_id, eh_modelo").eq("id", organizacaoId).maybeSingle();
+  if (error || !data) return true;
+  if (data.modelo_origem_id || data.eh_modelo) return true;
+  const catalogo = await catalogoTabelasComerciais({ organizacaoId }, deps);
+  return catalogo.balcao.length + catalogo.ifood.length > 0;
+}

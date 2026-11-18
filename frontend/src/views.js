@@ -67,6 +67,7 @@ function ligarEstadoUnidadeObrigatoria(root) {
 // isso só acontece em Configurações → Tabelas Comerciais (ver
 // configuracoes.js), com permissão própria.
 function bannerTabela() {
+  if (!state.exigeTabela) return ""; // empresa própria: sem tabela comercial, sem banner
   const canal = state.canal;
   const rotuloCanal = canalLabel(canal);
   const oficial = state.tabelasOficiais[canal];

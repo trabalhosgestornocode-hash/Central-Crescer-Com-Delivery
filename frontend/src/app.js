@@ -179,6 +179,9 @@ function atualizarNotif() {
 // (ver configuracoes.js), com permissão própria.
 const VALOR_OFICIAL = "__oficial__";
 function popularTabelas() {
+  // Empresa própria não usa tabela comercial: some o seletor de canal/tabela do topo.
+  const filtros = el(".global-filtros");
+  if (filtros) filtros.hidden = !state.exigeTabela;
   const sel = el("#tabela");
   const oficial = state.tabelasOficiais[state.canal];
   const rotuloOficial = oficial ? `★ Tabela oficial (${oficial})` : "★ Tabela oficial (não configurada)";
@@ -241,6 +244,7 @@ async function carregar() {
     // cliente supôs antes de perguntar) — mantém o seletor em sincronia
     // mesmo que outra aba/usuário tenha alterado a configuração da unidade.
     state.tabelasOficiais = { ...state.tabelasOficiais, [r.canal]: r.tabelaOficial };
+    state.exigeTabela = r.exigeTabela;
     state.atualizadoEm = Date.now();
     setSync("ok", "Sincronizado " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
   } catch (e) {
@@ -411,6 +415,7 @@ async function mostrarApp({ rotaInicial } = {}) {
   try {
     const { data } = await obterTabelasComerciaisUnidade();
     state.tabelasOficiais = { balcao: data?.tabelaBalcao ?? null, ifood: data?.tabelaIfood ?? null };
+    state.exigeTabela = data?.exigeTabela !== false;
     state.tabelasDisponiveis = {
       balcao: Array.isArray(data?.catalogo?.balcao) ? data.catalogo.balcao : [],
       ifood: Array.isArray(data?.catalogo?.ifood) ? data.catalogo.ifood : [],

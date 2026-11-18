@@ -224,6 +224,7 @@ body {
 .page-title { font-size: 20px; font-weight: 750; letter-spacing: -.3px; }
 .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .global-filtros { display: flex; gap: 8px; }
+.global-filtros[hidden] { display: none; }
 .select-sm, .toolbar select {
   padding: 8px 12px; border: 1.5px solid var(--linha); border-radius: 10px; background: var(--card); color: var(--texto); font-size: 14px; cursor: pointer;
   transition: border-color var(--t), box-shadow var(--t);

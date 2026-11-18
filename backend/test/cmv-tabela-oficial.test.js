@@ -109,3 +109,28 @@ describe("listarMargensOficialOuComparacao", () => {
     assert.equal(r.canal, "balcao");
   });
 });
+
+describe("empresa própria (sem modelo inicial Subway) não exige tabela comercial", () => {
+  const semTabela = async ({ canal }) => ({ canal, tabelaOficial: null });
+  const listarMargens = async () => { throw new Error("não deve ler margens"); };
+
+  test("sem tabela oficial e sem exigência: devolve vazio, sem erro", async () => {
+    const r = await listarMargensOficialOuComparacao({ organizacaoId: ORG_ID, unidadeId: UNIDADE_ID, canal: "balcao" },
+      { resolverTabela: semTabela, listarMargens, exigeTabela: async () => false });
+    assert.deepEqual(r, { data: [], canal: "balcao", tabela: null, tabelaOficial: null, comparando: false, exigeTabela: false });
+  });
+
+  test("franquia (exige tabela) sem tabela oficial continua com TABELA_NAO_CONFIGURADA", async () => {
+    await assert.rejects(
+      listarMargensOficialOuComparacao({ organizacaoId: ORG_ID, unidadeId: UNIDADE_ID, canal: "balcao" },
+        { resolverTabela: semTabela, listarMargens, exigeTabela: async () => true }),
+      (e) => e.codigo === "TABELA_NAO_CONFIGURADA");
+  });
+
+  test("sem unidade selecionada continua pedindo a unidade, mesmo em empresa própria", async () => {
+    await assert.rejects(
+      listarMargensOficialOuComparacao({ organizacaoId: ORG_ID, unidadeId: null, canal: "balcao" },
+        { resolverTabela: semTabela, listarMargens, exigeTabela: async () => false }),
+      (e) => e.codigo === "UNIDADE_NAO_SELECIONADA");
+  });
+});

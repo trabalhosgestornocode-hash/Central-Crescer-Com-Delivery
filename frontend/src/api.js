@@ -92,7 +92,7 @@ export async function carregarCmv(canal, tabelaComparacao) {
     categoria: r.categoria ?? catPorId[r.produto_id] ?? null,
     _status: statusCmv(r.cmv_pct),
   }));
-  return { linhas, canal: cmv.canal, tabela: cmv.tabela, tabelaOficial: cmv.tabelaOficial, comparando: !!cmv.comparando };
+  return { linhas, canal: cmv.canal, tabela: cmv.tabela, tabelaOficial: cmv.tabelaOficial, comparando: !!cmv.comparando, exigeTabela: cmv.exigeTabela !== false };
 }
 
 // ---------- Configuração da unidade (ver backend/src/modules/unidade) ----------

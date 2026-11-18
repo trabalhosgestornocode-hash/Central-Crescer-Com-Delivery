@@ -18,7 +18,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { auditarReq, ACOES } from "../../shared/auditoria.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
-import { resolverTabelasComerciaisUnidade, normalizarCanalTabela, catalogoTabelasComerciais } from "../../shared/tabelaComercial.js";
+import { resolverTabelasComerciaisUnidade, normalizarCanalTabela, catalogoTabelasComerciais, empresaExigeTabelaComercial } from "../../shared/tabelaComercial.js";
 import { fusoValido, lerCorteFuso } from "../checklist-operacional/checklistOperacional.fuso.js";
 
 // Defaults OFICIAIS do sistema para "Metas e Limites de CMV" quando a unidade
@@ -93,7 +93,8 @@ export async function obterTabelasComerciais({ unidadeId, organizacaoId }, deps 
   ]);
   // `catalogo` = opções permitidas (o que a empresa tem preço); `tabelaBalcao`
   // / `tabelaIfood` = o valor ATUAL oficial da unidade. São coisas diferentes.
-  return { ...atuais, catalogo };
+  const exigeTabela = await empresaExigeTabelaComercial({ organizacaoId }, sc);
+  return { ...atuais, catalogo, exigeTabela };
 }
 
 /**
