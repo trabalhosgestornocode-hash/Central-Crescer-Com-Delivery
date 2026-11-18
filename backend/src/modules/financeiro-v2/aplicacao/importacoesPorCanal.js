@@ -43,12 +43,14 @@ export const FORMATOS_POR_CANAL = Object.freeze({
       motivo: "Ainda não existe leitor do relatório oficial de pedidos do iFood. Precisamos de um arquivo oficial real para validar o layout; sem ele, o detalhe diário não é processado." },
   ]),
   NOVENTA_E_NOVE_FOOD: Object.freeze([
-    { id: "NOVENTA_E_NOVE_FOOD_RELATORIO", tipoRelatorio: null, nome: "Relatório oficial da 99Food", principal: true, arquivo: false, disponivel: false,
-      motivo: "Ainda não recebemos um relatório oficial da 99Food. Precisamos validar o primeiro relatório oficial antes de aceitar qualquer importação: nenhum formato é presumido." },
+    { id: "NOVENTA_E_NOVE_FOOD_RELATORIO", tipoRelatorio: "NOVENTA_E_NOVE_FOOD_RELATORIO", nome: "Relatório oficial da 99Food (XLSX ou ZIP)", principal: true, arquivo: true, disponivel: true,
+      descricao: "Dados da loja por dia. Importar só guarda as linhas; depois a prévia mostra o que entra na DRE e o que fica em conferência antes de aplicar.",
+      dica: "Envie o arquivo Dados da loja exportado pela 99Food, em XLSX ou no ZIP original." },
   ]),
 });
 
-const FONTE_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "IFOOD", NOVENTA_E_NOVE_FOOD: "NOVENTA_E_NOVE_FOOD" });
+// A 99Food entra como fonte "OUTRO" (sem migração); o tipo do relatório identifica o canal.
+const FONTE_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "IFOOD", NOVENTA_E_NOVE_FOOD: "OUTRO" });
 
 export function operacoesDeImportacoesPorCanal(b, { fontes }) {
   return {
@@ -69,6 +71,7 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
           };
         });
         const importacoes = (await tx.listar(cx, TIPO.IMPORTACAO, { onde: { fonte: FONTE_DO_CANAL[canal] } }))
+          .filter((i) => canal !== "NOVENTA_E_NOVE_FOOD" || i.tipoRelatorio === "NOVENTA_E_NOVE_FOOD_RELATORIO")
           .sort((a, x) => String(x.criadoEm).localeCompare(String(a.criadoEm))).slice(0, 40)
           .map((i) => ({
             id: i.id, tipoRelatorio: i.tipoRelatorio, relatorio: nomeDoRelatorio(i.tipoRelatorio), periodoInicio: i.periodoInicio, periodoFim: i.periodoFim,

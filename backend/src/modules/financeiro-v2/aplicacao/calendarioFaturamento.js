@@ -19,6 +19,7 @@ import { exigirTexto, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { aberturaDaUnidade } from "./abertura.js";
 import { demonstrativosDoIfood } from "./canalPlataforma.js";
 import { leituraDaConciliacaoIfood } from "./conciliacaoIfood.js";
+import { leituraDoRelatorio99Food } from "./relatorio99Food.js";
 import { diasDeFechamento, ehProvisoria } from "./fechamentoManual.js";
 import { itensDoLiquidoEsperado } from "./vendas.js";
 
@@ -209,11 +210,23 @@ async function fonteIfood(tx, cx, { inicio, fim, hoje }) {
 async function fonte99Food(tx, cx, { inicio, fim }) {
   const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal: "NOVENTA_E_NOVE_FOOD" } })).filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
   const porDia = agrupar(vendas, (v) => v.dataVenda);
-  return (data) => {
+  const relatorio = await leituraDoRelatorio99Food(tx, cx, { inicio, fim });
+  const base = (data) => {
     const dia = vazio();
     const lista = porDia.get(data) ?? [];
-    dia.observacoes.push("Nenhum relatório oficial da 99Food importado: o dia aparece sem dados (não é zero confirmado).");
-    if (!lista.length) return dia;
+    const oficial = relatorio?.porDia.get(data) ?? null;
+    if (oficial) {
+      dia.noventaOficial = oficial;
+      dia.estados.add(ESTADO_DIA.IMPORTADO);
+      if (!oficial.aplicado) dia.pendencias.push({ codigo: "RELATORIO_NAO_APLICADO", quantidade: 1, mensagem: "Relatório oficial importado, ainda não aplicado ao Financeiro." });
+      if (oficial.saipos && (oficial.saipos.diferencaPedidos || oficial.saipos.diferencaItensCentavos)) dia.divergencias.push({ codigo: "DIFERENCA_SAIPOS_99FOOD", diferencaCentavos: oficial.saipos.diferencaItensCentavos, mensagem: `SAIPOS com ${oficial.saipos.pedidos} pedido(s) e relatório oficial com ${oficial.quantidade}: pendente de conferência.` });
+      if (!oficial.saipos) dia.pendencias.push({ codigo: "SAIPOS_SEM_PEDIDOS_99FOOD", quantidade: 1, mensagem: "A SAIPOS não tem pedidos 99Food neste dia para comparar." });
+      if (oficial.diferencaRepasseCentavos) dia.divergencias.push({ codigo: "REPASSE_99FOOD_DIVERGENTE", diferencaCentavos: oficial.diferencaRepasseCentavos, mensagem: "O resultado preliminar do dia não fecha com o repasse informado: pendente de conferência." });
+      dia.pendencias.push({ codigo: "REPASSE_SEM_CICLO", quantidade: 1, mensagem: "Repasse informado sem data e sem ciclo oficial: aguardando identificação no extrato." });
+    } else dia.observacoes.push("Nenhum relatório oficial da 99Food importado: o dia aparece sem dados (não é zero confirmado).");
+    const soNaSaipos = relatorio?.soNaSaipos.get(data);
+    if (soNaSaipos) dia.pendencias.push({ codigo: "PEDIDOS_99FOOD_SO_NA_SAIPOS", quantidade: soNaSaipos.pedidos, mensagem: "Há pedidos 99Food na SAIPOS neste dia, mas o relatório oficial não traz o dia." });
+    if (!lista.length) { if (dia.pendencias.length) dia.estados.add(ESTADO_DIA.CONFERENCIA_PENDENTE); if (dia.divergencias.length) dia.estados.add(ESTADO_DIA.DIVERGENCIA); return dia; }
     const provisorias = lista.filter(ehProvisoria);
     const daSaipos = lista.filter((v) => v.fonte?.sistema === "SAIPOS");
     dia.registro = { vendas: lista.length, brutoCentavos: soma(lista, (v) => v.brutoCentavos), origem: { SAIPOS: daSaipos.length, MANUAL: lista.length - daSaipos.length }, provisorias: { vendas: provisorias.length, valorCentavos: soma(provisorias, (v) => v.brutoCentavos) } };
@@ -225,6 +238,7 @@ async function fonte99Food(tx, cx, { inicio, fim }) {
     if (dia.divergencias.length) dia.estados.add(ESTADO_DIA.DIVERGENCIA);
     return dia;
   };
+  return { base, diaria: Boolean(relatorio) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------- operações
@@ -244,10 +258,10 @@ export function operacoesDoCalendarioFaturamento(b) {
         const abertura = await aberturaDaUnidade(tx, cx);
         // Início do controle: o dia seguinte ao corte da abertura da unidade; sem abertura, o primeiro dia do mês corrente.
         const inicioDoControle = abertura?.dataDeCorte ? somarDias(abertura.dataDeCorte, 1) : primeiroDiaDe(hoje.slice(0, 7));
-        let diaDe; let cobertura = null; let ifoodDiario = false;
+        let diaDe; let cobertura = null; let ifoodDiario = false; let noventaDiario = false;
         if (CANAIS_SAIPOS.includes(canal)) diaDe = await fonteSaipos(tx, cx, { canal, inicio, fim, hoje });
         else if (canal === "IFOOD") { const f = await fonteIfood(tx, cx, { inicio, fim, hoje }); diaDe = f.base; cobertura = f.cobertura; ifoodDiario = f.diaria; }
-        else diaDe = await fonte99Food(tx, cx, { inicio, fim });
+        else { const f = await fonte99Food(tx, cx, { inicio, fim }); diaDe = f.base; noventaDiario = f.diaria; }
 
         const dias = diasDoMes(inicio, fim).map((data) => {
           const d = diaDe(data);
@@ -285,11 +299,11 @@ export function operacoesDoCalendarioFaturamento(b) {
         const saipos = CANAIS_SAIPOS.includes(canal);
         const observacoes = canal === "IFOOD"
           ? [ifoodDiario ? "Dias com relatório oficial de conciliação do iFood têm valores próprios. Dias fora do arquivo continuam sem registro." : "Somente o demonstrativo oficial do iFood. Ele cobre períodos: os valores não são repartidos por dia."]
-          : canal === "NOVENTA_E_NOVE_FOOD" ? ["Somente relatórios oficiais da 99Food. Sem relatório importado, os dias aparecem sem dados (nunca zero confirmado)."]
+          : canal === "NOVENTA_E_NOVE_FOOD" ? [noventaDiario ? "Dias com relatório oficial da 99Food têm valores próprios. Dias fora do arquivo continuam sem registro." : "Somente relatórios oficiais da 99Food. Sem relatório importado, os dias aparecem sem dados (nunca zero confirmado)."]
           : ["Uma importação da SAIPOS pode alimentar os dois canais; cada calendário mostra só os registros do seu canal."];
         return {
           canal, mes, hoje, controle: { inicio: inicioDoControle, origem: abertura?.dataDeCorte ? "ABERTURA" : "MES_CORRENTE" }, observacoes,
-          semFonteOficial: canal === "NOVENTA_E_NOVE_FOOD", granularidadeDiaria: saipos || ifoodDiario,
+          semFonteOficial: canal === "NOVENTA_E_NOVE_FOOD" && !noventaDiario, granularidadeDiaria: saipos || ifoodDiario || noventaDiario,
           acoes: {
             abrirImportacoes: saipos && tem(ACAO.VER), importar: saipos && tem(ACAO.IMPORTAR), registrarFechamento: saipos && tem(ACAO.REGISTRAR),
             registrarFaturamentoProvisorio: saipos && tem(ACAO.REGISTRAR), substituirProvisorio: saipos && tem(ACAO.CANCELAR), abrirConferencias: tem(ACAO.VER),
@@ -330,6 +344,7 @@ export function operacoesDoCalendarioFaturamento(b) {
             if (CANAIS_SAIPOS.includes(canal) || canal === "NOVENTA_E_NOVE_FOOD") {
               const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal } })).filter((v) => v.dataVenda === data);
               if (vendas.length) falhar(CODIGO.OPERACAO_INVALIDA, "Este dia já tem venda registrada neste canal: não pode ser marcado como sem operação.", { motivo: "DIA_COM_REGISTRO" });
+              if (canal === "NOVENTA_E_NOVE_FOOD" && (await leituraDoRelatorio99Food(tx, cx, { inicio: data, fim: data }))?.porDia.has(data)) falhar(CODIGO.OPERACAO_INVALIDA, "Este dia tem dados no relatório oficial da 99Food: não pode ser marcado como sem operação.", { motivo: "DIA_COM_REGISTRO" });
             } else {
               const cobre = (await demonstrativosDoIfood(tx, cx, b.hoje())).some((d) => d.periodoInicio <= data && data <= d.periodoFim);
               if (cobre) falhar(CODIGO.OPERACAO_INVALIDA, "Este dia está dentro de um demonstrativo oficial do iFood: não pode ser marcado como sem operação.", { motivo: "DIA_COM_REGISTRO" });

@@ -204,6 +204,11 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
         let substituidos = 0;
         if (imp.substituiImportacaoId) {
           const anterior = await b.obterOuFalhar(tx, cx, TIPO.IMPORTACAO, imp.substituiImportacaoId, "Importação anterior");
+          if (adaptador.substituicaoCompleta) {
+            const presentes = new Set(previa.analise.registros.map((r) => r.chave));
+            const faltam = (await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { importacaoId: anterior.id, situacao: SITUACAO_REGISTRO_FONTE.ATIVO } })).filter((r) => !presentes.has(r.chaveIdempotencia));
+            if (faltam.length) falhar(CODIGO.IMPORTACAO_INVALIDA, `A versão corrigida não traz ${faltam.length} registro(s) da versão anterior: envie o relatório completo do período.`, { faltam: faltam.length });
+          }
           if (anterior.estado === E.SUBSTITUIDO) falhar(CODIGO.IMPORTACAO_INVALIDA, "A importação anterior já foi substituída por outra versão.");
           const ativos = await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { importacaoId: anterior.id, situacao: SITUACAO_REGISTRO_FONTE.ATIVO } });
           for (const r of ativos) {
@@ -234,6 +239,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
           inseridos: previa.novos.length, jaImportados: previa.jaImportados.length, conflitosNaoGravados: previa.conflitos.length,
           duplicadosNoArquivo: previa.analise.duplicadosNoArquivo.length, divergencias: previa.divergencias.length,
           registrosSubstituidos: substituidos, controles: previa.analise.controles,
+          ...(adaptador.guardarConflitos ? { conflitos: previa.conflitos.map((r) => ({ chave: r.chave, impressao: r.impressao, data: r.data, valorCentavos: r.valorCentavos, tipoRegistro: r.tipoRegistro, idExterno: r.idExterno, identificacao: r.identificacao, linha: r.linha, dados: r.dados, original: r.original })) } : {}),
           observacao: "Importar não confirma, não concilia e não homologa: os registros entram como NÃO CONFERIDOS e sem efeito financeiro.",
         };
         imp = await b.alterar(tx, cx, TIPO.IMPORTACAO, imp, {

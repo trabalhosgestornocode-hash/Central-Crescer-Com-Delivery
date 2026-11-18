@@ -40,7 +40,7 @@ async function unidade(opcoes = {}) {
   return { n, W, caixa, subir, confirmar, aplicar, canal, calendario };
 }
 
-test("formatos por canal: SAIPOS pronto; iFood pela conciliação oficial e pelo demonstrativo; 99Food nada disponível (sem formato presumido)", async () => {
+test("formatos por canal: SAIPOS pronto; iFood pela conciliação oficial e pelo demonstrativo; 99Food pelo relatório oficial", async () => {
   const { canal } = await unidade();
   const s = await canal("SAIPOS");
   assert.equal(s.unidade.nome, "Unidade sintética");
@@ -53,9 +53,8 @@ test("formatos por canal: SAIPOS pronto; iFood pela conciliação oficial e pelo
   assert.match(i.formatos[2].motivo, /contrato sintético/);
   assert.match(i.formatos[3].motivo, /não existe leitor/);
   const n99 = await canal("NOVENTA_E_NOVE_FOOD");
-  assert.equal(n99.algumFormatoDisponivel, false);
-  assert.ok(n99.formatos.every((f) => !f.disponivel && !f.aceitaArquivo));
-  assert.match(n99.formatos[0].motivo, /validar o primeiro relatório oficial/);
+  assert.equal(n99.algumFormatoDisponivel, true);
+  assert.deepEqual(n99.formatos.map((f) => [f.id, f.disponivel, f.aceitaArquivo, f.homologado]), [["NOVENTA_E_NOVE_FOOD_RELATORIO", true, true, true]]);
   await rejeita(canal("OUTRO"), CODIGO.ENTRADA_INVALIDA);
   // Coerência com a camada HTTP: só o que está liberado para arquivo pode ser enviado.
   for (const f of Object.values(FORMATOS_POR_CANAL).flat()) assert.equal(Boolean(f.tipoRelatorio && FONTE_DO_RELATORIO[f.tipoRelatorio]), f.arquivo === true, f.id);
@@ -193,10 +192,10 @@ test("iFood: período que se sobrepõe a outro demonstrativo é bloqueado na pr�
   assert.equal(vizinho.podeConfirmar, true);
 });
 
-test("iFood e 99Food: arquivo sem layout validado é RECUSADO (apuração iFood sintética, relatório de pedidos e qualquer formato 99Food); nada é confirmável", async () => {
+test("iFood e 99Food: arquivo sem layout validado é RECUSADO (apuração iFood sintética, relatório de pedidos e formato 99Food desconhecido); nada é confirmável", async () => {
   const { n, W } = await unidade();
   const arq = aBase64(planilha([ficha("02/11/2026 12:00", "Dinheiro", 15)]));
-  for (const tipo of ["IFOOD_APURACAO", "IFOOD_PEDIDOS", "NOVENTA_E_NOVE_FOOD_RELATORIO", "NOVENTA_E_NOVE_FOOD_VENDAS", "99FOOD"]) {
+  for (const tipo of ["IFOOD_APURACAO", "IFOOD_PEDIDOS", "NOVENTA_E_NOVE_FOOD_VENDAS", "99FOOD"]) {
     await rejeita(async () => W("/importacao/receber", { tipoRelatorio: tipo, periodoInicio: "2026-11-02", periodoFim: "2026-11-02", arquivoBase64: arq, nomeArquivo: "relatorio.xlsx" }), CODIGO.ENTRADA_INVALIDA);
   }
   // Mesmo chamando o núcleo direto, a fonte 99Food não existe e o tipo SAIPOS não vale como 99Food.

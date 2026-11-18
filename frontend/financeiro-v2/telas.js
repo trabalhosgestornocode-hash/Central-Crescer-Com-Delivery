@@ -127,6 +127,15 @@ function noArvore(no, nivel = 0) {
 export const arvore = (componentes) => `<ul class="nos nos--raiz">${(componentes ?? []).map((n) => noArvore(n)).join("")}</ul>`;
 
 // ------------------------------------------------------------------------------------------- DRE
+/** Pendência da 99Food sempre visível na DRE: o resultado preliminar fica separado do repasse informado. */
+function pendencia99Food(lista = []) {
+  const p = lista.find((x) => x.tipo === "REPASSE_99FOOD_EM_CONFERENCIA");
+  if (!p) return "";
+  return `<section class="card card--alertas" data-pendencia-99food aria-labelledby="t-99food"><h2 id="t-99food">99Food: resultado gerencial preliminar</h2>
+<dl class="ficha ficha--compacta"><dt>Resultado preliminar</dt><dd>${valor(p.resultadoPreliminarCentavos)}</dd><dt>Repasse informado</dt><dd>${valor(p.repasseInformadoCentavos)}</dd><dt>Diferença líquida</dt><dd>${valor(p.valorCentavos)}</dd><dt>Soma absoluta das diferenças</dt><dd>${valor(p.somaAbsolutaCentavos)}</dd><dt>Dias divergentes</dt><dd>${esc(String(p.diasDivergentes))}</dd><dt>Situação</dt><dd>Pendente de conferência</dd></dl>
+<p class="nota">A diferença não é receita nem despesa e não gerou lançamento.</p></section>`;
+}
+
 export function dre(r, { unidadeNome = "" } = {}) {
   // 06D: competência homologada cuja apuração atual NÃO reproduz o retrato → valores da versão homologada (sem expansões).
   const usarVersao = r.versaoHomologada && !r.versaoHomologada.reproduz;
@@ -139,6 +148,7 @@ ${r.versaoHomologada ? `<p class="${r.versaoHomologada.reproduz ? "nota nota--ho
 <section class="resumo" aria-label="Resumo">
   ${["FATURAMENTO_BRUTO_PROPRIO", "RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_GERENCIAL"].map((c) => `<article class="card card--sec"><h3>${esc(L[c].nome.replace(/^\([^)]*\)\s*/, ""))}</h3><p>${valor(L[c].valorCentavos)}</p>${selo(L[c].situacao)}</article>`).join("")}
 </section>
+${usarVersao ? "" : pendencia99Food(r.pendencias)}
 ${barraCadaCem(r.cadaCem)}
 <section class="card card--dre" aria-labelledby="t-dre"><div class="card-topo"><h2 id="t-dre">Demonstrativo</h2><p class="nota">Valores e % do faturamento bruto. Abra uma linha para ver a composição.</p></div>
   <ol class="dre">${linhas.map((l) => `<li class="dre-linha${subtotal(l.codigo) ? " dre-linha--subtotal" : ""}${l.codigo === "RESULTADO_GERENCIAL" ? " dre-linha--resultado" : ""}" data-codigo="${esc(l.codigo)}">

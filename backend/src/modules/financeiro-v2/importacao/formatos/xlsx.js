@@ -41,7 +41,8 @@ export function abrirZip(bytes) {
   let consumido = 0;
   return {
     nomes: () => [...entradas.keys()],
-    ler(nome) {
+    ler(nome) { return this.lerBytes(nome)?.toString("utf8") ?? null; },
+    lerBytes(nome) {
       const e = entradas.get(nome);
       if (!e) return null;
       if (e.tamanho > LIMITE_ENTRADA_BYTES) invalido("entrada grande demais");
@@ -59,9 +60,19 @@ export function abrirZip(bytes) {
       } else invalido("método de compressão não suportado");
       consumido += saida.length;
       if (consumido > LIMITE_TOTAL_BYTES) invalido("conteúdo descompactado grande demais");
-      return saida.toString("utf8");
+      return saida;
     },
   };
+}
+
+/** ZIP de exportação com UM XLSX dentro devolve o XLSX; um XLSX comum volta como veio. Nenhum nome de entrada vira caminho. */
+export function xlsxDentroDoZip(bytes) {
+  const zip = abrirZip(bytes);
+  const nomes = zip.nomes();
+  if (nomes.includes("[Content_Types].xml")) return bytes;
+  const planilhas = nomes.filter((n) => n.toLowerCase().endsWith(".xlsx") && !n.includes("/") && !n.includes("\\"));
+  if (planilhas.length !== 1 || nomes.length !== 1) invalido("o ZIP precisa conter exatamente uma planilha XLSX");
+  return new Uint8Array(zip.lerBytes(planilhas[0]));
 }
 
 const ENTIDADES = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'" };
