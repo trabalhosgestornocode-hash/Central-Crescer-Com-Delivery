@@ -25,7 +25,7 @@ import { movimentosDoPeriodo } from "./movimentosDeCaixa.js";
 export const FORNECEDOR_DAS_SANGRIAS = "Sangrias";
 export const CATEGORIA_DAS_SANGRIAS = "OUTRAS_DESPESAS";
 export const PREFIXO_DA_FONTE = "sangria:";
-export const SITUACAO_RETIRADA = Object.freeze({ NOVA: "NOVA", JA_LANCADA_MANUALMENTE: "JA_LANCADA_MANUALMENTE", JA_LANCADA_PELA_IMPORTACAO: "JA_LANCADA_PELA_IMPORTACAO" });
+export const SITUACAO_RETIRADA = Object.freeze({ NOVA: "NOVA", JA_LANCADA_MANUALMENTE: "JA_LANCADA_MANUALMENTE", JA_LANCADA_EM_CONTA_UNICA: "JA_LANCADA_EM_CONTA_UNICA", JA_LANCADA_PELA_IMPORTACAO: "JA_LANCADA_PELA_IMPORTACAO" });
 
 const norm = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
 const chaveDaRetirada = (r) => `${PREFIXO_DA_FONTE}${sha256(r.chaveIdempotencia).slice(0, 32)}`;
@@ -34,28 +34,89 @@ const descricaoDaRetirada = (r) => `Retirada de Frente de Caixa (SAIPOS) em ${r.
 /**
  * Situação de cada retirada do período em relação ao que já existe no Contas a Pagar. Só LEITURA (usada pela prévia e, de novo, DENTRO da
  * transação de cada lançamento para não duplicar nada que tenha sido lançado entre a prévia e a confirmação).
+ *
+ * Como a equipe lança à mão: a retirada é paga em dinheiro pelo caixa, mas a conta pode estar em QUALQUER fornecedor ("Sangrias", o nome de quem
+ * recebeu, o tipo de compra) e uma conta pode juntar VÁRIAS retiradas do dia (ex.: R$ 120 + R$ 50 lançados como R$ 170). Por isso o
+ * reconhecimento é pelo PAGAMENTO EM DINHEIRO pelo caixa físico na mesma data (de qualquer fornecedor), 1 para 1 por valor e, depois, por SOMA.
+ * Na dúvida o sistema NÃO lança: duplicar despesa é o erro caro.
  */
 export async function situacaoDasRetiradas(tx, cx, inicio, fim) {
   const retiradas = (await movimentosDoPeriodo(tx, cx, inicio, fim))
     .filter((r) => r.dados.natureza === N.SANGRIA && r.dados.considerar)
     .sort((a, x) => a.dataReferencia.localeCompare(x.dataReferencia) || a.linha - x.linha);
   const caixas = (await tx.listar(cx, TIPO.CONTA)).filter((c) => c.ativa && c.tipo === TIPO_CONTA.CAIXA_FISICO);
-  const fornecedor = (await tx.listar(cx, TIPO.CONTRAPARTE)).find((x) => x.tipo === "FORNECEDOR" && norm(x.nome) === norm(FORNECEDOR_DAS_SANGRIAS)) ?? null;
-  const contas = fornecedor ? (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { contraparteId: fornecedor.id } })).filter((o) => o.situacao !== SITUACAO_TITULO.CANCELADA) : [];
-  const daImportacao = new Map(contas.filter((o) => String(o.fonte?.idExterno ?? "").startsWith(PREFIXO_DA_FONTE)).map((o) => [o.fonte.idExterno, o]));
-  const manuais = contas.filter((o) => !String(o.fonte?.idExterno ?? "").startsWith(PREFIXO_DA_FONTE));
-  const usadas = new Set(); // casamento 1 para 1: cada conta lançada à mão cobre UMA retirada
-  const itens = retiradas.map((r) => {
-    const chave = chaveDaRetirada(r);
-    const base = { registroId: r.id, chave, data: r.dataReferencia, valorCentavos: r.dados.valorAbsolutoCentavos, descricao: r.dados.descricaoOriginal, linha: r.linha, importacaoId: r.importacaoId };
-    const feita = daImportacao.get(chave);
-    if (feita) return { ...base, situacao: SITUACAO_RETIRADA.JA_LANCADA_PELA_IMPORTACAO, obrigacaoId: feita.id, quitada: feita.saldoCentavos === 0 };
-    const o = manuais.find((x) => !usadas.has(x.id) && x.vencimento === base.data && x.valorBaseCentavos === base.valorCentavos);
-    if (o) { usadas.add(o.id); return { ...base, situacao: SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE, obrigacaoId: o.id, descricaoDaConta: o.descricao ?? null, quitada: o.saldoCentavos === 0 }; }
-    return { ...base, situacao: SITUACAO_RETIRADA.NOVA };
-  });
+  const caixa = caixas.length === 1 ? caixas[0] : null;
+  const contrapartes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x]));
+  const fornecedor = [...contrapartes.values()].find((x) => x.tipo === "FORNECEDOR" && norm(x.nome) === norm(FORNECEDOR_DAS_SANGRIAS)) ?? null;
+  const contas = (await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => o.situacao !== SITUACAO_TITULO.CANCELADA);
+  const porId = new Map(contas.map((o) => [o.id, o]));
+  const daFuncao = (o) => String(o.fonte?.idExterno ?? "").startsWith(PREFIXO_DA_FONTE);
+  const daImportacao = new Map(contas.filter(daFuncao).map((o) => [o.fonte.idExterno, o]));
+  // Categoria da conta já lançada (ex.: diária vai para outra categoria): mostrada ao lado para a pessoa reconhecer.
+  const nomeDaCategoria = new Map((await tx.listar(cx, TIPO.CATEGORIA)).map((x) => [x.codigo, x.nome]));
+  const categoriaDoLancamento = new Map((await tx.listar(cx, TIPO.LANCAMENTO)).map((l) => [l.id, l.categoria]));
+
+  // Pagamentos em dinheiro pelo caixa físico no período, por conta e dia (de qualquer fornecedor; só o que NÃO foi lançado por esta função).
+  const entradas = [];
+  if (caixa) {
+    const saidas = new Map((await tx.listar(cx, TIPO.MOVIMENTACAO)).filter((m) => m.contaId === caixa.id && m.sentido === "SAIDA" && m.dataEfetiva >= inicio && m.dataEfetiva <= fim).map((m) => [m.id, m]));
+    const porContaDia = new Map();
+    for (const l of await tx.listar(cx, TIPO.LIQUIDACAO)) {
+      const m = saidas.get(l.movimentacaoId);
+      const o = porId.get(l.alvoId);
+      if (!m || !o || l.alvoTipo !== "OBRIGACAO" || l.situacao === "ESTORNADA" || daFuncao(o)) continue;
+      const k = `${o.id}|${m.dataEfetiva}`;
+      porContaDia.set(k, { obrigacao: o, data: m.dataEfetiva, valorCentavos: (porContaDia.get(k)?.valorCentavos ?? 0) + l.valorCentavos - (l.estornadoCentavos ?? 0) });
+    }
+    for (const e of porContaDia.values()) if (e.valorCentavos > 0) entradas.push(e);
+  }
+  // Contas do fornecedor "Sangrias" lançadas à mão com vencimento na data, mesmo que não tenham sido pagas pelo caixa (ex.: ainda abertas).
+  for (const o of contas.filter((x) => fornecedor && x.contraparteId === fornecedor.id && !daFuncao(x))) {
+    if (o.vencimento >= inicio && o.vencimento <= fim && !entradas.some((e) => e.obrigacao.id === o.id)) entradas.push({ obrigacao: o, data: o.vencimento, valorCentavos: o.valorBaseCentavos });
+  }
+  const dasSangrias = (e) => (fornecedor && e.obrigacao.contraparteId === fornecedor.id ? 0 : 1);
+  const descreve = (e) => ({ obrigacaoId: e.obrigacao.id, fornecedorDaConta: contrapartes.get(e.obrigacao.contraparteId)?.nome ?? null, descricaoDaConta: e.obrigacao.descricao ?? null, categoriaDaConta: nomeDaCategoria.get(categoriaDoLancamento.get(e.obrigacao.lancamentoId)) ?? null, valorDaContaCentavos: e.valorCentavos, quitada: e.obrigacao.saldoCentavos === 0 });
+
+  const itens = [];
+  const datas = [...new Set(retiradas.map((r) => r.dataReferencia))];
+  for (const data of datas) {
+    const doDia = retiradas.filter((r) => r.dataReferencia === data).map((r) => ({
+      registroId: r.id, chave: chaveDaRetirada(r), data, valorCentavos: r.dados.valorAbsolutoCentavos, descricao: r.dados.descricaoOriginal, linha: r.linha, importacaoId: r.importacaoId,
+    }));
+    const pool = entradas.filter((e) => e.data === data).sort((a, x) => dasSangrias(a) - dasSangrias(x) || x.valorCentavos - a.valorCentavos).map((e) => ({ ...e, usada: false }));
+    const resultado = new Map();
+    // 0) já lançadas por esta função (identificador próprio da linha importada).
+    for (const r of doDia) {
+      const feita = daImportacao.get(r.chave);
+      if (feita) resultado.set(r.chave, { ...r, situacao: SITUACAO_RETIRADA.JA_LANCADA_PELA_IMPORTACAO, obrigacaoId: feita.id, quitada: feita.saldoCentavos === 0 });
+    }
+    // 1) uma conta = uma retirada (mesmo valor).
+    for (const r of doDia.filter((x) => !resultado.has(x.chave))) {
+      const e = pool.find((x) => !x.usada && x.valorCentavos === r.valorCentavos);
+      if (e) { e.usada = true; resultado.set(r.chave, { ...r, situacao: SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE, ...descreve(e) }); }
+    }
+    // 2) uma conta = SOMA de várias retiradas do dia (ex.: 120 + 50 lançados como 170).
+    for (const e of pool.filter((x) => !x.usada)) {
+      const sobra = doDia.filter((x) => !resultado.has(x.chave));
+      const grupo = subconjuntoComSoma(sobra, e.valorCentavos);
+      if (grupo) { e.usada = true; for (const r of grupo) resultado.set(r.chave, { ...r, situacao: SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA, ...descreve(e), retiradasNaConta: grupo.length }); }
+    }
+    for (const r of doDia) itens.push(resultado.get(r.chave) ?? { ...r, situacao: SITUACAO_RETIRADA.NOVA });
+  }
   const motivoSemCaixa = caixas.length === 0 ? "Não há caixa físico cadastrado nesta unidade: cadastre o \"Caixa da loja\" antes de lançar." : caixas.length > 1 ? "Há mais de um caixa físico: o lançamento automático só funciona com um." : null;
-  return { conta: caixas.length === 1 ? { id: caixas[0].id, nome: caixas[0].nome } : null, motivoSemCaixa, fornecedor: fornecedor ? { id: fornecedor.id, nome: fornecedor.nome } : null, itens };
+  return { conta: caixa ? { id: caixa.id, nome: caixa.nome } : null, motivoSemCaixa, fornecedor: fornecedor ? { id: fornecedor.id, nome: fornecedor.nome } : null, itens };
+}
+
+/** Menor grupo (2 ou mais) de retiradas cuja soma é exatamente `alvo`; null se não houver. Poucas retiradas por dia: busca exaustiva. */
+function subconjuntoComSoma(retiradas, alvo) {
+  const n = Math.min(retiradas.length, 14);
+  let melhor = null;
+  for (let mascara = 1; mascara < (1 << n); mascara += 1) {
+    const grupo = retiradas.slice(0, n).filter((_, i) => mascara & (1 << i));
+    if (grupo.length < 2 || (melhor && grupo.length >= melhor.length)) continue;
+    if (grupo.reduce((t, r) => t + r.valorCentavos, 0) === alvo) melhor = grupo;
+  }
+  return melhor;
 }
 
 /** Prévia pronta (dentro de uma transação de leitura): usada pela consulta e pelo detalhe da importação. */
@@ -68,11 +129,12 @@ export async function previaDeSangriasNaTransacao(tx, cx, inicio, fim) {
     categoria: CATEGORIA_DAS_SANGRIAS, itens: s.itens,
     resumo: {
       novas: { quantidade: por(SITUACAO_RETIRADA.NOVA).length, totalCentavos: soma(por(SITUACAO_RETIRADA.NOVA)) },
-      jaLancadasManualmente: { quantidade: por(SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE).length, totalCentavos: soma(por(SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE)) },
+      jaLancadasManualmente: { quantidade: por(SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE).length + por(SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA).length, totalCentavos: soma(por(SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE)) + soma(por(SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA)) },
+      emContaUnica: { quantidade: por(SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA).length, totalCentavos: soma(por(SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA)) },
       jaLancadasPelaImportacao: { quantidade: por(SITUACAO_RETIRADA.JA_LANCADA_PELA_IMPORTACAO).length, totalCentavos: soma(por(SITUACAO_RETIRADA.JA_LANCADA_PELA_IMPORTACAO)) },
     },
     permissaoExigida: ACAO.REGISTRAR, voceTemPermissao: cx.permissoes.includes(ACAO.REGISTRAR),
-    efeito: "Cada retirada NOVA vira uma conta a pagar do fornecedor Sangrias (categoria Outras despesas), paga em dinheiro pelo caixa da loja na própria data. Entra na DRE em Outras despesas e aparece no Contas a Pagar e no calendário como paga. O que já foi lançado à mão não é lançado de novo.",
+    efeito: "Cada retirada NOVA vira uma conta a pagar do fornecedor Sangrias (categoria Outras despesas), paga em dinheiro pelo caixa da loja na própria data. Entra na DRE em Outras despesas e aparece no Contas a Pagar e no calendário como paga. O que já foi lançado à mão (em qualquer fornecedor, pago em dinheiro pelo caixa na mesma data, ou somado em uma conta só) NÃO é lançado de novo.",
   };
 }
 

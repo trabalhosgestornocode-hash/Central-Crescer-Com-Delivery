@@ -123,27 +123,34 @@ test("importação confirmada: bloco para lançar as retiradas como despesa paga
   const sangrias = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "SANGRIAS" });
   const o = (await n.registrarObrigacao(c, { contraparteId: sangrias.id, valorOriginalCentavos: 10000, categoria: "OUTRAS_DESPESAS", descricao: "compra de espátula", competencia: "2026-11", dataEmissao: "2026-11-08", vencimento: "2026-11-08" })).obrigacoes[0];
   await n.pagarContaAPagar(c, { obrigacaoId: o.id, contaId: caixa.id, dataEfetiva: "2026-11-08", valorCentavos: 10000 });
+  // Diária lançada em OUTRO fornecedor e OUTRA categoria, somando duas retiradas do dia 12 (25 + 26 = 51,00).
+  const maria = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Maria" });
+  const diaria = (await n.registrarObrigacao(c, { contraparteId: maria.id, valorOriginalCentavos: 5100, categoria: "SALARIOS_E_ENCARGOS", descricao: "Diária evento", competencia: "2026-11", dataEmissao: "2026-11-12", vencimento: "2026-11-12" })).obrigacoes[0];
+  await n.pagarContaAPagar(c, { obrigacaoId: diaria.id, contaId: caixa.id, dataEfetiva: "2026-11-12", valorCentavos: 5100 });
   const r = await ESCRITAS["/importacao/receber"].fazer(n, c, { tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", periodoInicio: "2026-11-01", periodoFim: "2026-11-17", nomeArquivo: "financeiro.xlsx",
-    arquivoBase64: aBase64([linha("08", 100), linha("08", 40), linha("12", 25)]) });
+    arquivoBase64: aBase64([linha("08", 100), linha("08", 40), linha("12", 25), linha("12", 26)]) });
   // Antes de confirmar a importação não há o que lançar.
   assert.doesNotMatch(conf.detalheDocumento(await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id }), { permissoes: PERMISSOES }), /Lançar as retiradas como despesas/);
   await n.confirmarImportacao(c, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia, aceitarPendencias: true, justificativa: "Sintético." });
   const d = await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id });
   const html = conf.detalheDocumento(d, { permissoes: PERMISSOES });
   assert.match(html, /Lançar as retiradas como despesas pagas em dinheiro/);
-  assert.match(html, /Novas \(serão lançadas\)<\/span><span>2 · R\$\s?65,00/);
-  assert.match(html, /Já lançadas à mão \(não serão repetidas\)<\/span><span>1 · R\$\s?100,00/);
+  assert.match(html, /Novas \(serão lançadas\)<\/span><span>1 · R\$\s?40,00/);
+  assert.match(html, /Já lançadas à mão \(não serão repetidas\)<\/span><span>3 · R\$\s?151,00/);
+  assert.match(html, /Já lançada \(somada em uma conta\)/);
+  assert.match(html, /<strong>Maria<\/strong> · Diária evento · <span class="nota">Salários e encargos<\/span>/, "mostra fornecedor, descrição e a CATEGORIA da conta já lançada");
+  assert.match(html, /conta de R\$\s?51,00 cobre 2 retiradas/);
   assert.match(html, /compra de espátula/, "mostra a conta que já existia, para a pessoa reconhecer");
   assert.match(html, /Já lançada à mão/);
   assert.match(html, /data-acao="\/api\/fv2\/acoes\/movimentos-caixa\/lancar-despesas"/);
-  assert.match(html, /Lançar 2 retirada\(s\) como despesa paga/);
+  assert.match(html, /Lançar 1 retirada\(s\) como despesa paga/);
   assert.match(html, /viram conta paga em dinheiro pelo Caixa da loja \(fornecedor Sangrias, Outras despesas\)\. Isso entra na DRE/);
   assert.deepEqual(auditarHtml(html), []);
   // Sem permissão de registrar: só explica.
   assert.match(conf.detalheDocumento(d, { permissoes: ["financeiro_v2.ver", "financeiro_v2.importar"] }), /Lançar exige a permissão "registrar"/);
   // Lança pelo núcleo real e relê: nada novo.
   const feito = await ESCRITAS["/movimentos-caixa/lancar-despesas"].fazer(n, c, { periodoInicio: "2026-11-01", periodoFim: "2026-11-17" });
-  assert.match(conf.resultadoDaAcao({ ok: true, dados: feito }), /2 retirada\(s\) lançada\(s\) como despesa paga em dinheiro; 1 já estava\(m\) lançada\(s\)/);
+  assert.match(conf.resultadoDaAcao({ ok: true, dados: feito }), /1 retirada\(s\) lançada\(s\) como despesa paga em dinheiro; 3 já estava\(m\) lançada\(s\)/);
   const depois = conf.detalheDocumento(await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id }), { permissoes: PERMISSOES });
   assert.match(depois, /Nada novo a lançar/);
   assert.doesNotMatch(depois, /data-acao="\/api\/fv2\/acoes\/movimentos-caixa\/lancar-despesas"/);
