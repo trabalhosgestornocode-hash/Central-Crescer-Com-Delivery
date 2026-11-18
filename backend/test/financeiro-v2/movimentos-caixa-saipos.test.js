@@ -61,7 +61,7 @@ test("o formato aparece na página SAIPOS como leitor real (XLSX homologado) e �
   const f = s.formatos.find((x) => x.id === "SAIPOS_MOVIMENTOS_CAIXA");
   assert.ok(f && f.disponivel && f.aceitaArquivo && f.homologado && !f.principal);
   assert.deepEqual(f.extensoesHomologadas, ["xlsx"]);
-  assert.match(f.descricao, /Não é faturamento/);
+  assert.match(f.descricao, /Importar não lança nada/);
 });
 
 test("importação: a prévia reconhece 9 retiradas, total e 7 dias; nada é gravado antes de confirmar; caixa fica pendente", async () => {
@@ -89,7 +89,7 @@ test("confirmar: grava os registros, soma por dia e por tipo, lista o que compõ
   assert.deepEqual([d08.retiradas.quantidade, d08.retiradas.totalCentavos], [2, 14000], "dois lançamentos no mesmo dia continuam sendo dois");
   assert.deepEqual(d08.itens.map((i) => [i.valorCentavos, i.natureza, i.vinculoComCaixa, i.caixa]), [[10000, "SANGRIA", "PENDENTE", null], [4000, "SANGRIA", "PENDENTE", null]]);
   assert.match(d08.pendenciasDeCaixa.mensagem, /não informa o caixa/);
-  assert.match(m.observacao, /não são faturamento nem despesa/);
+  assert.match(m.observacao, /só viram conta quando você as lança/);
   assert.equal((await n.detalharImportacao(c, { id: imp.id })).acoes.gerarPropostas, false, "não há proposta a gerar: o botão não aparece");
   assert.deepEqual(await efeitoFinanceiro(n), antes, "nenhuma venda, lançamento, movimentação ou recebível");
   const dreDepois = await n.apurarCompetencia(c, { competencia: "2026-11" });

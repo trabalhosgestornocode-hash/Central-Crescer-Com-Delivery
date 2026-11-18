@@ -2,7 +2,7 @@
 //
 // O relatório entra pelo importador de sempre (fonte SAIPOS_MOVIMENTOS_CAIXA → registros de fonte "MOVIMENTO_CAIXA", sem efeito
 // financeiro). Esta camada só lê esses registros e os apresenta:
-//   - NÃO é faturamento: não toca vendas, recebíveis, lançamentos nem DRE; transferência entre caixa e cofre nunca é despesa;
+//   - NÃO é faturamento e importar não lança nada. A retirada vira DESPESA só na etapa explícita de sangriasComoDespesa.js; reforço e transferência nunca;
 //   - o relatório não traz caixa, operador nem horário: o vínculo com a frente de caixa fica PENDENTE (nunca é inventado);
 //   - contra o fechamento manual (que a equipe digita) a comparação é por dia: valores iguais viram "possível duplicidade" para
 //     REVISÃO (nunca somados duas vezes); valores diferentes viram divergência; o sistema não escolhe um dos lados sozinho.
@@ -147,7 +147,7 @@ export function operacoesDeMovimentosDeCaixa(b) {
           desconhecidas: bloco(movimentos.filter((r) => r.dados.natureza === N.DESCONHECIDA)),
           semCaixaIdentificado: movimentos.filter((r) => r.dados.considerar).length,
         };
-        return { periodoInicio: inicio, periodoFim: fim, dias, totais, observacao: "Movimentações de dinheiro entre o caixa e o cofre: não são faturamento nem despesa, e não alteram a DRE." };
+        return { periodoInicio: inicio, periodoFim: fim, dias, totais, observacao: "Retiradas de caixa são despesas pagas em dinheiro, mas só viram conta quando você as lança (etapa explícita). Reforço e transferência não são despesa. Nada aqui é faturamento." };
       });
     },
   };

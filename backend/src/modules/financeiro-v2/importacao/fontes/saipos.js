@@ -441,7 +441,8 @@ export const SAIPOS_FATURAMENTO_POR_DIA = definirFonte({
  * Natureza de uma movimentação de dinheiro em espécie das frentes de caixa. Só é reconhecida com TODOS os sinais do layout real
  * (descrição + conta Cofre + categoria Frente de Caixa + sinal do valor); qualquer dúvida vira DESCONHECIDA (pendência), nunca palpite.
  * Convenção do export (conta Cofre): valor POSITIVO = dinheiro que ENTRA no cofre (retirada do caixa); NEGATIVO = SAI do cofre (reforço).
- * Nenhuma dessas movimentações é receita, despesa ou faturamento: são transferências entre o caixa e o cofre.
+ * Nenhuma é faturamento. A RETIRADA é uma despesa paga em dinheiro (o dono lança como fornecedor Sangrias · Outras despesas), mas só vira conta na etapa
+ * explícita de sangriasComoDespesa.js; reforço e transferência nunca viram despesa.
  */
 export const NATUREZA_MOVIMENTO_CAIXA = Object.freeze({ SANGRIA: "SANGRIA", REFORCO: "REFORCO", TRANSFERENCIA: "TRANSFERENCIA", DESCONHECIDA: "DESCONHECIDA" });
 

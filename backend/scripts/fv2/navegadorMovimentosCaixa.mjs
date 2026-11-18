@@ -50,7 +50,7 @@ await d.click('nav [data-aba-saipos="importacoes"]'); await d.waitForSelector("[
 
 await checar("SAIPOS › Importações: o formato aparece na própria página, sem ir à Central", async () => {
   const t = await texto("[data-importacoes-canal]");
-  return /Movimentações de Frente de Caixa/.test(t) && /Não é faturamento/.test(t);
+  return /Movimentações de Frente de Caixa/.test(t) && /Importar não lança nada/.test(t);
 });
 
 await checar("enviar o XLSX gera a prévia (sem gravar) com totais, classificação linha a linha e caixa pendente", async () => {
@@ -63,7 +63,7 @@ await checar("enviar o XLSX gera a prévia (sem gravar) com totais, classificaç
   await d.waitForSelector("#painel:not([hidden])", { timeout: 15000 }); await d.waitForTimeout(1500);
   const p = await texto("#painel");
   await d.screenshot({ path: join(SAIDA, "01-previa.png"), fullPage: true });
-  const ok = /Movimentações de Frente de Caixa/.test(p) && /Conferir as classificações/.test(p) && /Retirada \(sangria\)/.test(p) && /Reforço/.test(p) && /Sem classificação/.test(p) && /pendente/.test(p) && /não é faturamento nem despesa/i.test(p);
+  const ok = /Movimentações de Frente de Caixa/.test(p) && /Conferir as classificações/.test(p) && /Retirada \(sangria\)/.test(p) && /Reforço/.test(p) && /Sem classificação/.test(p) && /pendente/.test(p) && /Importar não lança nada/i.test(p);
   const semBotaoDePropostas = (await d.locator("#painel form[data-acao$='/propostas/gerar']").count()) === 0;
   return ok && semBotaoDePropostas ? "" : `FALHA: ${ok ? "apareceu o botão Gerar propostas" : p.slice(0, 200)}`;
 });
@@ -153,6 +153,45 @@ await checar("depois da correção o calendário soma R$ 150,00 no dia (110 + 40
   const fech = await texto();
   await d.screenshot({ path: join(SAIDA, "07-fechamento-divergente.png") });
   return /Retiradas \(sangrias\)\s*2 · R\$\s?150,00/.test(cal) && /valores diferentes/.test(fech) && /Revisar movimentações antes de conferir/.test(fech) ? "" : `FALHA: ${cal.slice(0, 200)}`;
+});
+
+await checar("importação confirmada: bloco 'Lançar as retiradas como despesas pagas em dinheiro' com o que é novo e o botão (nada foi lançado ao importar)", async () => {
+  await d.click('nav [data-aba-saipos="importacoes"]'); await d.waitForSelector("[data-importacoes-canal]", { timeout: 10000 }); await d.waitForTimeout(500);
+  await d.locator('[data-importacoes-canal] tr:has-text("Movimentações de Frente de Caixa") button[data-detalhe^="documento:"]').last().click(); // a mais recente (a corrigida)
+  await d.waitForSelector("#painel:not([hidden])", { timeout: 15000 }); await d.waitForTimeout(1200);
+  const p = await texto("#painel");
+  await d.screenshot({ path: join(SAIDA, "08-lancar-despesas.png") });
+  const temBotao = (await d.locator("#painel form[data-acao$='/movimentos-caixa/lancar-despesas']").count()) === 1;
+  return /Lançar as retiradas como despesas pagas em dinheiro/.test(p) && /Novas \(serão lançadas\)\s*4 · R\$\s?195,00/.test(p) && /Importar não lança nada/.test(p) && temBotao ? "" : `FALHA: botão=${temBotao} | ${p.slice(p.indexOf("Lançar as"), p.indexOf("Lançar as") + 300)}`;
+});
+
+await checar("lançar: cria 4 contas pagas em dinheiro e mostra o resultado; repetir não lança de novo", async () => {
+  const f = d.locator("#painel form[data-acao$='/movimentos-caixa/lancar-despesas']");
+  await f.locator("input[name=confirmar]").check();
+  await f.locator("button[type=submit]").click(); await d.waitForTimeout(2000);
+  const msg = await texto("#painel");
+  await d.screenshot({ path: join(SAIDA, "09-lancado.png") });
+  const lancou = /4 retirada\(s\) lançada\(s\) como despesa paga em dinheiro; 0 já estava/.test(msg) || /Nada novo a lançar/.test(msg);
+  const semBotao = (await d.locator("#painel form[data-acao$='/movimentos-caixa/lancar-despesas']").count()) === 0;
+  return lancou && semBotao && /Já lançadas por esta importação\s*4 · R\$\s?195,00/.test(msg) ? "" : `FALHA: ${msg.slice(msg.indexOf("Lançar as"), msg.indexOf("Lançar as") + 360)}`;
+});
+
+await checar("Contas a Pagar › Calendário: as retiradas aparecem como PAGAS no dia (fornecedor Sangrias)", async () => {
+  await d.click("[data-fechar-painel]").catch(() => {});
+  await irPara("calendario", "#conteudo .calendario");
+  await d.fill("#filtro-competencia", "2026-11"); await d.waitForTimeout(1200);
+  await d.locator('[data-dia="2026-11-08"]').click(); await d.waitForTimeout(600);
+  const t = await texto("#dia-detalhe");
+  await d.screenshot({ path: join(SAIDA, "10-contas-a-pagar-calendario.png") });
+  return /Pagamentos feitos no dia/.test(t) && /Sangrias/i.test(t) && /R\$\s?110,00/.test(t) && /R\$\s?40,00/.test(t) ? "" : `FALHA: ${t.slice(0, 300)}`;
+});
+
+await checar("Contas a Pagar › Lista: contas do fornecedor Sangrias quitadas, categoria Outras despesas", async () => {
+  await irPara("contas-a-pagar", "#conteudo table, #conteudo .vazio-lista");
+  await d.waitForTimeout(800);
+  const t = await texto();
+  const linhas = (t.match(/Sangrias/gi) ?? []).length;
+  return linhas >= 4 && /Outras despesas/i.test(t) && /Pago/.test(t) ? "" : `FALHA: ocorrências=${linhas}`;
 });
 
 await checar("sem rolagem horizontal no desktop e no celular, sem erros de console nem requisições com erro", async () => {

@@ -1,6 +1,6 @@
 // Sangrias, reforços e transferências em dinheiro importados da SAIPOS: peças de tela compartilhadas (prévia da importação, dia do
 // calendário SAIPOS e fechamento manual). Funções PURAS: dados já calculados pelo servidor → HTML escapado. Nenhuma conta aqui.
-// Estas movimentações NÃO são faturamento nem despesa: a tela sempre diz isso e mostra o vínculo com o caixa como pendente.
+// Nada aqui é faturamento. A retirada é despesa paga em dinheiro, mas só vira conta quando a pessoa a lança (bloco próprio na importação); a tela mostra o vínculo com o caixa como pendente.
 import { dataBR, esc, moeda } from "./formatar.js";
 
 const NATUREZA = Object.freeze({
@@ -35,7 +35,7 @@ export function movimentosDoDia(m) {
   const avisos = [...m.alertas, ...m.divergencias];
   return `<section class="mov-caixa" aria-label="Movimentações de dinheiro do dia ${esc(dataBR(m.data))}">
 <h3>Retiradas e reforços de caixa</h3>
-<p class="nota">Dinheiro que muda de lugar entre o caixa e o cofre. Não é faturamento, não é despesa e não altera a DRE.</p>
+<p class="nota">Retirada é despesa paga em dinheiro (lançada na importação); reforço e transferência não são despesa. Nada aqui é faturamento.</p>
 <dl class="ficha ficha--compacta">${linha("Retiradas (sangrias)", m.retiradas)}${linha("Reforços", m.reforcos)}${linha("Transferências", m.transferencias)}${linha("Transferências a confirmar (fora da conta)", m.transferenciasAConfirmar ?? { quantidade: 0 })}${linha("Sem classificação", m.desconhecidas)}
 ${m.pendenciasDeCaixa.quantidade ? `<dt>Caixa não identificado</dt><dd>${m.pendenciasDeCaixa.quantidade} movimentação(ões)</dd>` : ""}</dl>
 ${m.pendenciasDeCaixa.mensagem ? `<p class="nota">${esc(m.pendenciasDeCaixa.mensagem)}</p>` : ""}
@@ -76,7 +76,7 @@ export function previaDeMovimentos(c) {
     return `<tr><td data-rotulo="Data">${esc(dataBR(x.data))}</td><td data-rotulo="Descrição" class="esquerda">${esc(x.descricao)}${x.considerar ? "" : `<br><span class="nota">${esc(x.motivo ?? "")}${x.pago === false ? " · não pago" : ""} · fica fora dos totais</span>`}</td><td data-rotulo="Classificação">${selo(rotulo, classe)}</td><td data-rotulo="Valor">${valor(x.valorCentavos)}</td><td data-rotulo="Caixa"><span class="nota">pendente</span></td></tr>`;
   }).join("");
   return `<h3>Movimentações de Frente de Caixa</h3>
-<p class="nota">Dinheiro entre o caixa e o cofre: não é faturamento nem despesa. O relatório não informa o caixa: o vínculo fica pendente.</p>
+<p class="nota">Importar não lança nada: a retirada só vira despesa quando você a lança, abaixo. Reforço e transferência não são despesa. O relatório não informa o caixa: o vínculo fica pendente.</p>
 <ul class="lista-simples">${t("Retiradas (sangrias)", c.sangrias, c.sangriasCentavos)}${t("Reforços", c.reforcos, c.reforcosCentavos)}${c.desconhecidas ? `<li><span>Sem classificação (fora dos totais)</span><span>${c.desconhecidas}</span></li>` : ""}${c.naoPagas ? `<li><span>Não pagas (fora dos totais)</span><span>${c.naoPagas}</span></li>` : ""}${c.transferenciasAConfirmar ? `<li><span>Transferências a confirmar (fora do dinheiro esperado)</span><span>${c.transferenciasAConfirmar}</span></li>` : ""}<li><span>Dias com movimento</span><span>${c.diasComMovimento}</span></li></ul>
 <details open><summary><strong>Conferir as classificações</strong> (${c.movimentos.length} linha(s))</summary><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Classificação de cada movimentação</caption><thead><tr><th scope="col">Data</th><th scope="col" class="esquerda">Descrição</th><th scope="col">Classificação</th><th scope="col">Valor</th><th scope="col">Caixa</th></tr></thead><tbody>${linhas}</tbody></table></div></details>`;
 }

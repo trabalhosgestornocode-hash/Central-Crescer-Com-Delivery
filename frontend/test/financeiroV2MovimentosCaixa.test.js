@@ -32,7 +32,7 @@ test("prévia: totais por tipo e conferência das classificações linha a linha
   const { c, n, importacao } = await cenario();
   const html = conf.detalheDocumento(await CONSULTAS["/conferencias/documento"](n, c, { id: importacao.id }), { permissoes: PERMISSOES });
   assert.match(html, /Movimentações de Frente de Caixa/);
-  assert.match(html, /Dinheiro entre o caixa e o cofre: não é faturamento nem despesa/);
+  assert.match(html, /Importar não lança nada: a retirada só vira despesa quando você a lança/);
   assert.match(html, /Retiradas \(sangrias\)/);
   assert.match(html, /Conferir as classificações/);
   assert.match(html, /Retirada \(sangria\)/);
@@ -113,4 +113,39 @@ test("transferência aparece 'a confirmar, fora da conta' e a divergência de ve
   assert.match(html, /ficam fora do dinheiro esperado/);
   const previa = previaDeMovimentos({ sangrias: 0, sangriasCentavos: 0, reforcos: 0, reforcosCentavos: 0, desconhecidas: 0, naoPagas: 0, transferenciasAConfirmar: 2, diasComMovimento: 1, movimentos: [] });
   assert.match(previa, /Transferências a confirmar \(fora do dinheiro esperado\)/);
+});
+
+test("importação confirmada: bloco para lançar as retiradas como despesa paga — novas × já lançadas à mão, botão e confirmação; sem nada novo ou sem permissão, só explica", async () => {
+  const c = ctxBackend();
+  const { nucleo: n } = montar({ relogio: () => new Date("2026-11-25T15:00:00.000Z") });
+  await ESCRITAS["/configuracoes/unidade"].fazer(n, c, { nomeExibicao: "Unidade sintética", justificativa: "Teste." });
+  const caixa = await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa da loja" });
+  const sangrias = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "SANGRIAS" });
+  const o = (await n.registrarObrigacao(c, { contraparteId: sangrias.id, valorOriginalCentavos: 10000, categoria: "OUTRAS_DESPESAS", descricao: "compra de espátula", competencia: "2026-11", dataEmissao: "2026-11-08", vencimento: "2026-11-08" })).obrigacoes[0];
+  await n.pagarContaAPagar(c, { obrigacaoId: o.id, contaId: caixa.id, dataEfetiva: "2026-11-08", valorCentavos: 10000 });
+  const r = await ESCRITAS["/importacao/receber"].fazer(n, c, { tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", periodoInicio: "2026-11-01", periodoFim: "2026-11-17", nomeArquivo: "financeiro.xlsx",
+    arquivoBase64: aBase64([linha("08", 100), linha("08", 40), linha("12", 25)]) });
+  // Antes de confirmar a importação não há o que lançar.
+  assert.doesNotMatch(conf.detalheDocumento(await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id }), { permissoes: PERMISSOES }), /Lançar as retiradas como despesas/);
+  await n.confirmarImportacao(c, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia, aceitarPendencias: true, justificativa: "Sintético." });
+  const d = await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id });
+  const html = conf.detalheDocumento(d, { permissoes: PERMISSOES });
+  assert.match(html, /Lançar as retiradas como despesas pagas em dinheiro/);
+  assert.match(html, /Novas \(serão lançadas\)<\/span><span>2 · R\$\s?65,00/);
+  assert.match(html, /Já lançadas à mão \(não serão repetidas\)<\/span><span>1 · R\$\s?100,00/);
+  assert.match(html, /compra de espátula/, "mostra a conta que já existia, para a pessoa reconhecer");
+  assert.match(html, /Já lançada à mão/);
+  assert.match(html, /data-acao="\/api\/fv2\/acoes\/movimentos-caixa\/lancar-despesas"/);
+  assert.match(html, /Lançar 2 retirada\(s\) como despesa paga/);
+  assert.match(html, /viram conta paga em dinheiro pelo Caixa da loja \(fornecedor Sangrias, Outras despesas\)\. Isso entra na DRE/);
+  assert.deepEqual(auditarHtml(html), []);
+  // Sem permissão de registrar: só explica.
+  assert.match(conf.detalheDocumento(d, { permissoes: ["financeiro_v2.ver", "financeiro_v2.importar"] }), /Lançar exige a permissão "registrar"/);
+  // Lança pelo núcleo real e relê: nada novo.
+  const feito = await ESCRITAS["/movimentos-caixa/lancar-despesas"].fazer(n, c, { periodoInicio: "2026-11-01", periodoFim: "2026-11-17" });
+  assert.match(conf.resultadoDaAcao({ ok: true, dados: feito }), /2 retirada\(s\) lançada\(s\) como despesa paga em dinheiro; 1 já estava\(m\) lançada\(s\)/);
+  const depois = conf.detalheDocumento(await CONSULTAS["/conferencias/documento"](n, c, { id: r.importacao.id }), { permissoes: PERMISSOES });
+  assert.match(depois, /Nada novo a lançar/);
+  assert.doesNotMatch(depois, /data-acao="\/api\/fv2\/acoes\/movimentos-caixa\/lancar-despesas"/);
+  assert.deepEqual(auditarHtml(depois), []);
 });

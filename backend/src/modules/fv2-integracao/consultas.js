@@ -136,6 +136,8 @@ export const CONSULTAS = Object.freeze({
   "/calendario-faturamento": (n, c, p) => n.consultarCalendarioDeFaturamento(c, { canal: p.canal, mes: p.mes }),
   // Sangrias, reforços e transferências em dinheiro importados da SAIPOS (nunca faturamento): totais por dia e a lista que os compõe.
   "/movimentos-caixa": (n, c, p) => n.consultarMovimentosDeCaixa(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }),
+  // Prévia do lançamento das retiradas como despesas pagas em dinheiro (o que é NOVO × o que já foi lançado à mão ou pela importação).
+  "/sangrias-despesa": (n, c, p) => n.previaSangriasComoDespesa(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }),
   // Fase 11 (doc 48): importações por canal (formatos, estado de cada um e histórico) e a PRÉVIA do demonstrativo oficial do iFood.
   "/importacoes-canal": (n, c, p) => n.consultarImportacoesDoCanal(c, { canal: p.canal }),
   "/previa-demonstrativo-ifood": (n, c, p) => n.previaDoDemonstrativoIfood(c, {
