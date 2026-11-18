@@ -1,8 +1,8 @@
 // Aplicação do Financeiro v2 (demonstração local): roteamento por hash, filtros, carregamento sem flash de dados antigos,
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
-import { criarConsultor, definirTransporte, enviar } from "./consulta.js";
-import { credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro } from "./plataforma.js";
+import { criarConsultor, definirTransporte, enviar, invalidarCache } from "./consulta.js";
+import { aquecerCredenciais, credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro } from "./plataforma.js";
 import * as adm from "./telasAdministracao.js";
 import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
@@ -19,11 +19,19 @@ const MODO_PLATAFORMA = emModoPlataforma();
 if (MODO_PLATAFORMA) {
   definirTransporte(criarTransportePlataforma({ credenciais: credenciaisDaPlataforma }));
   document.documentElement.dataset.modo = "plataforma";
+  aquecerCredenciais(); // o token fica pronto enquanto os módulos terminam de carregar
 }
 const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
 const consultorCalendario = criarConsultor();
 const consultorImportacoes = criarConsultor();
+// Consulta da tela adiantada na plataforma (sai junto com a da sessão): consultor próprio, para uma não abortar a outra.
+const consultorAdiantado = criarConsultor();
+let numeroDoCarregamento = 0;
+/** A URL sem o parâmetro `unidade`: na plataforma o servidor a ignora (a unidade é a da sessão), então duas URLs que só diferem nela são a MESMA consulta. */
+const semUnidade = (url) => String(url).replace(/([?&])unidade=[^&]*(&|$)/, (_, ini, fim) => (fim ? ini : "")).replace(/[?&]$/, "");
+/** Mês de hoje em São Paulo ("2026-11"): o mesmo que o servidor usa como competência inicial (dataBase). */
+const mesDeHojeEmSaoPaulo = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" }).format(new Date());
 const estado = {
   rota: "visao-geral", competencia: "2026-09", unidade: null, sessao: "gestor", unidades: [], dataBase: null,
   // Filtros locais de cada tela (sobrevivem à troca de rota; são zerados ao trocar de unidade ou sessão).
@@ -81,6 +89,9 @@ function modoHomologacao(usuario) {
   const seletor = document.querySelector("#filtro-sessao");
   if (!seletor || seletor.dataset.homologacao) return;
   seletor.dataset.homologacao = "1";
+  // Homologação NÃO é demonstração nem produção: o aviso diz exatamente isso.
+  const faixa = document.querySelector(".faixa-demo");
+  if (faixa) faixa.textContent = "Ambiente de homologação · dados de teste · não é a produção";
   const rotulo = seletor.closest("label") ?? seletor;
   rotulo.hidden = true;
   const quem = document.createElement("span");
@@ -90,12 +101,13 @@ function modoHomologacao(usuario) {
   sair.type = "button";
   sair.textContent = "Sair";
   sair.addEventListener("click", async () => {
+    invalidarCache(); // ao encerrar a sessão, nada financeiro fica guardado na aba
     await fetch("/api/fv2/logout", { method: "POST", headers: { "content-type": "application/json" }, body: "{}", credentials: "same-origin" });
     window.location.assign("/entrar");
   });
   rotulo.after(quem, sair);
 }
-const qs = (extra = {}) => new URLSearchParams(Object.fromEntries(Object.entries({ competencia: estado.competencia, unidade: estado.unidade ?? "", ...extra }).filter(([, v]) => v !== undefined && v !== null && v !== false))).toString();
+const qs = (extra = {}) => new URLSearchParams(Object.fromEntries(Object.entries({ competencia: estado.competencia, unidade: MODO_PLATAFORMA ? undefined : (estado.unidade ?? ""), ...extra }).filter(([, v]) => v !== undefined && v !== null && v !== false))).toString();
 const nomeUnidade = () => estado.unidades.find((u) => u.id === estado.unidade)?.nome ?? "";
 
 // ---- datas de calendário (apresentação de período, sem valores)
@@ -221,11 +233,22 @@ function desenhar(dados) {
 }
 
 async function carregar() {
+  const meuCarregamento = (numeroDoCarregamento += 1);
   const conteudo = $("#conteudo");
   // Sem flash: a tela anterior some ANTES de qualquer consulta; nada de outra competência/unidade/filtro fica visível.
   conteudo.innerHTML = telas.estado("carregando");
   conteudo.setAttribute("aria-busy", "true");
   fecharPainel(false);
+  // PLATAFORMA: a unidade é SEMPRE a da sessão (o servidor ignora a que vier daqui). Então a consulta da tela não precisa esperar a sessão:
+  // sai JUNTO com ela. Só é aproveitada se a competência que a sessão escolher for a mesma que se supôs (mês de hoje); senão é descartada e refeita.
+  let adiantada = null;
+  if (MODO_PLATAFORMA && !estado.unidade && !estado.competenciaDaSessao) {
+    const original = estado.competencia;
+    estado.competencia = mesDeHojeEmSaoPaulo();
+    const url = consultaDaRota();
+    adiantada = { competencia: estado.competencia, url, promessa: consultorAdiantado.consultar(url, cabecalhos()) };
+    estado.competencia = original;
+  }
   if (!estado.unidade) {
     const s = await consultor.consultar("/api/fv2/sessao", cabecalhos());
     if (!s) return;
@@ -247,7 +270,15 @@ async function carregar() {
   const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
   const urlDasImportacoes = consultaDasImportacoes();
   const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
-  const r = await consultor.consultar(consultaDaRota(), cabecalhos());
+  const urlDaRota = consultaDaRota();
+  let r;
+  if (adiantada && semUnidade(adiantada.url) === semUnidade(urlDaRota)) {
+    r = await adiantada.promessa;
+    if (meuCarregamento !== numeroDoCarregamento) return; // outra navegação mais nova já começou
+    if (r === null) r = await consultor.consultar(urlDaRota, cabecalhos());
+  } else {
+    r = await consultor.consultar(urlDaRota, cabecalhos());
+  }
   if (r === null) return; // resposta obsoleta: outra consulta mais nova já está em andamento
   conteudo.removeAttribute("aria-busy");
   if (!r.ok) { conteudo.innerHTML = mensagemDeErro(r); return; }
@@ -558,6 +589,8 @@ function aplicarFiltroLocal(form) {
 }
 
 document.addEventListener("click", (e) => {
+  // "Tentar novamente" (erro de LEITURA) e "Atualizar dados": relê só a tela atual, na mesma unidade, competência e filtros. Nunca reenvia gravação.
+  if (e.target.closest("[data-tentar-novamente], #atualizar-dados")) { invalidarCache(); carregar(); return; }
   const alternar = e.target.closest("[data-alternar]");
   if (alternar) {
     const alvo = document.getElementById(alternar.getAttribute("aria-controls"));
@@ -669,6 +702,6 @@ document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[d
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; carregar(); });
 const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
-$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); carregar(); });
-$("#filtro-sessao").addEventListener("change", (e) => { estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
+$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); invalidarCache(); carregar(); });
+$("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
 rotear();

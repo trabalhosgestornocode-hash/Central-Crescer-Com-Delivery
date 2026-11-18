@@ -5,7 +5,21 @@
 let transporte = (...a) => fetch(...a);
 export function definirTransporte(fn) { transporte = fn; }
 
-export function criarConsultor(fetchFn = (...a) => transporte(...a)) {
+// CACHE CURTO EM MEMÓRIA (só desta aba; nada vai para localStorage, IndexedDB nem cookie): a MESMA consulta (a URL já traz unidade, competência e
+// filtros; o cabeçalho da sessão de demonstração entra na chave) é reaproveitada por poucos segundos, o que evita refazer o mesmo pedido ao
+// voltar para uma aba ou alternar entre telas. Regras que mantêm os números confiáveis:
+//   - só respostas BEM-SUCEDIDAS entram (erro nunca fica guardado);
+//   - qualquer AÇÃO confirmada (enviar) esvazia tudo: depois de gravar, a tela relê do servidor;
+//   - a resposta é copiada (quem desenha pode alterar os dados sem sujar o cache);
+//   - vale poucos segundos: nada antigo é apresentado como atual por muito tempo.
+export const VALIDADE_DO_CACHE_MS = 15_000;
+const cache = new Map();
+const copia = (x) => (typeof structuredClone === "function" ? structuredClone(x) : JSON.parse(JSON.stringify(x)));
+const chaveDoCache = (url, cabecalhos) => `${cabecalhos?.["x-fv2-demo-sessao"] ?? ""}|${url}`;
+export function invalidarCache() { cache.clear(); }
+const lerDoCache = (chave, agora = Date.now()) => { const e = cache.get(chave); if (!e) return null; if (agora - e.em > VALIDADE_DO_CACHE_MS) { cache.delete(chave); return null; } return copia(e.resposta); };
+
+export function criarConsultor(fetchFn = (...a) => transporte(...a), { usarCache = true } = {}) {
   let atual = 0;
   let controle = null;
   return {
@@ -14,6 +28,9 @@ export function criarConsultor(fetchFn = (...a) => transporte(...a)) {
       const minha = (atual += 1);
       controle?.abort();
       controle = typeof AbortController === "function" ? new AbortController() : null;
+      const chave = chaveDoCache(url, cabecalhos);
+      const guardada = usarCache ? lerDoCache(chave) : null;
+      if (guardada) return guardada;
       let resposta;
       try {
         const r = await fetchFn(url, { headers: { accept: "application/json", ...cabecalhos }, signal: controle?.signal, credentials: "same-origin" });
@@ -22,7 +39,9 @@ export function criarConsultor(fetchFn = (...a) => transporte(...a)) {
       } catch (e) {
         resposta = e?.name === "AbortError" ? null : { ok: false, status: 0, erro: "SEM_CONEXAO", mensagem: "Não foi possível consultar. Verifique a conexão." };
       }
-      return minha === atual ? resposta : null;
+      if (minha !== atual) return null;
+      if (usarCache && resposta?.ok) cache.set(chave, { em: Date.now(), resposta: copia(resposta) });
+      return resposta;
     },
   };
 }
@@ -36,6 +55,7 @@ export async function enviar(url, corpo, cabecalhos = {}, fetchFn = (...a) => tr
   try {
     const r = await fetchFn(url, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", ...cabecalhos }, body: JSON.stringify(corpo), credentials: "same-origin" });
     const dados = await r.json().catch(() => ({}));
+    if (r.ok) invalidarCache(); // depois de gravar, nada guardado pode ser mostrado como atual
     return r.ok ? { ok: true, dados } : { ok: false, status: r.status, erro: dados.erro ?? dados.codigo ?? "FALHA", motivo: dados.motivo ?? null, mensagem: dados.mensagem ?? "A ação não foi concluída." };
   } catch {
     return { ok: false, status: 0, erro: "SEM_CONEXAO", mensagem: "Sem conexão: nada foi confirmado." };

@@ -9,7 +9,7 @@ import { criarDemo } from "./fv2/demoInterface.mjs";
 
 const PORTA = Number(process.argv.find((x) => x.startsWith("--porta="))?.slice(8) || process.env.FV2_DEMO_PORTA || 5179);
 const PASTA = normalize(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "frontend", "financeiro-v2"));
-const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
+const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".jpeg": "image/jpeg" };
 // --agora=AAAA-MM-DDTHH:MM:SSZ: relógio da demonstração (ex.: conferir no navegador um relatório real de um período recente).
 const agora = process.argv.find((x) => x.startsWith("--agora="))?.slice("--agora=".length);
 const demo = await criarDemo(agora ? { relogio: () => new Date(agora) } : {});
@@ -44,9 +44,11 @@ createServer(async (req, res) => {
     res.writeHead(r.status, { ...cabecalhos, "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(r.corpo));
     return;
   }
-  const arquivo = normalize(join(PASTA, url.pathname === "/" ? "index.html" : url.pathname));
+  // O favicon oficial vive em frontend/assets (a produção serve a pasta frontend inteira); só ele é exposto aqui.
+  const logoOficial = url.pathname === "/assets/logo-crescer-central.jpeg";
+  const arquivo = logoOficial ? normalize(join(PASTA, "..", "assets", "logo-crescer-central.jpeg")) : normalize(join(PASTA, url.pathname === "/" ? "index.html" : url.pathname));
   const ext = arquivo.slice(arquivo.lastIndexOf("."));
-  if (!arquivo.startsWith(PASTA + sep) || !TIPOS[ext]) { res.writeHead(404, cabecalhos).end("Não encontrado"); return; }
+  if ((!logoOficial && !arquivo.startsWith(PASTA + sep)) || !TIPOS[ext]) { res.writeHead(404, cabecalhos).end("Não encontrado"); return; }
   try {
     res.writeHead(200, { ...cabecalhos, "content-type": TIPOS[ext], "content-security-policy": "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src blob:; object-src blob:; base-uri 'none'; form-action 'self'" }).end(await readFile(arquivo));
   } catch {

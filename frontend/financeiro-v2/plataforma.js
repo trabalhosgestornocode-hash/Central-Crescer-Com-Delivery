@@ -61,6 +61,13 @@ export async function credenciaisDaPlataforma() {
   return { token: await tokenAtual(), contexto: contextTokenAtual() };
 }
 
+/**
+ * Aquece a autenticação em paralelo com o resto do carregamento (script do Supabase, módulos da plataforma e leitura da sessão local):
+ * quando a primeira consulta precisar do token, ele já está pronto. Não envia nada ao servidor financeiro e ignora qualquer falha
+ * (a consulta de verdade refaz o caminho e mostra o estado correto: sem sessão, sem permissão etc.).
+ */
+export function aquecerCredenciais() { credenciaisDaPlataforma().catch(() => {}); }
+
 /** Estados da tela a partir da resposta de erro (status + código + motivo do servidor). */
 export function estadoDoErro(r) {
   const m = r?.motivo ?? null;
