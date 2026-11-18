@@ -29,7 +29,7 @@ import {
 const NOME_DO_RELATORIO = Object.freeze({
   SAIPOS_VENDAS: "Vendas por pedido do SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "Faturamento diário do SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento do SAIPOS",
   SAIPOS_VENDAS_DIARIAS: "Vendas diárias do SAIPOS", SAIPOS_VENDAS_POR_CANAL: "Vendas por canal do SAIPOS", STONE_VENDAS: "Vendas da Stone", STONE_RECEBIMENTOS: "Recebimentos da Stone",
-  UNICRED_EXTRATO: "Extrato da Unicred", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa do SAIPOS", FOODY_ENTREGAS: "Entregas do Foody", IFOOD_APURACAO: "Apuração do iFood", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood",
+  UNICRED_EXTRATO: "Extrato da Unicred", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa do SAIPOS", FOODY_ENTREGAS: "Entregas do Foody", IFOOD_APURACAO: "Apuração do iFood", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood", NOVENTA_E_NOVE_FOOD_RELATORIO: "Relatório oficial da 99Food",
 });
 export const nomeDoRelatorio = (t) => NOME_DO_RELATORIO[t] ?? FONTES_DA_COMPETENCIA.find((f) => f.tipoRelatorio === t)?.nome ?? "Relatório";
 const NATUREZA_DA_OPERACAO = Object.freeze({ VENDA: "Receita de venda", VENDA_AGREGADA: "Receita agregada do dia", PAGAMENTO_STONE: "Recebível e taxas", OBRIGACAO_ENTREGADOR: "Despesa e obrigação", MOVIMENTACAO_BANCARIA: "Movimentação de conta" });

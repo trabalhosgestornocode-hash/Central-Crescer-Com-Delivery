@@ -10,6 +10,7 @@ import { SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
 import { exigirCompetencia, primeiroDiaDe, ultimoDiaDe } from "../dominio/tempo.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
 import { leituraDaConciliacaoIfood } from "./conciliacaoIfood.js";
+import { leituraDoRelatorio99Food } from "./relatorio99Food.js";
 
 const CATEGORIAS = Object.freeze({
   COMISSOES_IFOOD: "comissoesCentavos", TAXAS_DE_PROCESSAMENTO: "taxasCentavos", MENSALIDADE_IFOOD: "mensalidadesCentavos", DESCONTOS_A_CLASSIFICAR: "descontosEPromocoesCentavos",
@@ -57,6 +58,26 @@ export function operacoesDoCanalPlataforma(b) {
           totalCentavos: soma(pedidosSaipos.filter((r) => !r.dados.cancelado), (r) => r.valorCentavos), natureza: "SO_CONFERENCIA",
         };
         if (canal === "NOVENTA_E_NOVE_FOOD") {
+          const relatorio = await leituraDoRelatorio99Food(tx, cx, { inicio: primeiroDiaDe(competencia), fim: ultimoDiaDe(competencia) });
+          if (relatorio) {
+            const dias = [...relatorio.porDia.values()];
+            const aplicados = dias.filter((x) => x.aplicado);
+            const v = (k) => soma(aplicados, (x) => x[k]);
+            const pendencias = [];
+            if (aplicados.length < dias.length) pendencias.push({ codigo: "RELATORIO_NAO_APLICADO", mensagem: `${dias.length - aplicados.length} dia(s) do relatório oficial ainda não aplicado(s) ao Financeiro: fora dos totais abaixo.` });
+            if (v("diferencaRepasseCentavos")) pendencias.push({ codigo: "REPASSE_EM_CONFERENCIA", mensagem: "O repasse informado não fecha com os lançamentos: a diferença fica em conferência.", valorCentavos: v("diferencaRepasseCentavos") });
+            if (aplicados.length) pendencias.push({ codigo: "REPASSE_SEM_CICLO", mensagem: "O relatório não informa data nem ciclo do repasse: nada foi marcado como a receber ou recebido." });
+            if (relatorio.conferenciaSaipos.diasDivergentes.length) pendencias.push({ codigo: "DIFERENCA_SAIPOS_99FOOD", mensagem: `${relatorio.conferenciaSaipos.diasDivergentes.length} dia(s) com diferença entre a SAIPOS e o relatório oficial: pendente de conferência.` });
+            const ate = dias.map((d) => d.data).sort();
+            return {
+              canal, competencia, fonteOficial: "Relatório oficial da 99Food", situacao: relatorio.situacao, dependeDeRelatorioOficial: false,
+              totais: aplicados.length ? {
+                brutoCentavos: v("itensCentavos"), comissoesCentavos: v("comissaoCentavos"), taxasCentavos: v("processamentoCentavos"), mensalidadesCentavos: 0, descontosEPromocoesCentavos: 0, ajustesCentavos: 0, marketingCentavos: v("marketingCentavos"), recompensasCentavos: v("recompensasCentavos"), receitaOfertaCentavos: v("receitaOfertaCentavos"),
+                resultadoCentavos: v("composicaoCentavos"), diferencaRepasseCentavos: v("diferencaRepasseCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: 0, saldoAReceberCentavos: null, pedidos: v("quantidade"), cancelamentos: null, observacaoPedidos: "Vendas informadas por dia no relatório oficial, sem pedidos individuais.",
+              } : null,
+              demonstrativos: [], historico: aplicados.length ? [{ periodoInicio: ate[0], periodoFim: ate.at(-1), brutoCentavos: v("itensCentavos"), repassePrevistoCentavos: v("repasseCentavos"), repasseRecebidoCentavos: null, situacaoRepasse: "SEM_CICLO" }] : [], conferenciaSaipos, pendencias, relatorio99Food: { loja: relatorio.lojas[0] ?? null, conferenciaSaipos: relatorio.conferenciaSaipos, diasImportados: dias.length, diasAplicados: aplicados.length },
+            };
+          }
           return {
             canal, competencia, fonteOficial: null, situacao: "SEM_FONTE_OFICIAL", dependeDeRelatorioOficial: true,
             totais: null, demonstrativos: [], historico: [], conferenciaSaipos,

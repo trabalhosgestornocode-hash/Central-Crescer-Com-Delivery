@@ -23,9 +23,9 @@ const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !=
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
 export const FONTE_DO_RELATORIO = Object.freeze({
-  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", SAIPOS_MOVIMENTOS_CAIXA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED", IFOOD_CONCILIACAO: "IFOOD",
+  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", SAIPOS_MOVIMENTOS_CAIXA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED", IFOOD_CONCILIACAO: "IFOOD", NOVENTA_E_NOVE_FOOD_RELATORIO: "OUTRO",
 });
-const MIME_DA_EXTENSAO = Object.freeze({ pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
+const MIME_DA_EXTENSAO = Object.freeze({ zip: "application/zip", pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
 /** Base64 estrito → bytes (até 5 MiB). */
 function arquivoDoBase64(texto) {
   if (typeof texto !== "string" || !texto || texto.length > 7 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(texto)) throw erroDeEntrada("Arquivo ausente, inválido ou maior que 5 MiB.", CODIGO.ENTRADA_INVALIDA, "arquivoBase64");
@@ -370,6 +370,7 @@ export const ESCRITAS = Object.freeze({
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/ifood-conciliacao/aplicar": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.aplicarConciliacaoIfood(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+  "/importacao/99food/aplicar": { campos: ["importacao", "justificativa", "aceitarDiferencaDeRepasse"], fazer: (n, c, b) => n.aplicarRelatorio99Food(c, { importacaoId: id(b.importacao), justificativa: b.justificativa, ...(marcado(b.aceitarDiferencaDeRepasse) ? { aceitarDiferencaDeRepasse: true } : {}) }) },
   "/importacao/ifood-conciliacao/classificar": { campos: ["chave", "categoria", "justificativa"], fazer: (n, c, b) => n.classificarLancamentoIfood(c, { chave: b.chave, categoria: b.categoria, justificativa: b.justificativa }) },
   "/conciliacoes/gerar-repasses-ifood": { campos: [], fazer: (n, c) => n.gerarCandidatasDeRepasseIfood(c, {}) },
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },

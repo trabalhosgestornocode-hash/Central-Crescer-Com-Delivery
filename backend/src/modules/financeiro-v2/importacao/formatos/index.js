@@ -5,7 +5,7 @@
 import { decodificar, lerTabela } from "../leitor.js";
 import { lerOfx } from "./ofx.js";
 import { lerPdf } from "./pdf.js";
-import { lerXlsx } from "./xlsx.js";
+import { lerXlsx, xlsxDentroDoZip } from "./xlsx.js";
 
 export const FORMATO = Object.freeze({ CSV: "csv", XLSX: "xlsx", PDF: "pdf", OFX: "ofx", DESCONHECIDO: "desconhecido" });
 export const MARCA_FORMULA_SEM_VALOR = "#FORMULA_SEM_VALOR";
@@ -35,7 +35,7 @@ function textoDaCelula(c) {
 export function paraTabelas(bytes, formato, adaptador, periodo) {
   if (formato === FORMATO.CSV) return { formato, tabelas: [{ nome: "csv", linhas: lerTabela(decodificar(bytes)).linhas }], avisos: [] };
   if (formato === FORMATO.XLSX) {
-    const wb = lerXlsx(bytes);
+    const wb = lerXlsx(adaptador?.aceitaZip ? xlsxDentroDoZip(bytes) : bytes);
     const avisos = [];
     const tabelas = wb.abas.map((aba) => {
       const linhas = aba.linhas.map((l) => l.map(textoDaCelula));

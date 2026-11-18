@@ -24,9 +24,9 @@ function formatosDoCanal(d) {
 }
 
 // -------------------------------------------------------------------------------------------------- envio de arquivo
-/** Versão corrigida do relatório do iFood: escolha explícita. Sem escolha, o arquivo é complementar e nada anterior é retirado. */
+/** Versão corrigida de um relatório oficial: escolha explícita. Sem escolha, o arquivo é complementar e nada anterior é retirado. */
 function substituiveis(d) {
-  const lista = (d.historico ?? []).filter((i) => i.tipoRelatorio === "IFOOD_CONCILIACAO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado));
+  const lista = (d.historico ?? []).filter((i) => ["IFOOD_CONCILIACAO", "NOVENTA_E_NOVE_FOOD_RELATORIO"].includes(i.tipoRelatorio) && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado));
   if (!lista.length) return "";
   return `<label class="campo--largo">Este arquivo corrige outro? <select name="substitui"><option value="">Não: é um relatório novo ou complementar</option>${lista.map((i) => `<option value="${esc(i.id)}">Sim: substitui ${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}</option>`).join("")}</select></label>`;
 }
@@ -59,7 +59,7 @@ function formularioDeArquivo(d, ctx) {
   <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${aceitos.map((f) => `<option value="${esc(f.tipoRelatorio)}"${f.principal ? " selected" : ""}>${esc(f.nome)}${f.principal ? " — recomendado" : ""}</option>`).join("")}</select></label>
   <label>Início do período <input type="date" name="periodoInicio" value="${esc(hoje.inicio)}" required></label>
   <label>Fim do período <input type="date" name="periodoFim" value="${esc(hoje.fim)}" required></label>
-  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept=".xlsx,.pdf,.csv" required></label>
+  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept="${d.canal === "NOVENTA_E_NOVE_FOOD" ? ".xlsx,.zip" : ".xlsx,.pdf,.csv"}" required></label>
   ${substituiveis(d)}
   </div>
   <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado da ${esc(nome)}, do período informado, para a unidade ${esc(d.unidade?.nome ?? "")}. Nada entra no financeiro antes da confirmação da prévia.</label>
@@ -97,7 +97,7 @@ function historico(d) {
     const [rotulo, classe] = ESTADO[i.estado] ?? [i.estado, "neutro"];
     return `<tr>${td("Período", `${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}`, "esquerda")}${td("Relatório", esc(i.relatorio), "esquerda")}${td("Situação", selo(rotulo, classe))}
 ${td("Erros", String(i.erros))}${td("Divergências", String(i.divergencias))}${td("Já existentes", String(i.jaExistentes))}
-${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">${i.estado === "PRONTO_PARA_IMPORTAR" ? "Conferir prévia e confirmar" : "Ver prévia e propostas"}</button>${i.tipoRelatorio === "IFOOD_CONCILIACAO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado) ? `<button type="button" class="botao-link" data-detalhe="conciliacao-ifood:${esc(i.id)}">Conferir e aplicar ao Financeiro</button>` : ""}`)}</tr>`;
+${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">${i.estado === "PRONTO_PARA_IMPORTAR" ? "Conferir prévia e confirmar" : "Ver prévia e propostas"}</button>${i.tipoRelatorio === "IFOOD_CONCILIACAO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado) ? `<button type="button" class="botao-link" data-detalhe="conciliacao-ifood:${esc(i.id)}">Conferir e aplicar ao Financeiro</button>` : ""}${i.tipoRelatorio === "NOVENTA_E_NOVE_FOOD_RELATORIO" && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado) ? `<button type="button" class="botao-link" data-detalhe="relatorio-99food:${esc(i.id)}">Conferir e aplicar ao Financeiro</button>` : ""}`)}</tr>`;
   }).join("");
   const demos = d.canal === "IFOOD" ? (d.demonstrativos.length ? `<h4>Demonstrativos oficiais registrados</h4><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Demonstrativos oficiais do iFood</caption><thead><tr><th scope="col">Período</th><th scope="col">Faturamento</th><th scope="col">Comissões</th><th scope="col">Taxas</th><th scope="col">Ajustes</th><th scope="col">Repasse previsto</th><th scope="col">Repasse</th></tr></thead><tbody>
 ${d.demonstrativos.map((x) => `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Faturamento", valor(x.brutoCentavos))}${td("Comissões", valor(x.comissoesCentavos))}${td("Taxas", valor(x.taxasCentavos))}${td("Ajustes", valor(x.ajustesCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Repasse", esc(REPASSE[x.situacaoRepasse] ?? x.situacaoRepasse))}</tr>`).join("")}</tbody></table></div>` : '<p class="nota">Nenhum demonstrativo oficial registrado.</p>') : "";
@@ -115,6 +115,31 @@ ${formatosDoCanal(d)}
 ${d.canal === "IFOOD" ? formularioDoDemonstrativo(d) : ""}
 ${formularioDeArquivo(d, ctx)}
 ${historico(d)}</div>`;
+}
+
+// ------------------------------------------------------------------------------------- painel: efeitos do relatório 99Food
+/** `p` = resposta de /previa-relatorio-99food. A conta vem pronta do servidor. */
+export function previaDoRelatorio99Food(p, { podeAplicar = false } = {}) {
+  const v = p.valores;
+  const dre = [["Vendas de itens", v.vendasCentavos], ["Taxas de processamento", -v.processamentoCentavos], ["Comissões", -v.comissoesCentavos], ["Marketing", -v.marketingCentavos], ["Resultado do canal", v.resultadoCentavos]];
+  const conferir = [["Recompensas da plataforma", v.recompensasCentavos], ["Receita de pedidos em oferta", v.receitaOfertaCentavos], ["Repasse informado", v.repasseInformadoCentavos], ["Diferença a conferir", v.diferencaRepasseCentavos]];
+  const conf = p.conferenciaSaipos;
+  const form = p.podeAplicar && podeAplicar ? `<form class="acao" data-acao="/api/fv2/acoes/importacao/99food/aplicar" data-recarregar="lista"><input type="hidden" name="importacao" value="${esc(p.importacaoId)}">
+<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>
+${p.exigeAceiteDaDiferenca ? '<label class="caixa-marcar"><input type="checkbox" name="aceitarDiferencaDeRepasse" required> Entendo que a diferença para o repasse informado fica em conferência.</label>' : ""}
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Conferi os valores e autorizo lançar no Financeiro.</label>
+<button type="submit" class="botao botao--primario">Aplicar ao Financeiro</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>` : "";
+  const dias = p.valoresDiarios.map((d) => `<tr>${td("Dia", esc(dataBR(d.data)), "esquerda")}${td("Vendas", String(d.quantidade))}${td("Itens", valor(d.itensCentavos))}${td("Taxas", valor(d.processamentoCentavos))}${td("Comissões", valor(d.comissaoCentavos))}${td("Marketing", valor(d.marketingCentavos))}${td("Recompensas", valor(d.recompensasCentavos))}${td("Repasse", valor(d.repasseCentavos))}</tr>`).join("");
+  return `${fechar("Relatório 99Food: conferir antes de aplicar")}
+<p class="nota">${esc(p.loja?.nome ?? "Loja")} · ${esc(p.loja?.cidade ?? "")} · ID ${esc(p.loja?.id ?? "—")}<br>${esc(dataBR(p.periodo.inicio))} a ${esc(dataBR(p.periodo.fim))} · ${p.dias} dia(s) · ${p.quantidade} venda(s). Nada foi gravado ainda.</p>
+<h3>Entra na DRE</h3><dl class="ficha ficha--compacta">${dre.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}</dl>
+<h3>Fica em conferência</h3><dl class="ficha ficha--compacta">${conferir.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}</dl>
+<p class="nota">O relatório não informa data nem ciclo do repasse: nada vira recebível nem crédito no banco.</p>
+<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · ${conf.diasDivergentes.length} com diferença · ${conf.diasSemSaipos.length} sem pedidos 99Food na SAIPOS.</p>
+<h3>Valores por dia</h3><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Valores diários do relatório da 99Food</caption><thead><tr><th scope="col">Dia</th><th scope="col">Vendas</th><th scope="col">Itens</th><th scope="col">Taxas</th><th scope="col">Comissões</th><th scope="col">Marketing</th><th scope="col">Recompensas</th><th scope="col">Repasse</th></tr></thead><tbody>${dias}</tbody></table></div>
+${p.bloqueios.length ? `<h3>O que impede aplicar</h3>${lista(p.bloqueios.map((b) => `<li><span>${esc(b.mensagem)}</span></li>`))}` : ""}
+${p.avisos.length ? `<h3>Avisos</h3>${lista(p.avisos.map((a) => `<li><span>${esc(a.mensagem)}</span></li>`))}` : ""}
+<p class="nota">Lançamentos: ${p.lancamentos.criar} novo(s), ${p.lancamentos.manter} já aplicado(s), ${p.lancamentos.cancelar} a substituir.</p>${form}`;
 }
 
 // ------------------------------------------------------------------------------------- painel: efeitos da conciliação iFood

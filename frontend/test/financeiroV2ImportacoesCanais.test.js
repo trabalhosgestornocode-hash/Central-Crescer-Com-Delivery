@@ -175,8 +175,8 @@ test("payload REAL do backend renderiza as três seções, com os estados certos
   assert.equal((i.match(/formato--ok/g) ?? []).length, 2);
   assert.equal((i.match(/formato--off/g) ?? []).length, 2);
   const x = imp.importacoesDoCanal(await CONSULTAS["/importacoes-canal"](n, c, { canal: "NOVENTA_E_NOVE_FOOD" }));
-  assert.equal((x.match(/formato--ok/g) ?? []).length, 0);
-  assert.match(x, /data-envio-bloqueado/);
+  assert.equal((x.match(/formato--ok/g) ?? []).length, 1);
+  assert.doesNotMatch(x, /data-envio-bloqueado/);
   for (const html of [s, i, x]) assert.doesNotMatch(html, /undefined|NaN|\[object/);
   const previa = await CONSULTAS["/previa-demonstrativo-ifood"](n, c, { periodoInicio: "2026-11-01", periodoFim: "2026-11-08", vendas: "1.000,00", comissoes: "120,00", taxaPagamento: "20,00", mensalidade: "10,00", servicosEPromocoes: "50,00", ajustes: "0,00", liquido: "800,00", origem: "Sintético", justificativa: "Teste" });
   const painel = imp.previaDoDemonstrativo(previa, { params: { periodoInicio: "2026-11-01" }, podeRegistrar: true });

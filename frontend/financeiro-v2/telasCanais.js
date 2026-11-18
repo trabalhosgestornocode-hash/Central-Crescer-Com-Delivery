@@ -235,7 +235,7 @@ const SITUACAO_PLATAFORMA = Object.freeze({
   CONFIRMADO_COM_REPASSE_PENDENTE: ["Confirmado · repasse pendente", "info"], SEM_FONTE_OFICIAL: ["Sem relatório oficial", "neutro"],
   IMPORTADO: ["Importado · ainda não aplicado", "alerta"], AGUARDANDO_CONFERENCIA: ["Aguardando conferência", "info"], DIVERGENTE: ["Divergente", "erro"], CONCILIADO: ["Conciliado", "ok"],
 });
-const REPASSE = Object.freeze({ RECEBIDO: ["Recebido", "ok"], PARCIAL: ["Parcial", "alerta"], PREVISTO: ["Previsto", "info"], ATRASADO: ["Atrasado", "erro"], SEM_RECEBIVEL: ["Sem recebível", "neutro"] });
+const REPASSE = Object.freeze({ SEM_CICLO: ["Aguardando identificação", "alerta"], RECEBIDO: ["Recebido", "ok"], PARCIAL: ["Parcial", "alerta"], PREVISTO: ["Previsto", "info"], ATRASADO: ["Atrasado", "erro"], SEM_RECEBIVEL: ["Sem recebível", "neutro"] });
 const depende = (texto = "Depende do relatório oficial") => `<span class="valor valor--desconhecido">${esc(texto)}</span>`;
 
 /** iFood e 99Food: SÓ fontes oficiais. Totais vêm prontos do servidor; ausência aparece como ausência (nunca zero). */
@@ -247,13 +247,14 @@ export function plataforma(d, ctx = {}) {
   const v = (k) => (t ? valor(t[k]) : depende());
   const cards = [
     ["Faturamento bruto", v("brutoCentavos"), "Vendas do período pelo relatório oficial da plataforma."],
-    ["Pedidos e cancelamentos", t && t.pedidos !== null ? `${t.pedidos} · ${t.cancelamentos}` : depende("Depende do relatório de pedidos"), t?.observacaoPedidos ?? "O relatório oficial de pedidos ainda não é importado."],
+    ["Pedidos e cancelamentos", t && t.pedidos !== null ? `${t.pedidos}${t.cancelamentos === null ? "" : ` · ${t.cancelamentos}`}` : depende("Depende do relatório de pedidos"), t?.observacaoPedidos ?? "O relatório oficial de pedidos ainda não é importado."],
     ["Descontos e promoções", v("descontosEPromocoesCentavos"), "Serviços e promoções sem decomposição no demonstrativo: dedução a classificar."],
     ["Comissões", v("comissoesCentavos"), "Comissão do marketplace (não é taxa de maquininha)."],
     ["Taxas", v("taxasCentavos"), "Taxa de transação do pagamento online."],
     ["Mensalidade", v("mensalidadesCentavos"), "Mensalidade da plataforma no período."],
     ["Ajustes", v("ajustesCentavos"), "Ajustes informados pela plataforma."],
-    ["Repasse previsto", v("repassePrevistoCentavos"), "Líquido a receber da plataforma (recebível). Não é depósito."],
+    ...(t?.marketingCentavos !== undefined ? [["Marketing", v("marketingCentavos"), "Despesas de marketing informadas pela 99Food."], ["Resultado do canal", v("resultadoCentavos"), "Vendas de itens − taxas − comissões − marketing."], ["Recompensas (em conferência)", v("recompensasCentavos"), "Valor informado pela plataforma. Não entra na DRE até confirmar como compõe as vendas ou o repasse."]] : []),
+    [t?.marketingCentavos !== undefined ? "Repasse informado" : "Repasse previsto", v("repassePrevistoCentavos"), t?.marketingCentavos !== undefined ? "Valor informado pela 99Food, sem data de pagamento. Não é recebível nem depósito." : "Líquido a receber da plataforma (recebível). Não é depósito."],
     ["Repasse recebido", t ? (t.repasseRecebidoCentavos ? valor(t.repasseRecebidoCentavos) : '<span class="nota">Nenhum repasse confirmado</span>') : depende(), "Só o que já foi liquidado com a entrada no banco."],
   ].map(([titulo, conteudo, exp]) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(titulo)}</h3>${explicar(titulo, exp)}</div><p>${conteudo}</p></article>`).join("");
   const historico = d.historico?.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Demonstrativos oficiais registrados</caption><thead><tr><th scope="col">Período</th><th scope="col">Bruto</th><th scope="col">Repasse previsto</th><th scope="col">Recebido</th><th scope="col">Repasse</th></tr></thead><tbody>
