@@ -159,7 +159,29 @@ const ACAITERIA = [
   f("VALORES_DE_TERCEIROS", "Valores retidos ou recebidos em nome de terceiros", "MOVIMENTACOES_PATRIMONIAIS"),
 ];
 
-export const MODELO_DE_PLANO = Object.freeze({ BASE: Object.freeze(BASE), ACAITERIA: Object.freeze([...BASE, ...ACAITERIA]) });
+/**
+ * Franquia Subway (doc 55). Reaproveita as categorias operacionais comuns (pessoal, benefícios, aluguel, energia...) e NÃO traz as
+ * de açaí. "Despesas de franquia" é grupo próprio (royalties e fundo de publicidade AFSB, nunca "comercial variável").
+ * A classificação do grupo é uma das 13 fixas (DESPESAS_COMERCIAIS: pesa sobre as vendas); mudar depois é RECLASSIFICAÇÃO, sem migração.
+ * "Distribuição de lucros" é PATRIMONIAL: nunca entra na DRE.
+ */
+const NAO_SUBWAY = new Set(["FRUTAS", "BROWNIES", "MIX", "SUCO", "ACAI_DISTRIBUIDORA"]);
+const SUBWAY = [
+  ...ACAITERIA.filter((c) => !NAO_SUBWAY.has(c.codigo)),
+  g("DESPESAS_DE_FRANQUIA", "Despesas de franquia", C.DESPESAS_COMERCIAIS),
+  f("ROYALTIES", "Royalties", "DESPESAS_DE_FRANQUIA"),
+  f("FUNDO_DE_PUBLICIDADE_AFSB", "Fundo de publicidade (AFSB)", "DESPESAS_DE_FRANQUIA"),
+  f("ENTREGAS_TERCEIRIZADAS", "Entregas terceirizadas", "DESPESAS_COMERCIAIS"),
+  f("RECRUTAMENTO_E_SELECAO", "Recrutamento e seleção", "PESSOAL"),
+  f("LOCACAO_DE_EQUIPAMENTOS", "Locação de equipamentos", "DESPESAS_ADMINISTRATIVAS"),
+  f("SEGUROS", "Seguros", "DESPESAS_ADMINISTRATIVAS"),
+  f("HIGIENIZACAO_E_PRAGAS", "Higienização e controle de pragas", "DESPESAS_ADMINISTRATIVAS"),
+  f("MATERIAIS_DE_CONSUMO", "Materiais de consumo", "DESPESAS_ADMINISTRATIVAS"),
+  f("TREINAMENTO_E_EVENTOS", "Treinamento e eventos", "DESPESAS_ADMINISTRATIVAS"),
+  f("DISTRIBUICAO_DE_LUCROS", "Distribuição de lucros aos sócios", "MOVIMENTACOES_PATRIMONIAIS"),
+];
+
+export const MODELO_DE_PLANO = Object.freeze({ BASE: Object.freeze(BASE), ACAITERIA: Object.freeze([...BASE, ...ACAITERIA]), SUBWAY: Object.freeze([...BASE, ...SUBWAY]) });
 
 /** Definição de uma categoria do sistema e de suas ascendentes, da raiz para a folha. */
 export function cadeiaDoSistema(codigo) {
