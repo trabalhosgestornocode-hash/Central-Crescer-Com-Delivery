@@ -9,7 +9,7 @@ import { competencia, esc, moeda } from "./formatar.js";
 
 /** Proposta inicial (doc 29 §2.1), SEMPRE editável e sujeita à confirmação do proprietário. */
 export const COMPETENCIA_DE_ABERTURA_PROPOSTA = "2026-11";
-export const MODELOS_DE_PLANO = Object.freeze([["ACAITERIA", "Açaiteria (base + categorias da açaiteria)"], ["BASE", "Base (qualquer empresa)"]]);
+export const MODELOS_DE_PLANO = Object.freeze([["ACAITERIA", "Açaiteria (base + categorias da açaiteria)"], ["BASE", "Base (qualquer empresa)"], ["SUBWAY", "Subway (franquia: royalties, AFSB, benefícios, distribuição de lucros)"]]);
 export const PROCESSADORES = Object.freeze([["STONE", "Stone"], ["IFOOD", "iFood"], ["ANOTA_AI", "Anota AI"], ["OPERADORA_BENEFICIOS", "Operadora de vale"], ["MAQUINA_TERCEIROS", "Máquina de terceiros"], ["OUTRO", "Outro processador"]]);
 const NOTA_SEM_ANEXO = "O cofre de documentos está desligado: informe a referência do documento. O sistema guarda a referência como texto e não afirma que conferiu um anexo.";
 
