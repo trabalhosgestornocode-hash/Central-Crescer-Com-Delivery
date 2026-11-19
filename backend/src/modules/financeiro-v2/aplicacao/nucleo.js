@@ -12,6 +12,9 @@ import { operacoesDeSangriasComoDespesa } from "./sangriasComoDespesa.js";
 import { operacoesDoCanalPlataforma } from "./canalPlataforma.js";
 import { operacoesDoCalendarioFaturamento } from "./calendarioFaturamento.js";
 import { operacoesDeImportacoesPorCanal } from "./importacoesPorCanal.js";
+import { operacoesDeFontesDeFaturamento } from "./fontesDeFaturamento.js";
+import { operacoesDaConferenciaSwf } from "./conferenciaSwf.js";
+import { operacoesDeSangriasSwf } from "./sangriasSwf.js";
 import { operacoesDoDemonstrativoIfood } from "./demonstrativoIfood.js";
 import { operacoesDaConciliacaoIfood } from "./conciliacaoIfood.js";
 import { operacoesDoRelatorio99Food } from "./relatorio99Food.js";
@@ -94,6 +97,9 @@ export function criarNucleoFinanceiro({
     ...operacoesDoCanalPlataforma(base),
     ...operacoesDoCalendarioFaturamento(base),
     ...operacoesDeImportacoesPorCanal(base, { fontes }),
+    ...operacoesDeFontesDeFaturamento(base),
+    ...operacoesDaConferenciaSwf(base),
+    ...operacoesDeSangriasSwf(base),
     ...operacoesDoDemonstrativoIfood(base),
     ...operacoesDaConciliacaoIfood(base),
     ...operacoesDoRelatorio99Food(base),

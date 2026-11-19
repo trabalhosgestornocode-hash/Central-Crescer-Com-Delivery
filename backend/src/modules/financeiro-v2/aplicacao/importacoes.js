@@ -10,6 +10,8 @@
 //   - a mesma origem não entra duas vezes (chave fonte + tipo + identificador, única por escopo no banco);
 //   - versão corrigida de um relatório entra como SUBSTITUIÇÃO explícita: os registros anteriores ficam marcados como
 //     substituídos (nunca apagados) e a nova importação passa a valer.
+import { exigirFonteDaUnidade, fontesDaUnidade } from "./fontesDeFaturamento.js";
+import { ehRelatorioSwf } from "../importacao/fontes/swf.js";
 import { CODIGO, ErroFinanceiro, falhar } from "../dominio/erros.js";
 import { CONFERENCIA_REGISTRO, ESTADO_IMPORTACAO as E, EVENTO_HISTORICO, SITUACAO_CORRESPONDENCIA, SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
@@ -56,9 +58,11 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
 
   /** Analisa o arquivo e o confronta com o que já foi gravado no escopo (sem gravar nada). */
   async function montarPrevia(tx, cx, imp, adaptador, bytes) {
+    // SWF: a loja que o SWF imprime precisa ser uma das lojas cadastradas nas fontes de faturamento da unidade.
+    const lojasSwf = ehRelatorioSwf(adaptador.tipoRelatorio) ? fontesDaUnidade(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade")).lojasSwf : [];
     const analise = analisarArquivo({
       bytes, adaptador, periodo: { inicio: imp.periodoInicio, fim: imp.periodoFim },
-      estabelecimentosDaUnidade: estabelecimentosDaUnidade?.(cx, adaptador.fonte) ?? null,
+      estabelecimentosDaUnidade: lojasSwf.length ? lojasSwf : estabelecimentosDaUnidade?.(cx, adaptador.fonte) ?? null,
     });
     // Relatórios que sabem detectar contradição com importações anteriores (ex.: movimentações de caixa): divergência que exige aceite explícito;
     // as linhas anteriores ausentes neste arquivo só são substituídas na CONFIRMAÇÃO aceita, nunca antes (e nunca apagadas: ficam no histórico).
@@ -122,6 +126,8 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
       const adaptador = fontes.buscar(c.fonte, c.tipoRelatorio);
       return b.executar(ctx, ACAO.IMPORTAR, async (cx, tx) => {
         b.exigirNaoFutura(c.periodoFim, "periodoFim");
+        // Fontes de faturamento da unidade: relatório de sistema que a unidade não usa é recusado antes de guardar qualquer coisa.
+        exigirFonteDaUnidade(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"), c.fonte, c.tipoRelatorio);
         const guardado = await exigirOCofre().guardar(cx, { conteudo: c.conteudo, tipoMime: c.tipoMime });
         const chaveDoc = `sha256:${guardado.hashSha256}`;
         let anterior = null;

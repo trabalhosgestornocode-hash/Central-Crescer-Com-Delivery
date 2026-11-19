@@ -31,6 +31,7 @@ import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 import { deParaFormaSaipos, pagamentoDaDescricaoSaipos } from "../importacao/fontes/saipos.js";
 import { operadoraNaData } from "../dominio/operadoras.js";
 import { rotulo } from "../importacao/leitor.js";
+import { SWF_CANAIS, ehRelatorioSwf } from "../importacao/fontes/swf.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
 /** Venda formada do relatório de formas de pagamento (total do dia por forma), não de pedido. */
@@ -494,7 +495,7 @@ export function operacoesDeFormacao(b) {
       if (!c.canal) falhar(CODIGO.OPERACAO_INVALIDA, "Total sem canal reconhecido não gera receita por canal.");
       const receita = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_DE_VENDA[c.canal]), {
         valorCentavos: c.receitaBrutaCentavos, moeda: "BRL", descricao: `Vendas ${c.canal} de ${c.periodoInicio} a ${c.periodoFim} (total do período, fonte agregada)`, dataOperacao: c.data, competencia: p.competencia,
-        fonte: { sistema: p.fonte, idExterno: `periodo:${c.periodoInicio}:${c.periodoFim}:${c.canal}` }, canal: c.canal, origem: { tipo: TIPO.PROPOSTA, id: p.id },
+        fonte: { sistema: ehRelatorioSwf(p.tipoRelatorio) ? "SWF" : p.fonte, idExterno: `periodo:${c.periodoInicio}:${c.periodoFim}:${c.canal}` }, canal: c.canal, origem: { tipo: TIPO.PROPOSTA, id: p.id },
       });
       efeitos.push({ tipo: TIPO.LANCAMENTO, id: receita.id });
     } else if (p.operacao === OP.VENDA_AGREGADA) {
@@ -554,6 +555,9 @@ export function operacoesDeFormacao(b) {
         const porFonte = {
           SAIPOS: () => propostasDeVendas(tx, cx, registros, g), STONE: () => propostasStone(tx, cx, registros),
           FOODY: () => propostasFoody(registros, imp), UNICRED: () => propostasUnicred(registros, g, imp),
+          // SWF (fonte OUTRO): só o relatório 76 forma propostas — e só do Balcão (iFood/99Food ficam de fora pela regra das
+          // fontes oficiais). Os relatórios 03 e 45 são controle: nenhuma proposta.
+          OUTRO: () => (imp.tipoRelatorio === SWF_CANAIS ? propostasDeVendas(tx, cx, registros.filter((r) => r.tipoRegistro === "TOTAL_CANAL"), g) : []),
         };
         const rascunhos = porFonte[imp.fonte] ? await porFonte[imp.fonte]() : [];
         const contagem = { criadas: 0, existentes: 0, reavaliadas: 0, substituidas: 0, porEstado: {} };

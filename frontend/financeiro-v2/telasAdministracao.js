@@ -5,7 +5,7 @@ import { ESTADOS_COMPETENCIA, PERMISSOES, TIPOS_DOCUMENTO, competencia, dataBR, 
 import { paginacao } from "./telasTesouraria.js";
 import { abertura } from "./telasAbertura.js";
 
-export const SECOES_CONFIG = Object.freeze([["unidade", "Organização e unidade"], ["plano", "Plano de contas"], ["canais", "Canais e processadores"], ["contas", "Contas financeiras"], ["metodologia", "Competências e metodologia"], ["permissoes", "Usuários e permissões"], ["abertura", "Abertura financeira"], ["taxas", "Taxas Stone"]]);
+export const SECOES_CONFIG = Object.freeze([["unidade", "Organização e unidade"], ["fontes", "Fontes de faturamento"], ["plano", "Plano de contas"], ["canais", "Canais e processadores"], ["contas", "Contas financeiras"], ["metodologia", "Competências e metodologia"], ["permissoes", "Usuários e permissões"], ["abertura", "Abertura financeira"], ["taxas", "Taxas Stone"]]);
 const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
 const selo = (texto, classe) => `<span class="selo selo--${classe}">${esc(texto)}</span>`;
 const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"${classe ? ` class="${classe}"` : ""}><span class="cel">${conteudo}</span></td>`;
@@ -56,10 +56,37 @@ ${(ctx.permissoes ?? []).includes("financeiro_v2.registrar") ? acao({ url: "/api
 // --------------------------------------------------------------------------------------------------- configurações
 export function configuracoes(dados, f = {}, ctx = {}) {
   const secao = f.secao ?? "unidade";
-  const corpo = { unidade, plano, canais, contas, metodologia, permissoes, abertura, taxas }[secao] ?? unidade;
+  const corpo = { unidade, fontes, plano, canais, contas, metodologia, permissoes, abertura, taxas }[secao] ?? unidade;
   return `<div class="configuracoes"><header class="cabecalho"><div><h1>Configurações</h1><p class="subtitulo">${esc(ctx.unidadeNome ?? "")} · organização e unidade vêm da sua sessão</p></div></header>
 <nav class="abas abas--botoes" aria-label="Seções de configurações">${SECOES_CONFIG.map(([k, t]) => `<button type="button" data-secao-config="${k}"${k === secao ? ' aria-current="page"' : ""}>${esc(t)}</button>`).join("")}</nav>
 ${corpo(dados, ctx)}</div>`;
+}
+
+// ------------------------------------------------------------------------------------- fontes de faturamento (doc 54)
+const NOME_FONTE = Object.freeze({ SAIPOS: "SAIPOS", SWF: "SWF", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
+const nomesFontes = (l) => (l ?? []).map((f) => NOME_FONTE[f] ?? f).join(", ");
+/** `d` = resposta de /fontes-faturamento. Alterar exige "Configurar" + justificativa; o servidor confere tudo de novo. */
+function fontes(d, ctx = {}) {
+  const hist = d.historico?.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Alterações das fontes de faturamento</caption><thead><tr><th scope="col">Quando</th><th scope="col">Antes</th><th scope="col">Depois</th><th scope="col">Justificativa</th></tr></thead><tbody>
+${d.historico.map((h) => `<tr>${td("Quando", esc(dataBR(String(h.em).slice(0, 10))), "esquerda")}${td("Antes", esc(nomesFontes(h.antes)))}${td("Depois", `${esc(nomesFontes(h.depois))}${h.lojasSwf?.length ? `<br><span class="nota">Loja SWF: ${esc(h.lojasSwf.join(", "))}</span>` : ""}`)}${td("Justificativa", esc(h.justificativa ?? "—"), "esquerda")}</tr>`).join("")}</tbody></table></div>` : nenhum("Nenhuma alteração registrada: vale o padrão.");
+  const form = !ctx.podeConfigurar ? exige('Alterar as fontes exige a permissão "Configurar".') : !d.unidadeConfigurada ? exige("Configure a unidade (nome de exibição) antes de definir as fontes.") : acao({
+    url: "/api/fv2/acoes/configuracoes/fontes-faturamento", rotulo: "Salvar fontes de faturamento", recarregar: "lista",
+    aviso: "Confirmo que estas são as fontes desta unidade. Relatórios de outros sistemas passarão a ser recusados nela.",
+    campos: `<fieldset><legend>Sistema de loja (Presencial/Balcão)</legend>
+<label class="caixa-marcar"><input type="radio" name="sistemaDeLoja" value="SAIPOS"${d.sistemaDeLoja === "SAIPOS" ? " checked" : ""} required> SAIPOS</label>
+<label class="caixa-marcar"><input type="radio" name="sistemaDeLoja" value="SWF"${d.sistemaDeLoja === "SWF" ? " checked" : ""}> SWF</label></fieldset>
+<fieldset><legend>Plataformas (sempre pela fonte oficial)</legend>
+<label class="caixa-marcar"><input type="checkbox" name="ifood" value="true"${d.fontes.includes("IFOOD") ? " checked" : ""}> iFood</label>
+<label class="caixa-marcar"><input type="checkbox" name="noventaENoveFood" value="true"${d.fontes.includes("NOVENTA_E_NOVE_FOOD") ? " checked" : ""}> 99Food</label></fieldset>
+<label>Loja como o SWF imprime (só para SWF) <input name="lojasSwf" maxlength="80" value="${esc((d.lojasSwf ?? []).join("; "))}" placeholder="Ex.: SUBWAY CENTRO"></label>
+${justificativa()}`,
+  });
+  return `<section class="card" aria-labelledby="t-fontes"><h2 id="t-fontes">Fontes de faturamento da unidade</h2>
+<dl class="ficha"><dt>Fontes em uso</dt><dd>${esc(nomesFontes(d.fontes))}${d.configurado ? "" : ` ${selo("Padrão", "info")}`}</dd>
+<dt>Sistema de loja</dt><dd>${esc(NOME_FONTE[d.sistemaDeLoja] ?? "—")}</dd>${d.lojasSwf?.length ? `<dt>Loja no SWF</dt><dd>${esc(d.lojasSwf.join(", "))}</dd>` : ""}</dl>
+<p class="nota">O sistema de loja fornece o Presencial/Balcão. iFood e 99Food vêm sempre dos relatórios oficiais das plataformas; o sistema de loja só confere. Arquivo de um sistema que a unidade não usa é recusado.</p>
+${form}</section>
+<section class="card" aria-labelledby="t-fontes-hist"><h2 id="t-fontes-hist">Histórico das fontes</h2>${hist}</section>`;
 }
 
 function unidade(c) {

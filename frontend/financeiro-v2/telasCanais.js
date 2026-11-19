@@ -432,3 +432,85 @@ export function textoDaGradeDeTaxas(entradas) {
   if (!linhas.length && !erros.length) erros.push("Informe ao menos uma taxa.");
   return { texto: linhas.join("\n"), erros };
 }
+
+// ------------------------------------------------------------------------------------------------ SWF (Subway)
+// 19/11/2026 (doc 54): área do sistema de loja SWF. Só o Balcão do relatório 76 é faturamento, e é TOTAL DO PERÍODO (nunca
+// repartido por dia). iFood e 99Food do SWF são conferência com as fontes oficiais; o 03 (formas) e o 45 (dia, todos os canais)
+// são controle. Todos os números chegam prontos do servidor (/conferencia-swf); nenhum rótulo da SAIPOS aparece aqui.
+const SITUACAO_BALCAO_SWF = Object.freeze({
+  APLICADO: ["Aplicado ao Financeiro", "ok"], PROPOSTA_ABERTA: ["Proposta aguardando aprovação e aplicação", "alerta"],
+  SEM_PROPOSTA: ["Importado: gere a proposta na Central", "alerta"], REJEITADO: ["Proposta rejeitada", "neutro"],
+});
+const COMPARACAO_SWF = Object.freeze({ CONFERE: ["Confere", "ok"], PENDENTE_DE_INVESTIGACAO: ["Pendente de investigação", "alerta"] });
+
+function periodoSwf(p) {
+  const [rs, cs] = SITUACAO_BALCAO_SWF[p.balcao.situacao] ?? [p.balcao.situacao, "neutro"];
+  const cards = [
+    ["Faturamento do Balcão", `${valor(p.balcao.valorCentavos)}<br><span class="nota">${p.balcao.quantidade} venda(s) · total do período</span>`, "Relatório 76 do SWF, canal Balcão. É o único faturamento reconhecido pelo SWF. Não é repartido por dia: o relatório não traz o valor de cada dia."],
+    ["iFood no SWF", `${valor(p.porCanal.IFOOD.valorCentavos)}<br><span class="nota">${p.porCanal.IFOOD.quantidade} pedido(s) · só conferência</span>`, "Não é receita: o faturamento do iFood vem do relatório oficial do iFood."],
+    ["99Food no SWF", `${valor(p.porCanal.NOVENTA_E_NOVE_FOOD.valorCentavos)}<br><span class="nota">${p.porCanal.NOVENTA_E_NOVE_FOOD.quantidade} pedido(s) · só conferência</span>`, "Não é receita: o faturamento da 99Food vem do relatório oficial da 99Food."],
+    ["Total do relatório 76", valor(p.totalCentavos), "Soma de todos os canais do SWF no período (controle)."],
+  ].map(([titulo, conteudo, exp]) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(titulo)}</h3>${explicar(titulo, exp)}</div><p>${conteudo}</p></article>`).join("");
+  const comparacoes = p.comparacoes.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Conferência entre os relatórios do SWF</caption><thead><tr><th scope="col">Conferência</th><th scope="col">Valor A</th><th scope="col">Valor B</th><th scope="col">Diferença</th><th scope="col">Situação</th></tr></thead><tbody>
+${p.comparacoes.map((c) => { const [r, k] = COMPARACAO_SWF[c.situacao] ?? [c.situacao, "neutro"]; return `<tr>${td("Conferência", `${esc(c.descricao)}${c.explicacao && c.situacao !== "CONFERE" ? `<br><span class="nota">${esc(c.explicacao)}</span>` : ""}`, "esquerda")}${td("Valor A", valor(c.aCentavos))}${td("Valor B", valor(c.bCentavos))}${td("Diferença", valor(c.diferencaCentavos))}${td("Situação", selo(r, k))}</tr>`; }).join("")}
+</tbody></table></div>` : nenhum("Importe o 03 (formas de pagamento) e o 45 (análise por dia) do MESMO período para conferir o 76.");
+  return `<section class="card" aria-label="Período de ${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}"><div class="card-topo"><h2>${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}</h2>${selo(rs, cs)}</div>
+<section class="resumo" aria-label="Números do período">${cards}</section>
+<h3>Conferência 76 × 03 × 45</h3>${comparacoes}
+<p class="nota">Relatório 45: ${p.diasDo45} de ${p.diasNoPeriodo} dia(s) do período importados.${p.formas ? "" : " Relatório 03 do mesmo período: não importado."}</p></section>`;
+}
+
+/** Área SWF: Resumo (Balcão, conferência, pendências, calendário) e Importações. `d` = resposta de /conferencia-swf. */
+export function swf(d, ctx = {}) {
+  const aba = ["importacoes", "sangrias"].includes(ctx.aba) ? ctx.aba : "resumo";
+  const abasSwf = `<nav class="abas abas--botoes" aria-label="Seções do SWF">${[["resumo", "Resumo"], ["importacoes", "Importações"], ["sangrias", "Sangrias do caixa"]].map(([k, t]) => `<button type="button" data-aba-canal="${k}"${k === aba ? ' aria-current="page"' : ""}>${t}</button>`).join("")}</nav>`;
+  if (aba === "sangrias") return `${cabecalho("SWF", "Sangrias do caixa · despesas pagas em dinheiro")}${abasSwf}${sangriasSwf(d, ctx)}`;
+  if (!d.usaSwf) return `${cabecalho("SWF", "Sistema de loja da Subway")}<p class="aviso">Esta unidade não usa o SWF como fonte de faturamento. As fontes da unidade ficam em Configurações → Fontes de faturamento.</p>`;
+  if (aba === "importacoes") return `${cabecalho("SWF", `Importações do sistema de loja · ${esc(d.mes)}`)}${abasSwf}${importacoesDoCanal(ctx.importacoes, { erro: ctx.importacoesErro ?? null })}`;
+  const pendentes = d.periodos.flatMap((p) => p.comparacoes.filter((c) => c.situacao !== "CONFERE").map((c) => ({ ...c, periodo: `${dataBR(p.periodoInicio)} a ${dataBR(p.periodoFim)}` })));
+  const naoAplicados = d.periodos.filter((p) => p.balcao.situacao !== "APLICADO");
+  return `${cabecalho("SWF", `Balcão pelo sistema de loja · ${esc(d.mes)}`)}${abasSwf}
+${d.importado ? "" : '<p class="aviso">Nenhum relatório do SWF importado neste mês. Nada é presumido: envie o 76 (vendas por canais) na aba Importações.</p>'}
+<ul class="lista-simples nota">${d.regras.map((r) => `<li><span>${esc(r)}</span></li>`).join("")}</ul>
+${d.periodos.map(periodoSwf).join("")}
+${pendentes.length || naoAplicados.length ? `<section class="card card--alertas"><h2>Pendências</h2><ul class="lista-simples">
+${naoAplicados.map((p) => `<li><span>Balcão de ${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}: ${esc((SITUACAO_BALCAO_SWF[p.balcao.situacao] ?? [p.balcao.situacao])[0])}.</span>${valor(p.balcao.valorCentavos)}</li>`).join("")}
+${pendentes.map((c) => `<li><span>${esc(c.descricao)} (${esc(c.periodo)}): diferença pendente de investigação, sem presumir a causa.</span>${valor(c.diferencaCentavos)}</li>`).join("")}
+</ul><p class="nota">Aprovar e aplicar a proposta do Balcão: Central de Importações e Conferências → Propostas.</p></section>` : ""}
+${calendarioCanal(ctx.calendario, { selecionado: ctx.calDia ?? null, erro: ctx.calendarioErro ?? null })}`;
+}
+
+const SITUACAO_SANGRIA = Object.freeze({ PAGO: ["Paga em dinheiro", "ok"], CONTA_EXISTENTE_EM_ABERTO: ["Conta existente em aberto", "alerta"], A_LANCAR: ["A lançar", "info"], A_CONFERIR: ["Para conferir", "alerta"], BLOQUEADA: ["Bloqueada: possível duplicidade", "erro"] });
+const DESTINO_SANGRIA = Object.freeze({ CRIAR_DESPESA_PAGA: "Vai criar despesa já paga", BAIXAR_OBRIGACAO_EXISTENTE: "Vai baixar obrigação já provisionada (sem despesa nova)" });
+const NOME_CATEGORIA_SANGRIA = Object.freeze({ VALE_REFEICAO: "Benefícios de pessoal › Vale-refeição", VALE_TRANSPORTE: "Benefícios de pessoal › Vale-transporte", DIARIAS_EXTRAS: "Diárias extras", SERVICOS_DE_TERCEIROS: "Serviços de terceiros", EMBALAGENS: "Descartáveis e embalagens", MATERIAL_DE_ESCRITORIO: "Material de escritório", OUTRAS_DESPESAS: "Outras despesas" });
+const NATUREZA_SANGRIA = Object.freeze({ DESPESA: "Despesa", BENEFICIO: "Benefício (VR/VT)", BENEFICIO_A_CONFERIR: "VR/VT a conferir", ADIANTAMENTO: "Adiantamento", TRANSFERENCIA: "Transferência", A_CLASSIFICAR: "A classificar" });
+/** Aba Sangrias do SWF. `d` = resposta de /sangrias-swf (prévia pronta do servidor). Só o que `podeLancar` aparece marcável. */
+function sangriasSwf(d, ctx = {}) {
+  const r = d.resumo;
+  const cards = [
+    ["Retiradas no período", `${r.total.quantidade} · ${esc(moeda(r.total.totalCentavos))}`], ["Prontas para lançar", `${r.aLancar.quantidade} · ${esc(moeda(r.aLancar.totalCentavos))}`],
+    ["Já lançadas (pagas)", `${r.jaLancadas.quantidade} · ${esc(moeda(r.jaLancadas.totalCentavos))}`], ["Para conferir", `${r.pendentes.quantidade} · ${esc(moeda(r.pendentes.totalCentavos))}`],
+  ].map(([t, v]) => `<article class="card card--sec"><div class="card-topo"><h3>${esc(t)}</h3></div><p>${v}</p></article>`).join("");
+  const pode = tem(ctx.permissoes, "financeiro_v2.registrar") && d.voceTemPermissao;
+  const linhas = d.itens.map((i) => {
+    const [rs, cs] = SITUACAO_SANGRIA[i.situacaoPagamento] ?? [i.situacaoPagamento, "neutro"];
+    const marcar = pode && i.podeLancar ? `<label class="caixa-marcar"><input type="checkbox" name="registros" value="${esc(i.registroId)}" data-multiplo checked><span class="sr">Lançar ${esc(i.descricao)}</span></label>` : "";
+    const hora = `${dataBR(i.dataHoraReal.slice(0, 10))} ${esc(i.dataHoraReal.slice(11, 16))}${i.doFechamentoAnterior ? ' <span class="nota">(madrugada, fechamento anterior)</span>' : i.madrugada ? ' <span class="nota">(madrugada)</span>' : ""}`;
+    return `<tr>${td("Lançar", marcar)}${td("Dia operacional", esc(dataBR(i.data)), "esquerda")}${td("Data/hora real", hora, "esquerda")}${td("Motivo (original)", esc(i.descricao), "esquerda")}${td("Valor", valor(i.valorCentavos))}
+${td("Natureza sugerida", `${esc(NATUREZA_SANGRIA[i.naturezaSugerida] ?? i.naturezaSugerida)}${i.regra ? `<br><span class="nota">regra ${esc(i.regra)}</span>` : ""}`)}${td("Categoria e competência", `${esc(i.categoriaDaConta ?? NOME_CATEGORIA_SANGRIA[i.categoriaSugerida] ?? i.categoriaSugerida ?? "—")}<br>${pode && i.podeLancar && i.competenciaAConfirmar ? `<label>Competência <select name="comp|${esc(i.registroId)}"><option value="">Escolha…</option>${i.competenciaOpcoes.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join("")}</select></label>` : `<span class="nota">${esc(i.competencia ?? (i.competenciaOpcoes ?? []).join(" ou "))}</span>`}`)}${td("Situação", `${selo(rs, cs)}${i.destino ? `<br><span class="nota">${esc(DESTINO_SANGRIA[i.destino] ?? i.destino)}${i.correspondencia?.obrigacao ? `: ${esc(i.correspondencia.obrigacao.descricao ?? "")}` : ""}</span>` : ""}${i.pendencia ? `<br><span class="nota">${esc(i.pendencia)}</span>` : ""}${i.fornecedorDaConta ? `<br><span class="nota">Conta: ${esc(i.fornecedorDaConta)}</span>` : ""}`)}</tr>`;
+  }).join("");
+  const tabela = d.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Sangrias do caixa SWF</caption><thead><tr><th scope="col"><span class="sr">Lançar</span></th><th scope="col">Dia operacional</th><th scope="col">Data/hora real</th><th scope="col">Motivo</th><th scope="col">Valor</th><th scope="col">Natureza</th><th scope="col">Categoria e competência</th><th scope="col">Situação</th></tr></thead><tbody>${linhas}</tbody></table></div>`
+    : nenhum("Nenhuma sangria do SWF importada neste mês. Envie o relatório de Sangrias na aba Importações.");
+  const orfas = d.despesasDeRetiradasSubstituidas?.length ? `<p class="aviso aviso--alerta">Há ${d.despesasDeRetiradasSubstituidas.length} despesa(s) lançada(s) de retiradas que um arquivo corrigido substituiu. Estorne-as no Contas a Pagar antes de lançar as versões corrigidas desses dias.</p>` : "";
+  const form = !d.itens.some((i) => i.podeLancar) ? "" : !pode ? '<p class="nota">Lançar exige a permissão "Registrar".</p>' : d.motivoSemCaixa ? `<p class="aviso aviso--alerta">${esc(d.motivoSemCaixa)}</p>` : "";
+  const corpoForm = !form && pode && d.itens.some((i) => i.podeLancar)
+    ? `<form class="acao acao--formulario" data-acao="/api/fv2/acoes/sangrias-swf/lancar" data-recarregar="lista"><input type="hidden" name="periodoInicio" value="${esc(d.periodoInicio)}"><input type="hidden" name="periodoFim" value="${esc(d.periodoFim)}">${tabela}
+<label>Justificativa <input type="text" name="justificativa" maxlength="300" required value="Sangrias do caixa SWF conferidas com o relatório do período."></label>
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que as retiradas marcadas são despesas pagas em dinheiro pelo caixa da loja, nas categorias sugeridas.</label>
+<button type="submit" class="botao botao--primario">Lançar as marcadas como despesa paga</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`
+    : `${tabela}${form}`;
+  return `<section class="resumo" aria-label="Resumo das sangrias">${cards}</section>
+<p class="nota">${esc(d.efeito)}</p>${orfas}
+<section class="card"><h2>Retiradas de ${esc(dataBR(d.periodoInicio))} a ${esc(dataBR(d.periodoFim))}</h2>${corpoForm}
+<p class="nota">A categoria vem de uma regra (código ao lado). Se discordar, deixe desmarcada e lance à mão, ou reclassifique depois: tudo fica no histórico.</p></section>`;
+}

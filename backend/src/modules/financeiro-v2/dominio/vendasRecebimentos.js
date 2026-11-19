@@ -53,7 +53,7 @@ export { SEM_CANAL };
 const CANAL_TXT = Object.freeze({ BALCAO: "no Balcão", IFOOD: "no iFood", ANOTA_AI: "pelo Anota AI", NOVENTA_E_NOVE_FOOD: "pela 99Food", OUTRO: "em outro canal" });
 const FORMA_TXT = Object.freeze({ DINHEIRO: "dinheiro", PIX: "Pix", DEBITO: "cartão de débito", CREDITO: "cartão de crédito", VALE: "vale-refeição/alimentação" });
 export const PROCESSADOR_TXT = Object.freeze({ STONE: "Stone", PAGBANK: "PagBank", MAQUININHA_IFOOD: "Maquininha do iFood", IFOOD: "iFood", ANOTA_AI: "Anota AI", NOVENTA_E_NOVE_FOOD: "99Food", OPERADORA_BENEFICIOS: "Operadora de benefícios", MAQUINA_TERCEIROS: "Máquina de terceiros", OUTRO: "Outro processador" });
-const SISTEMA_TXT = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "iFood", ANOTA_AI: "Anota AI", STONE: "Stone", UNICRED: "Unicred", FOODY: "Foody", MANUAL: "Registro manual", OUTRO: "Outra fonte" });
+const SISTEMA_TXT = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "iFood", ANOTA_AI: "Anota AI", STONE: "Stone", UNICRED: "Unicred", FOODY: "Foody", MANUAL: "Registro manual", OUTRO: "Outra fonte", SWF: "SWF (caixa da Subway)" });
 const DIA = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "");
 /** Forma em linguagem de gestão. "OUTRA" é DESCONHECIDA: nunca vira cartão, Pix ou dinheiro por suposição. */
 export function formaLegivel(forma, processador) {

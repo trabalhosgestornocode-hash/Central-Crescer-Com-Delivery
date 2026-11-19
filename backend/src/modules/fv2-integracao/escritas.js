@@ -24,6 +24,7 @@ const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_$
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
 export const FONTE_DO_RELATORIO = Object.freeze({
   SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", SAIPOS_MOVIMENTOS_CAIXA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED", IFOOD_CONCILIACAO: "IFOOD", NOVENTA_E_NOVE_FOOD_RELATORIO: "OUTRO",
+  SWF_CANAIS: "OUTRO", SWF_ANALISE_FATURAMENTO: "OUTRO", SWF_PAGAMENTOS: "OUTRO", SWF_SANGRIAS: "OUTRO",
 });
 const MIME_DA_EXTENSAO = Object.freeze({ zip: "application/zip", pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
 /** Base64 estrito → bytes (até 5 MiB). */
@@ -384,6 +385,15 @@ export const ESCRITAS = Object.freeze({
     liquidoInformadoCentavos: centavos(b.liquido), origem: b.origem, justificativa: b.justificativa,
   }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
+  // Fontes de faturamento da unidade: pela tela vêm o sistema de loja (SAIPOS|SWF) e as plataformas marcadas; `fontes` (lista) também é aceito.
+  "/configuracoes/fontes-faturamento": { campos: ["fontes", "sistemaDeLoja", "ifood", "noventaENoveFood", "lojasSwf", "justificativa"], fazer: (n, c, b) => n.configurarFontesDeFaturamento(c, {
+    fontes: [...[].concat(b.fontes ?? []).flatMap((f) => String(f).split(",")), ...(b.sistemaDeLoja ? [String(b.sistemaDeLoja)] : []), ...(marcado(b.ifood) ? ["IFOOD"] : []), ...(marcado(b.noventaENoveFood) ? ["NOVENTA_E_NOVE_FOOD"] : [])].map((f) => f.trim()).filter(Boolean),
+    ...(b.lojasSwf !== undefined && b.lojasSwf !== "" ? { lojasSwf: [].concat(b.lojasSwf).flatMap((l) => String(l).split(";")).map((l) => l.trim()).filter(Boolean) } : {}), justificativa: b.justificativa,
+  }) },
+  // Doc 54: sangrias do SWF escolhidas na prévia (ids separados por vírgula) → despesa paga em dinheiro pelo caixa.
+  "/sangrias-swf/lancar": { campos: ["periodoInicio", "periodoFim", "registros", "competencias", "justificativa"], fazer: (n, c, b) => n.lancarSangriasSwf(c, {
+    periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, registros: [].concat(b.registros ?? []).flatMap((x) => String(x).split(",")).map((x) => x.trim()).filter(Boolean).map(id), ...(b.competencias ? { competencias: String(b.competencias).split(";").filter(Boolean).map((x) => { const [r, c] = x.split("="); return `${id(String(r).trim())}=${String(c ?? "").trim()}`; }).join(";") } : {}), justificativa: b.justificativa, confirmar: true,
+  }) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },
   "/configuracoes/categoria": { campos: ["codigo", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarCategoria(c, { codigo: b.codigo, mudancas: { ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}) }, justificativa: b.justificativa }) },

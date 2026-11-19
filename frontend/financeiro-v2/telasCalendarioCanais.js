@@ -6,6 +6,8 @@ import { competencia as nomeDoMes, dataBR, esc, moeda } from "./formatar.js";
 import { movimentosDoDia } from "./telasMovimentosCaixa.js";
 
 const NOME_DO_CANAL = Object.freeze({ BALCAO: "SAIPOS — Presencial", ANOTA_AI: "SAIPOS — Anota Aí", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
+/** Nome do canal no calendário: na unidade que usa o SWF (Subway) o Presencial é "SWF — Balcão" (nenhum rótulo SAIPOS). */
+const nomeDoCanal = (cal) => (cal.swf ? { BALCAO: "SWF — Balcão", ANOTA_AI: "Anota Aí (não usado nesta unidade)" }[cal.canal] ?? NOME_DO_CANAL[cal.canal] : NOME_DO_CANAL[cal.canal]);
 export const SEMANA = Object.freeze(["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]);
 const DIA_POR_EXTENSO = Object.freeze(["domingo", "segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado"]);
 
@@ -26,7 +28,7 @@ const CONFERENCIA = Object.freeze({
   CONCILIADO: "Conciliado: recebido igual ao esperado", DIVERGENTE: "Divergente: recebido diferente do esperado", PENDENTE: "Pendente: há taxa ou recebimento sem confirmação",
   AGUARDANDO_EXTRATO: "Aguardando extrato: recebimento ainda não confirmado", PARCIAL: "Parcial: só parte foi recebida",
 });
-const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood", NOVENTA_E_NOVE_FOOD_RELATORIO: "Relatório oficial da 99Food" });
+const RELATORIO = Object.freeze({ SWF_CANAIS: "SWF 76 — Vendas por canais", SWF_PAGAMENTOS: "SWF 03 — Formas de pagamento", SWF_ANALISE_FATURAMENTO: "SWF 45 — Análise de faturamento", SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood", NOVENTA_E_NOVE_FOOD_RELATORIO: "Relatório oficial da 99Food" });
 const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível", SEM_SALDO: "Sem saldo a receber", DIVERGENTE: "Crédito com diferença" });
 const ORIGEM_DA_MARCACAO = Object.freeze({ DATA: "Marcado para esta data", DIA_DA_SEMANA: "Marcado para este dia da semana" });
 
@@ -78,13 +80,13 @@ export function calendarioCanal(cal, { selecionado = null, erro = null } = {}) {
   const deslocamento = (dia1.diaDaSemana + 6) % 7;
   const alvoFocavel = (selecionado && cal.dias.some((d) => d.data === selecionado) ? selecionado : (cal.dias.find((d) => d.hoje) ?? dia1).data);
   const sel = selecionado && cal.dias.find((d) => d.data === selecionado);
-  return `<section class="cal-canal" aria-label="Calendário de faturamento — ${esc(NOME_DO_CANAL[cal.canal])}" data-cal-canal="${esc(cal.canal)}">
+  return `<section class="cal-canal" aria-label="Calendário de faturamento — ${esc(nomeDoCanal(cal))}" data-cal-canal="${esc(cal.canal)}">
 <h2>Calendário de faturamento</h2>
 <p class="nota">${esc(cal.observacoes.join(" "))}</p>
 ${resumo(cal.resumo, cal.controle)}
 <div class="cal-nav"><button type="button" class="botao" data-mes="-1" aria-label="Mês anterior">‹ Anterior</button><strong aria-live="polite">${esc(nomeDoMes(cal.mes))}</strong><button type="button" class="botao" data-mes="1" aria-label="Próximo mês">Próximo ›</button><button type="button" class="botao" data-cal-hoje>Hoje</button></div>
 ${legenda()}
-<div class="calendario calendario--canal" role="grid" aria-label="Dias de ${esc(nomeDoMes(cal.mes))} — ${esc(NOME_DO_CANAL[cal.canal])}">
+<div class="calendario calendario--canal" role="grid" aria-label="Dias de ${esc(nomeDoMes(cal.mes))} — ${esc(nomeDoCanal(cal))}">
   ${SEMANA.map((s) => `<div class="cal-cab" role="columnheader">${s}</div>`).join("")}
   ${'<div class="cal-vazio" aria-hidden="true"></div>'.repeat(deslocamento)}
   ${cal.dias.map((d) => celula(d, cal.canal, selecionado, d.data === alvoFocavel)).join("")}
@@ -134,6 +136,19 @@ function oficialDa99Food(o) {
 <dt>Importação</dt><dd>${esc(o.aplicado ? "Aplicada ao Financeiro" : "Importada")}</dd><dt>Conferência</dt><dd>${esc(CONFERENCIA_99FOOD[o.situacaoConferencia] ?? o.situacaoConferencia)}</dd></dl>`;
 }
 
+/** SWF (Subway): o Balcão é total do PERÍODO (relatório 76) e o 45 é o total do dia de TODOS os canais. Nada por dia é inventado. */
+function valoresSwf(d) {
+  const c = d.cobertura;
+  const ctrl = d.swfControleDoDia;
+  const periodo = c ? `<p class="aviso">${esc(c.mensagem)}</p>${lista(c.periodos.map((p) => `<li><span><strong>${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}</strong><br><span class="nota">Balcão do PERÍODO inteiro (relatório 76), não deste dia</span></span>
+<span>${valor(p.balcaoCentavos)}<br><span class="nota">${p.vendas} venda(s) · ${esc({ APLICADO: "Aplicado ao Financeiro", PROPOSTA_ABERTA: "Proposta aguardando aplicação", SEM_PROPOSTA: "Importado, proposta não gerada", REJEITADO: "Proposta rejeitada" }[p.situacao] ?? p.situacao)}</span></span></li>`))}` : '<p class="nota">Nenhum relatório 76 (vendas por canais) cobre este dia: o Balcão do dia não tem registro.</p>';
+  const controle = ctrl ? `<h3>Controle do dia (relatório 45 — todos os canais)</h3><dl class="ficha ficha--compacta"><dt>Faturamento de todos os canais</dt><dd>${valor(ctrl.faturamentoTodosCanaisCentavos)}</dd><dt>Produtos</dt><dd>${valor(ctrl.produtosCentavos)}</dd><dt>Taxas de entrega</dt><dd>${valor(ctrl.entregasCentavos)}</dd><dt>Descontos</dt><dd>${valor(ctrl.descontosCentavos)}</dd><dt>Combos</dt><dd>${valor(ctrl.combosCentavos)}</dd></dl><p class="nota">Controle: não é faturamento do Balcão (mistura Balcão, iFood e 99Food).</p>` : "";
+  const sg = d.sangriasSwf;
+  const sangrias = sg ? `<h3>Sangrias do caixa SWF (dia operacional)</h3>${lista(sg.itens.map((i) => `<li><span><strong>${esc(i.descricao)}</strong><br><span class="nota">${esc(dataBR(i.dataHoraReal.slice(0, 10)))} ${esc(i.dataHoraReal.slice(11, 16))}${i.doFechamentoAnterior ? " (madrugada, fechamento anterior)" : ""} · ${esc(i.origem)} · Dinheiro · ${esc(i.categoria ?? "sem categoria")}${i.regra ? ` · regra ${esc(i.regra)}` : ""}</span>${i.pendencia ? `<br><span class="nota">${esc(i.pendencia)}</span>` : ""}</span>
+<span>${valor(i.valorCentavos)}<br><span class="nota">${esc({ PAGO: "Paga", CONTA_EXISTENTE_EM_ABERTO: "Conta existente em aberto", A_LANCAR: "A lançar", A_CONFERIR: "Para conferir", BLOQUEADA: "Bloqueada: possível duplicidade" }[i.situacao] ?? i.situacao)}</span></span></li>`))}<p class="nota">Total do dia: ${esc(moeda(sg.totalCentavos))} · despesas, nunca faturamento.</p>` : "";
+  return `${periodo}${controle}${sangrias}`;
+}
+
 function periodosDoIfood(d) {
   if (d.ifoodOficial) return oficialDoIfood(d.ifoodOficial);
   const c = d.cobertura;
@@ -144,7 +159,7 @@ function periodosDoIfood(d) {
 
 function acoesDoDia(d, cal) {
   const a = cal.acoes;
-  const saipos = cal.canal === "BALCAO" || cal.canal === "ANOTA_AI";
+  const saipos = (cal.canal === "BALCAO" || cal.canal === "ANOTA_AI") && !cal.swf;
   const botoes = [];
   if (saipos) {
     if (d.registro) botoes.push(`<button type="button" class="botao" data-cal-acao="vendas" data-cal-data="${esc(d.data)}">Ver faturamento e pagamentos</button>`);
@@ -152,6 +167,9 @@ function acoesDoDia(d, cal) {
     if (d.fechamento || a.registrarFechamento) botoes.push(`<button type="button" class="botao" data-cal-acao="fechamentos" data-cal-data="${esc(d.data)}">${d.fechamento ? "Ver fechamentos" : "Registrar fechamento de caixa"}</button>`);
     if (a.registrarFaturamentoProvisorio && !d.futuro && !d.registro?.origem?.SAIPOS) botoes.push(`<button type="button" class="botao" data-cal-acao="provisorio" data-cal-data="${esc(d.data)}">Registrar faturamento provisório</button>`);
     if (a.abrirConferencias) botoes.push(`<button type="button" class="botao" data-cal-acao="conferencias" data-cal-data="${esc(d.data)}">Abrir conferências</button>`);
+  } else if (cal.swf && cal.canal === "BALCAO") {
+    botoes.push('<button type="button" class="botao" data-aba-canal="importacoes">Abrir importações do SWF</button>');
+    if (d.sangriasSwf) botoes.push('<button type="button" class="botao" data-aba-canal="sangrias">Ver sangrias do caixa</button>');
   } else {
     if (cal.canal === "IFOOD") botoes.push('<a class="botao" href="#/contas-a-receber">Ver contas a receber (repasses)</a>');
     if (a.abrirConferencias) botoes.push('<a class="botao" href="#/conferencias">Abrir conferências</a>');
@@ -187,11 +205,11 @@ export function diaDoCanal(d, cal) {
   const dive = d.divergencias.length ? `<h3>Divergências</h3>${lista(d.divergencias.map((p) => `<li><span>${esc(p.mensagem)}</span>${typeof p.diferencaCentavos === "number" ? valor(p.diferencaCentavos) : ""}</li>`))}` : "";
   const obs = d.observacoes.length ? `<p class="nota">${esc(d.observacoes.join(" "))}</p>` : "";
   const sped = d.conferenciaSaipos ? `<p class="nota">${d.conferenciaSaipos.pedidos} pedido(s) iFood no relatório SAIPOS: só conferência, não é faturamento.</p>` : "";
-  const valores = cal.canal === "IFOOD" ? periodosDoIfood(d) : cal.canal === "NOVENTA_E_NOVE_FOOD" && d.noventaOficial ? oficialDa99Food(d.noventaOficial) : cal.canal === "NOVENTA_E_NOVE_FOOD" ? (d.registro ? `<dl class="ficha ficha--compacta"><dt>Faturamento registrado</dt><dd>${valor(d.registro.brutoCentavos)}</dd><dt>Vendas</dt><dd>${d.registro.vendas}</dd></dl><p class="nota">Não vem de relatório oficial da 99Food.</p>` : '<p class="nota">Sem dados da 99Food neste dia. Sem relatório oficial importado, isso não é zero confirmado.</p>') : valoresSaipos(d);
-  const origem = cal.canal === "IFOOD" ? (d.ifoodOficial ? "Relatório de Conciliação Financeira do iFood" : "Demonstrativo oficial do iFood") : cal.canal === "NOVENTA_E_NOVE_FOOD" ? (d.noventaOficial ? "Relatório oficial da 99Food" : "Relatório oficial da 99Food (ainda não importado)") : d.registro ? [d.registro.origem.SAIPOS ? "Relatório SAIPOS" : null, d.registro.origem.MANUAL ? "Registro manual (equipe)" : null].filter(Boolean).join(" e ") : d.fechamento ? "Fechamento manual (equipe)" : "—";
-  return `<header class="cal-detalhe-cab"><h3>${esc(NOME_DO_CANAL[cal.canal])} · ${esc(dataPorExtenso(d))}</h3></header>
+  const valores = cal.swf && cal.canal === "BALCAO" ? valoresSwf(d) : cal.swf && cal.canal === "ANOTA_AI" ? '<p class="nota">Esta unidade não usa o Anota Aí.</p>' : cal.canal === "IFOOD" ? periodosDoIfood(d) : cal.canal === "NOVENTA_E_NOVE_FOOD" && d.noventaOficial ? oficialDa99Food(d.noventaOficial) : cal.canal === "NOVENTA_E_NOVE_FOOD" ? (d.registro ? `<dl class="ficha ficha--compacta"><dt>Faturamento registrado</dt><dd>${valor(d.registro.brutoCentavos)}</dd><dt>Vendas</dt><dd>${d.registro.vendas}</dd></dl><p class="nota">Não vem de relatório oficial da 99Food.</p>` : '<p class="nota">Sem dados da 99Food neste dia. Sem relatório oficial importado, isso não é zero confirmado.</p>') : valoresSaipos(d);
+  const origem = cal.swf && cal.canal === "BALCAO" ? "Relatórios do SWF (76 vendas por canais; 45 análise de faturamento)" : cal.canal === "IFOOD" ? (d.ifoodOficial ? "Relatório de Conciliação Financeira do iFood" : "Demonstrativo oficial do iFood") : cal.canal === "NOVENTA_E_NOVE_FOOD" ? (d.noventaOficial ? "Relatório oficial da 99Food" : "Relatório oficial da 99Food (ainda não importado)") : d.registro ? [d.registro.origem.SAIPOS ? "Relatório SAIPOS" : null, d.registro.origem.MANUAL ? "Registro manual (equipe)" : null].filter(Boolean).join(" e ") : d.fechamento ? "Fechamento manual (equipe)" : "—";
+  return `<header class="cal-detalhe-cab"><h3>${esc(nomeDoCanal(cal))} · ${esc(dataPorExtenso(d))}</h3></header>
 <ul class="lista-estados">${estados}</ul>
-<dl class="ficha ficha--compacta"><dt>Canal</dt><dd>${esc(NOME_DO_CANAL[cal.canal])}</dd><dt>Data</dt><dd>${esc(dataPorExtenso(d))}</dd><dt>Origem da informação</dt><dd>${esc(origem)}</dd></dl>
+<dl class="ficha ficha--compacta"><dt>Canal</dt><dd>${esc(nomeDoCanal(cal))}</dd><dt>Data</dt><dd>${esc(dataPorExtenso(d))}</dd><dt>Origem da informação</dt><dd>${esc(origem)}</dd></dl>
 <h3>Valores</h3>${valores}${fech}${sped}
 ${movimentosDoDia(d.movimentosDeCaixa)}
 ${importacoes ? `<h3>Importações que cobrem o dia</h3>${importacoes}` : ""}

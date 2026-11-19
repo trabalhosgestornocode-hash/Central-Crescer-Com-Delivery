@@ -44,12 +44,12 @@ const estado = {
   impCanal: null,
 };
 function filtrosIniciais() {
-  return { saipos: { aba: "resumo" }, ifood: { aba: "resumo" }, "noventa-e-nove-food": { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {}, "entregadores-proprios": { aba: "resumo" } };
+  return { saipos: { aba: "resumo" }, swf: { aba: "resumo" }, ifood: { aba: "resumo" }, "noventa-e-nove-food": { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {}, "entregadores-proprios": { aba: "resumo" } };
 }
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "entregadores-proprios", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["visao-geral", "dre", "saipos", "swf", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "entregadores-proprios", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -133,12 +133,12 @@ function aplicarPesos(raiz) {
 
 /** Fase 10 — calendário de faturamento do canal da tela (SAIPOS Presencial/Anota Aí, iFood, 99Food): UMA consulta mensal consolidada. */
 function consultaDoCalendario() {
-  const canal = estado.rota === "saipos" ? { presencial: "BALCAO", anota: "ANOTA_AI" }[estado.filtros.saipos?.aba] : estado.rota === "ifood" && estado.filtros.ifood?.aba !== "importacoes" ? "IFOOD" : estado.rota === "noventa-e-nove-food" && estado.filtros["noventa-e-nove-food"]?.aba !== "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null;
+  const canal = estado.rota === "saipos" ? { presencial: "BALCAO", anota: "ANOTA_AI" }[estado.filtros.saipos?.aba] : estado.rota === "swf" && !["importacoes", "sangrias"].includes(estado.filtros.swf?.aba) ? "BALCAO" : estado.rota === "ifood" && estado.filtros.ifood?.aba !== "importacoes" ? "IFOOD" : estado.rota === "noventa-e-nove-food" && estado.filtros["noventa-e-nove-food"]?.aba !== "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null;
   return canal ? `/api/fv2/calendario-faturamento?${qs({ competencia: undefined, canal, mes: estado.competencia })}` : null;
 }
 /** Fase 11 — importações do canal da tela, só quando a aba "Importações" está aberta (SAIPOS, iFood ou 99Food). */
 function consultaDasImportacoes() {
-  const canal = { saipos: estado.filtros.saipos?.aba === "importacoes" ? "SAIPOS" : null, ifood: estado.filtros.ifood?.aba === "importacoes" ? "IFOOD" : null,
+  const canal = { saipos: estado.filtros.saipos?.aba === "importacoes" ? "SAIPOS" : null, swf: estado.filtros.swf?.aba === "importacoes" ? "SWF" : null, ifood: estado.filtros.ifood?.aba === "importacoes" ? "IFOOD" : null,
     "noventa-e-nove-food": estado.filtros["noventa-e-nove-food"]?.aba === "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null }[estado.rota] ?? null;
   return canal ? `/api/fv2/importacoes-canal?${qs({ competencia: undefined, canal })}` : null;
 }
@@ -175,8 +175,9 @@ function consultaDaRota() {
       }
       return `/api/fv2/operadoras?${qs({ competencia: undefined, periodoInicio: f.inicio, periodoFim: f.fim })}`;
     }
+    case "swf": return f.aba === "sangrias" ? `/api/fv2/sangrias-swf?${qs({ competencia: undefined, periodoInicio: inicioDoMes(estado.competencia), periodoFim: fimDoMes(estado.competencia) })}` : `/api/fv2/conferencia-swf?${qs({ competencia: undefined, mes: estado.competencia })}`;
     case "ifood": case "noventa-e-nove-food": return `/api/fv2/canal-plataforma?${qs({ canal: estado.rota === "ifood" ? "IFOOD" : "NOVENTA_E_NOVE_FOOD" })}`;
-    case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
+    case "configuracoes": return f.secao === "fontes" ? `/api/fv2/fontes-faturamento?${qs({ competencia: undefined })}` : f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
     case "contas-a-receber": return `/api/fv2/contas-a-receber?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, tipo: f.tipo, processador: f.processador, pagina, tamanho: 25 })}`;
@@ -213,12 +214,13 @@ function desenhar(dados) {
     case "entregadores-proprios": return ent.entregadoresProprios(dados, f, { permissoes: permissoesDaUnidade() });
     case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade(), ...contextoDoCalendario(), ...contextoDasImportacoes(), abrirProvisorio: estado.filtros.saipos?.foco === "provisorio" });
     case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade(), filtro: estado.filtros["operadoras-taxas"] ?? {} });
+    case "swf": return can.swf(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
     case "ifood": case "noventa-e-nove-food": return can.plataforma(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
     case "configuracoes": {
       const perm = permissoesDaUnidade();
       const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [], permissoes: perm };
       const corpo = f.secao === "plano" ? { plano: dados, configuracoes: estado.configuracoes } : f.secao === "permissoes" ? { permissoes: dados } : dados;
-      if (!f.secao || !["plano", "permissoes", "abertura", "taxas"].includes(f.secao)) estado.configuracoes = dados;
+      if (!f.secao || !["plano", "permissoes", "abertura", "taxas", "fontes"].includes(f.secao)) estado.configuracoes = dados;
       if (f.secao === "abertura" && dados?.configuracoes) estado.configuracoes = dados.configuracoes;
       return adm.configuracoes(corpo, f, ctx);
     }
@@ -269,6 +271,7 @@ async function carregar() {
     preencherUnidades();
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
+  if (await ajustarMenuDasFontes(meuCarregamento)) return; // a rota mudou (SAIPOS ↔ SWF): um novo carregamento já começou
   const urlDoCalendario = consultaDoCalendario();
   const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
   const urlDasImportacoes = consultaDasImportacoes();
@@ -305,6 +308,27 @@ async function carregar() {
     revisarAoCarregar = null;
     abrirDetalhe(`pendencia:${chave}`, conteudo);
   }
+}
+
+/**
+ * Doc 54 — o menu mostra o sistema de loja DA unidade (SAIPOS ou SWF); o outro some. Uma consulta por unidade.
+ * Quem abrir a área do sistema que a unidade não usa é levado para a do sistema dela (o servidor recusa os arquivos de todo jeito).
+ */
+async function ajustarMenuDasFontes(meuCarregamento) {
+  if (estado.fontesDaUnidade?.unidade !== estado.unidade) {
+    const r = await consultor.consultar(`/api/fv2/fontes-faturamento?${qs({ competencia: undefined })}`, cabecalhos());
+    if (r === null || meuCarregamento !== numeroDoCarregamento) return true;
+    estado.fontesDaUnidade = { unidade: estado.unidade, sistema: r.ok ? r.dados.sistemaDeLoja : "SAIPOS" };
+  }
+  const sistema = estado.fontesDaUnidade.sistema;
+  for (const [rota, visivel] of [["saipos", sistema !== "SWF"], ["swf", sistema === "SWF"]]) {
+    const item = document.querySelector(`[data-rota="${rota}"]`)?.closest("li");
+    if (item) item.hidden = !visivel;
+  }
+  const destino = sistema === "SWF" && estado.rota === "saipos" ? "swf" : sistema !== "SWF" && estado.rota === "swf" ? "saipos" : null;
+  if (!destino) return false;
+  window.location.hash = `#/${destino}`;
+  return true;
 }
 
 function preencherUnidades() {
@@ -454,7 +478,11 @@ async function executarAcao(form) {
   const entradas = [...new FormData(form).entries()].filter(([, v]) => typeof v === "string");
   // 18/11/2026: grade de taxas (campos "tx|MOD|BANDEIRA" e "tf|MOD|BANDEIRA") vira o texto que o servidor valida.
   const daGrade = (k) => k.startsWith("tx|") || k.startsWith("tf|");
-  const dados = Object.fromEntries(entradas.filter(([k]) => !daGrade(k)));
+  // Doc 54: competência escolhida por retirada ("comp|<id>") vira "id=AAAA-MM;…" (só as preenchidas).
+  const daCompetencia = (k) => k.startsWith("comp|");
+  const dados = Object.fromEntries(entradas.filter(([k]) => !daGrade(k) && !daCompetencia(k)));
+  const competencias = entradas.filter(([k, v]) => daCompetencia(k) && v).map(([k, v]) => `${k.slice(5)}=${v}`).join(";");
+  if (competencias) dados.competencias = competencias;
   // Caixas de marcar com o mesmo nome (data-multiplo): todos os valores marcados, separados por vírgula.
   for (const nome of new Set([...form.querySelectorAll("[data-multiplo]")].map((x) => x.name))) dados[nome] = new FormData(form).getAll(nome).join(",");
   if (!form.querySelector('[name="confirmar"]')?.checked) { saida.textContent = "Marque a confirmação para continuar."; return; }

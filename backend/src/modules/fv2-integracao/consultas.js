@@ -125,6 +125,9 @@ export const CONSULTAS = Object.freeze({
   "/conferencias/pendencias": (n, c, p) => n.consultarPendencias(c, filtro(p, ["competencia", "grupo", "situacao", ...PAGINA], PAGINA)),
   "/fechamento": (n, c, p) => n.consultarFechamento(c, filtro(p, ["competencia"])),
   "/configuracoes": (n, c) => n.consultarConfiguracoes(c),
+  "/fontes-faturamento": (n, c) => n.consultarFontesDeFaturamento(c),
+  "/conferencia-swf": (n, c, p) => n.consultarConferenciaSwf(c, { mes: p.mes }),
+  "/sangrias-swf": (n, c, p) => n.previaSangriasSwf(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }),
   // Abertura + o necessário do roteiro (contas, plano): uma consulta por tela, como as demais.
   // doc 35: taxas contratadas × cobradas (Stone), por modalidade e bandeira, transação a transação.
   "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),

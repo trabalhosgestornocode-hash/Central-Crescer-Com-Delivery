@@ -58,7 +58,7 @@ export const FORMA_PAGAMENTO = enumerar("DINHEIRO", "PIX", "DEBITO", "CREDITO", 
 export const PROCESSADOR = enumerar("STONE", "PAGBANK", "MAQUININHA_IFOOD", "IFOOD", "ANOTA_AI", "NOVENTA_E_NOVE_FOOD", "OPERADORA_BENEFICIOS", "MAQUINA_TERCEIROS", "OUTRO");
 
 /** Sistema de onde um dado veio. */
-export const SISTEMA_FONTE = enumerar("SAIPOS", "IFOOD", "ANOTA_AI", "STONE", "UNICRED", "FOODY", "MANUAL", "OUTRO");
+export const SISTEMA_FONTE = enumerar("SAIPOS", "IFOOD", "ANOTA_AI", "STONE", "UNICRED", "FOODY", "MANUAL", "OUTRO", "SWF");
 /**
  * Só estes sistemas podem ORIGINAR uma venda. Relatórios de processador (Stone) e extratos (Unicred) são evidência de
  * pagamento/recebimento da mesma venda — entram por conciliação, nunca como venda nova (evita faturamento em dobro).
