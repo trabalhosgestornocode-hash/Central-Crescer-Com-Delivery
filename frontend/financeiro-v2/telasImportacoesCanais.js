@@ -4,7 +4,7 @@
 // Nada aqui soma, calcula ou presume: formato sem leitor validado aparece bloqueado, com o motivo, e não há como confirmá-lo.
 import { dataBR, esc, moeda } from "./formatar.js";
 
-const NOME_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
+const NOME_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", SWF: "SWF", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
 const ESTADO = Object.freeze({
   RECEBIDO: ["Recebido", "neutro"], EM_VALIDACAO: ["Em validação", "info"], PRONTO_PARA_IMPORTAR: ["Prévia pronta: aguardando confirmação", "alerta"],
   IMPORTADO: ["Importado", "ok"], IMPORTADO_COM_PENDENCIAS: ["Importado com pendências", "alerta"], REJEITADO: ["Rejeitado", "erro"], SUBSTITUIDO: ["Substituído", "neutro"],
@@ -26,7 +26,7 @@ function formatosDoCanal(d) {
 // -------------------------------------------------------------------------------------------------- envio de arquivo
 /** Versão corrigida de um relatório oficial: escolha explícita. Sem escolha, o arquivo é complementar e nada anterior é retirado. */
 function substituiveis(d) {
-  const lista = (d.historico ?? []).filter((i) => ["IFOOD_CONCILIACAO", "NOVENTA_E_NOVE_FOOD_RELATORIO"].includes(i.tipoRelatorio) && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado));
+  const lista = (d.historico ?? []).filter((i) => ["IFOOD_CONCILIACAO", "NOVENTA_E_NOVE_FOOD_RELATORIO", "SWF_CANAIS", "SWF_PAGAMENTOS", "SWF_ANALISE_FATURAMENTO"].includes(i.tipoRelatorio) && ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"].includes(i.estado));
   if (!lista.length) return "";
   return `<label class="campo--largo">Este arquivo corrige outro? <select name="substitui"><option value="">Não: é um relatório novo ou complementar</option>${lista.map((i) => `<option value="${esc(i.id)}">Sim: substitui ${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}</option>`).join("")}</select></label>`;
 }
@@ -59,10 +59,10 @@ function formularioDeArquivo(d, ctx) {
   <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${aceitos.map((f) => `<option value="${esc(f.tipoRelatorio)}"${f.principal ? " selected" : ""}>${esc(f.nome)}${f.principal ? " — recomendado" : ""}</option>`).join("")}</select></label>
   <label>Início do período <input type="date" name="periodoInicio" value="${esc(hoje.inicio)}" required></label>
   <label>Fim do período <input type="date" name="periodoFim" value="${esc(hoje.fim)}" required></label>
-  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept="${d.canal === "NOVENTA_E_NOVE_FOOD" ? ".xlsx,.zip" : ".xlsx,.pdf,.csv"}" required></label>
+  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept="${d.canal === "NOVENTA_E_NOVE_FOOD" ? ".xlsx,.zip" : d.canal === "SWF" ? ".xlsx" : ".xlsx,.pdf,.csv"}" required></label>
   ${substituiveis(d)}
   </div>
-  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado da ${esc(nome)}, do período informado, para a unidade ${esc(d.unidade?.nome ?? "")}. Nada entra no financeiro antes da confirmação da prévia.</label>
+  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado ${d.canal === "SWF" ? "do" : "da"} ${esc(nome)}, do período informado, para a unidade ${esc(d.unidade?.nome ?? "")}. Nada entra no financeiro antes da confirmação da prévia.</label>
   <div class="acoes-form"><button type="submit" class="botao botao--primario">Enviar e gerar a prévia</button></div>
   <p class="resultado-acao" role="status" aria-live="polite"></p>
 </form>
@@ -103,7 +103,7 @@ ${td("Ações", `<button type="button" class="botao-link" data-detalhe="document
 ${d.demonstrativos.map((x) => `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Faturamento", valor(x.brutoCentavos))}${td("Comissões", valor(x.comissoesCentavos))}${td("Taxas", valor(x.taxasCentavos))}${td("Ajustes", valor(x.ajustesCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Repasse", esc(REPASSE[x.situacaoRepasse] ?? x.situacaoRepasse))}</tr>`).join("")}</tbody></table></div>` : '<p class="nota">Nenhum demonstrativo oficial registrado.</p>') : "";
   return `<section class="card" aria-labelledby="t-hist-${esc(d.canal)}"><div class="card-topo"><h3 id="t-hist-${esc(d.canal)}">Histórico de importações ${esc(NOME_DO_CANAL[d.canal])}</h3><a class="botao-link" href="#/conferencias">Central de Importações e Conferências</a></div>
 ${d.historico.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Importações de arquivo de ${esc(NOME_DO_CANAL[d.canal])}</caption><thead><tr><th scope="col">Período</th><th scope="col">Relatório</th><th scope="col">Situação</th><th scope="col">Erros</th><th scope="col">Divergências</th><th scope="col">Já existentes</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>${linhas}</tbody></table></div>`
-    : `<p class="nota vazio-lista">${d.canal === "IFOOD" ? "Nenhum arquivo importado. O iFood entra pelo demonstrativo oficial." : d.canal === "NOVENTA_E_NOVE_FOOD" ? "Nenhuma importação: ainda não há relatório oficial validado." : "Nenhum relatório SAIPOS importado."}</p>`}${demos}</section>`;
+    : `<p class="nota vazio-lista">${d.canal === "IFOOD" ? "Nenhum arquivo importado. O iFood entra pelo demonstrativo oficial." : d.canal === "NOVENTA_E_NOVE_FOOD" ? "Nenhuma importação: ainda não há relatório oficial validado." : d.canal === "SWF" ? "Nenhum relatório do SWF importado." : "Nenhum relatório SAIPOS importado."}</p>`}${demos}</section>`;
 }
 
 /** A seção "Importações" de um canal. `d` = resposta de /importacoes-canal; `erro` quando a consulta falhou. */

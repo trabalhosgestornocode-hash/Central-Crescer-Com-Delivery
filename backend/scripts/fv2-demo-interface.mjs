@@ -12,7 +12,9 @@ const PASTA = normalize(join(dirname(fileURLToPath(import.meta.url)), "..", ".."
 const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".jpeg": "image/jpeg" };
 // --agora=AAAA-MM-DDTHH:MM:SSZ: relógio da demonstração (ex.: conferir no navegador um relatório real de um período recente).
 const agora = process.argv.find((x) => x.startsWith("--agora="))?.slice("--agora=".length);
-const demo = await criarDemo(agora ? { relogio: () => new Date(agora) } : {});
+// --preparar=arquivo.mjs: cenário extra (export default async ({ nucleo, contexto, unidades }) => …), só em memória.
+const preparar = process.argv.find((x) => x.startsWith("--preparar="))?.slice("--preparar=".length);
+const demo = await criarDemo({ ...(agora ? { relogio: () => new Date(agora) } : {}), ...(preparar ? { preparar: (await import(new URL(`file:///${preparar.replaceAll("\\", "/")}`))).default } : {}) });
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");

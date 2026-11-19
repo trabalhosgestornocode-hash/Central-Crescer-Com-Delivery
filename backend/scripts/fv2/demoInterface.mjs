@@ -50,7 +50,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
  * @param {boolean} [o.carregar] 08B: false = NÃO carrega o cenário (os dados já estão no banco da homologação)
  * @param {(chave:string) => object|null} [o.sessaoDoPedido] 08B: sessão AUTENTICADA (gateway) no lugar do perfil de demonstração
  */
-export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z"), repositorio: repositorioExterno = null, cofre: cofreExterno = null, carregar = true, sessaoDoPedido = null } = {}) {
+export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z"), repositorio: repositorioExterno = null, cofre: cofreExterno = null, carregar = true, sessaoDoPedido = null, preparar = null } = {}) {
   const escopos = UNIDADES.map((u) => ({ organizacaoId: ORG, unidadeId: u.id }));
   const sal = randomUUID();
   const repositorio = repositorioExterno ?? m.criarRepositorioMemoria();
@@ -191,7 +191,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
     // Fases 04–06 (docs 42–44): as MESMAS consultas da plataforma (área SAIPOS, fechamento manual, operadoras, cards).
-    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma", "/calendario-faturamento", "/importacoes-canal", "/previa-demonstrativo-ifood"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
+    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma", "/calendario-faturamento", "/importacoes-canal", "/previa-demonstrativo-ifood", "/fontes-faturamento", "/conferencia-swf", "/sangrias-swf"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
     "/api/fv2/previa-relatorio-99food": (ctx, p) => CONSULTAS["/previa-relatorio-99food"](nucleo, ctx, { importacao: id(p.importacao) }),
     "/api/fv2/previa-conciliacao-ifood": (ctx, p) => CONSULTAS["/previa-conciliacao-ifood"](nucleo, ctx, { importacao: id(p.importacao) }),
     "/api/fv2/contas-a-pagar": async (ctx, p) => {
@@ -296,8 +296,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
     // Fases 04–06: as MESMAS ações da plataforma (fechamento manual, operadoras e taxas, lote de propostas prontas).
-    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/vendas/demonstrativo-ifood", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar", "/importacao/99food/aplicar", "/importacao/99food/vincular-loja", "/importacao/99food/decidir-correcao", "/importacao/ifood-conciliacao/classificar", "/conciliacoes/gerar-repasses-ifood"]
-      .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, ["/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar", "/importacao/99food/aplicar", "/importacao/99food/vincular-loja", "/importacao/99food/decidir-correcao"].includes(k) ? { ...b, importacao: id(b.importacao) } : b) }])),
+    ...Object.fromEntries(["/configuracoes/fontes-faturamento", "/sangrias-swf/lancar", "/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/vendas/demonstrativo-ifood", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar", "/importacao/99food/aplicar", "/importacao/99food/vincular-loja", "/importacao/99food/decidir-correcao", "/importacao/ifood-conciliacao/classificar", "/conciliacoes/gerar-repasses-ifood"]
+      .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, ["/propostas/aprovar-e-aplicar-prontas", "/importacao/ifood-conciliacao/aplicar", "/importacao/99food/aplicar", "/importacao/99food/vincular-loja", "/importacao/99food/decidir-correcao"].includes(k) ? { ...b, importacao: id(b.importacao) } : k === "/sangrias-swf/lancar" ? { ...b, registros: String(b.registros ?? "").split(",").map((x) => id(x.trim())).join(","), ...(b.competencias ? { competencias: String(b.competencias).split(";").filter(Boolean).map((x) => { const [r, c] = x.split("="); return `${id(String(r).trim())}=${c}`; }).join(";") } : {}) } : b) }])),
     // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
     // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.
     ...Object.fromEntries(Object.entries(escritasDaAbertura({ hoje: () => m.tempo.hojeEm(relogio()), ref: id })).filter(([k]) => k !== "/conciliacoes/gerar").map(([k, e]) => [`/api/fv2/acoes${k}`, { campos: e.campos, fazer: (ctx, b) => e.fazer(nucleo, ctx, b) }])),
@@ -473,6 +473,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       return { status: 500, corpo: { erro: "FALHA_DA_CONSULTA", mensagem: "Não foi possível consultar agora." } };
     }
   }
+  // Gancho LOCAL opcional (--preparar=arquivo.mjs no servidor de demonstração): carrega um cenário extra no núcleo em memória.
+  if (preparar) await preparar({ nucleo, contexto: (u) => ({ organizacaoId: ORG, unidadeId: u, usuarioId: USUARIOS.administrador, permissoes: Object.values(m.ACAO) }), unidades: UNIDADES }); // administrador sintético (concessões gravadas)
   return { responder, agir, unidades: UNIDADES };
 }
 

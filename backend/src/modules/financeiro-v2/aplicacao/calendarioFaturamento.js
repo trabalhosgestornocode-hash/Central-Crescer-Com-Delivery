@@ -22,6 +22,9 @@ import { leituraDaConciliacaoIfood } from "./conciliacaoIfood.js";
 import { leituraDoRelatorio99Food } from "./relatorio99Food.js";
 import { diasDeFechamento, ehProvisoria } from "./fechamentoManual.js";
 import { itensDoLiquidoEsperado } from "./vendas.js";
+import { fontesDaUnidade } from "./fontesDeFaturamento.js";
+import { leituraDoSwf } from "./conferenciaSwf.js";
+import { situacaoDasSangriasSwf } from "./sangriasSwf.js";
 
 export const CANAIS_DO_CALENDARIO = Object.freeze(["BALCAO", "ANOTA_AI", "IFOOD", "NOVENTA_E_NOVE_FOOD"]);
 const CANAIS_SAIPOS = ["BALCAO", "ANOTA_AI"];
@@ -153,6 +156,55 @@ async function fonteSaipos(tx, cx, { canal, inicio, fim, hoje }) {
   };
 }
 
+// ------------------------------------------------------------------------------------------------------ SWF (Balcão da Subway)
+// O SWF dá o Balcão como TOTAL DO PERÍODO (relatório 76): o dia coberto mostra a cobertura do período, nunca um valor do
+// dia. O 45 tem o total do dia de TODOS os canais: aparece como controle do dia (não é faturamento do Balcão).
+// Dia sem documento SWF fica sem registro (nunca zero).
+const br = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+async function fonteSwfBalcao(tx, cx, { inicio, fim }) {
+  const swf = await leituraDoSwf(tx, cx, { inicio, fim });
+  // Sangrias do caixa SWF por DIA OPERACIONAL: despesa paga em dinheiro (quando lançada) ou pendência. Nunca é faturamento.
+  const sangrias = agrupar((await situacaoDasSangriasSwf(tx, cx, inicio, fim)).itens, (i) => i.data);
+  const base = (data) => {
+    const dia = vazio();
+    const controle = swf?.porDia.get(data) ?? null;
+    const cobrem = (swf?.periodos ?? []).filter((p) => p.periodoInicio <= data && data <= p.periodoFim);
+    if (controle) {
+      dia.swfControleDoDia = controle;
+      dia.observacoes.push("Relatório 45 do SWF: total do dia de todos os canais (controle, não é faturamento do Balcão).");
+      if (!controle.fecha) dia.divergencias.push({ codigo: "SWF_45_NAO_FECHA", quantidade: 1, mensagem: "A composição do dia no relatório 45 não fecha com o faturamento." });
+    }
+    if (cobrem.length) {
+      dia.estados.add(ESTADO_DIA.IMPORTADO);
+      dia.cobertura = {
+        granularidadeDiaria: false,
+        periodos: cobrem.map((p) => ({ importacaoId: p.importacaoId, periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, balcaoCentavos: p.balcao.valorCentavos, vendas: p.balcao.quantidade, situacao: p.balcao.situacao })),
+        mensagem: "Balcão coberto pelo total do período do relatório 76 do SWF. O valor do dia não existe no documento e não é repartido.",
+      };
+      dia.observacoes.push(dia.cobertura.mensagem);
+      for (const p of cobrem.filter((x) => ["PROPOSTA_ABERTA", "SEM_PROPOSTA"].includes(x.balcao.situacao))) dia.pendencias.push({ codigo: "BALCAO_SWF_NAO_APLICADO", quantidade: 1, mensagem: `Balcão de ${br(p.periodoInicio)} a ${br(p.periodoFim)} importado, ainda não aplicado ao Financeiro.` });
+      for (const p of cobrem) for (const c of p.comparacoes.filter((x) => x.situacao !== "CONFERE")) dia.pendencias.push({ codigo: c.codigo, quantidade: 1, diferencaCentavos: c.diferencaCentavos, mensagem: `${c.descricao}: diferença pendente de investigação (período ${br(p.periodoInicio)} a ${br(p.periodoFim)}).` });
+      if (cobrem.length > 1) dia.divergencias.push({ codigo: "PERIODOS_SWF_SOBREPOSTOS", quantidade: cobrem.length, mensagem: "Mais de um relatório 76 cobre este dia: só um pode ser aplicado." });
+    } else if (controle) dia.pendencias.push({ codigo: "SWF_SEM_RELATORIO_DE_CANAIS", quantidade: 1, mensagem: "Há o total do dia (45), mas nenhum relatório 76 cobre o dia: o Balcão não é separado dos outros canais." });
+    const sg = sangrias.get(data) ?? [];
+    if (sg.length) {
+      dia.sangriasSwf = {
+        quantidade: sg.length, totalCentavos: soma(sg, (i) => i.valorCentavos),
+        itens: sg.map((i) => ({ registroId: i.registroId, importacaoId: i.importacaoId, linha: i.linha, dataHoraReal: i.dataHoraReal, madrugada: i.madrugada, doFechamentoAnterior: i.doFechamentoAnterior, descricao: i.descricao, operador: i.operador, valorCentavos: i.valorCentavos, formaPagamento: "DINHEIRO", origem: "Caixa SWF", situacao: i.situacaoPagamento, categoria: i.categoriaDaConta ?? i.categoriaSugerida, regra: i.regra, naturezaSugerida: i.naturezaSugerida, obrigacaoId: i.obrigacaoId ?? null, pendencia: i.pendencia })),
+      };
+      const aLancar = sg.filter((i) => i.podeLancar);
+      const conferir = sg.filter((i) => i.situacao === "NOVA" && !i.podeLancar);
+      if (aLancar.length) dia.pendencias.push({ codigo: "SANGRIAS_SWF_A_LANCAR", quantidade: aLancar.length, mensagem: `${aLancar.length} sangria(s) com natureza de despesa ainda não lançada(s) como despesa paga.` });
+      if (conferir.length) dia.pendencias.push({ codigo: "SANGRIAS_SWF_A_CONFERIR", quantidade: conferir.length, mensagem: `${conferir.length} sangria(s) para conferir (VR/VT, adiantamento, transferência ou motivo não reconhecido).` });
+      if (sg.some((i) => i.madrugada)) dia.observacoes.push("Há sangria de madrugada: o SWF a atribuiu a este fechamento; a hora real está no detalhe.");
+    }
+    if (dia.pendencias.length) dia.estados.add(ESTADO_DIA.CONFERENCIA_PENDENTE);
+    if (dia.divergencias.length) dia.estados.add(ESTADO_DIA.DIVERGENCIA);
+    return dia;
+  };
+  return { base, cobertura: swf?.periodos ?? [] };
+}
+
 // ------------------------------------------------------------------------------------------------------ iFood (fonte oficial)
 async function fonteIfood(tx, cx, { inicio, fim, hoje }) {
   const demonstrativos = (await demonstrativosDoIfood(tx, cx, hoje)).filter((d) => d.periodoInicio <= fim && inicio <= d.periodoFim);
@@ -259,7 +311,13 @@ export function operacoesDoCalendarioFaturamento(b) {
         // Início do controle: o dia seguinte ao corte da abertura da unidade; sem abertura, o primeiro dia do mês corrente.
         const inicioDoControle = abertura?.dataDeCorte ? somarDias(abertura.dataDeCorte, 1) : primeiroDiaDe(hoje.slice(0, 7));
         let diaDe; let cobertura = null; let ifoodDiario = false; let noventaDiario = false;
-        if (CANAIS_SAIPOS.includes(canal)) diaDe = await fonteSaipos(tx, cx, { canal, inicio, fim, hoje });
+        // Fontes de faturamento da unidade: no SWF o Presencial vem do relatório 76 e o Anota Aí não existe.
+        const fontes = fontesDaUnidade(config);
+        const swf = fontes.sistemaDeLoja === "SWF";
+        const foraDaUnidade = (swf && canal === "ANOTA_AI") || (canal === "IFOOD" && !fontes.fontes.includes("IFOOD")) || (canal === "NOVENTA_E_NOVE_FOOD" && !fontes.fontes.includes("NOVENTA_E_NOVE_FOOD"));
+        if (foraDaUnidade) diaDe = () => { const d = vazio(); d.observacoes.push("Canal não usado por esta unidade."); return d; };
+        else if (swf && canal === "BALCAO") { const f = await fonteSwfBalcao(tx, cx, { inicio, fim }); diaDe = f.base; cobertura = f.cobertura; }
+        else if (CANAIS_SAIPOS.includes(canal)) diaDe = await fonteSaipos(tx, cx, { canal, inicio, fim, hoje });
         else if (canal === "IFOOD") { const f = await fonteIfood(tx, cx, { inicio, fim, hoje }); diaDe = f.base; cobertura = f.cobertura; ifoodDiario = f.diaria; }
         else { const f = await fonte99Food(tx, cx, { inicio, fim }); diaDe = f.base; noventaDiario = f.diaria; }
 
@@ -275,7 +333,7 @@ export function operacoesDoCalendarioFaturamento(b) {
           if (d.temEvidenciaDeSemMovimento && !marcado) d.estados.add(ESTADO_DIA.SEM_MOVIMENTO_CONFIRMADO);
           const semOperacao = marcado && !temInformacao ? marcado : null;
           const antesDoControle = data < inicioDoControle;
-          const elegivel = !futuro && !ehHoje && !antesDoControle && !semOperacao;
+          const elegivel = !futuro && !ehHoje && !antesDoControle && !semOperacao && !foraDaUnidade;
           // Sem registro = nada registrado no dia. Pendência ou observação sozinhas (ex.: pedido iFood só na SAIPOS) não são registro.
           const temInformacaoFinal = [...d.estados].some((e) => COM_INFORMACAO.includes(e)) || d.registro !== null;
           if (elegivel && !temInformacaoFinal) d.estados.add(ESTADO_DIA.SEM_REGISTRO);
@@ -296,14 +354,18 @@ export function operacoesDoCalendarioFaturamento(b) {
           semOperacao: conta((d) => d.semOperacao !== null), futuros: conta((d) => d.futuro),
         };
         const tem = (a) => (ctx.permissoes ?? []).includes(a);
-        const saipos = CANAIS_SAIPOS.includes(canal);
-        const observacoes = canal === "IFOOD"
+        const saipos = CANAIS_SAIPOS.includes(canal) && !swf;
+        const observacoes = foraDaUnidade ? ["Canal não usado por esta unidade (fontes de faturamento da unidade)."]
+          : swf && canal === "BALCAO" ? ["Balcão pelo SWF: só o relatório 76 é faturamento e ele é total do período (sem valor por dia). O relatório 45 aparece como controle do dia de todos os canais."]
+          : canal === "IFOOD"
           ? [ifoodDiario ? "Dias com relatório oficial de conciliação do iFood têm valores próprios. Dias fora do arquivo continuam sem registro." : "Somente o demonstrativo oficial do iFood. Ele cobre períodos: os valores não são repartidos por dia."]
           : canal === "NOVENTA_E_NOVE_FOOD" ? [noventaDiario ? "Dias com relatório oficial da 99Food têm valores próprios. Dias fora do arquivo continuam sem registro." : "Somente relatórios oficiais da 99Food. Sem relatório importado, os dias aparecem sem dados (nunca zero confirmado)."]
           : ["Uma importação da SAIPOS pode alimentar os dois canais; cada calendário mostra só os registros do seu canal."];
         return {
           canal, mes, hoje, controle: { inicio: inicioDoControle, origem: abertura?.dataDeCorte ? "ABERTURA" : "MES_CORRENTE" }, observacoes,
+          sistemaDeLoja: fontes.sistemaDeLoja, canalNaUnidade: !foraDaUnidade,
           semFonteOficial: canal === "NOVENTA_E_NOVE_FOOD" && !noventaDiario, granularidadeDiaria: saipos || ifoodDiario || noventaDiario,
+          ...(swf ? { swf: true } : {}),
           acoes: {
             abrirImportacoes: saipos && tem(ACAO.VER), importar: saipos && tem(ACAO.IMPORTAR), registrarFechamento: saipos && tem(ACAO.REGISTRAR),
             registrarFaturamentoProvisorio: saipos && tem(ACAO.REGISTRAR), substituirProvisorio: saipos && tem(ACAO.CANCELAR), abrirConferencias: tem(ACAO.VER),
@@ -341,6 +403,10 @@ export function operacoesDoCalendarioFaturamento(b) {
         if (situacao === "SEM_OPERACAO") {
           if (data !== null) {
             if (datas.some((x) => x.data === data)) return { canal, ...doCanal, repetido: true };
+            if (canal === "BALCAO" && fontesDaUnidade(atual).sistemaDeLoja === "SWF") {
+              const swf = await leituraDoSwf(tx, cx, { inicio: data, fim: data });
+              if (swf?.porDia.has(data) || swf?.periodos.some((p) => p.periodoInicio <= data && data <= p.periodoFim)) falhar(CODIGO.OPERACAO_INVALIDA, "Este dia tem relatório do SWF: não pode ser marcado como sem operação.", { motivo: "DIA_COM_REGISTRO" });
+            }
             if (CANAIS_SAIPOS.includes(canal) || canal === "NOVENTA_E_NOVE_FOOD") {
               const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, canal } })).filter((v) => v.dataVenda === data);
               if (vendas.length) falhar(CODIGO.OPERACAO_INVALIDA, "Este dia já tem venda registrada neste canal: não pode ser marcado como sem operação.", { motivo: "DIA_COM_REGISTRO" });

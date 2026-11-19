@@ -40,10 +40,14 @@ const descricaoDaRetirada = (r) => `Retirada de Frente de Caixa (SAIPOS) em ${r.
  * reconhecimento é pelo PAGAMENTO EM DINHEIRO pelo caixa físico na mesma data (de qualquer fornecedor), 1 para 1 por valor e, depois, por SOMA.
  * Na dúvida o sistema NÃO lança: duplicar despesa é o erro caro.
  */
-export async function situacaoDasRetiradas(tx, cx, inicio, fim) {
-  const retiradas = (await movimentosDoPeriodo(tx, cx, inicio, fim))
-    .filter((r) => r.dados.natureza === N.SANGRIA && r.dados.considerar)
+export async function situacaoDasRetiradas(tx, cx, inicio, fim, { retiradas: daOrigem = null } = {}) {
+  // Doc 54: o SWF (Subway) passa as próprias retiradas (já filtradas e na data operacional); sem lista, valem as da SAIPOS.
+  const retiradas = (daOrigem ?? (await movimentosDoPeriodo(tx, cx, inicio, fim)).filter((r) => r.dados.natureza === N.SANGRIA && r.dados.considerar))
+    .filter((r) => r.dataReferencia >= inicio && r.dataReferencia <= fim)
     .sort((a, x) => a.dataReferencia.localeCompare(x.dataReferencia) || a.linha - x.linha);
+  // Doc 54: no SWF a retirada de madrugada pertence ao fechamento anterior, mas o dinheiro saiu na data REAL — o pagamento lançado à mão
+  // pode estar em qualquer das duas datas. Sem data real (SAIPOS), nada muda.
+  const fimDoDinheiro = retiradas.reduce((m, r) => (r.dados?.dataReal && r.dados.dataReal > m ? r.dados.dataReal : m), fim);
   const caixas = (await tx.listar(cx, TIPO.CONTA)).filter((c) => c.ativa && c.tipo === TIPO_CONTA.CAIXA_FISICO);
   const caixa = caixas.length === 1 ? caixas[0] : null;
   const contrapartes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x]));
@@ -59,7 +63,7 @@ export async function situacaoDasRetiradas(tx, cx, inicio, fim) {
   // Pagamentos em dinheiro pelo caixa físico no período, por conta e dia (de qualquer fornecedor; só o que NÃO foi lançado por esta função).
   const entradas = [];
   if (caixa) {
-    const saidas = new Map((await tx.listar(cx, TIPO.MOVIMENTACAO)).filter((m) => m.contaId === caixa.id && m.sentido === "SAIDA" && m.dataEfetiva >= inicio && m.dataEfetiva <= fim).map((m) => [m.id, m]));
+    const saidas = new Map((await tx.listar(cx, TIPO.MOVIMENTACAO)).filter((m) => m.contaId === caixa.id && m.sentido === "SAIDA" && m.dataEfetiva >= inicio && m.dataEfetiva <= fimDoDinheiro).map((m) => [m.id, m]));
     const porContaDia = new Map();
     for (const l of await tx.listar(cx, TIPO.LIQUIDACAO)) {
       const m = saidas.get(l.movimentacaoId);
@@ -72,7 +76,7 @@ export async function situacaoDasRetiradas(tx, cx, inicio, fim) {
   }
   // Contas do fornecedor "Sangrias" lançadas à mão com vencimento na data, mesmo que não tenham sido pagas pelo caixa (ex.: ainda abertas).
   for (const o of contas.filter((x) => fornecedor && x.contraparteId === fornecedor.id && !daFuncao(x))) {
-    if (o.vencimento >= inicio && o.vencimento <= fim && !entradas.some((e) => e.obrigacao.id === o.id)) entradas.push({ obrigacao: o, data: o.vencimento, valorCentavos: o.valorBaseCentavos });
+    if (o.vencimento >= inicio && o.vencimento <= fimDoDinheiro && !entradas.some((e) => e.obrigacao.id === o.id)) entradas.push({ obrigacao: o, data: o.vencimento, valorCentavos: o.valorBaseCentavos });
   }
   const dasSangrias = (e) => (fornecedor && e.obrigacao.contraparteId === fornecedor.id ? 0 : 1);
   const descreve = (e) => ({ obrigacaoId: e.obrigacao.id, fornecedorDaConta: contrapartes.get(e.obrigacao.contraparteId)?.nome ?? null, descricaoDaConta: e.obrigacao.descricao ?? null, categoriaDaConta: nomeDaCategoria.get(categoriaDoLancamento.get(e.obrigacao.lancamentoId)) ?? null, valorDaContaCentavos: e.valorCentavos, quitada: e.obrigacao.saldoCentavos === 0 });
@@ -81,9 +85,9 @@ export async function situacaoDasRetiradas(tx, cx, inicio, fim) {
   const datas = [...new Set(retiradas.map((r) => r.dataReferencia))];
   for (const data of datas) {
     const doDia = retiradas.filter((r) => r.dataReferencia === data).map((r) => ({
-      registroId: r.id, chave: chaveDaRetirada(r), data, valorCentavos: r.dados.valorAbsolutoCentavos, descricao: r.dados.descricaoOriginal, linha: r.linha, importacaoId: r.importacaoId,
+      registroId: r.id, chave: chaveDaRetirada(r), data, dataReal: r.dados.dataReal ?? data, valorCentavos: r.dados.valorAbsolutoCentavos, descricao: r.dados.descricaoOriginal, linha: r.linha, importacaoId: r.importacaoId,
     }));
-    const pool = entradas.filter((e) => e.data === data).sort((a, x) => dasSangrias(a) - dasSangrias(x) || x.valorCentavos - a.valorCentavos).map((e) => ({ ...e, usada: false }));
+    const pool = entradas.filter((e) => e.data === data || doDia.some((r) => r.dataReal === e.data)).sort((a, x) => dasSangrias(a) - dasSangrias(x) || x.valorCentavos - a.valorCentavos).map((e) => ({ ...e, usada: false }));
     const resultado = new Map();
     // 0) já lançadas por esta função (identificador próprio da linha importada).
     for (const r of doDia) {

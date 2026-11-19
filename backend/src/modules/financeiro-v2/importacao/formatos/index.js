@@ -33,7 +33,8 @@ function textoDaCelula(c) {
  * @returns {{formato:string, tabelas:Array<{nome:string, linhas:string[][]}>, avisos:Array<{codigo:string, mensagem:string}>, documento?:object}}
  */
 export function paraTabelas(bytes, formato, adaptador, periodo) {
-  if (formato === FORMATO.CSV) return { formato, tabelas: [{ nome: "csv", linhas: lerTabela(decodificar(bytes)).linhas }], avisos: [] };
+  const preparado = (r) => (adaptador?.prepararTabela ? { ...r, tabelas: r.tabelas.map((t) => ({ ...t, linhas: adaptador.prepararTabela(t.linhas) })) } : r);
+  if (formato === FORMATO.CSV) return preparado({ formato, tabelas: [{ nome: "csv", linhas: lerTabela(decodificar(bytes)).linhas }], avisos: [] });
   if (formato === FORMATO.XLSX) {
     const wb = lerXlsx(adaptador?.aceitaZip ? xlsxDentroDoZip(bytes) : bytes);
     const avisos = [];
@@ -45,7 +46,7 @@ export function paraTabelas(bytes, formato, adaptador, periodo) {
       }));
       return { nome: aba.nome, linhas };
     });
-    return { formato, tabelas, avisos };
+    return preparado({ formato, tabelas, avisos });
   }
   if (formato === FORMATO.PDF) {
     const documento = lerPdf(bytes);

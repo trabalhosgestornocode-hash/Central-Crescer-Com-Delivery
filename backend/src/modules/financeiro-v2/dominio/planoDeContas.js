@@ -137,6 +137,9 @@ const ACAITERIA = [
   f("ACAI_DISTRIBUIDORA", "Açaí e insumos da distribuidora", "INSUMOS"),
   f("OUTROS_INSUMOS", "Outros insumos", "INSUMOS"),
   f("BENEFICIOS", "Benefícios de pessoal", "PESSOAL"),
+  // Doc 54 (19/11/2026): VR e VT ficam em Benefícios de pessoal, com subcategoria própria (pagos pelo banco ou em dinheiro pelo caixa).
+  f("VALE_REFEICAO", "Vale-refeição", "BENEFICIOS"),
+  f("VALE_TRANSPORTE", "Vale-transporte", "BENEFICIOS"),
   f("FERIAS_E_RESCISOES", "Férias e rescisões", "PESSOAL"),
   f("EXAMES_OCUPACIONAIS", "Exames ocupacionais", "PESSOAL"),
   f("DIARIAS_EXTRAS", "Diárias extras", "PESSOAL"),

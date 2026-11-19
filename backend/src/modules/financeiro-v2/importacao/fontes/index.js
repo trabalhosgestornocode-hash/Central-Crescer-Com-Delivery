@@ -6,9 +6,10 @@ import { FONTES_IFOOD } from "./ifood.js";
 import { FONTES_99FOOD } from "./noventaENoveFood.js";
 import { FONTES_SAIPOS } from "./saipos.js";
 import { FONTES_STONE } from "./stone.js";
+import { FONTES_SWF } from "./swf.js";
 import { FONTES_UNICRED } from "./unicred.js";
 
-export const FONTES_PADRAO = Object.freeze([...FONTES_SAIPOS, ...FONTES_STONE, ...FONTES_IFOOD, ...FONTES_99FOOD, ...FONTES_FOODY, ...FONTES_UNICRED]);
+export const FONTES_PADRAO = Object.freeze([...FONTES_SAIPOS, ...FONTES_STONE, ...FONTES_IFOOD, ...FONTES_99FOOD, ...FONTES_FOODY, ...FONTES_UNICRED, ...FONTES_SWF]);
 
 export function criarRegistroDeFontes(fontes = FONTES_PADRAO) {
   const porTipo = new Map(fontes.map((f) => [f.tipoRelatorio, f]));

@@ -10,8 +10,10 @@ import { ACAO } from "../dominio/contexto.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
 import { demonstrativosDoIfood } from "./canalPlataforma.js";
 import { nomeDoRelatorio } from "./conferencias.js";
+import { fontesDaUnidade } from "./fontesDeFaturamento.js";
+import { ehRelatorioSwf } from "../importacao/fontes/swf.js";
 
-export const CANAIS_DE_IMPORTACAO = Object.freeze(["SAIPOS", "IFOOD", "NOVENTA_E_NOVE_FOOD"]);
+export const CANAIS_DE_IMPORTACAO = Object.freeze(["SAIPOS", "SWF", "IFOOD", "NOVENTA_E_NOVE_FOOD"]);
 
 /**
  * Catálogo de formatos por canal. `arquivo: true` = envio de arquivo liberado (o tipo precisa estar também em FONTE_DO_RELATORIO, da
@@ -30,6 +32,18 @@ export const FORMATOS_POR_CANAL = Object.freeze({
     { id: "SAIPOS_MOVIMENTOS_CAIXA", tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", nome: "Movimentações de Frente de Caixa (XLSX do Financeiro)", principal: false, arquivo: true, disponivel: true,
       descricao: "Retiradas (sangrias), reforços e transferências em dinheiro. Importar não lança nada. Depois você lança as retiradas como despesas pagas em dinheiro (fornecedor Sangrias, Outras despesas); reforço e transferência não são despesa. Nunca é faturamento.",
       dica: "Na SAIPOS: Lançamentos financeiros, categoria Frente de Caixa, descrição Retirada (para reforços, descrição Reforço). Exporte em XLSX." },
+  ]),
+  SWF: Object.freeze([
+    { id: "SWF_CANAIS", tipoRelatorio: "SWF_CANAIS", nome: "76 — Vendas por canais (XLSX)", principal: true, arquivo: true, disponivel: true,
+      descricao: "Total do período por canal. Só o Balcão vira faturamento (total do período, sem valor por dia). iFood e 99Food ficam só como conferência: a fonte deles é a plataforma.",
+      dica: "O 76 não imprime o período: informe exatamente o período exportado no SWF." },
+    { id: "SWF_PAGAMENTOS", tipoRelatorio: "SWF_PAGAMENTOS", nome: "03 — Faturamento por tipo de pagamento (XLSX)", principal: false, arquivo: true, disponivel: true,
+      descricao: "Total do período por forma de pagamento, todos os canais juntos. Só conferência: separa o que foi pago no app do que a loja recebeu (balcão ou entrega)." },
+    { id: "SWF_ANALISE_FATURAMENTO", tipoRelatorio: "SWF_ANALISE_FATURAMENTO", nome: "45 — Análise de faturamento por dia (XLSX)", principal: false, arquivo: true, disponivel: true,
+      descricao: "Total do dia de todos os canais (produtos, entregas, descontos, combos). Só controle do dia: não separa o Balcão." },
+    { id: "SWF_SANGRIAS", tipoRelatorio: "SWF_SANGRIAS", nome: "Sangrias do caixa (XLSX)", principal: false, arquivo: true, disponivel: true,
+      descricao: "Retiradas de dinheiro do caixa, com data/hora real e dia do fechamento. Importar não lança nada: depois você lança como despesa paga em dinheiro só as retiradas com natureza de despesa; VR/VT, adiantamentos, transferências e motivos desconhecidos ficam para conferência.",
+      dica: "No SWF: relatório de Sangrias do período, exportado em XLSX." },
   ]),
   IFOOD: Object.freeze([
     { id: "IFOOD_CONCILIACAO", tipoRelatorio: "IFOOD_CONCILIACAO", nome: "Conciliação Financeira do iFood (XLSX)", principal: true, arquivo: true, disponivel: true,
@@ -50,7 +64,7 @@ export const FORMATOS_POR_CANAL = Object.freeze({
 });
 
 // A 99Food entra como fonte "OUTRO" (sem migração); o tipo do relatório identifica o canal.
-const FONTE_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "IFOOD", NOVENTA_E_NOVE_FOOD: "OUTRO" });
+const FONTE_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", SWF: "OUTRO", IFOOD: "IFOOD", NOVENTA_E_NOVE_FOOD: "OUTRO" });
 
 export function operacoesDeImportacoesPorCanal(b, { fontes }) {
   return {
@@ -62,16 +76,19 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
         const hoje = b.hoje();
         const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
         const compat = new Map(fontes.compatibilidade().map((f) => [f.tipoRelatorio, f]));
+        // A área só aceita arquivo de um sistema que a unidade usa (o envio também é recusado no servidor).
+        const daUnidade = fontesDaUnidade(config);
+        const habilitado = daUnidade.fontes.includes(canal);
         const formatos = FORMATOS_POR_CANAL[canal].map((f) => {
           const c = f.tipoRelatorio ? compat.get(f.tipoRelatorio) : null;
           return {
             id: f.id, tipoRelatorio: f.tipoRelatorio, nome: f.nome, principal: f.principal, descricao: f.descricao ?? null, dica: f.dica ?? null, modo: f.modo ?? (f.arquivo ? "ARQUIVO" : null),
-            disponivel: f.disponivel, motivo: f.motivo ?? null, aceitaArquivo: f.arquivo === true && f.disponivel === true,
+            disponivel: f.disponivel, motivo: f.motivo ?? (habilitado ? null : "Esta unidade não usa este sistema como fonte de faturamento."), aceitaArquivo: habilitado && f.arquivo === true && f.disponivel === true,
             extensoes: c ? [...c.formatos] : [], homologado: c ? c.formatosHomologados.length > 0 : false, extensoesHomologadas: c ? [...c.formatosHomologados] : [],
           };
         });
         const importacoes = (await tx.listar(cx, TIPO.IMPORTACAO, { onde: { fonte: FONTE_DO_CANAL[canal] } }))
-          .filter((i) => canal !== "NOVENTA_E_NOVE_FOOD" || i.tipoRelatorio === "NOVENTA_E_NOVE_FOOD_RELATORIO")
+          .filter((i) => (canal === "NOVENTA_E_NOVE_FOOD" ? i.tipoRelatorio === "NOVENTA_E_NOVE_FOOD_RELATORIO" : canal === "SWF" ? ehRelatorioSwf(i.tipoRelatorio) : true))
           .sort((a, x) => String(x.criadoEm).localeCompare(String(a.criadoEm))).slice(0, 40)
           .map((i) => ({
             id: i.id, tipoRelatorio: i.tipoRelatorio, relatorio: nomeDoRelatorio(i.tipoRelatorio), periodoInicio: i.periodoInicio, periodoFim: i.periodoFim,
@@ -86,7 +103,7 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
         for (const i of importacoes) porEstado[i.estado] = (porEstado[i.estado] ?? 0) + 1;
         const tem = (a) => (ctx.permissoes ?? []).includes(a);
         return {
-          canal, hoje, unidade: { nome: config?.nomeExibicao ?? null },
+          canal, hoje, unidade: { nome: config?.nomeExibicao ?? null }, habilitadoNaUnidade: habilitado, fontesDaUnidade: daUnidade.fontes,
           acoes: { importar: tem(ACAO.IMPORTAR), confirmar: tem(ACAO.CONFIRMAR_IMPORTACAO) || tem(ACAO.IMPORTAR), registrarDemonstrativo: tem(ACAO.REGISTRAR) },
           formatos, historico: importacoes, demonstrativos, porEstado,
           estadosAguardando: [ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR],
