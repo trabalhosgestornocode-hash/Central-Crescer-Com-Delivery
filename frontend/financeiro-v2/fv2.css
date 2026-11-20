@@ -88,7 +88,7 @@ h1, h2, h3, h4 { line-height: 1.25; }
   html[data-modo="plataforma"] .topo-linha { display: contents; }
   html[data-modo="plataforma"] .topo #nav-alternar { grid-column: 1; grid-row: 1; }
   html[data-modo="plataforma"] .topo .topo-unidade { grid-column: 2; grid-row: 1; }
-  html[data-modo="plataforma"] .topo .filtros { grid-column: 3; grid-row: 1; padding: 0; align-items: flex-end; flex-wrap: nowrap; }
+  html[data-modo="plataforma"] .topo .filtros { grid-column: 3; grid-row: 1; padding: 0; align-items: center; flex-wrap: nowrap; }
   html[data-modo="plataforma"] .topo .topo-links { grid-column: 4; grid-row: 1; flex-wrap: nowrap; }
 }
 /* barra de filtros global (dentro do cabeçalho) */
@@ -204,9 +204,17 @@ button.botao-link[data-composicao]:hover { background: var(--hover); color: var(
 .card--receitas > :is(#card-faturamento-liquido, #card-custos-despesas, #card-resultado) h2 { font-size: 13px; font-weight: 500; color: var(--suave); }
 .card--receitas > :is(#card-faturamento-liquido, #card-custos-despesas, #card-resultado) .card-topo { flex-wrap: nowrap; }
 .card--receitas > :is(#card-faturamento-liquido, #card-custos-despesas, #card-resultado) .card-topo .selo { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-/* cabeçalho: todos os controles na mesma altura e na mesma linha de base */
+/* cabeçalho: UMA linha de base. Rótulo da competência AO LADO do campo; campos e botões com a mesma altura, tudo centralizado. */
 .topo :is(input, select), .topo .botao { min-height: 38px; height: 38px; }
-.topo .filtros > button { align-self: flex-end; }
+@media (min-width: 761px) {
+  .topo .filtros { align-items: center; }
+  .topo .filtros label { display: flex; align-items: center; gap: var(--e2); font-size: var(--t-pequeno); white-space: nowrap; }
+  .topo .filtros label > :is(input, select) { width: auto; }
+  .topo .filtros > button { align-self: center; }
+  .topo-links { align-items: center; flex-wrap: nowrap; }
+}
+/* campos só da demonstração: nunca aparecem dentro da plataforma (vence qualquer regra de layout do cabeçalho) */
+html[data-modo="plataforma"] .topo .filtros .so-demo { display: none; }
 @media (max-width: 900px) { .card--receitas { grid-template-columns: minmax(0, 1fr); } .card--receitas > #card-faturamento-liquido, .card--receitas > #card-custos-despesas { border-right: 0; } }
 .barra--canais { height: 10px; margin: 0 0 18px; }
 .canais { list-style: none; margin: 0 0 4px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px 28px; }
