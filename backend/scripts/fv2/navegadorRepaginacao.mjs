@@ -150,6 +150,13 @@ for (const [nome, vp] of Object.entries(VIEWPORTS)) {
   const { ctx, page } = await novaPagina(browser, srv, { viewport: vp });
   await pronto(page);
   await foto(page, `subway-${nome}-visao-geral`);
+  // cabeçalho: campos da demonstração nunca aparecem na plataforma; em telas largas todos os controles na MESMA linha (mesmo centro vertical)
+  const topo = await page.evaluate(() => ({
+    demo: [...document.querySelectorAll(".topo .so-demo")].some((e) => e.offsetParent),
+    centros: [...document.querySelectorAll(".topo #nav-alternar, .topo #filtro-competencia, .topo #atualizar-dados, .topo #link-operacional, .topo #link-plataforma")].map((e) => { const r = e.getBoundingClientRect(); return Math.round(r.top + r.height / 2); }),
+  }));
+  registrar("cabecalho", `${nome}: campos de demonstração ocultos na plataforma`, !topo.demo);
+  if (vp[0] >= 1280) registrar("cabecalho", `${nome}: controles do topo alinhados numa linha`, Math.max(...topo.centros) - Math.min(...topo.centros) <= 1, topo.centros.join(","));
   for (const rota of ["visao-geral", "dre", "swf", "contas-a-pagar", "calendario", "caixa-e-bancos", "configuracoes"]) {
     await page.evaluate((r) => { location.hash = `#/${r}`; }, rota);
     await espera(150);
