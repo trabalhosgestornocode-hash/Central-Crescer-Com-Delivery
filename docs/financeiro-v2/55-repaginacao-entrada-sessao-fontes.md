@@ -28,10 +28,26 @@ permissão, importador, baixa ou dado de produção foi alterado. Nada foi publi
 - **Desempenho**: telas pesadas (`conf`, `can`, `ven`, `adm`, `ent`, calendário/importações de canal) são baixadas sob demanda e aquecidas em tempo ocioso.
 - **Telas**: formulário de "Registrar conta a pagar" recolhível (a lista abre na primeira dobra); formulários de ação em colunas; contraste dos títulos do menu; menu recolhível.
 
+## Fase 2 (conclusão)
+
+- **Contrato de fontes corrigido** (`dominio/conferencias.js`, `aplicacao/fontesDeFaturamento.js`): relatórios esperados derivam das fontes reais da unidade e da **vigência histórica**
+  (`d.vigenciasDeFontes`, montada do histórico de configuração, só leitura). Regras: sem configuração = padrão histórico (SAIPOS); a primeira configuração gravada vale desde sempre
+  (o padrão é valor de partida, não vigência); trocas posteriores valem pela competência (competência que termina antes da troca mantém o sistema antigo). Subway espera SWF 45 e SWF 03
+  (equivalentes do faturamento diário e das formas de pagamento do SAIPOS; `FONTE_SEM_DOCUMENTO` segue sem efeito no fechamento). Nenhum valor/DRE/taxa/importação alterado
+  (teste compara DRE e Visão Geral antes/depois). Pendências históricas não são apagadas: são derivadas e continuam existindo para competências em que o sistema antigo valia.
+  Decisão que fica com o usuário: trocar SAIPOS→SWF numa unidade com competências passadas já fechadas mantém as pendências SAIPOS dessas competências (intencional).
+- **Sistema visual** (`fv2.css`): tokens de espaçamento (4 pt) e tipografia, coluna única centralizada (`--largura`), controles de formulário unificados, cabeçalho de tabela,
+  estado vazio, feedback de ação (`data-estado`), formulários recolhíveis nas telas de consulta (Contas a Pagar/Receber, Caixa e Bancos), menu móvel em gaveta, ficha de resumo com leitura controlada.
+
+## Não homologado
+
+Teste logado na plataforma real (Fase 4): **não executado**. A produção serve a `main`, sem estas mudanças; a plataforma local usaria o `.env` de produção. Verificação feita só com
+plataforma simulada (dados sintéticos) e testes estruturais. Falta, após publicar em ambiente de teste: entrada, `?setor=financeiro`, expiração/renovação real, usuário só-financeiro,
+múltiplas unidades, queda de rede, troca de unidade/competência.
+
 ## Pendências de contrato do backend (NÃO alteradas — decidir antes)
 
-1. `dominio/conferencias.js#FONTES_DA_COMPETENCIA` lista "Faturamento diário do SAIPOS" e "Formas de pagamento do SAIPOS" como relatórios **esperados de toda unidade**.
-   A interface os esconde na Subway, mas o servidor deveria derivar os esperados das fontes da unidade (afeta também pendências de fechamento).
+1. (RESOLVIDO na fase 2) `FONTES_DA_COMPETENCIA` listava relatórios SAIPOS como esperados de toda unidade.
 2. O servidor devolve a configuração de fontes sem versão; unidade sem configuração gravada vale o padrão histórico (SAIPOS). Para a Subway isso depende de a configuração da unidade estar gravada em produção.
 
 ## Como verificar
