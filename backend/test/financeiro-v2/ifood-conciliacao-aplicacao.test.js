@@ -221,3 +221,32 @@ test("Anota AI fora das opções operacionais da unidade SWF (Subway); unidade S
   assert.ok(!cw.canais.some((x) => x.codigo === "ANOTA_AI") && !cw.processadores.some((x) => x.codigo === "ANOTA_AI"));
   assert.ok(cw.canais.some((x) => x.codigo === "IFOOD"));
 });
+
+test("promoção custeada pela REDE: compõe a cesta como a do iFood (sem receita adicional, sem duplicar faturamento); entrega fecha", async () => {
+  // Espelha um pedido real: cesta 32 + entrega da loja 6,99; cliente pagou 24,99 (+0,99 de taxa); iFood 4,50 e rede 7,00 + 3,49.
+  const p3 = (desc, valor, extra = {}) => linha({ pedido: P3, tipo: extra.tipo ?? "Subsídio", desc, valor, cesta: 32, saldo: 35.28, ...extra });
+  const n = novo();
+  const { imp } = await importar(n, [
+    p3("Entrada Financeira", 24.99, { tipo: "Entrada Financeira" }), p3("Promoção custeada pelo iFood", 4.5), p3("Promoção custeada pela rede", 7),
+    p3("Promoção custeada pela rede no delivery", 3.49), p3("Taxa de serviço iFood cobrada do cliente", -0.99, { tipo: "Retenção" }),
+    p3("Comissão do iFood", -2.85, { tipo: "Cobrança" }), p3("Taxa de transação", -0.86, { tipo: "Cobrança" }),
+  ]);
+  const p = await n.previaDaConciliacaoIfood(c, { importacaoId: imp.id });
+  assert.equal(p.valores.produtosCentavos, 3200);
+  assert.equal(p.valores.entregasCentavos, 699, "entrega da loja correta (antes: −3,50)");
+  assert.equal(p.valores.faturamentoCentavos, 3899);
+  assert.equal(p.valores.promocoesRedeCentavos, 1049, "subsídio da rede visível à parte, informativo");
+  assert.equal(p.valores.liquidoCentavos, 3528, "líquido = o que o iFood paga");
+  assert.equal(p.valores.semClassificacaoCentavos, 0);
+  assert.deepEqual(p.pendenciasDeClassificacao, [], "a rede não vira pendência nem receita adicional");
+  assert.ok(!p.bloqueios.some((b) => b.codigo === "LINHA_NAO_FECHA"));
+  assert.deepEqual(p.porCompetencia.map((m) => [m.competencia, m.liquidoCentavos]), [["2026-11", 3528]]);
+});
+
+test("plano SUBWAY traz as categorias de decisão do iFood; o plano da açaiteria não muda", async () => {
+  const { MODELO_DE_PLANO } = await import("../../src/modules/financeiro-v2/dominio/planoDeContas.js");
+  const sub = MODELO_DE_PLANO.SUBWAY.map((x) => x.codigo);
+  assert.ok(sub.includes("RESSARCIMENTOS") && sub.includes("AJUSTES_DE_CANCELAMENTOS_E_ESTORNOS"));
+  const acai = MODELO_DE_PLANO.ACAITERIA.map((x) => x.codigo);
+  assert.ok(!acai.includes("RESSARCIMENTOS") && !acai.includes("AJUSTES_DE_CANCELAMENTOS_E_ESTORNOS"));
+});

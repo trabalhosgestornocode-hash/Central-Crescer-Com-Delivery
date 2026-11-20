@@ -270,10 +270,19 @@ export function operacoesDaConciliacaoIfood(b) {
     dias: p.resumo.dias.length,
     valores: {
       produtosCentavos: p.resumo.total.itensCentavos, entregasCentavos: p.resumo.total.entregaLojaCentavos, faturamentoCentavos: p.resumo.total.itensCentavos + p.resumo.total.entregaLojaCentavos,
+      promocoesIfoodCentavos: p.resumo.total.promocaoIfoodCentavos, promocoesRedeCentavos: p.resumo.total.promocaoRedeCentavos,
       promocoesLojaCentavos: -p.resumo.total.promocaoLojaCentavos, comissoesCentavos: -p.resumo.total.comissaoCentavos, taxaTransacaoCentavos: -p.resumo.total.transacaoCentavos,
       entregaSobDemandaCentavos: -p.resumo.total.sobDemandaCentavos, anunciosCentavos: -p.resumo.total.anunciosCentavos, classificadosCentavos: p.resumo.total.classificadosCentavos, semClassificacaoCentavos: p.resumo.total.semClassificacaoCentavos,
       liquidoCentavos: p.resumo.total.liquidoCentavos, repassePrevistoCentavos: p.resumo.repassePrevistoCentavos, recebidoDiretoCentavos: p.resumo.recebidoDiretoCentavos,
     },
+    // Competência = data do fato (venda/lançamento); a data de repasse só diz QUANDO o valor é descontado ou pago.
+    porCompetencia: Object.values(p.resumo.dias.reduce((acc, d) => {
+      const m = (acc[d.data.slice(0, 7)] ??= { competencia: d.data.slice(0, 7), brutoCentavos: 0, anunciosCentavos: 0, classificadosCentavos: 0, semClassificacaoCentavos: 0, liquidoCentavos: 0, repassesDeDesconto: new Set() });
+      m.brutoCentavos += d.itensCentavos + d.entregaLojaCentavos; m.anunciosCentavos += d.anunciosCentavos; m.classificadosCentavos += d.classificadosCentavos;
+      m.semClassificacaoCentavos += d.semClassificacaoCentavos; m.liquidoCentavos += d.liquidoCentavos;
+      for (const c of d.ciclos) m.repassesDeDesconto.add(c.split("|")[2]);
+      return acc;
+    }, {})).map((m) => ({ ...m, repassesDeDesconto: [...m.repassesDeDesconto].sort() })).sort((a, b) => a.competencia.localeCompare(b.competencia)),
     lancamentos: { criar: p.criar.length, manter: p.manter.length, cancelar: p.cancelar.length },
     repasses: { criar: p.repasses.criar.length, manter: p.repasses.manter.length, cancelar: p.repasses.cancelar.length, itens: p.resumo.repasses.map((r) => ({ apuracaoInicio: r.apuracaoInicio, apuracaoFim: r.apuracaoFim, dataPrevista: r.dataPrevista, previstoCentavos: r.previstoCentavos, situacao: r.situacao })) },
     pendenciasDeClassificacao: p.resumo.pendenciasDeClassificacao,

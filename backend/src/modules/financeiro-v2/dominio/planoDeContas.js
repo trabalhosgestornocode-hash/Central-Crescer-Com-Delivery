@@ -179,6 +179,9 @@ const SUBWAY = [
   f("MATERIAIS_DE_CONSUMO", "Materiais de consumo", "DESPESAS_ADMINISTRATIVAS"),
   f("TREINAMENTO_E_EVENTOS", "Treinamento e eventos", "DESPESAS_ADMINISTRATIVAS"),
   f("DISTRIBUICAO_DE_LUCROS", "Distribuição de lucros aos sócios", "MOVIMENTACOES_PATRIMONIAIS"),
+  // Movimentos do iFood sem regra automática, classificados por decisão (nunca presumidos):
+  f("RESSARCIMENTOS", "Outras receitas — Ressarcimentos", "OUTROS_EFEITOS_GERENCIAIS", { natureza: N.RECEITA }),
+  f("AJUSTES_DE_CANCELAMENTOS_E_ESTORNOS", "Ajustes de cancelamentos e estornos", "DEDUCOES_COMERCIAIS"),
 ];
 
 export const MODELO_DE_PLANO = Object.freeze({ BASE: Object.freeze(BASE), ACAITERIA: Object.freeze([...BASE, ...ACAITERIA]), SUBWAY: Object.freeze([...BASE, ...SUBWAY]) });
