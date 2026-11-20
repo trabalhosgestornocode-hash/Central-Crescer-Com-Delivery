@@ -111,7 +111,7 @@ const COLUNAS = [
   "organizacao_id", "unidade_id", "foody_uid", "numero_pedido", "data_hora", "status_foody", "situacao", "taxa_entregador",
   "valor_total", "forma_pagamento", "detalhes_pedido", "operacao", "operacao_motivo", "entregador_presente", "entregador_hash",
   "data_aceito", "data_pronto", "data_despachado", "data_coletado", "data_entregue", "data_finalizado", "data_cancelado",
-  "prazo_entrega", "cancelamento_razao", "cancelamento_justificativa", "sincronizado_em",
+  "prazo_entrega", "cancelamento_razao", "cancelamento_justificativa", "sincronizado_em", "roteamento_ativo",
 ].join(", ");
 
 /**
@@ -153,6 +153,9 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
       if (error) return { erro: "FONTE_FOODY_INDISPONIVEL" };
       for (const r of data ?? []) {
         if (r.organizacao_id !== organizacaoId || r.unidade_id !== unidadeId) return { erro: "FONTE_FOODY_TENANT_DIVERGENTE" };
+        // Linha desativada pelo roteamento (ex.: pedido decidido na triagem para a outra operação da conta): não é pedido desta
+        // unidade — a linha ativa está no destino. Mesma regra do fechamento logístico (foody.fechamento.calc.js).
+        if (r.roteamento_ativo === false) continue;
         const dia = String(r.data_hora).replace(" ", "T").slice(0, 10);
         if (diasPlanilha.has(dia)) { // planilha prevalece
           const op = operacaoFoodyParaParser(r.operacao);
@@ -292,14 +295,14 @@ export async function carregarCoberturaFoody({ db, env = process.env, organizaca
     const pedidosFoody = [];
     const fim = proximoDia(dataFim);
     for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
-      const { data, error } = await db.from("foody_pedidos").select("organizacao_id, unidade_id, data_hora, operacao, sincronizado_em, foody_uid")
+      const { data, error } = await db.from("foody_pedidos").select("organizacao_id, unidade_id, data_hora, operacao, sincronizado_em, foody_uid, roteamento_ativo")
         .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
         .gte("data_hora", `${dataInicio}T00:00:00`).lt("data_hora", `${fim}T00:00:00`)
         .order("data_hora", { ascending: true }).order("foody_uid", { ascending: true })
         .range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1);
       if (error) return { erro: "FONTE_FOODY_INDISPONIVEL" };
       if (!confere(data)) return { erro: "FONTE_FOODY_TENANT_DIVERGENTE" };
-      pedidosFoody.push(...(data ?? []));
+      pedidosFoody.push(...(data ?? []).filter((r) => r.roteamento_ativo !== false)); // desativada pelo roteamento: não é desta unidade
       if (!data || data.length < PAGINA) break;
       if (pagina === MAX_PAGINAS - 1) return { erro: "FONTE_FOODY_LIMITE_EXCEDIDO" };
     }
