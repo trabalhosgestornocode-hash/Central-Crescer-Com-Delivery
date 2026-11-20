@@ -4,6 +4,10 @@
 // Nada aqui soma, calcula ou presume: formato sem leitor validado aparece bloqueado, com o motivo, e não há como confirmá-lo.
 import { dataBR, esc, moeda } from "./formatar.js";
 
+/** Unidade sem SAIPOS (usa o SWF): a conferência não se aplica; o iFood/99Food do SWF 76 é conferido na área SWF. */
+const semSaipos = (conf) => conf?.situacao === "NAO_APLICAVEL";
+const notaSemSaipos = (canal) => `<h3>Conferência com o sistema da loja</h3><p class="nota">Esta unidade usa o SWF: os pedidos ${canal} do relatório 76 são só conferência e aparecem na área SWF. Nenhum valor do SWF vira receita.</p>`;
+
 const NOME_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", SWF: "SWF", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
 const ESTADO = Object.freeze({
   RECEBIDO: ["Recebido", "neutro"], EM_VALIDACAO: ["Em validação", "info"], PRONTO_PARA_IMPORTAR: ["Prévia pronta: aguardando confirmação", "alerta"],
@@ -155,7 +159,7 @@ ${p.exigeAceiteDaDiferenca ? '<label class="caixa-marcar"><input type="checkbox"
 <p class="nota">A diferença não é receita nem despesa. O relatório não informa data nem ciclo do repasse: nada vira recebível nem crédito no banco.</p>
 ${vinculoDaLoja99Food(p, podeVincular)}
 ${p.correcoesPendentes.length ? `<h3>Correções para decidir</h3>${p.correcoesPendentes.map((c) => correcaoDoDia99Food(c, podeDecidir)).join("")}` : ""}
-<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · ${conf.diasDivergentes.length} com diferença · ${conf.diasSemSaipos.length} sem pedidos 99Food na SAIPOS · ${conf.diasSoNaSaipos.length} só na SAIPOS.</p>
+${semSaipos(conf) ? notaSemSaipos("99Food") : `<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · ${conf.diasDivergentes.length} com diferença · ${conf.diasSemSaipos.length} sem pedidos 99Food na SAIPOS · ${conf.diasSoNaSaipos.length} só na SAIPOS.</p>`}
 <h3>Valores por dia</h3><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Valores diários do relatório da 99Food</caption><thead><tr><th scope="col">Dia</th><th scope="col">Vendas</th><th scope="col">Itens</th><th scope="col">Taxas</th><th scope="col">Comissões</th><th scope="col">Marketing</th><th scope="col">Recompensas</th><th scope="col">Repasse</th><th scope="col">Diferença</th></tr></thead><tbody>${dias}</tbody></table></div>
 ${p.bloqueios.length ? `<h3>O que impede aplicar</h3>${lista(p.bloqueios.map((b) => `<li><span>${esc(b.mensagem)}</span></li>`))}` : ""}
 ${p.avisos.length ? `<h3>Avisos</h3>${lista(p.avisos.map((a) => `<li><span>${esc(a.mensagem)}</span></li>`))}` : ""}
@@ -184,9 +188,10 @@ export function previaDaConciliacaoIfood(p, { podeAplicar = false, podeClassific
 <button type="submit" class="botao botao--primario">Aplicar ao Financeiro</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>` : "";
   return `${fechar("Conciliação iFood: conferir antes de aplicar")}
 <p class="nota">${esc(dataBR(p.periodo.inicio))} a ${esc(dataBR(p.periodo.fim))} · ${p.pedidos} pedido(s) · ${p.movimentos} movimento(s). Nada foi gravado ainda.</p>
-<dl class="ficha ficha--compacta">${linhas.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}<dt>Repasse previsto</dt><dd>${valor(v.repassePrevistoCentavos)}</dd><dt>Pago direto à loja (já no faturamento)</dt><dd>${valor(v.recebidoDiretoCentavos)}</dd></dl>
+<dl class="ficha ficha--compacta">${linhas.map(([t, c]) => `<dt>${esc(t)}</dt><dd>${valor(c)}</dd>`).join("")}<dt>Repasse previsto</dt><dd>${valor(v.repassePrevistoCentavos)}</dd><dt>Pago direto à loja (já no faturamento)</dt><dd>${valor(v.recebidoDiretoCentavos)}</dd>${v.promocoesIfoodCentavos ? `<dt>Promoções custeadas pelo iFood (já na cesta; informativo)</dt><dd>${valor(v.promocoesIfoodCentavos)}</dd>` : ""}${v.promocoesRedeCentavos ? `<dt>Subsídio promocional da rede (já na cesta; informativo)</dt><dd>${valor(v.promocoesRedeCentavos)}</dd>` : ""}</dl>
+${(p.porCompetencia ?? []).length ? `<h3>Líquido por competência</h3><p class="nota">Competência é a data do fato; a data de repasse só indica quando o valor é descontado ou pago.</p><div class="tabela-rolavel"><table class="tabela"><caption class="sr">Líquido por competência</caption><thead><tr><th scope="col">Competência</th><th scope="col">Bruto</th><th scope="col">Anúncios</th><th scope="col">Líquido</th><th scope="col">Descontado nos repasses de</th></tr></thead><tbody>${p.porCompetencia.map((m) => `<tr><th scope="row">${esc(m.competencia)}</th><td>${valor(m.brutoCentavos)}</td><td>${valor(m.anunciosCentavos)}</td><td>${valor(m.liquidoCentavos)}</td><td>${m.repassesDeDesconto.map((d) => esc(dataBR(d))).join(", ")}</td></tr>`).join("")}</tbody></table></div>` : ""}
 <h3>Repasses previstos</h3>${lista(p.repasses.itens.map((r) => `<li><span>${esc(dataBR(r.dataPrevista))}<br><span class="nota">Apuração de ${esc(dataBR(r.apuracaoInicio))} a ${esc(dataBR(r.apuracaoFim))}</span></span>${valor(r.previstoCentavos)}</li>`))}
-<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · diferença em produtos: ${esc(moeda(conf.diferencaCentavos))} · fica pendente de conferência.</p>
+${semSaipos(conf) ? notaSemSaipos("iFood") : `<h3>Conferência com a SAIPOS</h3><p class="nota">${conf.diasComparados} dia(s) comparado(s) · diferença em produtos: ${esc(moeda(conf.diferencaCentavos))} · fica pendente de conferência.</p>`}
 ${p.bloqueios.length ? `<h3>O que impede aplicar</h3>${lista(p.bloqueios.map((b) => `<li><span>${esc(b.mensagem)}</span></li>`))}` : ""}
 ${(p.pendenciasDeClassificacao ?? []).length ? `<h3>Classificar antes de aplicar</h3>${p.pendenciasDeClassificacao.map((x) => formularioDeClassificacao(x, p.categoriasPermitidas ?? [], podeClassificar)).join("")}` : ""}
 ${(p.avisos ?? []).length ? `<h3>Avisos</h3>${lista(p.avisos.map((a) => `<li><span>${esc(a.mensagem)}</span></li>`))}` : ""}

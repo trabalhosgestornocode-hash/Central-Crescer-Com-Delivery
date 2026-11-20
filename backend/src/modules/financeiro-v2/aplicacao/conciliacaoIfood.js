@@ -15,6 +15,7 @@ import {
   SITUACAO_REGISTRO_FONTE, SITUACAO_TITULO, SITUACAO_VENDA, TIPO,
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
+import { unidadeUsaSwf } from "./fontesDeFaturamento.js";
 import { aceitaEscrita, exigeCorrecaoAuditada } from "../dominio/fechamento.js";
 import { competenciaDe, exigirData, somarDias } from "../dominio/tempo.js";
 import { exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
@@ -79,6 +80,11 @@ function desejadosDoDia(dia) {
 
 /** Conferência com a SAIPOS, por dia: só compara e aponta; nada aqui altera valor. */
 async function conferenciaComSaipos(tx, cx, dias, pedidosOficiais) {
+  // Unidade que usa o SWF (Subway) não tem SAIPOS: a conferência não se aplica (nunca "dias sem SAIPOS" pendentes). O iFood/99Food
+  // aparece no SWF 76 só como conferência, na área SWF. Nenhum valor muda.
+  if (unidadeUsaSwf(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"))) {
+    return { porDia: new Map(), soNaSaipos: new Map(), resumo: { diasComparados: 0, diasSemSaipos: [], diasSoNaSaipos: [], diasDivergentes: [], saiposCentavos: 0, ifoodProdutosCentavos: 0, diferencaCentavos: 0, diferencaPedidos: 0, diferencaItensCentavos: 0, pedidosSoNoIfood: 0, pedidosSoNaSaipos: 0, situacao: "NAO_APLICAVEL", motivo: "A unidade usa o SWF: não há relatório SAIPOS para conferir." } };
+  }
   const datas = new Set(dias.map((d) => d.data));
   const saipos = (await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: "SAIPOS", tipoRegistro: "PEDIDO" } }))
     .filter((r) => r.situacao === SITUACAO_REGISTRO_FONTE.ATIVO && r.dados?.canal === "IFOOD" && datas.has(r.dataReferencia));
@@ -161,8 +167,12 @@ export function operacoesDaConciliacaoIfood(b) {
     for (const codigo of x.c.categorias) if (await b.categoriaPorCodigo(tx, cx, codigo)) return b.categoriaLancavel(tx, cx, codigo);
     return falhar(CODIGO.CATEGORIA_INVALIDA, "O plano de contas da unidade não tem categoria para este lançamento do iFood.", { componente: x.componente });
   }
-  const categoriasClassificaveis = async (tx, cx) => (await tx.listar(cx, TIPO.CATEGORIA))
-    .filter((c) => c.ativa && c.aceitaLancamento && [N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) && !NAO_CLASSIFICAVEIS.includes(c.codigo));
+  // Unidade que usa o SWF (Subway) não vende pelo Anota AI: a categoria não é oferecida (o plano de contas não muda).
+  const categoriasClassificaveis = async (tx, cx) => {
+    const swf = unidadeUsaSwf(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"));
+    return (await tx.listar(cx, TIPO.CATEGORIA))
+      .filter((c) => c.ativa && c.aceitaLancamento && [N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) && !NAO_CLASSIFICAVEIS.includes(c.codigo) && !(swf && c.codigo === "VENDA_ANOTA_AI"));
+  };
 
   /** O que a aplicação faria agora. Não grava: a prévia e a aplicação usam exatamente este plano. */
   async function planejar(tx, cx) {
@@ -260,10 +270,19 @@ export function operacoesDaConciliacaoIfood(b) {
     dias: p.resumo.dias.length,
     valores: {
       produtosCentavos: p.resumo.total.itensCentavos, entregasCentavos: p.resumo.total.entregaLojaCentavos, faturamentoCentavos: p.resumo.total.itensCentavos + p.resumo.total.entregaLojaCentavos,
+      promocoesIfoodCentavos: p.resumo.total.promocaoIfoodCentavos, promocoesRedeCentavos: p.resumo.total.promocaoRedeCentavos,
       promocoesLojaCentavos: -p.resumo.total.promocaoLojaCentavos, comissoesCentavos: -p.resumo.total.comissaoCentavos, taxaTransacaoCentavos: -p.resumo.total.transacaoCentavos,
       entregaSobDemandaCentavos: -p.resumo.total.sobDemandaCentavos, anunciosCentavos: -p.resumo.total.anunciosCentavos, classificadosCentavos: p.resumo.total.classificadosCentavos, semClassificacaoCentavos: p.resumo.total.semClassificacaoCentavos,
       liquidoCentavos: p.resumo.total.liquidoCentavos, repassePrevistoCentavos: p.resumo.repassePrevistoCentavos, recebidoDiretoCentavos: p.resumo.recebidoDiretoCentavos,
     },
+    // Competência = data do fato (venda/lançamento); a data de repasse só diz QUANDO o valor é descontado ou pago.
+    porCompetencia: Object.values(p.resumo.dias.reduce((acc, d) => {
+      const m = (acc[d.data.slice(0, 7)] ??= { competencia: d.data.slice(0, 7), brutoCentavos: 0, anunciosCentavos: 0, classificadosCentavos: 0, semClassificacaoCentavos: 0, liquidoCentavos: 0, repassesDeDesconto: new Set() });
+      m.brutoCentavos += d.itensCentavos + d.entregaLojaCentavos; m.anunciosCentavos += d.anunciosCentavos; m.classificadosCentavos += d.classificadosCentavos;
+      m.semClassificacaoCentavos += d.semClassificacaoCentavos; m.liquidoCentavos += d.liquidoCentavos;
+      for (const c of d.ciclos) m.repassesDeDesconto.add(c.split("|")[2]);
+      return acc;
+    }, {})).map((m) => ({ ...m, repassesDeDesconto: [...m.repassesDeDesconto].sort() })).sort((a, b) => a.competencia.localeCompare(b.competencia)),
     lancamentos: { criar: p.criar.length, manter: p.manter.length, cancelar: p.cancelar.length },
     repasses: { criar: p.repasses.criar.length, manter: p.repasses.manter.length, cancelar: p.repasses.cancelar.length, itens: p.resumo.repasses.map((r) => ({ apuracaoInicio: r.apuracaoInicio, apuracaoFim: r.apuracaoFim, dataPrevista: r.dataPrevista, previstoCentavos: r.previstoCentavos, situacao: r.situacao })) },
     pendenciasDeClassificacao: p.resumo.pendenciasDeClassificacao,

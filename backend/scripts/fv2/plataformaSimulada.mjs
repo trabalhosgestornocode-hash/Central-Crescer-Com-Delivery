@@ -44,6 +44,16 @@ export async function iniciarPlataformaSimulada({ pasta, porta = 0, relogio = ()
         const r = await demo.responder(caminho, params, "administrador");
         return json(res, r.status, r.corpo);
       }
+      // Ações (POST): o servidor real usa a unidade da sessão e a confirmação já dada na tela; aqui, o MESMO núcleo da demonstração.
+      if (req.method === "POST" && url.pathname.startsWith("/api/v1/financeiro-v2/acoes/")) {
+        const caminho = `/api/fv2/acoes/${url.pathname.slice("/api/v1/financeiro-v2/acoes/".length)}`;
+        requisicoesDeApi.push(`POST ${caminho}`);
+        const pedacos = []; for await (const p of req) pedacos.push(p);
+        let corpo; try { corpo = JSON.parse(Buffer.concat(pedacos).toString("utf8") || "{}"); } catch { return json(res, 400, { erro: "ENTRADA_INVALIDA", mensagem: "Corpo inválido." }); }
+        const { csrf } = (await demo.responder("/api/fv2/sessao", {}, "administrador")).corpo;
+        const r = await demo.agir(caminho, { ...corpo, unidade: UNIDADES[unidadeIndice].id, confirmar: true }, "administrador", { csrf });
+        return json(res, r.status, r.corpo);
+      }
       if (url.pathname.startsWith("/api/")) return json(res, 404, { erro: "NAO_ENCONTRADO", mensagem: "Fora da simulação." });
       // Estático: /financeiro-v2/ → index.html; o resto, relativo à pasta `frontend`.
       let rel = decodeURIComponent(url.pathname);

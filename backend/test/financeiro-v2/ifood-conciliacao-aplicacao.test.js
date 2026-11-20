@@ -194,3 +194,59 @@ test("permissão: quem só vê não aplica; rota de escrita e de prévia usam o 
   const r = await ESCRITAS["/importacao/ifood-conciliacao/aplicar"].fazer(n, c, { importacao: imp.id, justificativa: JUST });
   assert.equal(r.lancamentos.criar, 8);
 });
+
+test("unidade que usa o SWF (Subway): a conferência com a SAIPOS não se aplica — nada de 'dias sem SAIPOS' pendentes; valores idênticos", async () => {
+  const comSaipos = novo();
+  const { imp: impA } = await importar(comSaipos, base());
+  const a = await comSaipos.previaDaConciliacaoIfood(c, { importacaoId: impA.id });
+  assert.equal(a.conferenciaSaipos.situacao, "PENDENTE_DE_CONFERENCIA", "unidade SAIPOS: segue como antes");
+  const swf = novo();
+  await ESCRITAS["/configuracoes/unidade"].fazer(swf, c, { nomeExibicao: "Subway sintética", justificativa: JUST });
+  await swf.configurarFontesDeFaturamento(c, { fontes: ["SWF", "IFOOD", "NOVENTA_E_NOVE_FOOD"], justificativa: JUST });
+  const { imp: impB } = await importar(swf, base());
+  const b = await swf.previaDaConciliacaoIfood(c, { importacaoId: impB.id });
+  assert.equal(b.conferenciaSaipos.situacao, "NAO_APLICAVEL");
+  assert.deepEqual(b.conferenciaSaipos.diasSemSaipos, []);
+  assert.deepEqual(b.valores, a.valores, "a conferência não muda nenhum valor");
+});
+
+test("Anota AI fora das opções operacionais da unidade SWF (Subway); unidade SAIPOS (Açaí) mantém", async () => {
+  const saipos = novo();
+  const cs = await saipos.consultarConfiguracoes(c);
+  assert.ok(cs.canais.some((x) => x.codigo === "ANOTA_AI") && cs.processadores.some((x) => x.codigo === "ANOTA_AI"));
+  const swf = novo();
+  await ESCRITAS["/configuracoes/unidade"].fazer(swf, c, { nomeExibicao: "Subway sintética", justificativa: JUST });
+  await swf.configurarFontesDeFaturamento(c, { fontes: ["SWF", "IFOOD", "NOVENTA_E_NOVE_FOOD"], justificativa: JUST });
+  const cw = await swf.consultarConfiguracoes(c);
+  assert.ok(!cw.canais.some((x) => x.codigo === "ANOTA_AI") && !cw.processadores.some((x) => x.codigo === "ANOTA_AI"));
+  assert.ok(cw.canais.some((x) => x.codigo === "IFOOD"));
+});
+
+test("promoção custeada pela REDE: compõe a cesta como a do iFood (sem receita adicional, sem duplicar faturamento); entrega fecha", async () => {
+  // Espelha um pedido real: cesta 32 + entrega da loja 6,99; cliente pagou 24,99 (+0,99 de taxa); iFood 4,50 e rede 7,00 + 3,49.
+  const p3 = (desc, valor, extra = {}) => linha({ pedido: P3, tipo: extra.tipo ?? "Subsídio", desc, valor, cesta: 32, saldo: 35.28, ...extra });
+  const n = novo();
+  const { imp } = await importar(n, [
+    p3("Entrada Financeira", 24.99, { tipo: "Entrada Financeira" }), p3("Promoção custeada pelo iFood", 4.5), p3("Promoção custeada pela rede", 7),
+    p3("Promoção custeada pela rede no delivery", 3.49), p3("Taxa de serviço iFood cobrada do cliente", -0.99, { tipo: "Retenção" }),
+    p3("Comissão do iFood", -2.85, { tipo: "Cobrança" }), p3("Taxa de transação", -0.86, { tipo: "Cobrança" }),
+  ]);
+  const p = await n.previaDaConciliacaoIfood(c, { importacaoId: imp.id });
+  assert.equal(p.valores.produtosCentavos, 3200);
+  assert.equal(p.valores.entregasCentavos, 699, "entrega da loja correta (antes: −3,50)");
+  assert.equal(p.valores.faturamentoCentavos, 3899);
+  assert.equal(p.valores.promocoesRedeCentavos, 1049, "subsídio da rede visível à parte, informativo");
+  assert.equal(p.valores.liquidoCentavos, 3528, "líquido = o que o iFood paga");
+  assert.equal(p.valores.semClassificacaoCentavos, 0);
+  assert.deepEqual(p.pendenciasDeClassificacao, [], "a rede não vira pendência nem receita adicional");
+  assert.ok(!p.bloqueios.some((b) => b.codigo === "LINHA_NAO_FECHA"));
+  assert.deepEqual(p.porCompetencia.map((m) => [m.competencia, m.liquidoCentavos]), [["2026-11", 3528]]);
+});
+
+test("plano SUBWAY traz as categorias de decisão do iFood; o plano da açaiteria não muda", async () => {
+  const { MODELO_DE_PLANO } = await import("../../src/modules/financeiro-v2/dominio/planoDeContas.js");
+  const sub = MODELO_DE_PLANO.SUBWAY.map((x) => x.codigo);
+  assert.ok(sub.includes("RESSARCIMENTOS") && sub.includes("AJUSTES_DE_CANCELAMENTOS_E_ESTORNOS"));
+  const acai = MODELO_DE_PLANO.ACAITERIA.map((x) => x.codigo);
+  assert.ok(!acai.includes("RESSARCIMENTOS") && !acai.includes("AJUSTES_DE_CANCELAMENTOS_E_ESTORNOS"));
+});
