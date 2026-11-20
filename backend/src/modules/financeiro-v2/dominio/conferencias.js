@@ -65,10 +65,32 @@ export function fontesVigentesNaCompetencia(d, competencia) {
   for (const e of v) if (e.desde === null || e.desde === undefined || String(e.desde).slice(0, 10) <= fim) vigente = e.fontes;
   return vigente;
 }
-/** Relatórios ESPERADOS da competência: os de toda unidade + os do sistema de loja que estava em vigor nela. */
+/** Operadora Stone ativa em algum dia da competência (cadastrada ou implícita pela tabela de taxas contratadas). */
+function stoneNaCompetencia(operadoras, competencia) {
+  const ini = primeiroDiaDe(competencia);
+  const fim = ultimoDiaDe(competencia);
+  return (operadoras ?? []).some((o) => o.processador === "STONE" && o.situacao !== "INATIVA" && String(o.inicio ?? "0000-01-01") <= fim && (!o.encerramento || String(o.encerramento) >= ini));
+}
+/** Conta bancária Unicred ativa na unidade. */
+const temContaUnicred = (contas) => (contas ?? []).some((c) => c.tipo === "BANCARIA" && c.ativa !== false && /unicred/i.test(`${c.nome ?? ""} ${c.instituicao ?? ""}`));
+/**
+ * Relatórios ESPERADOS da competência. São CONTROLES DOCUMENTAIS (`FONTE_SEM_DOCUMENTO`, sem efeito no fechamento): nunca bloqueiam nada.
+ *   - sistema de loja (SAIPOS ou SWF): só o que estava em vigor na competência;
+ *   - Stone: só com operadora Stone ativa em algum dia da competência; Unicred: só com conta bancária Unicred ativa. Valem quando a unidade
+ *     tem fontes configuradas OU tem operadoras/contas bancárias cadastradas (a configuração real decide; nada é exigido sem ela);
+ *   - unidade sem nenhuma dessas configurações: padrão histórico, exatamente como antes (SAIPOS + Stone + Unicred).
+ */
 export function esperadasDaCompetencia(d, competencia) {
   const vigentes = fontesVigentesNaCompetencia(d, competencia);
-  return FONTES_DA_COMPETENCIA.filter((f) => !f.sistema || vigentes.includes(f.sistema));
+  const fontesConfiguradas = Array.isArray(d?.vigenciasDeFontes) && d.vigenciasDeFontes.length > 0;
+  const porOperadora = fontesConfiguradas || (d?.operadorasDaUnidade ?? []).length > 0;
+  const porConta = fontesConfiguradas || (d?.contas ?? []).some((c) => c.tipo === "BANCARIA");
+  return FONTES_DA_COMPETENCIA.filter((f) => {
+    if (f.sistema) return vigentes.includes(f.sistema);
+    if (f.fonte === "STONE") return !porOperadora || stoneNaCompetencia(d.operadorasDaUnidade, competencia);
+    if (f.fonte === "UNICRED") return !porConta || temContaUnicred(d.contas);
+    return true;
+  });
 }
 
 const ROTULO_RELACAO = Object.freeze({
