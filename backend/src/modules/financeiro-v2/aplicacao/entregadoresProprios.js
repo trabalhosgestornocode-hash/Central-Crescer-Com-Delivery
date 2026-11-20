@@ -257,7 +257,9 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
       const inicio = exigirSegunda(e.inicio);
       const apuracao = await apurar(contexto(ctx), inicio);
       return b.consultar(ctx, async (cx, tx) => {
-        const [obrigacoes, contrapartes, lancamentos] = [await tx.listar(cx, TIPO.OBRIGACAO), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
+        // Mesmo critério do fechamento: conta de extra reconhecido não é duplicidade das taxas da semana.
+        const dosExtras = new Set((await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).map((x) => x.obrigacaoId).filter(Boolean));
+        const [obrigacoes, contrapartes, lancamentos] = [(await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => !dosExtras.has(o.id)), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
         const itens = consolidar(apuracao.entregas).filter((g) => g.valorCentavos > 0).map((g) => ({ chave: g.chave, nome: g.nome, entregas: g.entregas, valorCentavos: g.valorCentavos, candidatas: contasManuaisCandidatas({ nome: g.nome, inicio, obrigacoes, contrapartes, lancamentos }) }));
         const contasManuais = contasManuaisSemEntregador({ nomes: itens.map((i) => i.nome), inicio, obrigacoes, contrapartes, lancamentos });
         return { inicio, rotulo: rotuloDaSemana(inicio), vencimento: semanaDe(inicio).vencimento, historica: !inicioDaOperacao || inicio < inicioDaOperacao, pendencias: [...pendenciasDaApuracao(apuracao, inicio), ...(await bloqueiosDaTransacao(tx, cx, inicio)), ...pendenciaDeContasManuais(contasManuais)], itens, totalCentavos: somarLista(itens, (i) => i.valorCentavos), comDuplicidade: itens.filter((i) => i.candidatas.length).length };
