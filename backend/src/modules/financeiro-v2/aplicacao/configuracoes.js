@@ -10,6 +10,7 @@
 // Toda alteração exige justificativa e fica no histórico (antes/depois, quem, quando).
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { CANAL, EVENTO_HISTORICO, NATUREZAS_DA_CLASSIFICACAO, PAPEL_COMERCIAL, PROCESSADOR, SITUACAO_CADASTRO, SITUACAO_SESSAO_CAIXA, TIPO } from "../dominio/catalogos.js";
+import { unidadeUsaSwf } from "./fontesDeFaturamento.js";
 import { ACAO } from "../dominio/contexto.js";
 import { conciliacaoEfetiva } from "../dominio/tesouraria.js";
 import { METODOLOGIAS, identificadorDa, metodologiaVigente } from "../dominio/metodologias.js";
@@ -39,7 +40,9 @@ export function operacoesDeConfiguracao(b) {
         const hoje = b.hoje();
         let vigente = null;
         try { vigente = metodologiaVigente(hoje.slice(0, 7)); } catch { vigente = null; }
-        const base = (papel, enumeracao) => Object.keys(enumeracao).map((codigo) => {
+        // Unidade que usa o SWF (Subway) não opera o Anota AI: só aparece se já houver cadastro (nada é escondido de quem já registrou).
+        const swf = unidadeUsaSwf(unidade);
+        const base = (papel, enumeracao) => Object.keys(enumeracao).filter((codigo) => !(swf && codigo === "ANOTA_AI" && !cadastros.some((x) => x.papel === papel && x.codigo === codigo))).map((codigo) => {
           const c = cadastros.find((x) => x.papel === papel && x.codigoBase === codigo && x.codigo === codigo);
           return { papel, codigo, codigoBase: codigo, nome: c?.nome ?? NOMES_BASE[papel][codigo] ?? codigo, situacao: c?.situacao ?? "NAO_CADASTRADO", doSistema: true, cadastrado: !!c, observacao: c?.observacao ?? null };
         });

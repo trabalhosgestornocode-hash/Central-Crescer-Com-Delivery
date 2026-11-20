@@ -167,8 +167,12 @@ export function operacoesDaConciliacaoIfood(b) {
     for (const codigo of x.c.categorias) if (await b.categoriaPorCodigo(tx, cx, codigo)) return b.categoriaLancavel(tx, cx, codigo);
     return falhar(CODIGO.CATEGORIA_INVALIDA, "O plano de contas da unidade não tem categoria para este lançamento do iFood.", { componente: x.componente });
   }
-  const categoriasClassificaveis = async (tx, cx) => (await tx.listar(cx, TIPO.CATEGORIA))
-    .filter((c) => c.ativa && c.aceitaLancamento && [N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) && !NAO_CLASSIFICAVEIS.includes(c.codigo));
+  // Unidade que usa o SWF (Subway) não vende pelo Anota AI: a categoria não é oferecida (o plano de contas não muda).
+  const categoriasClassificaveis = async (tx, cx) => {
+    const swf = unidadeUsaSwf(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"));
+    return (await tx.listar(cx, TIPO.CATEGORIA))
+      .filter((c) => c.ativa && c.aceitaLancamento && [N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) && !NAO_CLASSIFICAVEIS.includes(c.codigo) && !(swf && c.codigo === "VENDA_ANOTA_AI"));
+  };
 
   /** O que a aplicação faria agora. Não grava: a prévia e a aplicação usam exatamente este plano. */
   async function planejar(tx, cx) {

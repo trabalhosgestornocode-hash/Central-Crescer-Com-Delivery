@@ -25,6 +25,12 @@ const componenteDe = (descricao) => classificarPorPalavras(descricao, [
   [C.ANUNCIOS, ["pacote de anuncios"]],
 ]);
 
+/** Centavos → "R$ 1.234,56" (só para mensagens). */
+const reais = (c) => {
+  const d = String(c < 0 ? -c : c).padStart(3, "0"); // centavos inteiros, só texto
+  const inteiro = d.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return `${c < 0 ? "−" : ""}R$ ${inteiro},${d.slice(-2)}`;
+};
 const dataDe = (texto) => { const d = String(texto ?? "").slice(0, 10); return ehData(d) ? d : null; };
 
 export const IFOOD_CONCILIACAO = definirFonte({
@@ -197,7 +203,8 @@ export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, c
     const itens = cancelado ? 0 : p.cestaCentavos + p.entradaParcial;
     // A entrega da loja não vem em coluna própria: é o que o cliente pagou além dos itens, das promoções e das taxas retidas.
     const entrega = cancelado ? 0 : p.entrada - itens - p.promoLoja + p.promoIfood + p.taxasCliente;
-    if (entrega < 0) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: "Pedido com composição negativa de entrega: conferir." });
+    // A mensagem identifica o pedido e a composição (só leitura): sem isso não há como auditar a divergência. Nenhum cálculo muda.
+    if (entrega < 0) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: `Pedido ${p.curto ?? pedido} com composição negativa de entrega: entrada ${reais(p.entrada)} − itens ${reais(itens)} − promoção da loja ${reais(p.promoLoja)} + promoção do iFood ${reais(p.promoIfood)} + taxas do cliente ${reais(p.taxasCliente)} = ${reais(entrega)}. Conferir.`, pedido: p.curto ?? pedido });
     noDia(dia, {
       pedidos: 1, pedidosCancelados: cancelado ? 1 : 0, movimentos: p.movimentos, itensCentavos: itens, entregaLojaCentavos: entrega, promocaoLojaCentavos: cancelado ? 0 : p.promoLoja, promocaoIfoodCentavos: p.promoIfood,
       comissaoCentavos: cancelado ? 0 : p.comissao, transacaoCentavos: cancelado ? 0 : p.transacao, sobDemandaCentavos: p.sobDemanda, anunciosCentavos: p.anuncios, taxasDoClienteCentavos: p.taxasCliente,

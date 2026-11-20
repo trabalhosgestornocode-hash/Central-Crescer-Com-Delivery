@@ -209,3 +209,15 @@ test("unidade que usa o SWF (Subway): a conferência com a SAIPOS não se aplica
   assert.deepEqual(b.conferenciaSaipos.diasSemSaipos, []);
   assert.deepEqual(b.valores, a.valores, "a conferência não muda nenhum valor");
 });
+
+test("Anota AI fora das opções operacionais da unidade SWF (Subway); unidade SAIPOS (Açaí) mantém", async () => {
+  const saipos = novo();
+  const cs = await saipos.consultarConfiguracoes(c);
+  assert.ok(cs.canais.some((x) => x.codigo === "ANOTA_AI") && cs.processadores.some((x) => x.codigo === "ANOTA_AI"));
+  const swf = novo();
+  await ESCRITAS["/configuracoes/unidade"].fazer(swf, c, { nomeExibicao: "Subway sintética", justificativa: JUST });
+  await swf.configurarFontesDeFaturamento(c, { fontes: ["SWF", "IFOOD", "NOVENTA_E_NOVE_FOOD"], justificativa: JUST });
+  const cw = await swf.consultarConfiguracoes(c);
+  assert.ok(!cw.canais.some((x) => x.codigo === "ANOTA_AI") && !cw.processadores.some((x) => x.codigo === "ANOTA_AI"));
+  assert.ok(cw.canais.some((x) => x.codigo === "IFOOD"));
+});
