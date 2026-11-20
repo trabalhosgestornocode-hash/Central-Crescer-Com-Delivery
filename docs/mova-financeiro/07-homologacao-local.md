@@ -27,3 +27,26 @@ existente (fora do Render); MOVA desligado; `/internal/mova` inexistente enquant
 3. Concessão `financeiro_v2.ver` para a identidade de serviço do MOVA nas unidades fictícias e a configuração do contato autorizado.
 4. WhatsApp real: o Gateway de produção (Render) **não alcança** um backend local sem um túnel público, e ligar o canal exige
    **reiniciar o Gateway** — ambos precisam de autorização específica. Até lá, o canal é testado com eventos assinados locais.
+
+## Identidade e homologação funcional com eventos simulados (20/11/2026)
+- Conta fictícia criada no Auth do projeto de teste, TOTP cadastrado e **verificado** pelo próprio Auth; vínculo à empresa e às 3 unidades fictícias.
+- **Bootstrap oficial** (SQL gerado por `sqlBootstrapAdministrador`, executado como `postgres`) ⇒ administração da unidade Centro.
+- Pelo fluxo normal, com login real e TOTP: administração corporativa inicial; liberação (Centro e Açaí com escrita, Shopping só consulta);
+  identidade de serviço do MOVA com nível CONSULTA nas 3 unidades; plano BASE e contas fictícias na Centro.
+- As travas recusaram corretamente: conceder acesso a si mesmo; unidade fora dos escopos do banco financeiro; login do MOVA alterando a configuração.
+- Ajuste de ambiente: logins do Financeiro no padrão oficial (`search_path = financeiro_v2, pg_catalog`); sem ele toda sessão cai em "falha fechada".
+- Homologação funcional (eventos assinados localmente, IA e envio desligados): **19/20**. Canal (sem assinatura, segredo errado, repetição,
+  expiração ⇒ 401), duplicado, conversa/grupo não autorizados, mensagem própria, estado em modo HOMOLOGACAO, orçamento sem chamadas,
+  reprocessar, suspensão imediata e retomada, isolamento (sem concessão ⇒ 403 nas outras unidades).
+
+### Achado H-1 (não corrigido; decisão pendente)
+Falha de leitura antes de identificar a unidade (ex.: IA desligada) é registrada **sem unidade** e, pelo isolamento, não aparece para nenhum
+administrador de unidade (nem em Erros nem no Histórico). Sem vazamento, mas sem visibilidade. Opções: mostrar só a CONTAGEM no estado da
+conversa para quem tem `configurar`, ou atribuir a decisão à unidade única quando a conversa tem uma só.
+
+### Pendente
+- IA: o ambiente local não tem chave própria da Anthropic (a única existente é a de produção, nunca carregada). Propostas, aprovação e
+  aplicação ponta a ponta dependem de uma chave de homologação (ou autorização explícita) — limite já reduzido para 20 chamadas / US$ 1.
+- Açaí e Shopping sem administrador financeiro (o bootstrap é de uso único e ninguém concede a si mesmo): exige uma segunda conta fictícia
+  administradora para conceder.
+- WhatsApp real: túnel + reinício do Gateway (autorização específica).
