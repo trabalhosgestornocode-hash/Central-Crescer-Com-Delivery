@@ -24,6 +24,10 @@ export { CONSULTAS, FERRAMENTAS, INTENCAO, TIPO_DOCUMENTO, criarExtratorSimulado
 export { OPERACOES_PERMITIDAS, criarPortaFinanceira, exigirContratoFinanceiro } from "./aplicacao/portaFinanceira.js";
 export { DECISAO, TIPO_PROPOSTA, criarMotor } from "./aplicacao/motor.js";
 export { ErroDeAprovacao, criarAprovador } from "./aplicacao/aprovacao.js";
+export { criarFerramentas, periodoDaConsulta } from "./aplicacao/ferramentas.js";
+export { ErroDeIa, MODELO_PADRAO, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
+export { criarEnviadorDeRespostas, criarWorker } from "./gateway/worker.js";
+export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
 export { ESTADO_ITEM, ErroTransitorio, criarFilaMemoria } from "./gateway/fila.js";
 export { criarEvidenciasMemoria } from "./gateway/evidencias.js";
 export { criarReceptor } from "./gateway/receptor.js";
@@ -47,7 +51,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar });
-  const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro });
+  const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;
   return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta });
 }

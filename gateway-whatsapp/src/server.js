@@ -160,6 +160,7 @@ retryCache.iniciarMetricasPeriodicas();
 
 // MOVA (src/movaGrupo.js): DESLIGADO sem WHATSAPP_MOVA_GRUPOS_JID. Mesmo socket; mídia baixada pela sessão existente.
 const gruposMova = lerGruposMova(config.movaGruposJid);
+config.movaGrupos = gruposMova; // lista validada, usada pelo envio (enviarGrupoMova)
 const mova = gruposMova.length === 0 ? null : criarEncaminhadorMova({
   grupos: gruposMova,
   notificar: (payload) => backendClient.notificarEventoMova(payload),

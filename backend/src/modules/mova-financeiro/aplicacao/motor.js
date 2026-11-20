@@ -19,6 +19,8 @@ import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeRe
 import { mascararDadosSensiveis, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
+import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
+import { ErroTransitorio } from "../gateway/fila.js";
 
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
@@ -46,6 +48,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
+  const ferramentas = criarFerramentas({ porta, armazenamento: a });
 
   async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {} }) {
     await a.historico.registrar({
@@ -58,13 +61,17 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return { decisao, motivo, propostaId, resposta };
   }
 
-  async function lerDocumento(evento) {
+  async function lerDocumento(evento, grupo) {
     if (!evento.midia && !evento.texto) return { ok: true, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } };
+    // Contexto de conversa = SÓ a mensagem respondida (respostaA), do MESMO grupo. Mensagens apenas próximas no tempo nunca entram.
+    const citada = evento.respostaA ? await a.eventos.obter(evento.respostaA, evento.grupoId) : null;
+    const contexto = { unidades: cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId)).map((x) => x.nome), mensagemCitada: citada?.texto ?? null };
     let bruta;
     try {
-      bruta = await extrator.extrair({ texto: evento.texto, tipo: evento.tipo, midia: evento.midia ? { mime: evento.midia.mime, referencia: evento.midia.referencia } : null });
-    } catch {
-      return { ok: false, motivo: "EXTRATOR_FALHOU" };
+      bruta = await extrator.extrair({ texto: evento.texto, tipo: evento.tipo, midia: evento.midia ? { mime: evento.midia.mime, referencia: evento.midia.referencia } : null, contexto });
+    } catch (e) {
+      if (e instanceof ErroTransitorio) throw e; // IA/transcrição fora do ar: a fila tenta de novo; nada é criado agora
+      return { ok: false, motivo: e?.codigo ? `EXTRATOR_FALHOU:${e.codigo}` : "EXTRATOR_FALHOU", codigo: e?.codigo ?? null };
     }
     const v = validarSaidaDaIa(bruta);
     if (!v.ok) return { ok: false, motivo: `IA_SAIDA_INVALIDA:${v.erro}` };
@@ -82,11 +89,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
+      // Já registrado E já decidido ⇒ repetido. Registrado SEM decisão = nova tentativa depois de falha transitória: segue.
       const { novo } = await a.eventos.registrar(evento);
-      if (!novo) return { decisao: DECISAO.DUPLICADO, motivo: "EVENTO_JA_PROCESSADO" };
+      if (!novo && await a.historico.temDecisao(evento.eventoId)) return { decisao: DECISAO.DUPLICADO, motivo: "EVENTO_JA_PROCESSADO" };
       // 4. NÍVEL 1: participante do grupo autorizado é registrado automaticamente (sem cadastro nem login).
-      const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
-      if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
+      if (novo) {
+        const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
+        if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
+      }
 
       // 5. Mensagem relacionada: texto respondendo a um documento que aguarda esclarecimento (atômico; sobrevive a reinício).
       if (evento.respostaA && evento.tipo === "TEXTO") {
@@ -112,8 +122,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.
     let saida = esclarecimento?.saida ?? null;
     if (!saida) {
-      const lida = await lerDocumento(evento);
-      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.falhaLeitura(), injecao });
+      const lida = await lerDocumento(evento, grupo);
+      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : RESPOSTA.falhaLeitura(), injecao });
       saida = lida.saida;
     }
 
@@ -124,11 +134,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
     // 10. Consultas do GRUPO (não dependem de uma unidade).
     const consulta = (saida.intencao === "CONSULTAR" && saida.consulta) || null;
-    if (consulta && CONSULTAS_DO_GRUPO.includes(consulta)) return responderConsultaDoGrupo(evento, grupo, consulta, injecao);
+    if (consulta && (CONSULTAS_DO_GRUPO.includes(consulta) || saida.todasUnidades)) return responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao);
 
     // 11. Unidade (determinística; IA só confirma; nunca pelo histórico do participante).
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
-    const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto]).filter(Boolean);
+    // Áudio: a TRANSCRIÇÃO conta como texto da mensagem (a unidade pode ter sido dita no áudio).
+    const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto, saida.transcricao]).filter(Boolean);
     const u = resolverUnidade({ cfg, grupo, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida });
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
       const nomes = cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId)).map((x) => x.nome);
@@ -167,6 +178,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
 
     if (![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
+    if (!saida.valorCentavos && saida.camposAusentes.includes("valorCentavos") && saida.incertezas.length > 0) {
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AMBIGUO", escopo, resposta: RESPOSTA.faltaInformacao(["qual é o valor correto (o documento tem mais de um valor possível)"]), injecao });
+    }
     if (!saida.valorCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["valor"]), injecao });
 
     return PAGAMENTOS.includes(saida.tipoDocumento) ? tratarPagamento(ctx) : tratarConta(ctx);
@@ -277,46 +291,39 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
   }
 
-  /** Agregados compartilháveis de UMA unidade (política em dominio/privacidade.js). `null` = dados insuficientes. */
-  async function agregados(escopo) {
-    const r = await porta.resumo(escopo, mes(hoje()));
-    const pagar = r?.contasAPagar; const receber = r?.contasAReceber;
-    if ((!pagar || pagar.situacao === "SEM_REGISTROS") && (!receber || receber.situacao === "SEM_REGISTROS")) return null;
-    return {
-      pagar: pagar?.situacao === "CALCULADO" ? { saldo: pagar.saldoCentavos, vencido: pagar.vencidoCentavos, registros: pagar.registros } : null,
-      receber: receber?.situacao === "CALCULADO" ? { saldo: receber.saldoCentavos, registros: receber.registros } : null,
-    };
+  /** Contexto comum das ferramentas: período explícito na resposta e data de referência do motor. */
+  function contextoDaConsulta(saida) {
+    const periodo = periodoDaConsulta(saida, hoje());
+    return { periodo: { ...periodo, explicito: Boolean(saida.periodoInicio || saida.periodoFim) }, hoje: hoje(), saida };
   }
 
-  async function responderConsulta({ evento, escopo, unidade, injecao }, consulta) {
-    const linhas = [];
-    if (consulta === "CONTAS_VENCENDO") {
-      const abertas = await porta.contasAPagarAbertas(escopo);
-      const lista = abertas.filter((t) => t.vencimento >= hoje() && t.vencimento <= somarDias(hoje(), 7));
-      linhas.push(`${unidade.nome} — vencendo em 7 dias: ${lista.length} (${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}).`);
-    } else {
-      const g = await agregados(escopo);
-      if (!g) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(unidade.nome), injecao });
-      if (g.pagar) linhas.push(`${unidade.nome} — a pagar em aberto: ${reais(g.pagar.saldo)} (vencido: ${reais(g.pagar.vencido)}).`);
-      if (consulta === "RESUMO_DA_COMPETENCIA" && g.receber) linhas.push(`${unidade.nome} — a receber em aberto: ${reais(g.receber.saldo)}.`);
-      linhas.push("Detalhes no Centro Financeiro.");
+  /** Consulta de UMA unidade, pela ferramenta do catálogo. Sem dados = diz que não há (nunca estima). */
+  async function responderConsulta({ evento, escopo, unidade, saida, injecao }, consulta) {
+    const ferramenta = ferramentas[consulta];
+    if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, escopo, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
+    const c = contextoDaConsulta(saida);
+    const r = await ferramenta(escopo, c);
+    if (r.dadosInsuficientes) {
+      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo } });
     }
+    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), "Detalhes no Centro Financeiro."];
     return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: RESPOSTA.consulta(linhas), injecao });
   }
 
-  async function responderConsultaDoGrupo(evento, grupo, consulta, injecao) {
+  /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */
+  async function responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao) {
     const unidades = cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId));
-    const linhas = [];
+    const ferramenta = ferramentas[consulta];
+    if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
+    const c = contextoDaConsulta(saida);
+    const linhas = [`${c.periodo.rotulo}:`];
+    const valores = [];
     for (const u of unidades) {
-      if (consulta === "SITUACAO_PROPOSTAS") {
-        const ps = await a.propostas.listar(escopoDe(u));
-        const n = (e) => ps.filter((p) => p.estado === e).length;
-        linhas.push(`${u.nome}: ${n("AGUARDANDO_REVISAO")} aguardando revisão, ${n("APLICADA")} aplicadas, ${n("REJEITADA")} rejeitadas.`);
-      } else {
-        const g = await agregados(escopoDe(u));
-        linhas.push(g?.pagar ? `${u.nome}: a pagar em aberto ${reais(g.pagar.saldo)} (vencido ${reais(g.pagar.vencido)}).` : `${u.nome}: dados insuficientes.`);
-      }
+      const r = await ferramenta(escopoDe(u), c);
+      linhas.push(r.dadosInsuficientes ? `• ${u.nome}: dados insuficientes.` : `• ${u.nome}: ${r.linhas.join("; ")}`);
+      valores.push(r.dadosInsuficientes ? null : r.valorCentavos ?? null);
     }
+    if (consulta === "FATURAMENTO") linhas.push(valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
     return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao });
   }
 

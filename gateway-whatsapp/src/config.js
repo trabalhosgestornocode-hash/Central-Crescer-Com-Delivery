@@ -132,6 +132,8 @@ export const config = {
   // MOVA (src/movaGrupo.js): grupos AUTORIZADOS do Centro Financeiro cujo conteúdo é encaminhado ao backend por um caminho
   // à parte. Ausente/vazio ⇒ DESLIGADO (padrão). Fora do formato ⇒ falha no boot (validarConfig).
   movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
+  // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
+  movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",

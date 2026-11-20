@@ -36,7 +36,7 @@ Centro Financeiro (sessão da plataforma) → aprovador: financeiro_v2.aprovar +
 - `inboundContrato.js`: `espiar(id)` no rastreador (leitura sem liberar).
 - `config.js`/`server.js`: `WHATSAPP_MOVA_GRUPOS_JID` (vazio = desligado; formato inválido derruba o boot); `downloadMediaMessage` do próprio Baileys com `sock.updateMediaMessage`. Nenhuma credencial, sessão ou auth state alterado; nenhuma segunda conexão.
 - `backendClient.js`: `notificarEventoMova`.
-- **Risco conhecido (não resolvido aqui)**: o companion preso no sync offline (memória `whatsapp-companion-offline-stall`) faz o inbound não chegar; se persistir, as mensagens do grupo também não chegarão ao MOVA. A deduplicação por `bly:<id>` cobre a reentrega quando o sync destravar. Homologar só depois de confirmar inbound chegando.
+- **Sync offline do companion:** o texto anterior o chamava de "não resolvido" — errado: foi resolvido em 25/09/2026 por re-pareamento. Diagnóstico e verificação antes de homologar: doc 03, seção 9.
 
 ## 4. Estrutura PostgreSQL (`database/mova-financeiro/migracoes/0001_mova_fundacao.sql`, schema `mova`)
 `instancia_gateway`, `grupo_autorizado` (nasce desligado), `grupo_unidade` (apelidos, documentos, fontes), `participante`, `evidencia` (bytea, ≤15 MB — em produção, bucket privado), `evento` (único por grupo+mensagem), `documento` (idempotência por sha256 + dados extraídos), `proposta` (estados com transição travada por gatilho; final em APLICADA/REJEITADA; sem exclusão), `decisao`, `aprovacao`, `auditoria` (só inserção), `mensagem_pendente` (esclarecimento sobrevive a reinício; tomada atômica), `resposta` (`provider_message_id` evita laço), `fila` (lease). Ordenação por sequência (`seq`). Nada de obrigação/lançamento/concessão: isso é do Financeiro v2.
@@ -81,7 +81,7 @@ Observação: a primeira rodada criou bancos `mova_teste_*` fora do padrão do a
 
 ## 12. Configuração para futuras homologações
 1. Ambiente de teste do backend com o MOVA montado em `fv2-integracao` e injetado no router do Gateway; migração 0001 em banco de homologação; papel de banco próprio.
-2. `WHATSAPP_MOVA_GRUPOS_JID` = **grupo de teste** (nunca o grupo real primeiro); confirmar antes que o inbound chega (companion destravado).
+2. `WHATSAPP_MOVA_GRUPOS_JID` = **grupo de teste** (nunca o grupo real primeiro); confirmar antes que o inbound chega (telemetria do sync: doc 03, seção 9).
 3. `instalarConfiguracao` com as três unidades, apelidos e fontes reais do cadastro (North `A_CONFIRMAR`); identidade de serviço com concessão `ver`.
 4. Provedor de IA real só na Execução 03, atrás do mesmo contrato estrito.
 

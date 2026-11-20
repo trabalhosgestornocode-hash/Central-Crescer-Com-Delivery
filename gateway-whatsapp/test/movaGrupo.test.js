@@ -6,6 +6,7 @@ import { CONTRATO_MOVA_VERSAO, criarEncaminhadorMova, lerGruposMova, montarEvent
 import { criarRastreadorOrigem } from "../src/inboundContrato.js";
 import { criarSessaoBaileys } from "../src/baileysSession.js";
 import { EventEmitter } from "node:events";
+import { CODIGOS } from "../src/errors.js";
 
 const G = "120363000000000001@g.us";
 const OUTRO = "120363000000000099@g.us";
@@ -102,4 +103,13 @@ test("sessão: com MOVA ligado, o fluxo atual segue igual (grupo continua no inb
   assert.equal(geral[0].origemJidTipo, "group");
   assert.equal(geral[0].origemTipo, "LIVE", "a origem continua sendo consumida pelo fluxo atual");
   assert.ok(!geral[0].texto, "conteúdo de grupo continua fora da Central de Comunicação");
+});
+
+test("envio do MOVA: desligado por padrão; grupo fora da lista recusado; ligado e autorizado passa às checagens normais (conexão)", async () => {
+  const fab = () => ({ ev: new EventEmitter(), ws: new EventEmitter(), user: null, end: async () => {} });
+  const mk = (config) => criarSessaoBaileys({ authAdapter: { comoAuthState: () => ({}) }, backendClient: {}, config: { providerInstanceId: "t", ...config }, fabricaSocket: fab, DisconnectReasonLoggedOut: 401, agendar: () => 0, cancelar: () => {} });
+  await assert.rejects(mk({}).enviarGrupoMova({ grupoJid: G, texto: "oi" }), (e) => e.codigo === CODIGOS.GRUPO_NAO_AUTORIZADO && e.preEnvio === true);
+  await assert.rejects(mk({ movaEnvioHabilitado: true, movaGrupos: [G] }).enviarGrupoMova({ grupoJid: OUTRO, texto: "oi" }), (e) => e.codigo === CODIGOS.GRUPO_NAO_AUTORIZADO);
+  await assert.rejects(mk({ movaEnvioHabilitado: true, movaGrupos: [G] }).enviarGrupoMova({ grupoJid: G, texto: "oi" }), (e) => e.codigo === CODIGOS.NAO_CONECTADO && e.preEnvio === true);
+  await assert.rejects(mk({ movaEnvioHabilitado: true, movaGrupos: [G], grupoInternoJid: null }).enviarGrupoInterno({ grupoJid: G, texto: "oi" }), (e) => e.codigo === CODIGOS.GRUPO_NAO_AUTORIZADO, "o grupo do MOVA não vira grupo interno");
 });

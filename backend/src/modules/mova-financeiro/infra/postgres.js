@@ -57,8 +57,9 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         [e.eventoId, e.grupoId, e.mensagemId, e.participanteId, e.provedor, e.tipo, e.texto, e.respostaA, e.midia?.sha256 ?? null, e.recebidoEm]);
         return { novo: r.rowCount === 1 };
       },
-      async obter(eventoId) {
-        const r = await q("select * from mova.evento where evento_id = $1", [eventoId]);
+      /** Por eventoId; com grupoId, pela mensagem_id DENTRO do grupo (mensagem respondida). */
+      async obter(id, grupoId = null) {
+        const r = grupoId ? await q("select * from mova.evento where grupo_jid = $1 and mensagem_id = $2", [grupoId, id]) : await q("select * from mova.evento where evento_id = $1", [id]);
         return r.rows[0] ?? null;
       },
     }),
@@ -101,6 +102,13 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return linhaProposta(r.rows[0]) ?? null;
       },
       async quantidade() { return Number((await q("select count(*)::int as n from mova.proposta")).rows[0].n); },
+      /** Revisão (Nível 2) enquanto AGUARDANDO_REVISAO; só mescla `alteracoes` em dados; exige a versão lida (senão null). */
+      async revisar(escopo, id, versao, alteracoes) {
+        const r = await q(`update mova.proposta set dados = dados || $5::jsonb
+                           where id = $1 and organizacao_id = $2 and unidade_id = $3 and versao = $4 and estado = 'AGUARDANDO_REVISAO' returning *`,
+        [id, escopo.organizacaoId, escopo.unidadeId, versao, JSON.stringify(alteracoes)]);
+        return linhaProposta(r.rows[0]) ?? null;
+      },
     }),
     historico: Object.freeze({
       async registrar(h) {
@@ -112,6 +120,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q(`select * from mova.decisao where organizacao_id is not distinct from $1 and unidade_id is not distinct from $2 order by seq`, [organizacaoId, unidadeId]);
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
       },
+      async temDecisao(eventoId) { return (await q("select 1 from mova.decisao where evento_id = $1 and decisao <> 'FALHOU' limit 1", [eventoId])).rowCount > 0; },
       async todos() {
         const r = await q("select * from mova.decisao order by seq");
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
@@ -126,6 +135,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async marcar(sha256, d) {
         await q(`insert into mova.documento (sha256, organizacao_id, unidade_id, evento_id, proposta_id, leitura) values ($1,$2,$3,$4,$5,$6) on conflict do nothing`,
           [sha256, d.organizacaoId ?? null, d.unidadeId ?? null, d.eventoId, d.propostaId ?? null, d.leitura ? JSON.stringify(d.leitura) : null]);
+        if (d.unidadeId) await q("update mova.evidencia set organizacao_id = $2, unidade_id = $3 where sha256 = $1 and unidade_id is null", [sha256, d.organizacaoId, d.unidadeId]);
       },
     }),
     mensagens: Object.freeze({
@@ -152,7 +162,22 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q("select 1 from mova.resposta where provider_message_id = $1", [mensagemId])).rowCount > 0;
       },
       async marcarEnviada(id, providerMessageId) {
-        await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2 where id = $1", [id, providerMessageId]);
+        await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2, enviada_em = now(), lease_ate = null where id = $1", [id, providerMessageId]);
+      },
+      /** Pega até `limite` respostas PENDENTES (ou ENVIANDO com lease vencido) para envio — dois enviadores nunca pegam a mesma. */
+      async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date() } = {}) {
+        return emTransacao(pool, async (tx) => (await tx(`
+          update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
+           where id in (select id from mova.resposta where estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1)
+                         order by seq limit $3 for update skip locked)
+          returning id, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
+        [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite])).rows);
+      },
+      async marcarFalhaDeEnvio(id, codigo, { final }) {
+        await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo]);
+      },
+      async contagem() {
+        return Object.fromEntries((await q("select estado, count(*)::int as n from mova.resposta group by estado")).rows.map((x) => [x.estado, x.n]));
       },
     }),
     aprovacoes: Object.freeze({
@@ -189,6 +214,12 @@ export function criarEvidenciasPostgres({ pool }) {
       return (await q("select conteudo from mova.evidencia where referencia = $1", [referencia])).rows[0]?.conteudo ?? null;
     },
     async quantidade() { return Number((await q("select count(*)::int as n from mova.evidencia")).rows[0].n); },
+    /** Conteúdo SÓ para a unidade dona (Centro Financeiro). Removida ou de outra unidade = null. */
+    async obterDaUnidade(sha256, escopo) {
+      const r = await q("select conteudo, mime, nome_arquivo from mova.evidencia where sha256 = $1 and organizacao_id = $2 and unidade_id = $3 and removida_em is null", [sha256, escopo.organizacaoId, escopo.unidadeId]);
+      return r.rows[0] ? { bytes: r.rows[0].conteudo, mime: r.rows[0].mime, nomeArquivo: r.rows[0].nome_arquivo } : null;
+    },
+    async expurgar(agora = new Date()) { return Number((await q("select mova.expurgar_evidencias($1) as n", [agora.toISOString()])).rows[0].n); },
   });
 }
 
@@ -239,6 +270,17 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
       return x ? { estado: x.estado, tentativas: x.tentativas, ultimoErro: x.ultimo_erro, resultado: x.resultado } : null;
     },
     async listar() { return (await q("select evento_id as \"eventoId\", estado, tentativas, ultimo_erro as \"ultimoErro\" from mova.fila order by criado_em")).rows; },
+    async estatisticas() {
+      const r = await q("select estado, count(*)::int as n, min(case when estado = 'PENDENTE' then criado_em end) as mais_antigo from mova.fila group by estado");
+      return { porEstado: Object.fromEntries(r.rows.map((x) => [x.estado, x.n])), pendenteMaisAntigo: r.rows.find((x) => x.estado === "PENDENTE")?.mais_antigo?.toISOString() ?? null };
+    },
+    async falhas(limite = 50) {
+      return (await q("select evento_id as \"eventoId\", tentativas, ultimo_erro as \"ultimoErro\", atualizado_em as \"em\" from mova.fila where estado = 'FALHOU' order by atualizado_em desc limit $1", [limite])).rows;
+    },
+    /** Reprocessar (Nível 2): devolve um item FALHOU para a fila. */
+    async reprocessar(eventoId) {
+      return (await q("update mova.fila set estado = 'PENDENTE', proxima_em = '-infinity', tentativas = 0, ultimo_erro = null where evento_id = $1 and estado = 'FALHOU'", [eventoId])).rowCount === 1;
+    },
   });
 }
 
@@ -308,6 +350,21 @@ export function criarConsultasPostgres({ pool }) {
                                    and exists (select 1 from mova.mensagem_pendente m where m.evento_id = e.evento_id and m.resolvida_em is null)
                                  order by e.recebido_em desc limit $3`, [organizacaoId, unidadeId, limite]);
       return { itens: daUnidade.rows.map(item), aguardandoUnidade: semUnidade.rows.map(item) };
+    },
+    /** Item da Caixa ligado a UMA proposta (da unidade). */
+    async proposta({ organizacaoId, unidadeId, id }) {
+      const r = await q(`${SQL} where p.id = $1 and p.organizacao_id = $2 and p.unidade_id = $3`, [id, organizacaoId, unidadeId]);
+      if (!r.rows[0]) return null;
+      const aprov = (await q("select acao, usuario_id as \"usuarioId\", motivo, em from mova.aprovacao where proposta_id = $1 order by seq", [id])).rows;
+      const p = (await q("select versao, dados from mova.proposta where id = $1", [id])).rows[0];
+      return { ...item(r.rows[0]), versao: p.versao, comando: p.dados.comando ?? null, categoriaRevisada: p.dados.categoriaRevisada ?? null, aprovacoes: aprov };
+    },
+    async documento({ organizacaoId, unidadeId, eventoId }) {
+      const r = await q(`${SQL} where e.evento_id = $1 and exists (select 1 from mova.decisao x where x.evento_id = e.evento_id and x.organizacao_id = $2 and x.unidade_id = $3)`, [eventoId, organizacaoId, unidadeId]);
+      return r.rows[0] ? item(r.rows[0]) : null;
+    },
+    async historico({ organizacaoId, unidadeId, limite = 200 }) {
+      return (await q("select evento_id as \"eventoId\", decisao, motivo, proposta_id as \"propostaId\", sinais_injecao as \"sinaisDeInjecao\", em from mova.decisao where organizacao_id = $1 and unidade_id = $2 order by seq desc limit $3", [organizacaoId, unidadeId, limite])).rows;
     },
   });
 }

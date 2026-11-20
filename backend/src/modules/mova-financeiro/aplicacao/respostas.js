@@ -20,6 +20,7 @@ export const RESPOSTA = Object.freeze({
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
   documentoDeOutraUnidade: () => "O documento parece ser de outra unidade (ou de uma unidade que este grupo não atende). Confira e reenvie no lugar certo. Nada foi registrado.",
   operacaoBloqueada: () => "Não executo pagamentos bancários nem exclusões. Essas ações são feitas por uma pessoa autorizada, no Financeiro. Nada foi alterado.",
+  audioSemTranscricao: () => "Ainda não consigo ouvir áudios aqui. Mande a informação por texto ou foto do documento. Nada foi registrado.",
   falhaLeitura: () => "Não consegui ler este documento. Envie uma foto mais nítida ou o PDF original. Nada foi registrado.",
   duplicado: (propostaId) => `Este documento já foi recebido antes${propostaId ? ` (proposta ${curto(propostaId)})` : ""}. Não criei nada novo.`,
   obrigacaoJaExiste: (t) => `Já existe conta a pagar igual (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Não criei nada novo.`,

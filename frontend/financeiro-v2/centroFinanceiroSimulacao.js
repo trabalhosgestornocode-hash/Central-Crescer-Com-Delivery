@@ -18,8 +18,8 @@ export const CONFIGURACAO = Object.freeze({
     { nivel: "Nível 2 — administrador financeiro", pode: "Revisar, aprovar, corrigir e aplicar — só aqui, no Centro Financeiro, com as permissões do Financeiro." },
   ],
   privacidade: {
-    compartilhavel: ["Totais e quantidades a pagar / vencendo / a receber por unidade", "Comparativo desses totais entre as unidades", "Situação das propostas"],
-    restrito: ["Dados bancários e saldos de conta", "Documentos pessoais (CPF, RG)", "Funcionários e entregadores", "Senhas, tokens e códigos", "DRE e resultado detalhados"],
+    compartilhavel: ["Totais a pagar / vencendo / a receber por unidade", "Faturamento por período e caixa realizado", "Resumo da DRE (indicadores com a situação de cada um)", "Total de uma categoria na competência", "Comparativo entre as unidades", "Situação das propostas"],
+    restrito: ["Dados bancários e saldos de conta", "Documentos pessoais (CPF, RG)", "Dados individuais de funcionários e entregadores", "Senhas, tokens e códigos", "DRE linha a linha e por fornecedor"],
   },
 });
 

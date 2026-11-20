@@ -33,8 +33,7 @@ sintéticos ("Unidade Alfa/Beta/Gama"). Nenhum JID, telefone, CNPJ ou identifica
   (`backend/src/modules/comunicacao/inbound/inbound.contrato.js`). Mídia nunca é encaminhada (só o tipo `midia`).
 - Webhooks/eventos existentes: `POST /internal/comunicacao/eventos/{mensagem-recebida,status-provider,heartbeat,auth-state}`
   (Gateway → backend). Nenhum deles serve ao MOVA sem mudança no Gateway.
-- Problema conhecido em aberto (memória do projeto): o companion do WhatsApp fica preso no sync offline e inbound/receipts não
-  chegam à Central — **risco direto** para ler o grupo pelo Baileys.
+- **Correção (Execução 03):** o travamento do sync offline do companion foi RESOLVIDO em 25/09/2026 por re-pareamento (ver doc 03, seção 9). A versão anterior deste texto o tratava, por engano, como problema em aberto.
 
 ### 2.2 Financeiro v2
 - `backend/src/modules/financeiro-v2/` (núcleo puro, injeção de dependências) + `fv2-integracao/` (rotas `/api/fv2/*` e
@@ -200,7 +199,7 @@ migração foi criada); todos os testes `frontend/test/financeiroV2*` (160/160).
 5. Vínculos participante → usuário cadastrados por um administrador (e concessão `financeiro_v2.enviar_documento` nas unidades).
 
 **Riscos**
-- Companion do WhatsApp preso no sync offline: com Baileys, mensagens do grupo podem não chegar (inbound hoje já não chega à Central).
+- Sync offline do companion: resolvido em 25/09/2026 (re-pareamento); se o padrão voltar, as mensagens do grupo não chegam — ver doc 03, seção 9.
 - Ler o grupo real expõe conversas de três unidades: precisa de base legal/aviso aos participantes e retenção definida.
 - Identificação de unidade por apelido depende de nomes bem distintos (configuração recusa apelido ambíguo).
 - Duplicidade de boleto compara valor + vencimento + fornecedor; o identificador (linha digitável) não aparece na consulta de Contas

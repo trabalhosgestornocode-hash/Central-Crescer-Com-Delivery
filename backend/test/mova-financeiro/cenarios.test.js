@@ -115,7 +115,7 @@ t("01 participante comum conversa: pergunta respondida com agregados compartilh�
   await s.enviar(gw({ texto: "quanto temos a pagar na alfa?" }));
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo, h.unidadeId, h.participanteId], [DECISAO.CONSULTA, "CONTAS_A_PAGAR_ABERTAS", ALFA, P1]);
-  assert.match((await s.respostas()).at(-1).texto, /Unidade Alfa — a pagar em aberto: R\$ 123,45/);
+  assert.match((await s.respostas()).at(-1).texto, /Unidade Alfa — competência 2026-10:\n• a pagar em aberto: 1 contas, R\$ 123,45/);
   assert.deepEqual(ESCRITAS(s.espiao.chamadas), []);
 });
 
@@ -476,11 +476,11 @@ t("24 resposta com dados insuficientes: diz que não há dados, não estima; com
   const s = await cenario({ porTexto: (x) => (x.includes("compar") ? leitura({ ...consulta("COMPARATIVO_UNIDADES") }) : consulta("RESUMO_DA_COMPETENCIA")) });
   await s.enviar(gw({ texto: "como está o resumo da beta?" }));
   assert.equal((await s.ultima()).motivo, "RESUMO_DA_COMPETENCIA:DADOS_INSUFICIENTES");
-  assert.match((await s.respostas()).at(-1).texto, /Ainda não há dados suficientes .* Unidade Beta\. Não vou estimar\./);
+  assert.match((await s.respostas()).at(-1).texto, /Ainda não há dados suficientes .* Unidade Beta \(competência 2026-10\)\. Não vou estimar\./);
   await s.obrigacao(ALFA);
   await s.enviar(gw({ texto: "compare as três unidades" }));
   const txt = (await s.respostas()).at(-1).texto;
-  assert.match(txt, /Unidade Alfa: a pagar em aberto R\$ 123,45/);
+  assert.match(txt, /Unidade Alfa: a pagar em aberto: 1 contas, R\$ 123,45/);
   assert.match(txt, /Unidade Beta: dados insuficientes\./);
   assert.match(txt, /Unidade Gama: dados insuficientes\./);
 });

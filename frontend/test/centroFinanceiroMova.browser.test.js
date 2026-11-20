@@ -20,12 +20,27 @@ const RAIZ = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const MIME = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html; charset=utf-8", ".jpeg": "image/jpeg" };
 let servidor, base, navegador;
 const pedidos = [];
+// API simulada pelo servidor do teste (formato EXATO das rotas /api/mova/* e /sessao). null = sem API (arquivo estático).
+const api = { modo: null, posts: [] };
+const ITEM = (id, tipo, extra = {}) => ({ eventoId: id, recebidoEm: "2026-10-15T10:00:00Z", tipo: "IMAGEM", texto: "pago, alfa", participante: { referencia: "…0001", nomeExibicao: "Pessoa", nomeNaoEProvaDeIdentidade: true },
+  documento: { sha256: "a".repeat(64), mime: "image/jpeg", nomeArquivo: null }, dadosExtraidos: { tipoDocumento: "COMPROVANTE_PAGAMENTO", valorCentavos: 12345, dataPagamento: "2026-10-10", confianca: "ALTA" },
+  proposta: { id: "11111111-0000-4000-8000-00000000000" + id.slice(-1), tipo, estado: "AGUARDANDO_REVISAO", valorCentavos: 12345, categoriaSugerida: "INSUMOS", datas: { competencia: "2026-10", caixa: "2026-10-10" }, bloqueioDeAplicacao: null, sinaisDeInjecao: false, ...extra },
+  decisoes: [{ decisao: "PROPOSTA", motivo: tipo, em: "2026-10-15T10:00:01Z" }] });
+const jsonRes = (res, status, corpo) => { res.writeHead(status, { "Content-Type": "application/json" }); res.end(JSON.stringify(corpo)); };
 
 before(async () => {
   if (PULAR) return;
   servidor = createServer((req, res) => {
     const caminho = new URL(req.url, "http://x").pathname;
     pedidos.push(caminho);
+    if (caminho.startsWith("/api/") && api.modo) {
+      if (req.method === "POST") { let c = ""; req.on("data", (d) => { c += d; }); req.on("end", () => { api.posts.push({ caminho, corpo: JSON.parse(c) }); jsonRes(res, 200, { estado: "APLICADA" }); }); return; }
+      if (caminho === "/api/fv2/sessao") return jsonRes(res, 200, { escritaHabilitada: true, unidades: [{ id: "u-1", nome: "Unidade Real Sintética", permissoes: ["financeiro_v2.ver", "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.registrar"] }] });
+      if (caminho === "/api/fv2/mova/caixa") return api.modo === "desligado" ? jsonRes(res, 404, { codigo: "MOVA_DESLIGADO" }) : jsonRes(res, 200, { itens: [ITEM("bly:API1", "BAIXA_DE_OBRIGACAO")], aguardandoUnidade: [] });
+      if (caminho === "/api/fv2/mova/estado") return jsonRes(res, 200, { fila: { porEstado: { CONCLUIDO: 3 } }, respostas: { PENDENTE: 1 }, envioHabilitado: false, chaves: { recebimento: false, ia: false, envio: false } });
+      if (caminho === "/api/fv2/caixa-e-bancos") return jsonRes(res, 200, { contas: [{ id: "c-1", nome: "Banco Sintético", tipo: "BANCARIA", ativa: true }] });
+      return jsonRes(res, 404, { codigo: "NAO_ENCONTRADO" });
+    }
     const arq = resolve(RAIZ, "." + caminho);
     if (!arq.startsWith(RAIZ + sep)) { res.writeHead(403).end(); return; }
     try { const c = readFileSync(arq); res.writeHead(200, { "Content-Type": MIME[extname(arq)] ?? "application/octet-stream" }); res.end(c); } catch { res.writeHead(404).end(); }
@@ -41,7 +56,7 @@ async function abrir({ largura = 1280, altura = 900, escuro = false } = {}) {
   const pagina = await ctx.newPage();
   const erros = [];
   pagina.on("pageerror", (e) => erros.push(String(e)));
-  pagina.on("console", (m) => { if (m.type() === "error" && !/favicon|logo-crescer/.test(m.text())) erros.push(m.text()); });
+  pagina.on("console", (m) => { if (m.type() === "error" && !/favicon|logo-crescer|status of 404/.test(m.text())) erros.push(m.text()); });
   if (escuro) await pagina.addInitScript(() => localStorage.setItem("saci-tema", "dark"));
   await pagina.goto(base);
   await pagina.waitForSelector("#cf-aba-entrada[aria-selected=true]");
@@ -75,7 +90,8 @@ test("desktop: Caixa de Entrada lista mensagens e o detalhe mostra mensagem, par
     assert.match(await pagina.textContent("#cf-conteudo"), /Nível 1 — participante do grupo/);
     await capturar(pagina, "mova-desktop");
     assert.deepEqual(erros, []);
-    assert.ok(pedidos.every((p) => !p.startsWith("/api")), "a página em simulação não chama o backend");
+    // sem API: só a SONDAGEM da sessão (404) e nenhuma outra chamada ao backend
+    assert.deepEqual([...new Set(pedidos.filter((p) => p.startsWith("/api")))], ["/api/fv2/sessao"]);
   } finally { await ctx.close(); }
 });
 
@@ -105,4 +121,38 @@ test("tema escuro: fundo escuro e texto claro (contraste vem dos tokens do Finan
     await capturar(pagina, "mova-escuro");
     assert.deepEqual(erros, []);
   } finally { await ctx.close(); }
+});
+
+test("API real: sem faixa de simulação, unidade da sessão, aprovação exige a conta e envia só o necessário", { skip: PULAR }, async () => {
+  api.modo = "ligado"; api.posts.length = 0;
+  const { ctx, pagina, erros } = await abrir();
+  try {
+    assert.equal(await pagina.isHidden(".cf-simulacao"), true);
+    assert.equal(await pagina.inputValue("#cf-unidade"), "u-1");
+    assert.equal(await pagina.isDisabled("#cf-unidade"), true);
+    await pagina.click("#cf-aba-propostas");
+    await pagina.click("button[data-acao=aplicar]");
+    assert.match(await pagina.textContent("#cf-conteudo"), /Escolha a conta/);
+    assert.equal(api.posts.length, 0);
+    await pagina.selectOption("select.cf-conta", "c-1");
+    await pagina.click("button[data-acao=aplicar]");
+    await pagina.waitForSelector("text=Proposta aplicada no Financeiro.");
+    assert.deepEqual(api.posts, [{ caminho: "/api/fv2/acoes/mova/aplicar", corpo: { propostaId: "11111111-0000-4000-8000-000000000001", contaId: "c-1" } }]);
+    await pagina.click("#cf-aba-config");
+    assert.match(await pagina.textContent("#cf-conteudo"), /Financeiro \(API\)[\s\S]*Recebimento do grupo[\s\S]*Desligado/);
+    await capturar(pagina, "mova-api");
+    assert.deepEqual(erros, []);
+  } finally { await ctx.close(); api.modo = null; }
+});
+
+test("MOVA desligado no servidor: estado real, sem dados inventados", { skip: PULAR }, async () => {
+  api.modo = "desligado";
+  const ctx = await navegador.newContext({ viewport: { width: 1280, height: 900 } });
+  const pagina = await ctx.newPage();
+  try {
+    await pagina.goto(base);
+    await pagina.waitForSelector("text=MOVA desligado");
+    assert.match(await pagina.textContent("#cf-conteudo"), /Nenhuma mensagem do WhatsApp é lida/);
+    assert.equal(await pagina.locator("tr[data-id]").count(), 0);
+  } finally { await ctx.close(); api.modo = null; }
 });

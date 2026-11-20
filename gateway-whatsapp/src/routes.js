@@ -156,6 +156,15 @@ export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
     } catch (e) { next(e); }
   });
 
+  // MOVA — resposta de texto a grupo AUTORIZADO do MOVA, só com WHATSAPP_MOVA_ENVIO_HABILITADO=1 (decidido na sessão).
+  router.post("/whatsapp/mova/messages", async (req, res, next) => {
+    try {
+      const { grupoJid, texto, idempotencyKey } = req.corpoJson ?? {};
+      if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "texto inválido" });
+      res.json(await sessao.enviarGrupoMova({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
+    } catch (e) { next(e); }
+  });
+
   // Métricas do reenvio sob retry (src/retryCache.js) — SÓ números/vocabulário fechado (nunca id, JID ou conteúdo).
   // É o que mede a correção: retryRecebido, cacheHit, cacheMiss, reenvioEnviado, esgotado e cacheHitRate.
   router.get("/whatsapp/retry/metricas", (req, res) => {

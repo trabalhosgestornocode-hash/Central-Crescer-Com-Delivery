@@ -24,7 +24,12 @@ export function exigirContratoFinanceiro(f) {
   return Object.freeze({ ACAO: f.ACAO, ErroFinanceiro: f.ErroFinanceiro, validarObrigacao: f.validarObrigacao, categoriaProvisoria: f.categoriaProvisoria });
 }
 
-export const OPERACOES_PERMITIDAS = Object.freeze(["consultarContasAPagar", "consultarCompetencia", "consultarResumoFinanceiro"]);
+export const OPERACOES_PERMITIDAS = Object.freeze([
+  "consultarContasAPagar", "consultarCompetencia", "consultarResumoFinanceiro",
+  // Execução 03 — leituras das ferramentas financeiras (aplicacao/ferramentas.js). Todas passam por b.consultar no núcleo.
+  "consultarVendas", "apurarCompetencia", "consultarFluxoDeCaixa", "consultarContasAReceber", "consultarPendencias", "consultarPlanoDeContas",
+  "consultarDocumentos", "detalharContaAPagar",
+]);
 const SITUACOES_ABERTAS = Object.freeze(["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"]);
 const MAX_PAGINAS = 20;
 
@@ -77,6 +82,8 @@ export function criarPortaFinanceira({ nucleo, concessoes, financeiro }) {
     async resumo(escopo, competencia) {
       return chamar("consultarResumoFinanceiro", escopo, { competencia });
     },
+    /** Leitura genérica, SÓ das operações da lista fechada (as ferramentas financeiras usam esta). */
+    ler: (op, escopo, entrada) => chamar(op, escopo, entrada),
     /** Confere o comando da obrigação com o contrato REAL do Financeiro v2 (lança ErroFinanceiro se inválido). */
     validarComandoDeObrigacao: (cmd) => validarObrigacao(cmd),
     /** Erro de REGRA do Financeiro (entrada inválida etc.), em oposição a indisponibilidade. */

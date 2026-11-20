@@ -1776,6 +1776,24 @@ export function criarSessaoBaileys({
      */
     async enviarGrupoInterno({ grupoJid, texto, correlationId = null }) {
       exigirGrupoAutorizado(grupoJid, config?.grupoInternoJid ?? null);
+      return enviarTextoAGrupo({ grupoJid, texto, correlationId });
+    },
+
+    /**
+     * MOVA — envia UMA resposta de texto a um grupo AUTORIZADO do MOVA (WHATSAPP_MOVA_GRUPOS_JID), só com
+     * WHATSAPP_MOVA_ENVIO_HABILITADO=1. Mesmo socket, mesma ordem fail-closed do grupo interno. Desligado ⇒ recusa pré-envio.
+     */
+    async enviarGrupoMova({ grupoJid, texto, correlationId = null }) {
+      if (config?.movaEnvioHabilitado !== true) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "envio do MOVA desligado"); e.preEnvio = true; throw e; }
+      const grupos = Array.isArray(config?.movaGrupos) ? config.movaGrupos : [];
+      if (!grupos.includes(grupoJid)) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "grupo fora do MOVA"); e.preEnvio = true; throw e; }
+      return enviarTextoAGrupo({ grupoJid, texto, correlationId });
+    },
+  };
+
+  /** Miolo comum do envio de texto a grupo (grupo interno e MOVA). Quem chama já autorizou o JID. */
+  async function enviarTextoAGrupo({ grupoJid, texto, correlationId }) {
+    {
       const naoConectado = () => { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; return e; };
       if (status !== STATUS_CONEXAO.CONNECTED || !socket) throw naoConectado();
       const sockEnvio = socket;
@@ -1803,6 +1821,6 @@ export function criarSessaoBaileys({
       const providerMessageId = resultado?.key?.id ?? providerIdGerado;
       log("info", "grupo.send_resolved", { correlationId, providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1 });
       return { providerMessageId, enviadoEm: new Date().toISOString(), grupo: { jid: info.jid, nome: info.nome } };
-    },
-  };
+    }
+  }
 }

@@ -268,6 +268,13 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
       if (typeof texto !== "string" || !texto.trim() || texto.length > MAX_TEXTO_ENVIO) throw rejeitarPedidoInvalido(`texto ausente/vazio ou maior que ${MAX_TEXTO_ENVIO} caracteres`);
       return chamar("POST", "/internal/whatsapp/grupo-interno/messages", { grupoJid, texto, idempotencyKey }, { envio: true });
     },
+    // MOVA: resposta a grupo autorizado do MOVA. O Gateway só aceita com WHATSAPP_MOVA_ENVIO_HABILITADO=1 e JID na lista do MOVA.
+    async sendTextGrupoMova({ grupoJid, texto, idempotencyKey }) {
+      if (typeof grupoJid !== "string" || !REGEX_JID_GRUPO.test(grupoJid)) throw rejeitarPedidoInvalido("grupoJid fora do formato de grupo");
+      if (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 200) throw rejeitarPedidoInvalido("idempotencyKey ausente/vazia");
+      if (typeof texto !== "string" || !texto.trim() || texto.length > MAX_TEXTO_ENVIO) throw rejeitarPedidoInvalido(`texto ausente/vazio ou maior que ${MAX_TEXTO_ENVIO} caracteres`);
+      return chamar("POST", "/internal/whatsapp/mova/messages", { grupoJid, texto, idempotencyKey }, { envio: true });
+    },
 
     onMessage(handler) { handlersMensagem.push(handler); },
 

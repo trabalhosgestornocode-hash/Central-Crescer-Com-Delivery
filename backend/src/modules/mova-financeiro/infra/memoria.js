@@ -22,7 +22,8 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   return Object.freeze({
     eventos: Object.freeze({
       async registrar(e) { if (eventos.has(e.eventoId)) return { novo: false }; eventos.set(e.eventoId, e); return { novo: true }; },
-      async obter(id) { return eventos.get(id) ?? null; },
+      /** Por eventoId; com grupoId, pela mensagemId DENTRO do grupo (mensagem respondida). */
+      async obter(id, grupoId = null) { return grupoId ? [...eventos.values()].find((e) => e.mensagemId === id && e.grupoId === grupoId) ?? null : eventos.get(id) ?? null; },
     }),
     participantes: Object.freeze({
       async registrar({ grupoId, participanteId, nomeExibicao = null }) {
@@ -57,6 +58,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async registrar(entrada) { historico.push(Object.freeze({ id: gerarId(), em: relogio().toISOString(), ...entrada })); },
       async listar({ organizacaoId, unidadeId }) { return historico.filter((h) => (h.organizacaoId ?? null) === organizacaoId && (h.unidadeId ?? null) === unidadeId); },
       async todos() { return [...historico]; },
+      async temDecisao(eventoId) { return historico.some((h) => h.eventoId === eventoId && h.decisao !== "FALHOU"); },
     }),
     documentos: Object.freeze({
       async visto(sha256) { return documentos.get(sha256) ?? null; },

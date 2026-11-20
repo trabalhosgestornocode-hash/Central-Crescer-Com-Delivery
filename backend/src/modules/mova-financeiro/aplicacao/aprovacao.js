@@ -26,7 +26,7 @@ const mes = (d) => d.slice(0, 7);
 /**
  * @param {{cfg:object, armazenamento:object, nucleo:object, financeiro:object}} deps  `nucleo` = núcleo do Financeiro v2 (injetado)
  */
-export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
+export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, financeiro, fila = null }) {
   const { ACAO, ErroFinanceiro } = exigirContratoFinanceiro(financeiro);
   const escopo = (ctx) => ({ organizacaoId: String(ctx?.organizacaoId ?? "").toLowerCase(), unidadeId: String(ctx?.unidadeId ?? "").toLowerCase() });
 
@@ -38,12 +38,12 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
     }
   }
 
-  async function competenciaAberta(ctx, competencia) {
+  async function competenciaAberta(nucleo, ctx, competencia) {
     const c = await nucleo.consultarCompetencia(ctx, { competencia });
     if (c.estado !== "ABERTA") throw new ErroDeAprovacao("COMPETENCIA_FECHADA", { competencia, estado: c.estado });
   }
 
-  async function semDuplicata(ctx, p) {
+  async function semDuplicata(nucleo, ctx, p) {
     const e = p.comando.entrada;
     for (let pagina = 1; pagina <= 20; pagina++) {
       const r = await nucleo.consultarContasAPagar(ctx, { competencia: e.competencia, pagina, tamanho: 100 });
@@ -54,11 +54,11 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
     }
   }
 
-  async function executar(ctx, p, { contaId, categoria }) {
+  async function executar(nucleo, ctx, p, { contaId, categoria }) {
     const fonte = { sistema: "MANUAL", idExterno: `MOVA:${p.id}` };
     if (p.tipo === "BAIXA_DE_OBRIGACAO") {
       const e = p.comando.entrada;
-      await competenciaAberta(ctx, mes(e.dataEfetiva));
+      await competenciaAberta(nucleo, ctx, mes(e.dataEfetiva));
       const { titulo } = await nucleo.detalharContaAPagar(ctx, { id: e.obrigacaoId });
       if (titulo.situacao === "CANCELADO") throw new ErroDeAprovacao("OBRIGACAO_CANCELADA");
       if (e.valorCentavos > titulo.saldoCentavos) throw new ErroDeAprovacao("VALOR_MAIOR_QUE_SALDO", { saldoCentavos: titulo.saldoCentavos });
@@ -66,13 +66,13 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
       return { obrigacaoId: e.obrigacaoId, movimentacaoId: r.movimentacao?.id ?? null };
     }
     const entrada = { ...p.comando.entrada, ...(categoria ? { categoria } : {}), fonte };
-    await competenciaAberta(ctx, entrada.competencia);
-    await semDuplicata(ctx, p);
+    await competenciaAberta(nucleo, ctx, entrada.competencia);
+    await semDuplicata(nucleo, ctx, p);
     const ob = await nucleo.registrarObrigacao(ctx, entrada);
     const obrigacaoId = ob.obrigacoes[0].id;
     if (p.tipo === "NOVA_OBRIGACAO") return { obrigacaoId, movimentacaoId: null };
     // DESPESA_PAGA: a mesma proposta registra a obrigação e a baixa (o mês do caixa também precisa estar aberto).
-    await competenciaAberta(ctx, mes(p.comando.pagamento.dataEfetiva));
+    await competenciaAberta(nucleo, ctx, mes(p.comando.pagamento.dataEfetiva));
     const pg = await nucleo.pagarContaAPagar(ctx, { obrigacaoId, contaId, dataEfetiva: p.comando.pagamento.dataEfetiva, valorCentavos: p.comando.pagamento.valorCentavos });
     return { obrigacaoId, movimentacaoId: pg.movimentacao?.id ?? null };
   }
@@ -82,7 +82,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
      * @param {object} ctx contexto VERIFICADO do Financeiro v2 (sessão da plataforma)
      * @param {{propostaId:string, contaId?:string, categoria?:string}} e  contaId obrigatório para baixa/despesa paga
      */
-    async aplicar(ctx, { propostaId, contaId = null, categoria = null } = {}) {
+    async aplicar(ctx, { propostaId, contaId = null, categoria = null } = {}, { nucleo = nucleoPadrao } = {}) {
       await exigir(ctx, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR]);
       const esc = escopo(ctx);
       const p = UUID.test(propostaId ?? "") ? await a.propostas.obter(esc, propostaId) : null;
@@ -97,7 +97,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
       const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
       if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
       try {
-        const resultado = await executar(ctx, p, { contaId, categoria });
+        const resultado = await executar(nucleo, ctx, p, { contaId, categoria: categoria ?? p.categoriaRevisada ?? null });
         const aplicada = await a.propostas.transicionar(esc, p.id, "APLICANDO", "APLICADA", resultado);
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "APLICADA", usuarioId: ctx.usuarioId, resultado });
         await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado } });
@@ -108,6 +108,26 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo, financeiro }) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "FALHOU", usuarioId: ctx.usuarioId, motivo: codigo });
         throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao(codigo);
       }
+    },
+    /** Revisão de classificação (Nível 2): grava a categoria escolhida na proposta; a aplicação valida no Financeiro. */
+    async revisarClassificacao(ctx, { propostaId, versao, categoria }) {
+      await exigir(ctx, [ACAO.APROVAR]);
+      if (typeof categoria !== "string" || !/^[A-Z][A-Z0-9_]{1,79}$/.test(categoria)) throw new ErroDeAprovacao("CATEGORIA_INVALIDA");
+      if (!Number.isInteger(versao)) throw new ErroDeAprovacao("VERSAO_OBRIGATORIA");
+      if (typeof a.propostas.revisar !== "function") throw new ErroDeAprovacao("REVISAO_INDISPONIVEL");
+      const r = UUID.test(propostaId ?? "") ? await a.propostas.revisar(escopo(ctx), propostaId, versao, { categoriaRevisada: categoria, revisadaPor: ctx.usuarioId }) : null;
+      if (!r) throw new ErroDeAprovacao("PROPOSTA_ALTERADA_OU_INEXISTENTE");
+      await a.auditoria.registrar({ acao: "CLASSIFICACAO_REVISADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: propostaId, dados: { categoria } });
+      return r;
+    },
+    /** Reprocessar um evento que falhou (Nível 2). O evento precisa ser da unidade do contexto ou ainda sem unidade. */
+    async reprocessar(ctx, { eventoId }) {
+      await exigir(ctx, [ACAO.APROVAR]);
+      if (!fila?.reprocessar) throw new ErroDeAprovacao("REPROCESSAMENTO_INDISPONIVEL");
+      const ok = await fila.reprocessar(String(eventoId ?? ""));
+      if (!ok) throw new ErroDeAprovacao("EVENTO_NAO_ESTA_EM_FALHA");
+      await a.auditoria.registrar({ acao: "EVENTO_REPROCESSADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: String(eventoId) });
+      return { ok: true };
     },
     async rejeitar(ctx, { propostaId, motivo }) {
       await exigir(ctx, [ACAO.APROVAR]);
