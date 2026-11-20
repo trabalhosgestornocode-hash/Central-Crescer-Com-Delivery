@@ -251,3 +251,20 @@ describe("lerOperacaoPropria (vale também para a planilha importada, sem depend
       { organizacao_id: ORG, unidade_id: UNI, operacao: "subway", estado: "ATIVO" }] }))), { erro: "FONTE_FOODY_OPERACAO_AMBIGUA" });
   });
 });
+
+describe("linha desativada pelo roteamento (pedido decidido para a outra operação da conta)", () => {
+  const desativada = (uid, dia) => pedido(uid, dia, { operacao: "triagem", roteamento_ativo: false });
+  test("cobertura: não conta como triagem nem como pedido do dia; a triagem ATIVA continua contando", async () => {
+    const a = { env: ON, organizacaoId: ORG, unidadeId: UNI, dataInicio: "2026-11-05", dataFim: "2026-11-05", agora: new Date("2026-11-10T12:00:00Z") };
+    const r = await carregarCoberturaFoody({ ...a, db: dbFalso({ foody_conexoes: [{ organizacao_id: ORG, unidade_id: UNI, status: "ATIVA" }],
+      foody_pedidos: [pedido("a", "2026-11-05T12:00:00"), desativada("b", "2026-11-05T13:00:00"), pedido("c", "2026-11-05T14:00:00", { operacao: "triagem", roteamento_ativo: true })] }) });
+    assert.deepEqual([r.dias[0].triagem, r.dias[0].pedidosFoody], [1, 2]);
+    const so = await carregarCoberturaFoody({ ...a, db: dbFalso({ foody_pedidos: [pedido("a", "2026-11-05T12:00:00"), desativada("b", "2026-11-05T13:00:00")] }) });
+    assert.equal(so.dias[0].triagem, 0, "a cópia desativada não trava o dia");
+  });
+  test("pedidos do Parser: a linha desativada não entra (a ativa está no destino); linha sem o campo segue entrando", async () => {
+    const r = await carregarPedidosFoody(args(dbFalso({ foody_pedidos: [pedido("a", "2026-11-08T12:00:00"), desativada("b", "2026-11-08T13:00:00"), pedido("c", "2026-11-08T14:00:00")] })));
+    assert.ok(!JSON.stringify(r.linhas).includes("Nb"), "o pedido desativado (Nb) não entra");
+    assert.equal(r.linhas.length, 2);
+  });
+});
