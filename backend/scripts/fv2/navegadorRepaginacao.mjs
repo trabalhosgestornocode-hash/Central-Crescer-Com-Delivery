@@ -161,12 +161,26 @@ for (const [nome, vp] of Object.entries(VIEWPORTS)) {
     await page.keyboard.press("Tab");
     const primeiro = await page.evaluate(() => document.activeElement?.className);
     registrar("teclado", `${nome}: primeiro Tab vai ao 'Pular para o conteúdo'`, /pular/.test(primeiro ?? ""), primeiro);
-    // menu recolhível
-    await page.click("#nav-alternar");
-    const rec = await page.evaluate(() => ({ nav: document.documentElement.dataset.nav, exp: document.querySelector("#nav-alternar").getAttribute("aria-expanded"), vis: getComputedStyle(document.querySelector("#navegacao")).display !== "none" }));
-    registrar("menu", `${nome}: menu recolhe e reabre (aria-expanded)`, rec.nav === "recolhida" && rec.exp === "false" && !rec.vis);
-    await foto(page, `subway-${nome}-menu-recolhido`);
-    await page.click("#nav-alternar");
+    // menu: no desktop recolhe/abre a coluna; no celular é uma gaveta (fechada por padrão, abre em lista vertical, fecha ao navegar)
+    const estadoMenu = () => page.evaluate(() => ({ nav: document.documentElement.dataset.nav, exp: document.querySelector("#nav-alternar").getAttribute("aria-expanded"), coluna: getComputedStyle(document.querySelector("#navegacao")).display !== "none", grupos: getComputedStyle(document.querySelector(".nav-grupos")).display !== "none" }));
+    if (nome === "mobile") {
+      const fechado = await estadoMenu();
+      registrar("menu", "mobile: o menu começa fechado (só a marca), sem tira de rolagem horizontal", fechado.nav === "recolhida" && fechado.exp === "false" && !fechado.grupos, JSON.stringify(fechado));
+      await page.click("#nav-alternar");
+      const aberto = await estadoMenu();
+      await foto(page, "subway-mobile-menu-aberto");
+      registrar("menu", "mobile: o botão abre os grupos em lista vertical", aberto.nav === "aberta" && aberto.exp === "true" && aberto.grupos, JSON.stringify(aberto));
+      await page.click('.nav-grupos a[data-rota="dre"]');
+      await espera(200);
+      const depois = await estadoMenu();
+      registrar("menu", "mobile: ao escolher uma área o menu fecha sozinho", depois.nav === "recolhida" && !depois.grupos, JSON.stringify(depois));
+    } else {
+      await page.click("#nav-alternar");
+      const rec = await estadoMenu();
+      registrar("menu", `${nome}: menu recolhe e reabre (aria-expanded)`, rec.nav === "recolhida" && rec.exp === "false" && !rec.coluna);
+      await foto(page, `subway-${nome}-menu-recolhido`);
+      await page.click("#nav-alternar");
+    }
   }
   await ctx.close();
   await srv.fechar();

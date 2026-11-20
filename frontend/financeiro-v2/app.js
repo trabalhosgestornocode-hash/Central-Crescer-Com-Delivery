@@ -608,10 +608,12 @@ async function executarAcao(form) {
   }
   if ("aceitarPendencias" in dados) corpo.aceitarPendencias = true;
   botao.disabled = true;
+  saida.dataset.estado = "enviando";
   saida.textContent = "Enviando…";
   const r = await enviar(form.dataset.acao, corpo, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
   if (ehSessaoExpirada(r)) { sessaoExpirada(r); return; } // nada foi gravado; a tela explica e oferece entrar de novo
   saida.innerHTML = conf.resultadoDaAcao(r);
+  saida.dataset.estado = r.ok ? "ok" : "erro";
   if (!r.ok) { botao.disabled = false; return; }
   recarregarAoFechar = true;
   const proximo = form.dataset.recarregar ?? "";

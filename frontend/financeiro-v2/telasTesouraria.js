@@ -428,7 +428,7 @@ ${form}`;
 
 export function caixaEBancos(r, f = {}, ctx = {}) {
   const k = r.consolidado;
-  const saldo = podeRegistrar(ctx) && r.contas?.length ? formAcao({ url: "/api/fv2/acoes/saldos/registrar", titulo: "Informar saldo de conta (extrato)", rotulo: "Registrar saldo informado",
+  const saldo = podeRegistrar(ctx) && r.contas?.length ? formAcao({ url: "/api/fv2/acoes/saldos/registrar", titulo: "Informar saldo de conta (extrato)", recolhivel: true, rotulo: "Registrar saldo informado",
     aviso: "Confirmo o saldo informado: ele não corrige nada — se não conferir com o calculado, a diferença aparece como divergência.",
     campos: `<label>Conta <select name="conta" required>${r.contas.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Data <input type="date" name="data" required></label>

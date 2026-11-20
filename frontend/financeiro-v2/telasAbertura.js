@@ -28,12 +28,16 @@ const selo = (texto, classe) => `<span class="selo selo--${classe}">${esc(texto)
 let seq = 0;
 
 /** Formulário de ação (contrato comum: `data-acao`, confirmação obrigatória, resultado anunciado). */
-export function formulario({ url, titulo, campos, aviso, rotulo, explicacao = "", recarregar = "lista", perigo = false }) {
+/** `recolhivel`: o formulário abre sob demanda (telas de consulta mantêm os dados na primeira dobra). */
+export function formulario({ url, titulo, campos, aviso, rotulo, explicacao = "", recarregar = "lista", perigo = false, recolhivel = false }) {
   const k = (seq += 1);
-  return `<section class="card card--formulario" aria-labelledby="t-ab-${k}"><div class="card-topo"><h3 id="t-ab-${k}">${esc(titulo)}</h3></div>${explicacao ? `<p class="nota">${esc(explicacao)}</p>` : ""}
+  const [abre, titulo_, fecha] = recolhivel
+    ? [`<details class="card card--formulario card--recolhivel"><summary><h3 id="t-ab-${k}">${esc(titulo)}</h3></summary>`, "", "</details>"]
+    : [`<section class="card card--formulario" aria-labelledby="t-ab-${k}">`, `<div class="card-topo"><h3 id="t-ab-${k}">${esc(titulo)}</h3></div>`, "</section>"];
+  return `${abre}${titulo_}${explicacao ? `<p class="nota">${esc(explicacao)}</p>` : ""}
 <form class="acao acao--formulario${perigo ? " acao--perigo" : ""}" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}"><div class="campos-form">${campos}</div>
 <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
-<div class="acoes-form"><button type="submit" class="botao${perigo ? "" : " botao--primario"}">${esc(rotulo)}</button></div><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>`;
+<div class="acoes-form"><button type="submit" class="botao${perigo ? "" : " botao--primario"}">${esc(rotulo)}</button></div><p class="resultado-acao" role="status" aria-live="polite"></p></form>${fecha}`;
 }
 const campoOrigem = (exemplo) => `<label class="campo--largo">Origem do valor (obrigatória) <input type="text" name="origem" minlength="5" maxlength="160" required placeholder="${esc(exemplo)}"></label>`;
 const campoIdentificador = (exemplo) => `<label>Identificador do título (recomendado) <input type="text" name="identificador" maxlength="80" placeholder="${esc(exemplo)}"></label>`;
@@ -175,13 +179,13 @@ export function formulariosDeCaixa(contas = [], ctx = {}) {
   const semSessao = caixas.filter((c) => !abertaDe(c));
   const bancos = contas.filter((c) => c.tipo !== "CAIXA_FISICO");
   const sessoes = abertas.map((s) => opcao(s.id, `${s.contaNome} · aberta em ${dataCurta(s.dataAbertura)}`)).join("");
-  return `<div class="formularios-caixa">${semSessao.length ? formulario({ url: "/api/fv2/acoes/caixa/abrir", titulo: "Abrir caixa", rotulo: "Abrir caixa",
+  return `<div class="formularios-caixa">${semSessao.length ? formulario({ recolhivel: true, url: "/api/fv2/acoes/caixa/abrir", titulo: "Abrir caixa", rotulo: "Abrir caixa",
     explicacao: "Informe o dinheiro CONTADO na gaveta. A abertura não é faturamento nem receita: é o ponto de partida da sessão.",
     aviso: "Confirmo a abertura com o valor contado.",
     campos: `<label>Caixa <select name="conta" required>${semSessao.map((c) => opcao(c.id, c.nome)).join("")}</select></label>
 <label>Data <input type="date" name="data" required></label><label>Dinheiro contado (R$) <input type="text" name="contado" ${VALOR} required></label>
 <label class="campo--largo">Observação <input type="text" name="observacao" maxlength="300"></label>` }) : ""}
-${abertas.length ? formulario({ url: "/api/fv2/acoes/caixa/operacao", titulo: "Entrada, saída, sangria ou suprimento", rotulo: "Registrar operação",
+${abertas.length ? formulario({ recolhivel: true, url: "/api/fv2/acoes/caixa/operacao", titulo: "Entrada, saída, sangria ou suprimento", rotulo: "Registrar operação",
     explicacao: "Não classifica como receita nem despesa: saída sem destino identificado fica pendente de classificação. Sangria para o banco vira transferência interna.",
     aviso: "Confirmo a operação (reenviar o mesmo formulário não duplica).",
     campos: `<input type="hidden" name="chave" value="${novaChave()}"><label>Sessão <select name="sessao" required>${sessoes}</select></label>
@@ -189,7 +193,7 @@ ${abertas.length ? formulario({ url: "/api/fv2/acoes/caixa/operacao", titulo: "E
 <label>Valor (R$) <input type="text" name="valor" ${VALOR} required></label><label>Data <input type="date" name="data" required></label>
 <label class="campo--largo">Descrição <input type="text" name="descricao" maxlength="200" required></label>
 ${bancos.length ? `<label>Conta de destino/origem (só sangria/suprimento) <select name="contraConta">${opcao("", "— nenhuma (dinheiro de fora) —")}${bancos.map((c) => opcao(c.id, c.nome)).join("")}</select></label>` : ""}` })
-  + formulario({ url: "/api/fv2/acoes/caixa/fechar", titulo: "Fechar caixa", rotulo: "Fechar caixa",
+  + formulario({ recolhivel: true, url: "/api/fv2/acoes/caixa/fechar", titulo: "Fechar caixa", rotulo: "Fechar caixa",
     explicacao: "Compara o teórico (abertura + entradas − saídas) com o contado. Diferença exige justificativa e NÃO gera ajuste automático.",
     aviso: "Confirmo o fechamento com o valor contado.",
     campos: `<label>Sessão <select name="sessao" required>${sessoes}</select></label><label>Data <input type="date" name="data" required></label>
@@ -199,7 +203,7 @@ ${bancos.length ? `<label>Conta de destino/origem (só sangria/suprimento) <sele
 // ------------------------------------------------------------------------------------------- contas a receber (período)
 export function formRecebivelDoPeriodo(ctx = {}) {
   if (!(ctx.permissoes ?? []).includes("financeiro_v2.registrar")) return "";
-  return formulario({ url: "/api/fv2/acoes/recebiveis/registrar", titulo: "Registrar valor a receber de cliente", rotulo: "Registrar a receber",
+  return formulario({ recolhivel: true, url: "/api/fv2/acoes/recebiveis/registrar", titulo: "Registrar valor a receber de cliente", rotulo: "Registrar a receber",
     explicacao: "Para créditos com clientes (ex.: encomenda faturada). Repasses de Stone, iFood e outros processadores nascem das vendas e dos demonstrativos e não entram por aqui, para não contar duas vezes. Título a receber não é faturamento.",
     aviso: "Confirmo o registro (reenviar o mesmo formulário não duplica).",
     campos: `<input type="hidden" name="chave" value="${novaChave()}"><label>Cliente <input type="text" name="clienteNovo" maxlength="120" required placeholder="O mesmo nome reaproveita o cadastro"></label>
