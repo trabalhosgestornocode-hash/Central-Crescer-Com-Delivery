@@ -20,7 +20,7 @@ await ctx.route("**/*", (route) => {
   const u = route.request().url();
   if (u.startsWith(srv.url)) return route.continue();
   if (u.includes("cdn.jsdelivr.net")) return route.fulfill({ status: 200, contentType: "text/javascript", body: STUB });
-  if (u.includes("fonts.googleapis.com") || u.includes("fonts.gstatic.com")) return route.fulfill({ status: 200, contentType: u.includes("gstatic") ? "font/woff2" : "text/css", body: "" });
+  if (u.includes("fonts.googleapis.com") || u.includes("fonts.gstatic.com")) return route.continue(); // fonte real: capturas fiéis (nenhum dado sai)
   return route.abort();
 });
 const page = await ctx.newPage();
