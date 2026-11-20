@@ -75,8 +75,10 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
     const novos = [];
     const jaImportados = [];
     const conflitos = [];
+    // Uma consulta por lote de chaves (antes: uma ida ao banco por linha do arquivo).
+    const gravados = await tx.buscarPorChaves(cx, TIPO.REGISTRO_FONTE, analise.registros.map((r) => r.chave));
     for (const r of analise.registros) {
-      const existente = await tx.buscarPorChave(cx, TIPO.REGISTRO_FONTE, r.chave);
+      const existente = gravados.get(r.chave) ?? null;
       if (!existente || (imp.substituiImportacaoId && existente.importacaoId === imp.substituiImportacaoId)) novos.push(r);
       else if (existente.impressao === r.impressao) jaImportados.push(r);
       else conflitos.push(r);
@@ -233,14 +235,13 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
           await b.alterar(tx, cx, TIPO.REGISTRO_FONTE, r, { situacao: SITUACAO_REGISTRO_FONTE.SUBSTITUIDO, substituidoPorImportacaoId: imp.id, chaveIdempotencia: `substituido:${r.id}` }, EVENTO_HISTORICO.SUBSTITUICAO, c.justificativa);
           substituidos += 1;
         }
-        for (const r of previa.novos) {
-          await b.criar(tx, cx, TIPO.REGISTRO_FONTE, {
+        // Em lote, na MESMA transação: uma falha desfaz tudo (nada fica gravado pela metade) e a chave única barra duplicidade.
+        await b.criarVarios(tx, cx, TIPO.REGISTRO_FONTE, previa.novos.map((r) => ({
             importacaoId: imp.id, documentoId: documento.id, fonte: imp.fonte, tipoRelatorio: imp.tipoRelatorio, tipoRegistro: r.tipoRegistro,
             idExterno: r.idExterno, identificacao: r.identificacao, linha: r.linha, dataReferencia: r.data, competencia: r.competencia,
             valorCentavos: r.valorCentavos, dados: r.dados, original: r.original, conferencia: CONFERENCIA_REGISTRO.NAO_CONFERIDO,
             situacao: SITUACAO_REGISTRO_FONTE.ATIVO, substituidoPorImportacaoId: null, chaveIdempotencia: r.chave, impressao: r.impressao,
-          });
-        }
+          })));
         const relatorio = {
           inseridos: previa.novos.length, jaImportados: previa.jaImportados.length, conflitosNaoGravados: previa.conflitos.length,
           duplicadosNoArquivo: previa.analise.duplicadosNoArquivo.length, divergencias: previa.divergencias.length,

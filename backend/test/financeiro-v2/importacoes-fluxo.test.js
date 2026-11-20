@@ -122,6 +122,15 @@ test("falha no meio da gravação desfaz TUDO; reimportar o mesmo arquivo depois
     leitura: (fn, o) => real.leitura(fn, o),
     transacao: (fn, o) => real.transacao((tx) => fn(new Proxy(tx, {
       get(alvo, k) {
+        // Gravação em lote: grava PARTE do lote (o 1º registro) e cai — o rollback precisa desfazer essa parte também.
+        if (k === "inserirVarios") {
+          return async (tipo, registros) => {
+            if (tipo !== "REGISTRO_FONTE" || falharNo <= 0) return alvo.inserirVarios(tipo, registros);
+            falharNo = 0;
+            await alvo.inserirVarios(tipo, registros.slice(0, 1));
+            throw new Error("queda simulada no meio da gravação");
+          };
+        }
         if (k !== "inserir") return alvo[k];
         return async (tipo, registro) => {
           if (tipo === "REGISTRO_FONTE" && falharNo > 0 && --falharNo === 0) throw new Error("queda simulada no meio da gravação");
