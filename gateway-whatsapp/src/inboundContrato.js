@@ -95,6 +95,8 @@ export function criarRastreadorOrigem({ max = 5000, rotularOffline = () => "OFFL
       const origem = mapa.get(id); mapa.delete(id);
       return origem;
     },
+    /** Lê a origem SEM liberar a entrada (MOVA, src/movaGrupo.js). Desconhecida ⇒ ORIGEM_PADRAO (nunca LIVE por omissão). */
+    espiar(id) { return typeof id === "string" && mapa.has(id) ? mapa.get(id) : ORIGEM_PADRAO; },
     novoSocket() { mapa.clear(); },
     /** promove as entradas PENDENTES de OFFLINE_NORMAL para OFFLINE_RECOVERY (nunca toca LIVE nem loga ids) */
     promoverPendentesParaRecovery() {

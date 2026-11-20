@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import express from "express";
-import makeWASocket, { DisconnectReason } from "baileys";
+import makeWASocket, { DisconnectReason, downloadMediaMessage } from "baileys";
 import { config, validarConfig } from "./config.js";
 import { exigirHmac } from "./hmac.js";
 import { criarRotas, health } from "./routes.js";
@@ -22,6 +22,9 @@ import { criarInboundGateway } from "./inboundScope.js";
 import { criarRastreadorOrigem } from "./inboundContrato.js";
 import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
 import { criarCacheRetry } from "./retryCache.js";
+import { criarEncaminhadorMova, lerGruposMova } from "./movaGrupo.js";
+import { criarVerificadorDeContato, lerContatoHomologacao } from "./movaHomologacao.js";
+import { criarCanalMova, lerCanalMova } from "./movaCanal.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -157,6 +160,24 @@ const retryCache = criarCacheRetry({
 log("info", "whatsapp.retry.config", retryCache.configuracao());
 retryCache.iniciarMetricasPeriodicas();
 
+// MOVA (src/movaGrupo.js): DESLIGADO sem WHATSAPP_MOVA_GRUPOS_JID. Mesmo socket; mídia baixada pela sessão existente.
+const gruposMova = lerGruposMova(config.movaGruposJid);
+config.movaGrupos = gruposMova; // lista validada, usada pelo envio (enviarGrupoMova)
+const homologacao = lerContatoHomologacao({ contato: config.movaHomologacaoContato, confirmacao: config.movaHomologacaoConfirmacao });
+const contatoHomologacao = homologacao.ativo ? criarVerificadorDeContato({ telefoneE164: homologacao.telefoneE164 }) : null;
+// Canal isolado obrigatório: sem ele o MOVA não liga (nenhum evento MOVA vai ao backend de produção).
+const canalMova = lerCanalMova({ url: config.movaBackendUrl, segredo: config.movaBackendSecret, segredoPrincipal: config.segredoHmac });
+const canal = canalMova.ativo ? criarCanalMova({ url: canalMova.url, segredo: canalMova.segredo, log: (nivel, evento, dados) => log(nivel, evento, dados) }) : null;
+const encaminhador = !canal || (gruposMova.length === 0 && !contatoHomologacao) ? null : criarEncaminhadorMova({
+  grupos: gruposMova, contatoHomologacao,
+  notificar: (payload) => canal.notificar(payload),
+  baixarMidia: (m, sock) => downloadMediaMessage(m, "buffer", {}, { reuploadRequest: sock?.updateMediaMessage }),
+  log: (nivel, evento, dados) => log(nivel, evento, dados),
+});
+const mova = encaminhador ? { aoMensagens: (...a) => encaminhador.aoMensagens(...a), contatoHomologacao } : null;
+config.movaEnvioSoPeloCanal = Boolean(canal); // com canal isolado, o backend de produção não envia mensagens MOVA
+log("info", "mova.config", { ativo: Boolean(mova), grupos: gruposMova.length, homologacaoPrivada: Boolean(contatoHomologacao), motivoHomologacao: homologacao.ativo ? null : homologacao.motivo, canal: canalMova.ativo ? "ATIVO" : canalMova.motivo });
+
 const sessao = criarSessaoBaileys({
   authAdapter,
   backendClient,
@@ -167,6 +188,7 @@ const sessao = criarSessaoBaileys({
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
   leaseManager,
   retryCache,
+  mova,
 });
 
 const app = express();
@@ -178,6 +200,17 @@ app.get("/health", health);
 // express.raw: o HMAC assina os BYTES recebidos. Reparsear/reserializar
 // JSON mudaria a representação e quebraria a assinatura. As rotas usam
 // `req.corpoJson`, produzido pelo middleware.
+// MOVA: envio de resposta pelo canal ISOLADO (segredo próprio). Só existe com o canal ativo; antes do router principal.
+if (canal) {
+  app.post("/internal/mova/messages", express.raw({ type: "*/*", limit: 64 * 1024 }), exigirHmac(canalMova.segredo), async (req, res, next) => {
+    try {
+      const { grupoJid, texto, idempotencyKey } = req.corpoJson ?? {};
+      if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE" });
+      res.json(await sessao.enviarGrupoMova({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
+    } catch (e) { next(e); }
+  });
+}
+
 app.use(
   "/internal",
   express.raw({ type: "*/*", limit: config.limiteCorpoBytes }),
@@ -188,7 +221,7 @@ app.use(
       return res.status(409).json({ error: "OPERACAO_OBRIGATORIA" });
     next();
   },
-  criarRotas(sessao, { executarOperacao: criarExecutorOperacao(sessao, backendClient), retryCache }),
+  criarRotas(sessao, { executarOperacao: criarExecutorOperacao(sessao, backendClient), retryCache, movaEnvioSoPeloCanal: config.movaEnvioSoPeloCanal }),
 );
 
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));

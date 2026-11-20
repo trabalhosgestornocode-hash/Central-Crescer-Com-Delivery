@@ -77,11 +77,13 @@ export function lerLimiteAuthStateBytes(valorEnv) {
  * @param {ReturnType<import('../providers/baileysGateway.provider.js').criarBaileysGatewayProvider>} [opts.provider]
  * @param {object} [opts.repo] Injeção explícita — só para testes. Sem isto,
  *   produção usa `criarRepoSupabase()`.
+ * @param {{receptor:object, rota:Function, limiteBytes:number, caminho:string}} [opts.mova] MOVA (Execução 02): rota
+ *   `/eventos/mova-grupo` SÓ quando injetado. app.js não injeta ⇒ em produção a rota não existe e nada muda.
  * @returns {{ path: string, router: import('express').Router, limiteCorpoBytes: number, limiteAuthStateBytes: number, repo: object } | null}
  *   `repo` vem junto só para introspecção/teste (qual repositório foi
  *   efetivamente escolhido) — app.js usa só `path`/`router`.
  */
-export function montarWhatsappGatewayRouter({ provider, repo, inbox } = {}) {
+export function montarWhatsappGatewayRouter({ provider, repo, inbox, mova } = {}) {
   const segredo = process.env.WHATSAPP_GATEWAY_SECRET;
   const organizacaoId = process.env.WHATSAPP_GATEWAY_ORGANIZACAO_ID;
   if (!segredo || !organizacaoId) return null; // feature inativa — nada montado
@@ -124,8 +126,19 @@ export function montarWhatsappGatewayRouter({ provider, repo, inbox } = {}) {
     }
     return rawAuthState(req, res, next);
   });
+  // MOVA (opcional, injetado): corpo maior SÓ para POST /eventos/mova-grupo (mídia em base64), com a mesma pré-checagem de
+  // presença dos headers de assinatura; a autenticidade continua decidida só por `exigirHmac`.
+  if (mova) {
+    const rawMova = express.raw({ type: "*/*", limit: mova.limiteBytes });
+    router.use((req, res, next) => {
+      if (req.method !== "POST" || req.path !== mova.caminho) return next();
+      if (!req.get("X-Gateway-Timestamp") || !req.get("X-Gateway-Nonce") || !req.get("X-Gateway-Signature")) return res.status(401).json({ error: "unauthorized" });
+      return rawMova(req, res, next);
+    });
+  }
   router.use(express.raw({ type: "*/*", limit: limiteCorpoBytes }));
   router.use(exigirHmac(segredo));
+  if (mova) router.use(mova.rota({ receptor: mova.receptor }));
   router.use(criarWhatsappGatewayRouter({ repo: repoEfetivo, organizacaoId, provider, inbox: inboxEfetivo }));
 
   return { path: "/internal/comunicacao", router, limiteCorpoBytes, limiteAuthStateBytes, repo: repoEfetivo };

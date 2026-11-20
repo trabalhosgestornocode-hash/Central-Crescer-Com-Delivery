@@ -17,6 +17,7 @@ import { CONSULTAS, pessoasDaUnidade } from "./consultas.js";
 import { ESCRITAS } from "./escritas.js";
 import { criarCofreTemporario } from "./cofreTemporario.js";
 import { lerPayloadSemConfiar } from "./mfaPeloProvedor.js";
+import { ACOES_MOVA, CONSULTAS_MOVA, executarAcaoMova } from "./movaRotas.js";
 
 const STATUS_POR_CODIGO = Object.freeze({
   [CODIGO.SESSAO_AUSENTE]: 401, [CODIGO.SESSAO_INVALIDA]: 401, [CODIGO.ESCOPO_NAO_AUTORIZADO]: 403, [CODIGO.PERMISSAO_INSUFICIENTE]: 403,
@@ -54,7 +55,7 @@ function responderErro(res, e, registrar) {
  * @param {() => {repositorio:object, adaptador:object, vinculos:object, relogio?:Function}} p.dependencias
  * @param {(evento:object)=>void} [p.registrar]
  */
-export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {} }) {
+export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {}, mova = null }) {
   const r = Router();
   // doc 37: importar SEM GUARDAR o arquivo — ele vive só na memória do processo (30 min) entre a prévia e a confirmação.
   const cofreTemporario = criarCofreTemporario();
@@ -187,6 +188,46 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
       }
     });
   }
+  // ---------------------------------------------------------------- MOVA (Centro Financeiro) — só com o MOVA montado
+  // `mova` é um getter assíncrono (fv2-integracao/mova.js); null/desligado ⇒ 404. Contexto SEMPRE da sessão (comIdentidade + preparar).
+  const exigirMova = async () => {
+    const m = mova ? await mova() : null;
+    if (!m) throw recusa(404, "MOVA_DESLIGADO", "O MOVA não está ativo neste ambiente.");
+    return m;
+  };
+  for (const [caminho, consulta] of Object.entries(CONSULTAS_MOVA)) {
+    r.get(`/api${caminho}`, async (req, res) => {
+      try {
+        const m = await exigirMova();
+        const corpo = await comIdentidade(req, async (sessao) => {
+          const { c } = await preparar(sessao);
+          return consulta({ ctx: c.contexto, mova: m.mova, worker: m.worker, enviador: m.enviador, chaves: m.chaves ?? null, controle: m.controle ?? null, orcamento: m.orcamento ?? null, params: req.query });
+        });
+        res.set("cache-control", "no-store");
+        return res.json(corpo);
+      } catch (e) { return responderErro(res, e, registrar); }
+    });
+  }
+  for (const [caminho, acao] of Object.entries(ACOES_MOVA)) {
+    r.post(`/acoes${caminho}`, corpoJson, async (req, res) => {
+      try {
+        if (!req.is("application/json")) throw recusa(415, "TIPO_DE_CONTEUDO", "Envie a ação como JSON.");
+        const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+        if (Object.keys(b).some((k) => !acao.campos.includes(k))) throw recusa(400, "CAMPO_DESCONHECIDO", "A ação recebeu campos que não aceita.");
+        const m = await exigirMova();
+        const corpo = await comIdentidade(req, async (sessao) => {
+          const { c, nucleo } = await preparar(sessao);
+          if (acao.escreveNoFinanceiro && c.escritaDaUnidade !== true) throw recusa(403, "ESCRITA_DA_UNIDADE_DESLIGADA", "Esta unidade ainda não foi liberada para lançamentos.");
+          const resultado = await executarAcaoMova(acao, { ctx: c.contexto, mova: m.mova, nucleo, b, controle: m.controle ?? null });
+          registrar({ tipo: "ACAO_MOVA", acao: caminho, unidadeId: c.contexto.unidadeId, pessoa: c.contexto.usuarioId });
+          return resultado ?? { ok: true };
+        });
+        res.set("cache-control", "no-store");
+        return res.json(corpo);
+      } catch (e) { return responderErro(res, e, registrar); }
+    });
+  }
+
   // ---------------------------------------------------------------- ATIVAÇÃO (administrador inicial + liberação)
   // Só com FV2_PROVISIONAMENTO_HABILITADO=1 (ligar para ativar e desligar em seguida). Quem age é ADMINISTRADOR DA EMPRESA
   // (vínculo da plataforma), com 2º fator RECENTE; a pessoa beneficiada é escolhida por ele (nunca automaticamente), tem

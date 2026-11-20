@@ -91,6 +91,10 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
     async notificarMensagemRecebida(payload) {
       return chamar("POST", `${R}/eventos/mensagem-recebida`, payload);
     },
+    /** MOVA — mensagem de grupo AUTORIZADO do Centro Financeiro (src/movaGrupo.js). Rota só existe no backend se o MOVA for montado. */
+    async notificarEventoMova(payload) {
+      return chamar("POST", `${R}/eventos/mova-grupo`, payload);
+    },
     /** Transição de status de uma mensagem já enviada (SENT/DELIVERED/READ/FAILED). */
     async notificarStatusProvider(payload) {
       return chamar("POST", `${R}/eventos/status-provider`, payload);

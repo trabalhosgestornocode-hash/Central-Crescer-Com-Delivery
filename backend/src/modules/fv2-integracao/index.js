@@ -21,6 +21,8 @@ import { criarRotasFinanceiroV2 } from "./rotas.js";
 import { criarFonteEntregadores } from "./fonteEntregadores.js";
 import { criarCofreNotasSupabase } from "./cofreNotasSupabase.js";
 import { criarAgendadorEntregadores, executarCiclo, lerConfiguracaoDoAgendador } from "./agendadorEntregadores.js";
+import { lerConfiguracaoMova, movaDaPlataforma, registrarDependenciasFv2 } from "./mova.js";
+export { iniciarMovaEmbutido, pararMovaEmbutido } from "./mova.js";
 
 /** Marca o trecho executado pelo agendador: só ele recebe sessão de banco da identidade de automação. */
 const automacao = new AsyncLocalStorage();
@@ -75,9 +77,11 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
       poolAutoridade.on("error", () => {});
       const autoridade = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa, registrar });
       // Agendador: sem requisição de pessoa. O BANCO continua exigindo concessão ativa da identidade de automação (FV020).
-      sessoes = { ...autoridade, emitir: async (e) => (automacao.getStore() === true
-        ? (await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, 300, "automacao:entregadores"])).rows[0].t
-        : autoridade.emitir(e)) };
+      // Trabalho SEM pessoa (agendador de entregadores, worker do MOVA): sessão pela função do banco, que exige concessão ATIVA
+      // da identidade na unidade. A referência identifica a automação na trilha (fv2_sessao_banco.referencia).
+      sessoes = { ...autoridade, emitir: async (e) => { const loja = automacao.getStore(); return loja
+        ? (await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, 300, loja === true ? "automacao:entregadores" : loja.referencia])).rows[0].t
+        : autoridade.emitir(e); } };
     } else {
       sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
     }
@@ -85,11 +89,16 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     const vinculos = criarVinculosDaPlataforma(supabase);
     const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
     const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
-    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
+    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, comAutomacaoMova: (fn) => automacao.run({ referencia: "automacao:mova" }, fn), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
   };
   const dependencias = () => (compartilhadas ??= montar());
   dependenciasDaPlataforma = dependencias;
+  registrarDependenciasFv2(dependencias);
+  // MOVA: só com MOVA_HABILITADO=1 (e o restante da configuração); senão as rotas /mova respondem 404.
+  const movaCfg = lerConfiguracaoMova(env);
+  const mova = movaCfg.habilitado ? async () => { const m = await movaDaPlataforma({ env, registrar }); return m ? { ...m, chaves: { modo: movaCfg.modo, recebimento: movaCfg.recebimento, processamento: movaCfg.processamento, ia: movaCfg.ia, envio: movaCfg.envio } } : null; } : null;
   return criarRotasFinanceiroV2({
+    mova,
     habilitado: cfg.habilitado,
     escritaHabilitada: cfg.habilitado && cfg.escritaHabilitada === true,
     homologacaoHabilitada: cfg.habilitado && cfg.homologacaoHabilitada === true,

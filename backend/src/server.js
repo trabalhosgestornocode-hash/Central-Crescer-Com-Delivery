@@ -90,9 +90,16 @@ iniciarServidorHttp({
       .then((m) => m.iniciarEntregadoresEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados), efeitosPermitidos: avaliarEfeitosExternos(process.env).permitido }))
       .then((r) => console.log(r.habilitado ? "   Entregadores próprios: agendador ATIVO" : `   Entregadores próprios: agendador DESABILITADO (${r.motivo})`))
       .catch(() => console.log("   Entregadores próprios: agendador NÃO INICIADO"));
+
+    // MOVA (só no backend de HOMOLOGAÇÃO): worker + respostas; desligado sem MOVA_HABILITADO/MOVA_PROCESSAMENTO_HABILITADO.
+    import("./modules/fv2-integracao/index.js")
+      .then((m) => m.iniciarMovaEmbutido({ env: process.env, log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }))
+      .then((r) => console.log(r.habilitado ? "   MOVA: worker ATIVO" : `   MOVA: DESABILITADO (${r.motivo})`))
+      .catch(() => console.log("   MOVA: NÃO INICIADO"));
   },
   antesDeFechar: [
     () => import("./modules/fv2-integracao/index.js").then((m) => m.pararEntregadoresEmbutido()).catch(() => {}),
+    () => import("./modules/fv2-integracao/index.js").then((m) => m.pararMovaEmbutido({ env: process.env })).catch(() => {}),
     () => purgaInbox.parar(),
     (sinal) => pararWorkerComunicacaoEmbutido(sinal),
     (sinal) => pararEventsIfoodEmbutido(sinal),

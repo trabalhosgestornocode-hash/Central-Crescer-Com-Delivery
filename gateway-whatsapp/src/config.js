@@ -8,6 +8,7 @@
 // test/seguranca-sem-supabase.test.js para a verificação executável disso.
 
 import { RETRY_TTL_MIN_HORAS, RETRY_TTL_MAX_HORAS, RETRY_MAX_REENVIOS_TETO } from "./retryLimites.js";
+import { lerGruposMova } from "./movaGrupo.js";
 
 // Checkpoint G.2.0 — parse NÃO permissivo (nunca `Number(env) || default`) para os caps do motor de
 // OFFLINE_RECOVERY abaixo. Ausente ou vazio (após trim) ⇒ `undefined` — mesmo tratamento que os outros flags deste
@@ -128,6 +129,18 @@ export const config = {
   // Ausente/vazio ⇒ null ⇒ nenhum envio a grupo (a listagem continua só leitura). Fornecido fora do formato ⇒ falha no boot.
   grupoInternoJid: String(process.env.WHATSAPP_GRUPO_INTERNO_JID ?? "").trim() || null,
 
+  // MOVA (src/movaGrupo.js): grupos AUTORIZADOS do Centro Financeiro cujo conteúdo é encaminhado ao backend por um caminho
+  // à parte. Ausente/vazio ⇒ DESLIGADO (padrão). Fora do formato ⇒ falha no boot (validarConfig).
+  movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
+  // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
+  movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
+  // Homologação privada (src/movaHomologacao.js): contato + confirmação explícita de modo. Ausente ⇒ desligada.
+  movaHomologacaoContato: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONTATO ?? "").trim(),
+  // Canal ISOLADO do MOVA (src/movaCanal.js): backend MOVA de homologação com URL e segredo próprios. Sem ele, MOVA desligado.
+  movaBackendUrl: String(process.env.WHATSAPP_MOVA_BACKEND_URL ?? "").trim(),
+  movaBackendSecret: process.env.WHATSAPP_MOVA_BACKEND_SECRET ?? "",
+  movaHomologacaoConfirmacao: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONFIRMACAO ?? "").trim(),
+
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
 
@@ -232,6 +245,7 @@ export function validarConfig() {
   if (config.grupoInternoJid !== null && !REGEX_JID_GRUPO.test(config.grupoInternoJid)) {
     throw new Error("WHATSAPP_GRUPO_INTERNO_JID precisa ser um JID de grupo (formato <numeros>@g.us)");
   }
+  lerGruposMova(config.movaGruposJid); // lança se algum JID estiver fora do formato
 
   // Checkpoint G.3.3 — mesma regra fail-closed dos caps de recovery acima: ausente = ok (fica no default de 1 MiB
   // de authHeadroom.js); um valor EXPLICITAMENTE fornecido e inválido (zero, negativo, decimal, texto) FALHA NO

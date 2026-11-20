@@ -17,7 +17,7 @@ import { qrParaSvg } from "./qrSvg.js";
 /**
  * @param {ReturnType<import('./baileysSession.js').criarSessaoBaileys>} sessao
  */
-export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
+export function criarRotas(sessao, { executarOperacao, retryCache, movaEnvioSoPeloCanal = false } = {}) {
   const router = Router();
   router.post("/whatsapp/operacao", async (req, res, next) => {
     try {
@@ -153,6 +153,17 @@ export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
       if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "texto inválido" });
       log("info", "grupo.recebido_pedido_envio", { idempotencyKey });
       res.json(await sessao.enviarGrupoInterno({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
+    } catch (e) { next(e); }
+  });
+
+  // MOVA — resposta de texto a grupo AUTORIZADO do MOVA, só com WHATSAPP_MOVA_ENVIO_HABILITADO=1 (decidido na sessão).
+  router.post("/whatsapp/mova/messages", async (req, res, next) => {
+    try {
+      // Com o canal isolado do MOVA ativo, o envio MOVA só entra por ele (o backend de produção nunca envia mensagens MOVA).
+      if (movaEnvioSoPeloCanal) return res.status(403).json({ error: "MOVA_ENVIO_SO_PELO_CANAL_ISOLADO" });
+      const { grupoJid, texto, idempotencyKey } = req.corpoJson ?? {};
+      if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "texto inválido" });
+      res.json(await sessao.enviarGrupoMova({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
     } catch (e) { next(e); }
   });
 
