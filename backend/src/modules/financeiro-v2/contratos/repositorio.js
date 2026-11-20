@@ -20,8 +20,11 @@
 //                                                { onde: { campo: valor, ... }, predicado } — `onde` é igualdade simples,
 //                                                que o adaptador pode resolver no banco
 //   buscarPorChave(escopo, tipo, chave)          busca pela chaveIdempotencia dentro do escopo
+//   buscarPorChaves(escopo, tipo, chaves)        o mesmo para várias chaves de uma vez → Map chave → registro
+//   inserirVarios(tipo, registros)               como inserir, para vários registros (mesmas regras; tudo ou nada na transação)
 //   travar(escopo, recurso, modo)                trava nomeada até o fim da transação; modo "COMPARTILHADA" | "EXCLUSIVA"
 //   anexarHistorico(evento)                      somente acréscimo
+//   anexarHistoricos(eventos)                    o mesmo para vários eventos, na ordem dada
 //   listarHistorico(escopo, filtro?)             filtro como em listar; devolve na ordem em que os eventos foram gravados
 //   paginar(escopo, tipo, consulta)              LISTA paginada resolvida NO BANCO (Execução 06C): filtros, ordem, LIMITE e a
 //                                                contagem total são calculados pela persistência — nada é carregado inteiro.
@@ -41,7 +44,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
  */
 export const ORDEM_DE_GRAVACAO = Symbol.for("financeiro-v2.ordemDeGravacao");
 
-export const METODOS_DA_TRANSACAO = Object.freeze(["inserir", "atualizar", "obter", "listar", "buscarPorChave", "travar", "anexarHistorico", "listarHistorico", "paginar", "agregar"]);
+export const METODOS_DA_TRANSACAO = Object.freeze(["inserir", "atualizar", "obter", "listar", "buscarPorChave", "buscarPorChaves", "inserirVarios", "travar", "anexarHistorico", "anexarHistoricos", "listarHistorico", "paginar", "agregar"]);
 export const LIMITE_DA_PAGINA = 500;
 const PROIBIDOS = Object.freeze(["remover", "excluir", "apagar", "deletar", "delete", "remove"]);
 

@@ -104,6 +104,24 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigi
     return registro;
   }
 
+  /**
+   * Vários registros do MESMO tipo de uma vez: cada um idêntico ao de `criar` (escopo, versão 1, autoria) e com o mesmo evento
+   * de CRIAÇÃO no histórico, gravados em lote na transação corrente (tudo ou nada). Ordem de gravação = ordem da lista.
+   */
+  async function criarVarios(tx, ctx, tipo, lista, justificativa = null) {
+    const em = agora();
+    const registros = lista.map((dados) => ({
+      id: dados.id ?? gerarId(), organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId, ...dados,
+      versao: 1, criadoEm: em, criadoPor: ctx.usuarioId, atualizadoEm: em, atualizadoPor: ctx.usuarioId,
+    }));
+    await tx.inserirVarios(tipo, registros);
+    await tx.anexarHistoricos(registros.map((registro) => ({
+      id: gerarId(), organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId,
+      registroTipo: tipo, registroId: registro.id, evento: EVENTO_HISTORICO.CRIACAO, antes: null, depois: registro, justificativa, usuarioId: ctx.usuarioId, em,
+    })));
+    return registros;
+  }
+
   /** Alteração SEMPRE versionada e com antes/depois no histórico. Nunca muda id, escopo nem autoria de criação. */
   async function alterar(tx, ctx, tipo, atual, mudancas, evento, justificativa = null) {
     const novo = { ...atual, ...mudancas, id: atual.id, organizacaoId: atual.organizacaoId, unidadeId: atual.unidadeId, criadoEm: atual.criadoEm, criadoPor: atual.criadoPor, versao: atual.versao + 1, atualizadoEm: agora(), atualizadoPor: ctx.usuarioId };
@@ -256,7 +274,7 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigi
   }
 
   return {
-    gerarId, agora, hoje, executar, consultar, provisionar, autorizarContexto, exigirConcessaoVigente, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, exigirCompetenciasDoVinculo,
+    gerarId, agora, hoje, executar, consultar, provisionar, autorizarContexto, exigirConcessaoVigente, historico, criar, criarVarios, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, exigirCompetenciasDoVinculo,
     chaveDe, jaRegistrado, exigirNaoFutura, categoriaPorCodigo, categoriaLancavel, categoriaDoSistema, lancar, cancelarLancamento, exigirDocumentos,
   };
 }

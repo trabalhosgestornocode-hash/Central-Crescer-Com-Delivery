@@ -185,6 +185,10 @@ function traduzir(e) {
   return e;
 }
 
+/** Lotes: chaves por consulta e parâmetros por INSERT (o PostgreSQL aceita até 65.535 parâmetros por comando). */
+const LOTE_DE_CHAVES = 1000;
+const LIMITE_DE_PARAMETROS = 30000;
+
 const esperar = (ms) => new Promise((resolver) => { setTimeout(resolver, ms); });
 
 function criarTx(cliente, { somenteLeitura }) {
@@ -208,6 +212,23 @@ function criarTx(cliente, { somenteLeitura }) {
     const cond = condicoes(def, escopo, f.onde, comExtras);
     const { rows } = await consulta(`select ${selecao(def, comExtras)} from ${def.tabela} where ${cond.sql} order by seq${sufixo}`, cond.valores);
     return rows.map((linha) => registroDe(def, linha, { comExtras })).filter(f.predicado);
+  }
+
+  /** Um INSERT de várias linhas por lote, sem passar do limite de parâmetros do PostgreSQL. Todas as gravações têm as mesmas colunas. */
+  async function inserirEmLotes(def, gravacoes) {
+    if (!gravacoes.length) return;
+    const colunas = gravacoes[0].colunas;
+    const porLote = Math.max(1, Math.floor(LIMITE_DE_PARAMETROS / colunas.length));
+    for (let i = 0; i < gravacoes.length; i += porLote) {
+      const valores = [];
+      const tuplas = gravacoes.slice(i, i + porLote).map((g) => {
+        if (g.colunas.length !== colunas.length) falhar(CODIGO.REPOSITORIO_INVALIDO, "Lote com colunas diferentes.");
+        const base = valores.length;
+        valores.push(...g.valores);
+        return `(${g.marcas.map((m, k) => m.replace(/^\$\d+/, `$${base + k + 1}`)).join(", ")})`;
+      });
+      await consulta(`insert into ${def.tabela} (${colunas.join(", ")}) values ${tuplas.join(", ")}`, valores);
+    }
   }
 
   return {
@@ -263,6 +284,41 @@ function criarTx(cliente, { somenteLeitura }) {
     async buscarPorChave(escopo, tipo, chave) {
       const [r] = await selecionar(definicao(tipo), escopo, { onde: { chaveIdempotencia: chave } }, { comExtras: true });
       return r ?? null;
+    },
+
+    /** Várias chaves numa só consulta por lote (em vez de uma ida ao banco por chave): Map chave → registro. */
+    async buscarPorChaves(escopo, tipo, chaves) {
+      const def = definicao(tipo);
+      const coluna = def.campos.chaveIdempotencia?.coluna ?? falhar(CODIGO.REPOSITORIO_INVALIDO, "Tipo sem chave de idempotência.", { tipo });
+      const achados = new Map();
+      const unicas = [...new Set(chaves)];
+      for (let i = 0; i < unicas.length; i += LOTE_DE_CHAVES) {
+        const cond = condicoes(def, escopo, {}, true);
+        const { rows } = await consulta(
+          `select ${selecao(def, true)} from ${def.tabela} where ${cond.sql} and ${coluna} = any($${cond.valores.length + 1}::text[]) order by seq`,
+          [...cond.valores, unicas.slice(i, i + LOTE_DE_CHAVES)],
+        );
+        for (const linha of rows) {
+          const r = registroDe(def, linha, { comExtras: true });
+          if (!achados.has(r.chaveIdempotencia)) achados.set(r.chaveIdempotencia, r);
+        }
+      }
+      return achados;
+    },
+
+    /** Inserção em lote (INSERT de várias linhas): mesmas colunas, regras, gatilhos e RLS de `inserir`, com menos idas ao banco. */
+    async inserirVarios(tipo, registros) {
+      exigirEscrita();
+      if (tipo === "CONCESSAO") falhar(CODIGO.REPOSITORIO_INVALIDO, "Concessão só é gravada uma a uma.");
+      registros.forEach(exigirEscopoDoRegistro);
+      const def = definicao(tipo);
+      await inserirEmLotes(def, registros.map((r) => gravacaoDe(def, r, { comExtras: true })));
+    },
+
+    async anexarHistoricos(eventos) {
+      exigirEscrita();
+      eventos.forEach(exigirEscopoDoRegistro);
+      await inserirEmLotes(HISTORICO, eventos.map((e) => gravacaoDe(HISTORICO, e, { comExtras: false })));
     },
 
     /** Trava consultiva do PostgreSQL, liberada sozinha no fim da transação. Em leitura não há o que travar. */

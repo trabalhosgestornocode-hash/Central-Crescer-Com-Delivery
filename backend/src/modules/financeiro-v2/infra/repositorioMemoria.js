@@ -63,6 +63,21 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
       const r = Object.values(tabela(tipo)).find((x) => mesmoEscopo(x, escopo) && x.chaveIdempotencia === chave);
       return r ? copia(r) : null;
     },
+    /** Várias chaves de uma vez: Map chave → registro (só as encontradas). */
+    buscarPorChaves(escopo, tipo, chaves) {
+      const procuradas = new Set(chaves);
+      const achados = new Map();
+      for (const r of Object.values(tabela(tipo))) {
+        if (mesmoEscopo(r, escopo) && procuradas.has(r.chaveIdempotencia) && !achados.has(r.chaveIdempotencia)) achados.set(r.chaveIdempotencia, copia(r));
+      }
+      return achados;
+    },
+    inserirVarios(tipo, registros) {
+      for (const r of registros) this.inserir(tipo, r);
+    },
+    anexarHistoricos(eventos) {
+      for (const e of eventos) this.anexarHistorico(e);
+    },
     travar() {
       // Transações em memória já são serializadas: a trava é sempre concedida.
     },
