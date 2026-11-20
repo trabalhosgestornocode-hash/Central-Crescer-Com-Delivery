@@ -49,7 +49,13 @@ export const CONSULTAS_MOVA = Object.freeze({
     return { fila: await mova.fila.estatisticas(), respostas: await mova.armazenamento.saida.contagem(), worker: worker?.estado() ?? null, envioHabilitado: Boolean(enviador?.habilitado), chaves,
       controle: controle ? await controle.estado() : null, orcamentoIa: orcamento ? await orcamento.resumo().catch(() => null) : null };
   },
-  "/mova/erros": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: await mova.fila.falhas(50) }; },
+  // Falhas da fila SÓ das conversas que atendem a unidade da sessão (H-1/isolamento).
+  "/mova/erros": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.consultas ? await mova.consultas.falhasDaFila(escopo(ctx)) : [] }; },
+  // H-1: falhas GERAIS (sem unidade identificada) — só metadados; exige configurar.
+  "/mova/falhas-gerais": async ({ ctx, mova }) => {
+    if (!ctx?.permissoes?.includes(ACAO.CONFIGURAR)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Falhas gerais do MOVA exigem permissão de configuração.");
+    return mova.consultas.falhasGerais(escopo(ctx));
+  },
   // Arquivo da evidência: só da unidade da sessão, com conferência de integridade; exige financeiro_v2.documentos.
   "/mova/arquivo": async ({ ctx, mova, params }) => {
     if (!ctx?.permissoes?.includes(ACAO.DOCUMENTOS)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Abrir documentos exige permissão de documentos.");
@@ -79,7 +85,17 @@ export const ACOES_MOVA = Object.freeze({
       return controle.estado();
     } },
   "/mova/reprocessar": { campos: ["eventoId"], escreveNoFinanceiro: false,
-    fazer: ({ ctx, mova, b }) => mova.aprovador.reprocessar(ctx, { eventoId: b.eventoId }) },
+    fazer: async ({ ctx, mova, b }) => {
+      const eventoId = typeof b.eventoId === "string" && /^[A-Za-z0-9_.:@-]{1,160}$/.test(b.eventoId) ? b.eventoId : null;
+      if (!eventoId) throw recusa(400, "PARAMETRO_INVALIDO", "Evento inválido.");
+      // 1) falha da fila de conversa da unidade ⇒ fluxo de sempre (aprovar)
+      if (await mova.consultas.falhaDaFilaNoEscopo({ ...escopo(ctx), eventoId })) return mova.aprovador.reprocessar(ctx, { eventoId });
+      // 2) falha de leitura SEM unidade (H-1) ⇒ exige configurar; condicional e auditado
+      if (!ctx?.permissoes?.includes(ACAO.CONFIGURAR)) throw recusa(404, "EVENTO_NAO_ESTA_EM_FALHA", "Evento não encontrado em falha nesta unidade.");
+      if (!(await mova.fila.reprocessarLeitura(eventoId, escopo(ctx)))) throw recusa(404, "EVENTO_NAO_ESTA_EM_FALHA", "Evento não encontrado em falha nesta unidade.");
+      await mova.armazenamento.auditoria.registrar({ acao: "FALHA_GERAL_REPROCESSADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: eventoId });
+      return { ok: true };
+    } },
 });
 
 /** Executa uma ação já com contexto verificado; erros do aprovador viram HTTP fechados. */

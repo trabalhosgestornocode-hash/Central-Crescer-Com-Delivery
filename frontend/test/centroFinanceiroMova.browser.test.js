@@ -40,6 +40,7 @@ before(async () => {
       if (caminho === "/api/fv2/mova/estado") return jsonRes(res, 200, { fila: { porEstado: { CONCLUIDO: 3 } }, respostas: { PENDENTE: 1 }, envioHabilitado: false,
         chaves: { modo: api.modo === "homolog" ? "HOMOLOGACAO" : "SIMULACAO", recebimento: false, ia: false, envio: false },
         controle: { suspenso: false, recebimento: true, processamento: true, ia: true, envio: false }, orcamentoIa: { chamadas: 12, limiteChamadas: 200, custoUsd: 0.31, limiteUsd: 10, tokensEntrada: 50000, tokensSaida: 6000 } });
+      if (caminho === "/api/fv2/mova/falhas-gerais") return jsonRes(res, 200, { total: 1, porTipo: { FALHA_LEITURA: 1 }, pendentes: 2, itens: [{ eventoId: "bly:GERAL1", tipo: "FALHA_LEITURA", motivo: "EXTRATOR_FALHOU:IA_DESLIGADA", em: "2026-11-20T15:00:00Z", estado: "CONCLUIDO", tentativas: 1, reprocessavel: true }] });
       if (caminho === "/api/fv2/mova/erros") return jsonRes(res, 200, { itens: api.modo === "homolog" ? [{ eventoId: "bly:FALHA1", tentativas: 5, ultimoErro: "IA_INDISPONIVEL" }] : [] });
       if (caminho === "/api/fv2/caixa-e-bancos") return jsonRes(res, 200, { contas: [{ id: "c-1", nome: "Banco Sintético", tipo: "BANCARIA", ativa: true }] });
       return jsonRes(res, 404, { codigo: "NAO_ENCONTRADO" });
@@ -171,9 +172,12 @@ test("HOMOLOGAÇÃO: faixa inconfundível; aba Processamento com orçamento, int
     assert.match(t, /12 de 200/);
     assert.match(t, /US\$ 0\.31 de US\$ 10\.00/);
     assert.match(t, /IA_INDISPONIVEL/);
+    assert.match(t, /Falhas gerais \(sem unidade identificada\)/);
+    assert.match(t, /1 falha\(s\) · FALHA_LEITURA: 1 · 2 pendente\(s\)/);
+    assert.match(t, /EXTRATOR_FALHOU:IA_DESLIGADA/);
     await pagina.click("button[data-acao=controle][data-chave=suspenso]");
     await pagina.waitForSelector("text=Feito.");
-    await pagina.click("button[data-acao=reprocessar]");
+    await pagina.click("button[data-acao=reprocessar][data-evento='bly:FALHA1']");
     await pagina.waitForFunction(() => document.querySelectorAll("[role=status]").length > 0);
     assert.deepEqual(api.posts.map((p) => [p.caminho, p.corpo]), [
       ["/api/fv2/acoes/mova/controle", { suspenso: true, motivo: "Centro Financeiro" }],

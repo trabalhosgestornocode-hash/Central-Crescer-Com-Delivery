@@ -58,7 +58,11 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async registrar(entrada) { historico.push(Object.freeze({ id: gerarId(), em: relogio().toISOString(), ...entrada })); },
       async listar({ organizacaoId, unidadeId }) { return historico.filter((h) => (h.organizacaoId ?? null) === organizacaoId && (h.unidadeId ?? null) === unidadeId); },
       async todos() { return [...historico]; },
-      async temDecisao(eventoId) { return historico.some((h) => h.eventoId === eventoId && h.decisao !== "FALHOU"); },
+      async temDecisao(eventoId) {
+        const doEvento = historico.filter((h) => h.eventoId === eventoId);
+        const corte = doEvento.map((h) => h.decisao).lastIndexOf("REPROCESSAR");
+        return doEvento.slice(corte + 1).some((h) => !["FALHOU", "REPROCESSAR"].includes(h.decisao));
+      },
     }),
     documentos: Object.freeze({
       async visto(sha256) { return documentos.get(sha256) ?? null; },

@@ -33,7 +33,9 @@ export async function carregarDados() {
   const caixa = await ler("/api/fv2/mova/caixa");
   if (caixa.status === 404 && caixa.dados?.codigo === "MOVA_DESLIGADO") return { fonte: "MOVA_DESLIGADO", unidade: u };
   if (!caixa.ok) return { fonte: "ERRO", mensagem: caixa.dados?.mensagem ?? "Não foi possível ler a Caixa de Entrada." };
-  const [estadoMova, contas, erros] = await Promise.all([ler("/api/fv2/mova/estado"), ler("/api/fv2/caixa-e-bancos"), ler("/api/fv2/mova/erros")]);
+  const podeConfigurarMova = (u.permissoes ?? []).includes("financeiro_v2.configurar");
+  const [estadoMova, contas, erros, gerais] = await Promise.all([ler("/api/fv2/mova/estado"), ler("/api/fv2/caixa-e-bancos"), ler("/api/fv2/mova/erros"),
+    podeConfigurarMova ? ler("/api/fv2/mova/falhas-gerais") : Promise.resolve({ ok: false })]);
   const itens = [...caixa.dados.itens, ...caixa.dados.aguardandoUnidade];
   const incompleta = itens.some((i) => i.proposta?.bloqueioDeAplicacao === "REQUISITOS_FINANCEIROS_INCOMPLETOS");
   return {
@@ -48,6 +50,7 @@ export async function carregarDados() {
     podeAbrirDocumentos: (u.permissoes ?? []).includes("financeiro_v2.documentos"),
     homologacao: estadoMova.ok && estadoMova.dados?.chaves?.modo === "HOMOLOGACAO",
     erros: erros.ok ? erros.dados?.itens ?? [] : [],
+    falhasGerais: gerais.ok ? gerais.dados : null, // H-1: só com configurar; só metadados
     contas: (contas.ok ? contas.dados?.contas ?? [] : []).filter((c) => c.ativa !== false).map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo })),
   };
 }

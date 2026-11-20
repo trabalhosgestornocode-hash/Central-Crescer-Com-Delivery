@@ -120,7 +120,11 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q(`select * from mova.decisao where organizacao_id is not distinct from $1 and unidade_id is not distinct from $2 order by seq`, [organizacaoId, unidadeId]);
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
       },
-      async temDecisao(eventoId) { return (await q("select 1 from mova.decisao where evento_id = $1 and decisao <> 'FALHOU' limit 1", [eventoId])).rowCount > 0; },
+      // Decidido = existe decisão final DEPOIS da última liberação de reprocessamento (REPROCESSAR, ato auditado do administrador).
+      async temDecisao(eventoId) {
+        return (await q(`select 1 from mova.decisao d where d.evento_id = $1 and d.decisao not in ('FALHOU','REPROCESSAR')
+                          and d.seq > coalesce((select max(r.seq) from mova.decisao r where r.evento_id = $1 and r.decisao = 'REPROCESSAR'), 0) limit 1`, [eventoId])).rowCount > 0;
+      },
       async todos() {
         const r = await q("select * from mova.decisao order by seq");
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
@@ -284,6 +288,26 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
     async reprocessar(eventoId) {
       return (await q("update mova.fila set estado = 'PENDENTE', proxima_em = '-infinity', tentativas = 0, ultimo_erro = null where evento_id = $1 and estado = 'FALHOU'", [eventoId])).rowCount === 1;
     },
+    /**
+     * H-1: libera para nova leitura um evento cuja ÚLTIMA decisão é FALHA_LEITURA sem unidade, de conversa que atende o escopo.
+     * Numa transação: registra REPROCESSAR (sem unidade, sem conteúdo) e devolve à fila. Condicional ⇒ repetir não duplica.
+     */
+    async reprocessarLeitura(eventoId, { organizacaoId, unidadeId }) {
+      const c = await pool.connect();
+      try {
+        await c.query("begin");
+        const alvo = await c.query(`select 1 from mova.fila f
+            where f.evento_id = $1 and f.estado = 'CONCLUIDO'
+              and f.carga->>'grupoId' in (select gu.grupo_jid from mova.grupo_unidade gu where gu.organizacao_id = $2 and gu.unidade_id = $3)
+              and (select d.decisao || '|' || coalesce(d.unidade_id::text, '') from mova.decisao d where d.evento_id = $1 order by d.seq desc limit 1) = 'FALHA_LEITURA|'
+            for update of f`, [eventoId, organizacaoId, unidadeId]);
+        if (alvo.rowCount !== 1) { await c.query("rollback"); return false; }
+        await c.query("insert into mova.decisao (evento_id, decisao, motivo) values ($1, 'REPROCESSAR', 'LIBERADO_PELO_ADMINISTRADOR')", [eventoId]);
+        await c.query("update mova.fila set estado = 'PENDENTE', proxima_em = '-infinity', tentativas = 0, ultimo_erro = null, resultado = null where evento_id = $1", [eventoId]);
+        await c.query("commit");
+        return true;
+      } catch (e) { await c.query("rollback").catch(() => {}); throw e; } finally { c.release(); }
+    },
   });
 }
 
@@ -345,7 +369,31 @@ export function criarConsultasPostgres({ pool }) {
       left join mova.evidencia ev on ev.sha256 = e.documento_sha256
       left join mova.documento d on d.sha256 = e.documento_sha256 and d.evento_id = e.evento_id
       left join mova.proposta p on p.evento_id = e.evento_id`;
+  // Conversas que atendem a unidade (escopo das falhas sem unidade). Só metadados saem destas consultas — nunca texto ou documento.
+  const CONVERSAS = "select gu.grupo_jid from mova.grupo_unidade gu where gu.organizacao_id = $1 and gu.unidade_id = $2";
   return Object.freeze({
+    /** H-1: falhas GERAIS (sem unidade identificada) das conversas que atendem a unidade + pendentes dessas conversas. */
+    async falhasGerais({ organizacaoId, unidadeId, limite = 100 }) {
+      const itens = (await q(`select d.evento_id as "eventoId", d.decisao as tipo, d.motivo, d.em, f.estado, f.tentativas
+          from mova.decisao d join mova.fila f on f.evento_id = d.evento_id
+         where d.unidade_id is null and d.decisao not in ('IGNORADO','REPROCESSAR')
+           and d.seq = (select max(x.seq) from mova.decisao x where x.evento_id = d.evento_id)
+           and f.carga->>'grupoId' in (${CONVERSAS})
+         order by d.seq desc limit $3`, [organizacaoId, unidadeId, limite])).rows;
+      const pend = (await q(`select count(*)::int n from mova.fila f where f.estado in ('PENDENTE','PROCESSANDO') and f.carga->>'grupoId' in (${CONVERSAS})`, [organizacaoId, unidadeId])).rows[0].n;
+      const porTipo = {};
+      for (const i of itens) porTipo[i.tipo] = (porTipo[i.tipo] ?? 0) + 1;
+      return { total: itens.length, porTipo, pendentes: pend, itens: itens.map((i) => ({ ...i, reprocessavel: i.tipo === "FALHA_LEITURA" && i.estado === "CONCLUIDO" })) };
+    },
+    /** Falhas da FILA restritas às conversas da unidade (antes: todas as conversas). */
+    async falhasDaFila({ organizacaoId, unidadeId, limite = 50 }) {
+      return (await q(`select f.evento_id as "eventoId", f.tentativas, f.ultimo_erro as "ultimoErro", f.atualizado_em as em from mova.fila f
+         where f.estado = 'FALHOU' and f.carga->>'grupoId' in (${CONVERSAS}) order by f.atualizado_em desc limit $3`, [organizacaoId, unidadeId, limite])).rows;
+    },
+    /** O evento está em falha na fila e é de conversa que atende a unidade? */
+    async falhaDaFilaNoEscopo({ organizacaoId, unidadeId, eventoId }) {
+      return (await q(`select 1 from mova.fila f where f.evento_id = $3 and f.estado = 'FALHOU' and f.carga->>'grupoId' in (${CONVERSAS})`, [organizacaoId, unidadeId, eventoId])).rowCount === 1;
+    },
     async caixaDeEntrada({ organizacaoId, unidadeId, limite = 100 }) {
       const daUnidade = await q(`${SQL} where exists (select 1 from mova.decisao x where x.evento_id = e.evento_id and x.organizacao_id = $1 and x.unidade_id = $2)
                                  order by e.recebido_em desc limit $3`, [organizacaoId, unidadeId, limite]);
