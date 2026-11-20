@@ -137,3 +137,9 @@ test("7b. sangria da SAIPOS confirmada é associada à conta já paga, sem segun
   assert.deepEqual([previa.resumo.novas.quantidade, previa.resumo.jaLancadasManualmente.quantidade], [0, 1]);
   assert.equal((await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).length, 1);
 });
+test("extra reconhecido de quem não tem taxa na semana não vira 'conta manual já lançada' na prévia nem no fechamento", async () => {
+  const m = await montar();
+  await m.n.registrarExtraDoEntregador(m.c, extra({ entregador: "beta", entregadorNome: "Beta", situacao: "PENDENTE", meioPagamento: undefined }));
+  assert.ok(!(await m.n.previaDoFechamentoSemanal(m.c, { inicio: SEG })).pendencias.some((p) => p.codigo === "CONTA_MANUAL_SEM_ENTREGADOR"));
+  assert.equal((await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG })).situacao, "CONSOLIDADA");
+});

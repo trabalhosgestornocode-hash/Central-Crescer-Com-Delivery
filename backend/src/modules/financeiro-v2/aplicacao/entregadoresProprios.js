@@ -12,8 +12,8 @@ import { ACAO } from "../dominio/contexto.js";
 import { somarLista } from "../dominio/dinheiro.js";
 import {
   CATEGORIA_ENTREGADORES, CODIGO_PENDENCIA, DECISAO_DIVERGENCIA, DECISAO_DUPLICIDADE, FUSO_OPERACIONAL, SITUACAO_DOCUMENTAL as DOC, SITUACAO_PAGAMENTO, SITUACAO_SEMANA,
-  chaveDaSemana, chaveDeRegistro, chaveDoFechamento, compararComFechamento, competenciaDaSemana, consolidar, contasManuaisCandidatas, descricaoDaConta, exigirSegunda, exigirTransicao,
-  idExternoDaConta, pastaDoDocumento, pendenciasDaApuracao, rotuloDaSemana, semanaDe, semanaEncerrada, situacaoDoPagamento,
+  chaveDaSemana, chaveDeRegistro, chaveDoFechamento, compararComFechamento, competenciaDaSemana, consolidar, contasManuaisCandidatas, contasManuaisSemEntregador, descricaoDaConta, exigirSegunda, exigirTransicao,
+  idExternoDaConta, pastaDoDocumento, pendenciaDeContasManuais, pendenciasDaApuracao, rotuloDaSemana, semanaDe, semanaEncerrada, situacaoDoPagamento,
 } from "../dominio/entregadoresProprios.js";
 import { diaDaSemana, exigirData, hojeEm, somarDias } from "../dominio/tempo.js";
 import { exigirTexto, exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
@@ -114,8 +114,9 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     const historica = !inicioDaOperacao || inicio < inicioDaOperacao;
     if (historica && e.reconciliacao !== true) falhar(CODIGO.OPERACAO_INVALIDA, "Semana anterior ao início do fechamento automático: confira a prévia e confirme a reconciliação.", { motivo: "HISTORICO_EXIGE_RECONCILIACAO" });
     if (historica && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Reconciliação de semana histórica exige justificativa.", { campo: "justificativa" });
-    if ((e.aceitarDiasSemDados === true || e.aceitarTriagem === true) && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Aceitar dia sem dados ou triagem pendente exige justificativa.", { campo: "justificativa" });
+    if ((e.aceitarDiasSemDados === true || e.aceitarTriagem === true || e.aceitarContasManuais === true) && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Aceitar dia sem dados, triagem pendente ou conta manual já lançada exige justificativa.", { campo: "justificativa" });
     if (e.aceitarTriagem === true && origem !== "MANUAL") falhar(CODIGO.OPERACAO_INVALIDA, "Só uma pessoa pode aceitar triagem pendente.");
+    if (e.aceitarContasManuais === true && origem !== "MANUAL") falhar(CODIGO.OPERACAO_INVALIDA, "Só uma pessoa pode aceitar conta manual já lançada.");
     if (e.adiamentos !== undefined && origem !== "MANUAL") falhar(CODIGO.OPERACAO_INVALIDA, "Só uma pessoa pode adiar o pagamento de pedidos.");
     const adiados = validarAdiamentos(e, inicio, justificativa);
     const apuracao = await apurar(cx0, inicio);
@@ -123,15 +124,17 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
       await tx.travar(cx, chaveDaSemana(inicio), "EXCLUSIVA");
       const atual = await obterSemana(tx, cx, inicio);
       if (atual?.situacao === SITUACAO_SEMANA.CONSOLIDADA) return { situacao: atual.situacao, repetido: true, contasCriadas: 0, semana: atual };
-      const pendencias = [...pendenciasDaApuracao(apuracao, inicio, { aceitarDiasSemDados: e.aceitarDiasSemDados === true, aceitarTriagem: e.aceitarTriagem === true }), ...(await bloqueiosDaTransacao(tx, cx, inicio))];
+      const grupos = consolidar(apuracao.entregas).filter((g) => g.valorCentavos > 0);
+      const dosExtras = new Set((await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).map((x) => x.obrigacaoId).filter(Boolean)); // extra reconhecido não é duplicidade das taxas
+      const [obrigacoes, contrapartes, lancamentos] = [(await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => !dosExtras.has(o.id)), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
+      const contasManuais = contasManuaisSemEntregador({ nomes: grupos.map((g) => g.nome), inicio, obrigacoes, contrapartes, lancamentos });
+      const pendencias = [...pendenciasDaApuracao(apuracao, inicio, { aceitarDiasSemDados: e.aceitarDiasSemDados === true, aceitarTriagem: e.aceitarTriagem === true }), ...(await bloqueiosDaTransacao(tx, cx, inicio)),
+        ...(e.aceitarContasManuais === true ? [] : pendenciaDeContasManuais(contasManuais))];
       const execucao = { em: b.agora(), origem, por: cx.usuarioId };
       if (pendencias.length) {
         const semana = await gravarSemana(tx, cx, inicio, SITUACAO_SEMANA.PENDENTE, { pendencias, ultimaExecucao: execucao }, "Fechamento semanal pendente: a apuração operacional ainda não está completa.");
         return { situacao: semana.situacao, pendencias, contasCriadas: 0, semana };
       }
-      const grupos = consolidar(apuracao.entregas).filter((g) => g.valorCentavos > 0);
-      const dosExtras = new Set((await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).map((x) => x.obrigacaoId).filter(Boolean)); // extra reconhecido não é duplicidade das taxas
-      const [obrigacoes, contrapartes, lancamentos] = [(await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => !dosExtras.has(o.id)), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
       const s = semanaDe(inicio);
       let contasCriadas = 0;
       const fechamentos = [];
@@ -154,7 +157,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
           dados: { chaveEstavel: chave, referencia: g.referencia, entregasCentavos: g.entregasCentavos, ajustesCentavos: g.ajustesCentavos, porDia: g.porDia, itens: g.itens, notas: [], conferencias: [], duplicidade: candidatas.length ? { situacao: "ABERTA", candidatas } : null, adiamentos, complementos: contasAdiadas },
         }, "Retrato da apuração semanal do parser Foody Delivery."));
       }
-      const semana = await gravarSemana(tx, cx, inicio, SITUACAO_SEMANA.CONSOLIDADA, { pendencias: [], ultimaExecucao: execucao, consolidadoEm: b.agora(), origem, ...(historica ? { reconciliacao: { justificativa, por: cx.usuarioId } } : {}), ...(e.aceitarDiasSemDados === true ? { diasSemDadosAceitos: justificativa } : {}), ...(e.aceitarTriagem === true ? { triagemAceita: justificativa } : {}), retrato: grupos.map(({ chave, nome, valorCentavos, itens }) => ({ chave, nome, valorCentavos, itens })), divergencias: [] }, justificativa ?? "Semana consolidada a partir do parser Foody Delivery.");
+      const semana = await gravarSemana(tx, cx, inicio, SITUACAO_SEMANA.CONSOLIDADA, { pendencias: [], ultimaExecucao: execucao, consolidadoEm: b.agora(), origem, ...(historica ? { reconciliacao: { justificativa, por: cx.usuarioId } } : {}), ...(e.aceitarDiasSemDados === true ? { diasSemDadosAceitos: justificativa } : {}), ...(e.aceitarTriagem === true ? { triagemAceita: justificativa } : {}), ...(e.aceitarContasManuais === true && contasManuais.length ? { contasManuaisAceitas: { justificativa, contas: contasManuais.map((c) => c.obrigacaoId) } } : {}), retrato: grupos.map(({ chave, nome, valorCentavos, itens }) => ({ chave, nome, valorCentavos, itens })), divergencias: [] }, justificativa ?? "Semana consolidada a partir do parser Foody Delivery.");
       return { situacao: semana.situacao, pendencias: [], contasCriadas, entregadores: fechamentos.length, duplicidades: fechamentos.filter((f) => f.dados.duplicidade).length, totalCentavos: somarLista(fechamentos, (f) => f.valorCentavos), semana };
     });
   }
@@ -254,9 +257,12 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
       const inicio = exigirSegunda(e.inicio);
       const apuracao = await apurar(contexto(ctx), inicio);
       return b.consultar(ctx, async (cx, tx) => {
-        const [obrigacoes, contrapartes, lancamentos] = [await tx.listar(cx, TIPO.OBRIGACAO), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
+        // Mesmo critério do fechamento: conta de extra reconhecido não é duplicidade das taxas da semana.
+        const dosExtras = new Set((await tx.listar(cx, TIPO.EXTRA_ENTREGADOR)).map((x) => x.obrigacaoId).filter(Boolean));
+        const [obrigacoes, contrapartes, lancamentos] = [(await tx.listar(cx, TIPO.OBRIGACAO)).filter((o) => !dosExtras.has(o.id)), await tx.listar(cx, TIPO.CONTRAPARTE), await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_ENTREGADORES } })];
         const itens = consolidar(apuracao.entregas).filter((g) => g.valorCentavos > 0).map((g) => ({ chave: g.chave, nome: g.nome, entregas: g.entregas, valorCentavos: g.valorCentavos, candidatas: contasManuaisCandidatas({ nome: g.nome, inicio, obrigacoes, contrapartes, lancamentos }) }));
-        return { inicio, rotulo: rotuloDaSemana(inicio), vencimento: semanaDe(inicio).vencimento, historica: !inicioDaOperacao || inicio < inicioDaOperacao, pendencias: [...pendenciasDaApuracao(apuracao, inicio), ...(await bloqueiosDaTransacao(tx, cx, inicio))], itens, totalCentavos: somarLista(itens, (i) => i.valorCentavos), comDuplicidade: itens.filter((i) => i.candidatas.length).length };
+        const contasManuais = contasManuaisSemEntregador({ nomes: itens.map((i) => i.nome), inicio, obrigacoes, contrapartes, lancamentos });
+        return { inicio, rotulo: rotuloDaSemana(inicio), vencimento: semanaDe(inicio).vencimento, historica: !inicioDaOperacao || inicio < inicioDaOperacao, pendencias: [...pendenciasDaApuracao(apuracao, inicio), ...(await bloqueiosDaTransacao(tx, cx, inicio)), ...pendenciaDeContasManuais(contasManuais)], itens, totalCentavos: somarLista(itens, (i) => i.valorCentavos), comDuplicidade: itens.filter((i) => i.candidatas.length).length };
       });
     },
 
@@ -306,7 +312,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     },
 
     fecharSemanaDeEntregadores(ctx, e = {}) {
-      semCamposDesconhecidos(e, ["inicio", "reconciliacao", "aceitarDiasSemDados", "aceitarTriagem", "adiamentos", "justificativa"], "fechamento");
+      semCamposDesconhecidos(e, ["inicio", "reconciliacao", "aceitarDiasSemDados", "aceitarTriagem", "aceitarContasManuais", "adiamentos", "justificativa"], "fechamento");
       return fechar(ctx, e, "MANUAL");
     },
     verificarAlteracoesDaSemana(ctx, e = {}) {
