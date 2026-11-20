@@ -22,7 +22,7 @@ if (naPlataforma) document.documentElement.dataset.modo = "plataforma";
 
 const fonte = document.createElement("link");
 fonte.rel = "stylesheet";
-fonte.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap";
+fonte.href = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap";
 fonte.media = "print"; // não bloqueia a renderização; vira "all" quando carrega
 fonte.onload = () => { fonte.media = "all"; };
 document.head.append(fonte);
