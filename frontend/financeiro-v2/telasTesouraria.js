@@ -182,6 +182,21 @@ ${t.pagoCentavos ? `<span class="conta-hero__nota">de ${esc(moeda(total))} · j�
 <dl class="conta-hero__meta"><div><dt>Vence em</dt><dd>${esc(dataBR(t.vencimento))}</dd></div><div><dt>Situação</dt><dd>${selo(t.situacao)}</dd></div><div><dt>Categoria</dt><dd>${esc(t.categoria?.nome ?? "—")}</dd></div></dl></div></header>`;
 };
 
+/**
+ * Cancelar a conta (Lista e Calendário abrem esta mesma ficha). Só com a permissão de cancelar e sem pagamento vinculado — o
+ * servidor confere de novo e recusa se houver. Nada é apagado: a conta e o lançamento ficam cancelados, com o motivo no histórico.
+ */
+export function blocoCancelar(t, d, ctx = {}) {
+  const pode = (ctx?.permissoes ?? []).includes("financeiro_v2.cancelar") && t.situacao !== "CANCELADO" && !(t.pagoCentavos > 0);
+  if (!pode) return "";
+  const parcelas = (d?.parcelas ?? []).length;
+  return `<details class="card cancelar-conta"><summary><h3 class="inline">Cancelar esta conta</h3></summary>
+${formAcao({ url: "/api/fv2/acoes/obrigacoes/cancelar", titulo: "Cancelar conta lançada", rotulo: "Cancelar conta", recarregar: `pagar:${t.id}`,
+    aviso: `Confirmo o cancelamento${parcelas > 1 ? ` das ${parcelas} parcelas desta conta` : ""}: ela sai do calendário, das contas em aberto e da DRE. Nada é apagado; o motivo fica no histórico.`,
+    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
+<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` })}</details>`;
+}
+
 export function detalheAPagar(d, ctx = {}) {
   const t = d.titulo;
   const corrigir = (ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO";
@@ -221,6 +236,7 @@ ${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lanç
 </details>
 ${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
 ${blocoCorrigir}
+${blocoCancelar(t, d, ctx)}
 <h3>Histórico</h3>${historico(d.historico)}`;
 }
 

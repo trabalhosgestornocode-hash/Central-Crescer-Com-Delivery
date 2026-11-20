@@ -291,6 +291,8 @@ export const ESCRITAS = Object.freeze({
       ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true, ...(marcado(b.pagamentoAntecipado) ? { pagamentoAntecipado: true } : {}),
     });
   } },
+  // Cancelar uma conta a pagar (o grupo inteiro e o lançamento, nada é apagado). O núcleo recusa se houver pagamento vinculado.
+  "/obrigacoes/cancelar": { campos: ["obrigacao", "justificativa"], fazer: (n, c, b) => n.cancelarObrigacao(c, { obrigacaoId: id(b.obrigacao), justificativa: b.justificativa }) },
   // Corrigir o VALOR de uma conta a pagar: o histórico é preservado — grava um ajuste (diferença) com motivo, na mesma categoria.
   "/obrigacoes/corrigir-valor": { campos: ["obrigacao", "novoValor", "justificativa"], fazer: async (n, c, b) => {
     const d = await n.detalharContaAPagar(c, { id: id(b.obrigacao) });
