@@ -41,3 +41,18 @@ code { font-size: var(--t-micro); }
   .cf-cabecalho { padding-top: var(--e4); }
   .cf-cartao { padding: var(--e3) var(--e4); }
 }
+/* Execução 02 — Caixa de Entrada com detalhe */
+.cf-dupla { display: grid; gap: var(--e4); grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+.cf-dupla--igual { grid-template-columns: 1fr 1fr; }
+.cf-detalhe h3 { font-size: var(--t-base); margin: var(--e4) 0 var(--e2); }
+.cf-mensagem { margin: 0; padding: var(--e2) var(--e3); background: var(--superficie); border-left: 3px solid var(--linha-forte); border-radius: var(--raio-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cf-dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--e1) var(--e3); margin: 0; font-size: var(--t-pequeno); }
+.cf-dl dt { color: var(--suave); }
+.cf-dl dd { margin: 0; overflow-wrap: anywhere; }
+.cf-linha { cursor: pointer; }
+.cf-linha:hover { background: var(--hover); }
+.cf-linha:focus-visible { outline: 2px solid var(--foco); outline-offset: -2px; }
+.cf-linha--sel { background: var(--info-bg); }
+.cf-selo--ok { background: var(--ok-bg); color: var(--ok); }
+.cf-aviso--alerta { background: var(--alerta-bg); color: var(--alerta); }
+@media (max-width: 900px) { .cf-dupla, .cf-dupla--igual { grid-template-columns: 1fr; } }

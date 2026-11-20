@@ -1,11 +1,9 @@
-// ADAPTADOR Baileys → evento bruto do MOVA.
+// ADAPTADOR item cru do Baileys (`messages.upsert`, WAMessage) → evento bruto do MOVA.
 //
-// SITUAÇÃO: PREPARADO, NÃO LIGADO. O Gateway próprio (`gateway-whatsapp/`) hoje NÃO encaminha conteúdo de grupo: o contrato
-// inbound (gateway-whatsapp/src/inboundContrato.js) manda grupo como `origemJidTipo: "group"` sem texto nem mídia, e o
-// backend o persiste como IGNORED (backend/src/modules/comunicacao/inbound/inbound.contrato.js). Ligar este adaptador exige
-// uma rota NOVA e separada no Gateway, restrita aos grupos autorizados do MOVA — mudança de outra execução, com autorização.
-// Este arquivo só define o mapeamento (item de `messages.upsert` do Baileys → evento bruto) para que essa rota não precise
-// inventar formato. Nada aqui altera as mensagens automáticas atuais.
+// Uso: FIXTURES e simulação (eventos representativos do formato real). Em produção futura o Gateway próprio já entrega o
+// payload montado por gateway-whatsapp/src/movaGrupo.js (adaptadores/gatewayBaileys.js valida). As duas formas produzem o
+// MESMO evento bruto — o eventoId é `bly:<id da mensagem>` nos dois, então reconexão/reentrega deduplicam igual.
+// Mídia aqui chega sem bytes: o receptor usa a porta `obterMidia`.
 import { lerMensagem } from "./mensagemWhatsapp.js";
 
 /**
@@ -18,6 +16,7 @@ export function normalizarBaileys(item) {
   if (typeof key.remoteJid !== "string" || !key.remoteJid.endsWith("@g.us")) return { ok: false, motivo: "nao_e_grupo" };
   if (item.messageStubType != null) return { ok: false, motivo: "stub_sistema" };
   const ts = Number(item.messageTimestamp);
+  const nome = typeof item.pushName === "string" && item.pushName.trim() ? item.pushName.trim().slice(0, 60) : null;
   return {
     ok: true,
     bruto: {
@@ -26,6 +25,8 @@ export function normalizarBaileys(item) {
       mensagemId: key.id,
       grupoId: key.remoteJid,
       participanteId: typeof key.participant === "string" && key.participant ? key.participant : null,
+      telefoneE164: null,
+      nomeExibicao: nome,
       fromMe: key.fromMe === true,
       ...lerMensagem(item.message),
       recebidoEm: Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000).toISOString() : null,

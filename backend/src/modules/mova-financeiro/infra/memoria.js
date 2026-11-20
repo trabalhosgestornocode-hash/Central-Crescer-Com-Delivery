@@ -1,54 +1,84 @@
-// Armazenamentos em MEMÓRIA do MOVA (simulação e testes): propostas, histórico do agente, documentos vistos, mensagens
-// relacionadas e caixa de saída de respostas. Tudo é separado por organização + unidade; nenhuma listagem sem unidade.
-//
-// A versão persistente é PENDENTE (tabelas próprias do MOVA, com RLS por unidade — exige migração e autorização). Os
-// métodos abaixo são o contrato que ela deve cumprir.
+// Armazenamento em MEMÓRIA do MOVA — simulação/demonstração e testes rápidos. MESMO contrato de infra/postgres.js (a versão
+// durável, Execução 02): eventos, participantes, propostas (com transição condicional), histórico, documentos, mensagens
+// pendentes, caixa de saída, aprovações e auditoria. Tudo separado por organização + unidade.
 import { randomUUID } from "node:crypto";
 
-export const ESTADO_PROPOSTA_MOVA = Object.freeze({ AGUARDANDO_REVISAO: "AGUARDANDO_REVISAO", REJEITADA: "REJEITADA", APLICADA: "APLICADA" });
+export const ESTADO_PROPOSTA_MOVA = Object.freeze({ AGUARDANDO_REVISAO: "AGUARDANDO_REVISAO", APLICANDO: "APLICANDO", APLICADA: "APLICADA", REJEITADA: "REJEITADA" });
+const TRANSICOES = { AGUARDANDO_REVISAO: ["APLICANDO", "REJEITADA"], APLICANDO: ["APLICADA", "AGUARDANDO_REVISAO"] };
 const chave = (e) => `${e.organizacaoId}|${e.unidadeId}`;
 
 export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () => new Date() } = {}) {
-  const propostas = new Map();            // id → proposta
-  const propostaPorChave = new Map();     // chave de idempotência → id
+  const eventos = new Map();
+  const participantes = new Map();
+  const propostas = new Map();
+  const propostaPorChave = new Map();
   const historico = [];
-  const documentos = new Map();           // sha256 → {organizacaoId, unidadeId, propostaId, eventoId}
-  const mensagens = new Map();            // mensagemId → {grupoId, unidadeId|null, pendente: carga|null}
+  const documentos = new Map();
+  const pendentes = new Map();
   const saida = [];
+  const aprovacoes = [];
+  const auditoria = [];
 
   return Object.freeze({
+    eventos: Object.freeze({
+      async registrar(e) { if (eventos.has(e.eventoId)) return { novo: false }; eventos.set(e.eventoId, e); return { novo: true }; },
+      async obter(id) { return eventos.get(id) ?? null; },
+    }),
+    participantes: Object.freeze({
+      async registrar({ grupoId, participanteId, nomeExibicao = null }) {
+        const k = `${grupoId}|${participanteId}`;
+        const atual = participantes.get(k);
+        participantes.set(k, { grupoId, participanteId, nomeExibicao: nomeExibicao ?? atual?.nomeExibicao ?? null, mensagens: (atual?.mensagens ?? 0) + 1 });
+        return { novo: !atual };
+      },
+      async listar(grupoId) { return [...participantes.values()].filter((p) => p.grupoId === grupoId); },
+    }),
     propostas: Object.freeze({
-      /** Idempotente por `chaveIdempotencia` (evento + tipo). */
-      criar(escopo, dados) {
+      async criar(escopo, dados) {
         const existente = propostaPorChave.get(dados.chaveIdempotencia);
         if (existente) return { proposta: propostas.get(existente), repetida: true };
-        const p = Object.freeze({ id: gerarId(), organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, estado: ESTADO_PROPOSTA_MOVA.AGUARDANDO_REVISAO, simulada: true, criadaEm: relogio().toISOString(), ...dados });
+        const p = Object.freeze({ id: gerarId(), organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, estado: ESTADO_PROPOSTA_MOVA.AGUARDANDO_REVISAO, simulada: true, versao: 1, resultado: null, criadaEm: relogio().toISOString(), ...dados });
         propostas.set(p.id, p);
         propostaPorChave.set(dados.chaveIdempotencia, p.id);
         return { proposta: p, repetida: false };
       },
-      listar(escopo) { return [...propostas.values()].filter((p) => chave(p) === chave(escopo)); },
-      obter(escopo, id) { const p = propostas.get(id); return p && chave(p) === chave(escopo) ? p : null; },
-      quantidade: () => propostas.size,
+      async listar(escopo) { return [...propostas.values()].filter((p) => chave(p) === chave(escopo)); },
+      async obter(escopo, id) { const p = propostas.get(id); return p && chave(p) === chave(escopo) ? p : null; },
+      async transicionar(escopo, id, de, para, resultado = null) {
+        const p = propostas.get(id);
+        if (!p || chave(p) !== chave(escopo) || p.estado !== de || !TRANSICOES[de]?.includes(para)) return null;
+        const nova = Object.freeze({ ...p, estado: para, versao: p.versao + 1, resultado: resultado ?? p.resultado });
+        propostas.set(id, nova);
+        return nova;
+      },
+      async quantidade() { return propostas.size; },
     }),
     historico: Object.freeze({
-      registrar(entrada) { const h = Object.freeze({ id: gerarId(), em: relogio().toISOString(), ...entrada }); historico.push(h); return h; },
-      /** Por unidade; `unidadeId: null` lista só os eventos sem unidade (bloqueios antes da identificação). */
-      listar({ organizacaoId, unidadeId }) { return historico.filter((h) => h.organizacaoId === organizacaoId && h.unidadeId === unidadeId); },
-      todos: () => [...historico],
+      async registrar(entrada) { historico.push(Object.freeze({ id: gerarId(), em: relogio().toISOString(), ...entrada })); },
+      async listar({ organizacaoId, unidadeId }) { return historico.filter((h) => (h.organizacaoId ?? null) === organizacaoId && (h.unidadeId ?? null) === unidadeId); },
+      async todos() { return [...historico]; },
     }),
     documentos: Object.freeze({
-      visto(sha256) { return documentos.get(sha256) ?? null; },
-      marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
+      async visto(sha256) { return documentos.get(sha256) ?? null; },
+      async marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
     }),
     mensagens: Object.freeze({
-      lembrar(mensagemId, dados) { mensagens.set(mensagemId, Object.freeze({ ...dados })); },
-      obter(mensagemId) { return mensagens.get(mensagemId) ?? null; },
+      async lembrar(mensagemId, { grupoId, pendente }) { if (pendente) pendentes.set(mensagemId, { grupoId, pendente }); else pendentes.delete(mensagemId); },
+      async tomarPendente(mensagemId) { const p = pendentes.get(mensagemId) ?? null; pendentes.delete(mensagemId); return p; },
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */
-      enfileirar(resposta) { saida.push(Object.freeze({ ...resposta })); },
-      listar: () => [...saida],
+      async enfileirar(resposta) { saida.push(Object.freeze({ estado: "PENDENTE", ...resposta })); },
+      async listar() { return [...saida]; },
+      async ehRespostaPropria(mensagemId) { return saida.some((r) => r.providerMessageId && r.providerMessageId === mensagemId); },
+    }),
+    aprovacoes: Object.freeze({
+      async registrar(a) { aprovacoes.push(Object.freeze({ ...a })); },
+      async listar(propostaId) { return aprovacoes.filter((a) => a.propostaId === propostaId); },
+    }),
+    auditoria: Object.freeze({
+      async registrar(a) { auditoria.push(Object.freeze({ ...a })); },
+      async listar() { return [...auditoria]; },
     }),
   });
 }

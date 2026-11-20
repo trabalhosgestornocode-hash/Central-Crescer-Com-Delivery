@@ -1,5 +1,7 @@
 # Centro Financeiro Inteligente MOVA — Execução 01 (fundação)
 
+> Continuação: Execução 02 em [02-persistencia-baileys-acesso.md](02-persistencia-baileys-acesso.md). As decisões de lá substituem as daqui onde divergem (Evolution descartada; acesso por grupo sem vínculo individual).
+
 Data: 20/11/2026 · Branch: `feat/mova-centro-financeiro` (a partir da `main` em `d65346d`) · **Nada publicado, nada ligado.**
 
 Este documento não contém dados reais. Unidades, grupos, participantes, fornecedores e valores dos testes e da tela são

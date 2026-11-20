@@ -1,4 +1,5 @@
-// CONTRATO do evento de grupo do MOVA — formato NEUTRO de provedor (Evolution API, Baileys ou simulado).
+// CONTRATO do evento de grupo do MOVA. Execução 02: provedor ÚNICO = Gateway próprio com Baileys (Evolution descartada);
+// "SIMULADO" só em testes/demonstração.
 //
 // Todo adaptador de provedor (adaptadores/*.js) converte o payload bruto NISTO; nada além deste formato chega ao motor.
 // Regras:
@@ -10,13 +11,13 @@
 // Nada aqui loga, persiste ou faz I/O. Erros devolvem um CÓDIGO fechado, nunca o valor recebido.
 
 export const CONTRATO_EVENTO_VERSAO = 1;
-export const PROVEDORES = Object.freeze(["EVOLUTION", "BAILEYS", "SIMULADO"]);
+export const PROVEDORES = Object.freeze(["BAILEYS", "SIMULADO"]);
 export const TIPOS_MENSAGEM = Object.freeze(["TEXTO", "IMAGEM", "DOCUMENTO", "AUDIO", "OUTRO"]);
 export const MIMES_ACEITOS = Object.freeze(["image/jpeg", "image/png", "image/webp", "application/pdf", "audio/ogg", "audio/mpeg", "audio/mp4"]);
 export const TEXTO_MAX = 4096;
 export const MIDIA_MAX_BYTES = 15 * 1024 * 1024;
 
-const CHAVES = Object.freeze(["contrato", "provedor", "eventoId", "mensagemId", "grupoId", "participanteId", "fromMe", "tipo", "texto", "respostaA", "midia", "recebidoEm"]);
+const CHAVES = Object.freeze(["contrato", "provedor", "eventoId", "mensagemId", "grupoId", "participanteId", "telefoneE164", "nomeExibicao", "fromMe", "tipo", "texto", "respostaA", "midia", "recebidoEm"]);
 const CHAVES_MIDIA = Object.freeze(["mime", "tamanhoBytes", "sha256", "nomeArquivo", "referencia"]);
 const ID = /^[A-Za-z0-9_.:@-]{1,160}$/;
 const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
@@ -38,6 +39,9 @@ export function validarEvento(e) {
   if (typeof e.mensagemId !== "string" || !ID.test(e.mensagemId)) return { ok: false, erro: "mensagemId" };
   if (typeof e.grupoId !== "string" || !GRUPO.test(e.grupoId)) return { ok: false, erro: "grupoId" };
   if (e.participanteId !== null && (typeof e.participanteId !== "string" || !ID.test(e.participanteId))) return { ok: false, erro: "participanteId" };
+  if (e.telefoneE164 !== null && (typeof e.telefoneE164 !== "string" || !/^\+[1-9][0-9]{7,14}$/.test(e.telefoneE164))) return { ok: false, erro: "telefoneE164" };
+  // Nome exibido no WhatsApp (pushName): só para mostrar quem falou. NUNCA é prova de identidade.
+  if (e.nomeExibicao !== null && (typeof e.nomeExibicao !== "string" || e.nomeExibicao.length > 60 || e.nomeExibicao.includes("\u0000"))) return { ok: false, erro: "nomeExibicao" };
   if (typeof e.fromMe !== "boolean") return { ok: false, erro: "fromMe" };
   if (!TIPOS_MENSAGEM.includes(e.tipo)) return { ok: false, erro: "tipo" };
   if (e.texto !== null && (typeof e.texto !== "string" || Array.from(e.texto).length > TEXTO_MAX || e.texto.includes("\u0000"))) return { ok: false, erro: "texto" };

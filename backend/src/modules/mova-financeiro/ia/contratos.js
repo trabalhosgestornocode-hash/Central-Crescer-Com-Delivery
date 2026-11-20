@@ -9,17 +9,23 @@
 // (`montarEntradaDoModelo`), e uma instrução embutida ("ignore as regras", "pague", "apague") não muda nada, porque a
 // decisão nunca é do modelo. `sinaisDeInjecao` só marca o histórico para revisão humana.
 //
+// Áudio: o extrator recebe a mídia de áudio; a transcrição é responsabilidade do provedor (pendente).
 // PROVEDOR: nenhum ligado nesta execução (a porta `extrator` é injetada; os testes usam um extrator simulado). O agente
 // existente (backend/src/modules/agente/agente.provider.js) é o candidato a provedor — ligar exige outra execução.
 
 export const TIPO_DOCUMENTO = Object.freeze(["COMPROVANTE_PAGAMENTO", "BOLETO", "NOTA_FISCAL", "RECIBO", "EXTRATO", "RELATORIO_VENDAS", "OUTRO", "DESCONHECIDO"]);
-export const INTENCAO = Object.freeze(["INFORMAR_PAGAMENTO", "REGISTRAR_CONTA", "CONSULTAR", "PEDIR_PAGAMENTO", "PEDIR_EXCLUSAO", "PEDIR_CORRECAO", "OUTRA", "DESCONHECIDA"]);
+export const INTENCAO = Object.freeze([
+  "INFORMAR_PAGAMENTO", "REGISTRAR_CONTA", "INFORMAR_TRANSFERENCIA", "CONSULTAR", "PEDIR_CORRECAO", "PEDIR_CLASSIFICACAO",
+  "APROVAR_PROPOSTA", "PEDIR_PAGAMENTO", "PEDIR_EXCLUSAO", "OUTRA", "DESCONHECIDA",
+]);
 /** Intenções que o MOVA NUNCA executa (são bloqueadas e encaminhadas a uma pessoa). */
-export const INTENCOES_BLOQUEADAS = Object.freeze(["PEDIR_PAGAMENTO", "PEDIR_EXCLUSAO", "PEDIR_CORRECAO"]);
+export const INTENCOES_BLOQUEADAS = Object.freeze(["PEDIR_PAGAMENTO", "PEDIR_EXCLUSAO"]);
+/** Pedidos que viram SOLICITAÇÃO DE REVISÃO para o administrador (sem comando financeiro). */
+export const INTENCOES_DE_REVISAO = Object.freeze(["PEDIR_CORRECAO", "PEDIR_CLASSIFICACAO"]);
 export const NATUREZA = Object.freeze(["CUSTO", "DESPESA", "PATRIMONIAL", "RECEITA"]);
 export const CONFIANCA = Object.freeze(["ALTA", "MEDIA", "BAIXA"]);
 /** Consultas permitidas ao dashboard (cada uma mapeia para UMA consulta somente-leitura do Financeiro v2). */
-export const CONSULTAS = Object.freeze(["CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "RESUMO_DA_COMPETENCIA"]);
+export const CONSULTAS = Object.freeze(["CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "RESUMO_DA_COMPETENCIA", "COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS", "DADO_RESTRITO"]);
 /** Catálogo FECHADO de ferramentas que o motor pode acionar. Não existe ferramenta de escrita direta, SQL ou pagamento. */
 export const FERRAMENTAS = Object.freeze(["CONSULTAR_CONTAS_A_PAGAR", "CONSULTAR_COMPETENCIA", "CONSULTAR_RESUMO", "DETECTAR_DUPLICIDADE", "CRIAR_PROPOSTA_SIMULADA", "PEDIR_INFORMACAO"]);
 

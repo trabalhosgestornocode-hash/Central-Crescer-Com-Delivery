@@ -175,6 +175,9 @@ export function criarSessaoBaileys({
   // Checkpoint G.0.1 (Partes C-J) — concorrência limitada + prioridade LIVE > OFFLINE_* para
   // backendClient.notificarMensagemRecebida(): ver aoMessagesUpsert abaixo e src/filaConcorrenciaLimitada.js.
   filaNotificacaoBackend = criarFilaConcorrenciaLimitada({ concorrencia: config?.backendNotifyConcurrency ?? 4 }),
+  // MOVA (src/movaGrupo.js) — caminho À PARTE para os grupos autorizados do Centro Financeiro. Ausente ou sem grupos ⇒ nada
+  // muda. Nunca altera o fluxo inbound abaixo (que continua descartando conteúdo de grupo) nem a sessão/socket.
+  mova = null,
 }) {
   let socket = null;
   // H.4-B.4 — contador de gerações de socket deste processo (sobe a cada socket criado): só correlação nos logs de envio/receipt.
@@ -871,6 +874,8 @@ export function criarSessaoBaileys({
 
   function aoMessagesUpsert({ messages }) {
     try { inbound?.aoMensagens?.(messages); } catch { /* diagnóstico de inbound nunca interfere no encaminhamento */ }
+    // MOVA: origem POR MENSAGEM lida sem consumir (o fluxo abaixo continua consumindo do mesmo rastreador).
+    try { mova?.aoMensagens?.(messages, { origemDe: (id) => rastreadorOrigem.espiar(id), socket }); } catch { /* MOVA nunca interfere no fluxo atual */ }
     for (const m of messages ?? []) {
       if (m.key?.fromMe) continue; // eco da própria mensagem enviada — ignorar
       try { inbound?.aoEncaminhada?.(m); } catch { /* diagnóstico nunca interfere */ }

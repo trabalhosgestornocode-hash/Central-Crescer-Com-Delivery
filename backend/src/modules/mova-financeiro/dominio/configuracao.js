@@ -1,10 +1,12 @@
-// CONFIGURAÇÃO do MOVA — grupos autorizados, unidades (com apelidos e fontes de faturamento) e vínculos participante → usuário.
+// CONFIGURAÇÃO do MOVA — grupos autorizados, unidades (com apelidos e fontes de faturamento) e a identidade de serviço.
 //
 // Princípios:
 //   - Nenhum identificador real (JID de grupo, telefone, CNPJ, id de unidade) mora no código: tudo vem desta configuração,
 //     montada a partir de dados da plataforma/ambiente no momento da montagem.
-//   - PARTICIPAR DO GRUPO NÃO DÁ ACESSO: só um participante com VÍNCULO explícito a um usuário da plataforma age, e mesmo assim
-//     só com as permissões financeiras (financeiro_v2.*) que esse usuário tem NA unidade (lidas da concessão, não daqui).
+//   - Execução 02 (decisão do proprietário): NÍVEL 1 = todo participante de um grupo AUTORIZADO conversa com o MOVA, envia
+//     documentos e cria PROPOSTAS, sem cadastro nem login. NÍVEL 2 (revisar/aprovar/aplicar) continua sendo só de usuário da
+//     plataforma com as permissões financeiro_v2.* — pelo Centro Financeiro autenticado, nunca pelo WhatsApp.
+//   - As consultas do MOVA ao Financeiro usam a IDENTIDADE DE SERVIÇO (`identidadeServico.usuarioId`), sempre só com "ver".
 //   - Fontes de faturamento por unidade: sistema de loja (SAIPOS | SWF) + plataformas oficiais. Unidade sem fontes confirmadas
 //     fica "A_CONFIRMAR" e nada de receita é proposto para ela.
 //   - Modo: só "SIMULACAO" nesta execução (nenhuma escrita real, nenhuma resposta enviada ao WhatsApp).
@@ -15,7 +17,6 @@ const SISTEMAS_DE_LOJA = ["SAIPOS", "SWF"];
 const PLATAFORMAS = ["IFOOD", "NOVENTA_E_NOVE_FOOD"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
-const PARTICIPANTE = /^[A-Za-z0-9_.:@-]{1,160}$/;
 
 export class ErroDeConfiguracao extends Error {
   constructor(campo) { super(`Configuração do MOVA inválida: ${campo}`); this.name = "ErroDeConfiguracao"; this.campo = campo; }
@@ -46,6 +47,7 @@ function validarFontes(f, i) {
 export function validarConfiguracao(c) {
   exigir(c && typeof c === "object", "raiz");
   exigir(MODOS.includes(c.modo), "modo");
+  exigir(UUID.test(c.identidadeServico?.usuarioId ?? ""), "identidadeServico");
   exigir(Array.isArray(c.unidades) && c.unidades.length > 0, "unidades");
   const unidades = c.unidades.map((u, i) => {
     exigir(UUID.test(u?.organizacaoId ?? "") && UUID.test(u?.unidadeId ?? ""), `unidades[${i}].ids`);
@@ -71,19 +73,13 @@ export function validarConfiguracao(c) {
     exigir(Array.isArray(g.unidades) && g.unidades.length > 0 && g.unidades.every((x) => ids.has(String(x).toLowerCase())), `gruposAutorizados[${i}].unidades`);
     return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(g.unidades.map((x) => String(x).toLowerCase())) });
   });
-  exigir(Array.isArray(c.vinculos), "vinculos");
-  const vinculos = c.vinculos.map((v, i) => {
-    exigir(PARTICIPANTE.test(v?.participanteId ?? ""), `vinculos[${i}].participanteId`);
-    exigir(UUID.test(v.usuarioId ?? ""), `vinculos[${i}].usuarioId`);
-    return Object.freeze({ participanteId: v.participanteId, usuarioId: v.usuarioId.toLowerCase() });
-  });
-  exigir(new Set(vinculos.map((v) => v.participanteId)).size === vinculos.length, "vinculos.duplicados");
-  return Object.freeze({ modo: c.modo, unidades: Object.freeze(unidades), gruposAutorizados: Object.freeze(grupos), vinculos: Object.freeze(vinculos) });
+  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades), gruposAutorizados: Object.freeze(grupos) });
 }
 
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;
 export const unidadePorId = (cfg, id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
-export const vinculoDe = (cfg, participanteId) => (participanteId ? cfg.vinculos.find((v) => v.participanteId === participanteId) ?? null : null);
+/** Requisitos financeiros completos para APLICAR propostas (hoje: fontes de faturamento confirmadas no cadastro). */
+export const requisitosCompletos = (unidade) => unidade?.fontes?.situacao === SITUACAO_FONTES.CONFIRMADA;
 
 /** Mascara um JID de grupo/participante para log: só os 4 últimos dígitos. */
 export function mascarar(jid) {

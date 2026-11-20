@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import express from "express";
-import makeWASocket, { DisconnectReason } from "baileys";
+import makeWASocket, { DisconnectReason, downloadMediaMessage } from "baileys";
 import { config, validarConfig } from "./config.js";
 import { exigirHmac } from "./hmac.js";
 import { criarRotas, health } from "./routes.js";
@@ -22,6 +22,7 @@ import { criarInboundGateway } from "./inboundScope.js";
 import { criarRastreadorOrigem } from "./inboundContrato.js";
 import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
 import { criarCacheRetry } from "./retryCache.js";
+import { criarEncaminhadorMova, lerGruposMova } from "./movaGrupo.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -157,6 +158,16 @@ const retryCache = criarCacheRetry({
 log("info", "whatsapp.retry.config", retryCache.configuracao());
 retryCache.iniciarMetricasPeriodicas();
 
+// MOVA (src/movaGrupo.js): DESLIGADO sem WHATSAPP_MOVA_GRUPOS_JID. Mesmo socket; mídia baixada pela sessão existente.
+const gruposMova = lerGruposMova(config.movaGruposJid);
+const mova = gruposMova.length === 0 ? null : criarEncaminhadorMova({
+  grupos: gruposMova,
+  notificar: (payload) => backendClient.notificarEventoMova(payload),
+  baixarMidia: (m, sock) => downloadMediaMessage(m, "buffer", {}, { reuploadRequest: sock?.updateMediaMessage }),
+  log: (nivel, evento, dados) => log(nivel, evento, dados),
+});
+log("info", "mova.config", { ativo: Boolean(mova), grupos: gruposMova.length });
+
 const sessao = criarSessaoBaileys({
   authAdapter,
   backendClient,
@@ -167,6 +178,7 @@ const sessao = criarSessaoBaileys({
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
   leaseManager,
   retryCache,
+  mova,
 });
 
 const app = express();
