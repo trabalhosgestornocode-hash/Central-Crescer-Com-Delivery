@@ -76,7 +76,7 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
         });
       } catch (e) {
         if (ehFalhaTransitoriaDeIa(e)) throw new ErroTransitorio("IA_INDISPONIVEL");
-        throw new ErroDeIa("IA_RECUSOU_A_REQUISICAO");
+        throw new ErroDeIa(Number(e?.status) === 400 ? "IA_REQUISICAO_INVALIDA" : Number(e?.status) === 401 || Number(e?.status) === 403 ? "IA_SEM_AUTORIZACAO" : "IA_ERRO_PERMANENTE");
       }
       if (resposta?.stop_reason === "refusal") throw new ErroDeIa("IA_RECUSOU");
       if (resposta?.stop_reason === "max_tokens") throw new ErroDeIa("IA_RESPOSTA_TRUNCADA");

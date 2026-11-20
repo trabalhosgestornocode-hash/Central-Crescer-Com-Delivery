@@ -91,19 +91,25 @@ export function validarSaidaDaIa(s) {
 /** Saída vazia (ex.: texto puro sem documento, antes da IA). */
 export const SAIDA_VAZIA = Object.freeze({ ...Object.fromEntries(CHAVES.map((k) => [k, null])), ...OPCIONAIS });
 
-/** JSON Schema da saída (structured outputs do provedor). O servidor valida de novo com validarSaidaDaIa. */
+/**
+ * JSON Schema da saída (structured outputs do provedor). Execução 04A: a API recusa restrições numéricas/de tamanho
+ * (`minimum`, `maxLength`, `maxItems`) — o schema fica só com tipos, enums e padrões; os limites continuam garantidos pelo
+ * servidor em validarSaidaDaIa (que é a autoridade final de qualquer forma).
+ */
 export function esquemaDaSaida() {
-  const t = (max) => ({ type: ["string", "null"], maxLength: max });
-  const d = { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}$" };
+  // Anulável sempre como anyOf [esquema, null] (a API recusa enum/pattern com `type: [..., "null"]`).
+  const nulo = (esq) => ({ anyOf: [esq, { type: "null" }] });
+  const t = () => nulo({ type: "string" });
+  const d = nulo({ type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$" });
   const e = (vals) => ({ type: "string", enum: [...vals] });
-  const en = (vals) => ({ type: ["string", "null"], enum: [...vals, null] });
+  const en = (vals) => nulo(e(vals));
   const props = {
     legivel: { type: "boolean" }, tipoDocumento: e(TIPO_DOCUMENTO), intencao: e(INTENCAO), unidadeSugerida: t(80), documentoDestinatario: t(40),
-    valorCentavos: { type: ["integer", "null"], minimum: 1 }, dataPagamento: d, dataEmissao: d, vencimento: d,
-    competencia: { type: ["string", "null"], pattern: "^\\d{4}-(0[1-9]|1[0-2])$" }, favorecido: t(120), identificadorDocumento: t(80),
-    categoriaSugerida: { type: ["string", "null"], pattern: "^[A-Z][A-Z0-9_]{1,79}$" }, natureza: en(NATUREZA), consulta: en(CONSULTAS), confianca: e(CONFIANCA),
-    camposAusentes: { type: "array", items: e(CAMPOS_AUSENTES), maxItems: CAMPOS_AUSENTES.length }, incertezas: { type: "array", items: { type: "string", maxLength: 200 }, maxItems: 5 },
-    justificativa: t(500), referenciasDocumentais: { type: "array", items: { type: "string", maxLength: 80 }, maxItems: 5 }, periodoInicio: d, periodoFim: d,
+    valorCentavos: nulo({ type: "integer" }), dataPagamento: d, dataEmissao: d, vencimento: d,
+    competencia: nulo({ type: "string", pattern: "^\\d{4}-(0[1-9]|1[0-2])$" }), favorecido: t(120), identificadorDocumento: t(80),
+    categoriaSugerida: nulo({ type: "string", pattern: "^[A-Z][A-Z0-9_]{1,79}$" }), natureza: en(NATUREZA), consulta: en(CONSULTAS), confianca: e(CONFIANCA),
+    camposAusentes: { type: "array", items: e(CAMPOS_AUSENTES) }, incertezas: { type: "array", items: { type: "string" } },
+    justificativa: t(500), referenciasDocumentais: { type: "array", items: { type: "string" } }, periodoInicio: d, periodoFim: d,
     todasUnidades: { type: "boolean" }, transcricao: t(4096),
   };
   return { type: "object", properties: props, required: Object.keys(props), additionalProperties: false };
