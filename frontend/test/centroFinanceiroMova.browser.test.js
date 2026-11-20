@@ -35,9 +35,12 @@ before(async () => {
     pedidos.push(caminho);
     if (caminho.startsWith("/api/") && api.modo) {
       if (req.method === "POST") { let c = ""; req.on("data", (d) => { c += d; }); req.on("end", () => { api.posts.push({ caminho, corpo: JSON.parse(c) }); jsonRes(res, 200, { estado: "APLICADA" }); }); return; }
-      if (caminho === "/api/fv2/sessao") return jsonRes(res, 200, { escritaHabilitada: true, unidades: [{ id: "u-1", nome: "Unidade Real Sintética", permissoes: ["financeiro_v2.ver", "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.registrar"] }] });
+      if (caminho === "/api/fv2/sessao") return jsonRes(res, 200, { escritaHabilitada: true, unidades: [{ id: "u-1", nome: "Unidade Real Sintética", permissoes: ["financeiro_v2.ver", "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.registrar", ...(api.modo === "homolog" ? ["financeiro_v2.configurar", "financeiro_v2.documentos"] : [])] }] });
       if (caminho === "/api/fv2/mova/caixa") return api.modo === "desligado" ? jsonRes(res, 404, { codigo: "MOVA_DESLIGADO" }) : jsonRes(res, 200, { itens: [ITEM("bly:API1", "BAIXA_DE_OBRIGACAO")], aguardandoUnidade: [] });
-      if (caminho === "/api/fv2/mova/estado") return jsonRes(res, 200, { fila: { porEstado: { CONCLUIDO: 3 } }, respostas: { PENDENTE: 1 }, envioHabilitado: false, chaves: { recebimento: false, ia: false, envio: false } });
+      if (caminho === "/api/fv2/mova/estado") return jsonRes(res, 200, { fila: { porEstado: { CONCLUIDO: 3 } }, respostas: { PENDENTE: 1 }, envioHabilitado: false,
+        chaves: { modo: api.modo === "homolog" ? "HOMOLOGACAO" : "SIMULACAO", recebimento: false, ia: false, envio: false },
+        controle: { suspenso: false, recebimento: true, processamento: true, ia: true, envio: false }, orcamentoIa: { chamadas: 12, limiteChamadas: 200, custoUsd: 0.31, limiteUsd: 10, tokensEntrada: 50000, tokensSaida: 6000 } });
+      if (caminho === "/api/fv2/mova/erros") return jsonRes(res, 200, { itens: api.modo === "homolog" ? [{ eventoId: "bly:FALHA1", tentativas: 5, ultimoErro: "IA_INDISPONIVEL" }] : [] });
       if (caminho === "/api/fv2/caixa-e-bancos") return jsonRes(res, 200, { contas: [{ id: "c-1", nome: "Banco Sintético", tipo: "BANCARIA", ativa: true }] });
       return jsonRes(res, 404, { codigo: "NAO_ENCONTRADO" });
     }
@@ -154,5 +157,29 @@ test("MOVA desligado no servidor: estado real, sem dados inventados", { skip: PU
     await pagina.waitForSelector("text=MOVA desligado");
     assert.match(await pagina.textContent("#cf-conteudo"), /Nenhuma mensagem do WhatsApp é lida/);
     assert.equal(await pagina.locator("tr[data-id]").count(), 0);
+  } finally { await ctx.close(); api.modo = null; }
+});
+
+test("HOMOLOGAÇÃO: faixa inconfundível; aba Processamento com orçamento, interruptores e reprocessar; ações vão à API", { skip: PULAR }, async () => {
+  api.modo = "homolog"; api.posts.length = 0;
+  const { ctx, pagina, erros } = await abrir();
+  try {
+    assert.equal(await pagina.isVisible(".cf-simulacao.cf-homologacao"), true);
+    assert.match(await pagina.textContent(".cf-simulacao"), /HOMOLOGAÇÃO · registros de teste do MOVA · não são lançamentos financeiros oficiais/);
+    await pagina.click("#cf-aba-processamento");
+    const t = await pagina.textContent("#cf-conteudo");
+    assert.match(t, /12 de 200/);
+    assert.match(t, /US\$ 0\.31 de US\$ 10\.00/);
+    assert.match(t, /IA_INDISPONIVEL/);
+    await pagina.click("button[data-acao=controle][data-chave=suspenso]");
+    await pagina.waitForSelector("text=Feito.");
+    await pagina.click("button[data-acao=reprocessar]");
+    await pagina.waitForFunction(() => document.querySelectorAll("[role=status]").length > 0);
+    assert.deepEqual(api.posts.map((p) => [p.caminho, p.corpo]), [
+      ["/api/fv2/acoes/mova/controle", { suspenso: true, motivo: "Centro Financeiro" }],
+      ["/api/fv2/acoes/mova/reprocessar", { eventoId: "bly:FALHA1" }],
+    ]);
+    await capturar(pagina, "mova-homologacao");
+    assert.deepEqual(erros, []);
   } finally { await ctx.close(); api.modo = null; }
 });

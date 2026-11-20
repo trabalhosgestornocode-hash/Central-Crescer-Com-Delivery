@@ -75,6 +75,7 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
           messages: [{ role: "user", content: [...blocos, { type: "text", text: entrada.conteudo }] }],
         });
       } catch (e) {
+        if (e instanceof ErroDeIa) throw e; // orçamento/controle (Execução 05): código preservado, a chamada nem saiu
         if (ehFalhaTransitoriaDeIa(e)) throw new ErroTransitorio("IA_INDISPONIVEL");
         throw new ErroDeIa(Number(e?.status) === 400 ? "IA_REQUISICAO_INVALIDA" : Number(e?.status) === 401 || Number(e?.status) === 403 ? "IA_SEM_AUTORIZACAO" : "IA_ERRO_PERMANENTE");
       }

@@ -136,6 +136,9 @@ export const config = {
   movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
   // Homologação privada (src/movaHomologacao.js): contato + confirmação explícita de modo. Ausente ⇒ desligada.
   movaHomologacaoContato: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONTATO ?? "").trim(),
+  // Canal ISOLADO do MOVA (src/movaCanal.js): backend MOVA de homologação com URL e segredo próprios. Sem ele, MOVA desligado.
+  movaBackendUrl: String(process.env.WHATSAPP_MOVA_BACKEND_URL ?? "").trim(),
+  movaBackendSecret: process.env.WHATSAPP_MOVA_BACKEND_SECRET ?? "",
   movaHomologacaoConfirmacao: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONFIRMACAO ?? "").trim(),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",

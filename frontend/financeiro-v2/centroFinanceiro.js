@@ -9,6 +9,7 @@
 import { acoes, carregarDados } from "./centroFinanceiroDados.js";
 
 const ABAS = [
+  { id: "processamento", rotulo: "Processamento" },
   { id: "visao", rotulo: "Visão Operacional" },
   { id: "entrada", rotulo: "Caixa de Entrada MOVA" },
   { id: "propostas", rotulo: "Propostas e Aprovações" },
@@ -89,7 +90,9 @@ function detalhe(i) {
     ]),
     el("h3", { texto: "Documento" }),
     i.documento ? dl([["Formato", i.documento.mime], ["Arquivo", i.documento.nomeArquivo ?? "—"], ["Impressão (sha256)", el("code", { texto: `${i.documento.sha256.slice(0, 16)}…` })]]) : vazio("Mensagem sem documento."),
-    i.documento ? el("p", { classe: "cf-dica", texto: "Abrir o arquivo: indisponível nesta execução (cofre de evidências e rota autenticada pendentes)." }) : null,
+    i.documento ? (dados.fonte === "API" && dados.podeAbrirDocumentos
+      ? el("p", {}, el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "arquivo", "data-sha": i.documento.sha256, texto: "Abrir documento" }))
+      : el("p", { classe: "cf-dica", texto: dados.fonte === "API" ? "Abrir o arquivo exige a permissão de documentos." : "Abrir o arquivo: só no ambiente com a API do MOVA." })) : null,
     el("h3", { texto: "Dados extraídos" }),
     x ? dl([["Tipo documental", TIPO_DOC[x.tipoDocumento] ?? x.tipoDocumento], ["Valor", reais(x.valorCentavos)], ["Pagamento", x.dataPagamento ? dataBr(x.dataPagamento) : undefined], ["Emissão", x.dataEmissao ? dataBr(x.dataEmissao) : undefined], ["Vencimento", x.vencimento ? dataBr(x.vencimento) : undefined], ["Favorecido", x.favorecido], ["Confiança da leitura", x.confianca]])
       : vazio("Sem dados extraídos (texto puro, ou ainda aguardando esclarecimento)."),
@@ -161,7 +164,11 @@ function propostas() {
     return { id: i.eventoId, celulas: [
       el("code", { texto: p.id.slice(0, 8) }), TIPO_PROPOSTA[p.tipo] ?? p.tipo, el("span", { classe: "cf-num", texto: reais(p.valorCentavos) }),
       `Competência ${p.datas?.competencia ?? "—"}${p.datas?.caixa ? ` · caixa ${dataBr(p.datas.caixa)}` : p.datas?.vencimento ? ` · vence ${dataBr(p.datas.vencimento)}` : ""}`,
-      p.categoriaSugerida ? `Sugestão: ${p.categoriaSugerida}` : "—",
+      el("span", {}, p.categoriaSugerida ? `Sugestão: ${p.categoriaSugerida}` : "—",
+        dados.podeDecidir && p.estado === "AGUARDANDO_REVISAO" && p.tipo !== "BAIXA_DE_OBRIGACAO"
+          ? el("span", { classe: "cf-quebra" }, el("input", { classe: "cf-categoria", "data-categoria": p.id, "aria-label": "Categoria (código)", placeholder: "CODIGO_DA_CATEGORIA", value: p.categoriaSugerida ?? "" }),
+            el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "classificar", "data-proposta": p.id, texto: "Revisar categoria" }))
+          : null),
       selo(ESTADO[p.estado] ?? [p.estado, "neutro"]),
       el("div", { classe: "cf-acoes" },
         precisaConta ? el("select", { classe: "cf-conta", "data-conta": p.id, "aria-label": "Conta de onde saiu o pagamento" }, el("option", { value: "", texto: "Conta do pagamento…" }), dados.contas.map((c) => el("option", { value: c.id, texto: c.nome }))) : null,
@@ -208,7 +215,29 @@ function config() {
   ];
 }
 
-const DESENHOS = { visao, entrada, propostas, historico, config };
+function processamento() {
+  if (dados.fonte !== "API") return [cartao("Processamento", el("p", { texto: "Disponível só no ambiente com a API do MOVA." }))];
+  const e = dados.estadoMova ?? {};
+  const o = e.orcamentoIa;
+  const ctl = e.controle;
+  const chave = (k, rotulo) => el("li", {}, el("strong", { texto: `${rotulo}: ` }), selo(ctl && !ctl.suspenso && ctl[k] ? ["Ligado", "ok"] : ["Desligado", "neutro"]),
+    dados.podeConfigurar && ctl ? el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "controle", "data-chave": k, "data-valor": String(!(ctl[k])), texto: ctl[k] ? "Desligar" : "Ligar" }) : null);
+  return [
+    estado.aviso ? el("p", { classe: `cf-aviso${estado.aviso.ok ? "" : " cf-aviso--alerta"}`, role: "status", texto: estado.aviso.texto }) : null,
+    cartao("Interruptores (efeito imediato, sem reiniciar o WhatsApp)",
+      ctl ? el("ul", { classe: "cf-lista" }, chave("recebimento", "Recebimento"), chave("processamento", "Processamento"), chave("ia", "IA"), chave("envio", "Envio de respostas"),
+        el("li", {}, el("strong", { texto: "Suspensão geral: " }), selo(ctl.suspenso ? ["SUSPENSO", "erro"] : ["Não", "neutro"]),
+          dados.podeConfigurar ? el("button", { classe: `botao botao--pequeno${ctl.suspenso ? "" : " botao--perigo"}`, type: "button", "data-acao": "controle", "data-chave": "suspenso", "data-valor": String(!ctl.suspenso), texto: ctl.suspenso ? "Retomar" : "Suspender tudo agora" }) : null))
+        : el("p", { texto: "Controle indisponível." }),
+      el("p", { classe: "cf-dica", texto: "Cada etapa também precisa estar ligada na configuração do servidor; aqui só se desliga ou religa o que o servidor permite." })),
+    cartao("Orçamento da IA", o ? dl([["Chamadas", `${o.chamadas} de ${o.limiteChamadas}`], ["Custo estimado", `US$ ${o.custoUsd.toFixed(2)} de US$ ${o.limiteUsd.toFixed(2)}`], ["Tokens", `${o.tokensEntrada} entrada · ${o.tokensSaida} saída`]]) : el("p", { texto: "Sem dados de orçamento." })),
+    cartao("Fila", dl([["Por estado", Object.entries(e.fila?.porEstado ?? {}).map(([k, n]) => `${k}: ${n}`).join(" · ") || "vazia"], ["Pendente mais antigo", e.fila?.pendenteMaisAntigo ? horaBr(e.fila.pendenteMaisAntigo) : "—"], ["Respostas", Object.entries(e.respostas ?? {}).map(([k, n]) => `${k}: ${n}`).join(" · ") || "nenhuma"], ["Worker", e.worker ? `${e.worker.rodando ? "rodando" : "parado"}; última falha: ${e.worker.ultimaFalha ?? "nenhuma"}` : "não iniciado"]])),
+    cartao("Erros", tabela(["Evento", "Tentativas", "Último erro", ""], dados.erros.map((x) => ({ id: x.eventoId, celulas: [el("code", { texto: x.eventoId }), String(x.tentativas), el("code", { texto: x.ultimoErro ?? "—" }),
+      dados.podeDecidir ? el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "reprocessar", "data-evento": x.eventoId, texto: "Reprocessar" }) : "—"] })), "Eventos com falha")),
+  ];
+}
+
+const DESENHOS = { visao, entrada, propostas, historico, config, processamento };
 
 function desenharIndisponivel(alvo) {
   const texto = dados.fonte === "MOVA_DESLIGADO" ? "O MOVA está desligado neste ambiente. Nenhuma mensagem do WhatsApp é lida e nenhuma proposta é criada." : dados.mensagem ?? "Não foi possível carregar o Centro Financeiro.";
@@ -229,6 +258,24 @@ function selecionar(id) { estado.selecionado = id; desenhar(); document.querySel
 async function decidir(botao) {
   const id = botao.dataset.proposta;
   let r;
+  if (botao.dataset.acao === "arquivo") {
+    const a = await acoes.arquivo(botao.dataset.sha);
+    if (!a.ok) { estado.aviso = { ok: false, texto: a.mensagem }; return desenhar(); }
+    const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(a.base64), (c) => c.charCodeAt(0))], { type: a.mime }));
+    globalThis.open?.(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return;
+  }
+  if (botao.dataset.acao === "classificar") {
+    const cat = document.querySelector(`[data-categoria="${id}"]`)?.value?.trim().toUpperCase();
+    r = await acoes.classificar(id, cat);
+    estado.aviso = r.ok ? { ok: true, texto: "Categoria revisada (será usada na aplicação)." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    dados = await carregarDados(); return desenhar();
+  }
+  if (botao.dataset.acao === "reprocessar" || botao.dataset.acao === "controle") {
+    r = botao.dataset.acao === "reprocessar" ? await acoes.reprocessar(botao.dataset.evento) : await acoes.controle({ [botao.dataset.chave]: botao.dataset.valor === "true", motivo: "Centro Financeiro" });
+    estado.aviso = r.ok ? { ok: true, texto: "Feito." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    dados = await carregarDados(); return desenhar();
+  }
   if (botao.dataset.acao === "aplicar") {
     const conta = document.querySelector(`[data-conta="${id}"]`);
     if (conta && !conta.value) { estado.aviso = { ok: false, texto: "Escolha a conta de onde saiu o pagamento." }; return desenhar(); }
@@ -247,7 +294,11 @@ async function decidir(botao) {
 async function iniciar() {
   dados = await carregarDados();
   const faixa = document.querySelector(".cf-simulacao");
-  if (dados.fonte !== "SIMULACAO") faixa.hidden = true;
+  if (dados.homologacao) {
+    // Ambiente de HOMOLOGAÇÃO: faixa permanente — nada aqui é registro financeiro oficial.
+    faixa.hidden = false; faixa.classList.add("cf-homologacao");
+    faixa.replaceChildren(el("strong", { texto: "HOMOLOGAÇÃO" }), " · registros de teste do MOVA · não são lançamentos financeiros oficiais");
+  } else if (dados.fonte !== "SIMULACAO") faixa.hidden = true;
   if (!dados.unidades) { desenhar(); return; }
   estado.unidadeId = dados.unidades[0].unidadeId;
   const sel = document.getElementById("cf-unidade");

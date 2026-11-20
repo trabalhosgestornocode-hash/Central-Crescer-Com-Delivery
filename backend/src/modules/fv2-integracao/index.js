@@ -22,6 +22,7 @@ import { criarFonteEntregadores } from "./fonteEntregadores.js";
 import { criarCofreNotasSupabase } from "./cofreNotasSupabase.js";
 import { criarAgendadorEntregadores, executarCiclo, lerConfiguracaoDoAgendador } from "./agendadorEntregadores.js";
 import { lerConfiguracaoMova, movaDaPlataforma, registrarDependenciasFv2 } from "./mova.js";
+export { iniciarMovaEmbutido, pararMovaEmbutido } from "./mova.js";
 
 /** Marca o trecho executado pelo agendador: só ele recebe sessão de banco da identidade de automação. */
 const automacao = new AsyncLocalStorage();
@@ -93,7 +94,7 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
   registrarDependenciasFv2(dependencias);
   // MOVA: só com MOVA_HABILITADO=1 (e o restante da configuração); senão as rotas /mova respondem 404.
   const movaCfg = lerConfiguracaoMova(env);
-  const mova = movaCfg.habilitado ? async () => { const m = await movaDaPlataforma({ env, registrar }); return m ? { ...m, chaves: { recebimento: movaCfg.recebimento, ia: movaCfg.ia, envio: movaCfg.envio } } : null; } : null;
+  const mova = movaCfg.habilitado ? async () => { const m = await movaDaPlataforma({ env, registrar }); return m ? { ...m, chaves: { modo: movaCfg.modo, recebimento: movaCfg.recebimento, processamento: movaCfg.processamento, ia: movaCfg.ia, envio: movaCfg.envio } } : null; } : null;
   return criarRotasFinanceiroV2({
     mova,
     habilitado: cfg.habilitado,

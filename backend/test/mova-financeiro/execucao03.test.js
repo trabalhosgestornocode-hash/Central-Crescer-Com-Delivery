@@ -451,7 +451,7 @@ t("30 preservação: tudo desligado por padrão; app.js mantém a montagem atual
   const c = lerConfiguracaoMova({ MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "postgres://x", MOVA_SERVICO_USUARIO_ID: SERVICO });
   assert.deepEqual([c.recebimento, c.ia, c.envio], [false, false, false]);
   const app = readFileSync(new URL("../../src/app.js", import.meta.url), "utf8");
-  assert.match(app, /: montarWhatsappGatewayRouter\(\);/);
+  assert.match(app, /const whatsappGateway = montarWhatsappGatewayRouter\(\);/, "router do Gateway montado como sempre (Execução 05: sem injeção do MOVA)");
   const { EXTRATOR_DESLIGADO } = await import("../../src/modules/fv2-integracao/mova.js");
   await assert.rejects(EXTRATOR_DESLIGADO.extrair({}), { codigo: "IA_DESLIGADA" });
 });

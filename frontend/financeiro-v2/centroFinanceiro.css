@@ -56,3 +56,6 @@ code { font-size: var(--t-micro); }
 .cf-selo--ok { background: var(--ok-bg); color: var(--ok); }
 .cf-aviso--alerta { background: var(--alerta-bg); color: var(--alerta); }
 @media (max-width: 900px) { .cf-dupla, .cf-dupla--igual { grid-template-columns: 1fr; } }
+/* Execução 05 — faixa de homologação (inconfundível com produção) */
+.cf-simulacao.cf-homologacao { background: var(--erro-bg); color: var(--erro); border-bottom: 2px solid var(--erro); font-size: var(--t-base); }
+.cf-categoria { font: inherit; font-size: var(--t-micro); width: 14em; max-width: 100%; padding: 2px var(--e1); margin-right: var(--e1); border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); }

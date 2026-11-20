@@ -201,7 +201,7 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const m = await exigirMova();
         const corpo = await comIdentidade(req, async (sessao) => {
           const { c } = await preparar(sessao);
-          return consulta({ ctx: c.contexto, mova: m.mova, worker: m.worker, enviador: m.enviador, chaves: m.chaves ?? null, params: req.query });
+          return consulta({ ctx: c.contexto, mova: m.mova, worker: m.worker, enviador: m.enviador, chaves: m.chaves ?? null, controle: m.controle ?? null, orcamento: m.orcamento ?? null, params: req.query });
         });
         res.set("cache-control", "no-store");
         return res.json(corpo);
@@ -218,7 +218,7 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const corpo = await comIdentidade(req, async (sessao) => {
           const { c, nucleo } = await preparar(sessao);
           if (acao.escreveNoFinanceiro && c.escritaDaUnidade !== true) throw recusa(403, "ESCRITA_DA_UNIDADE_DESLIGADA", "Esta unidade ainda não foi liberada para lançamentos.");
-          const resultado = await executarAcaoMova(acao, { ctx: c.contexto, mova: m.mova, nucleo, b });
+          const resultado = await executarAcaoMova(acao, { ctx: c.contexto, mova: m.mova, nucleo, b, controle: m.controle ?? null });
           registrar({ tipo: "ACAO_MOVA", acao: caminho, unidadeId: c.contexto.unidadeId, pessoa: c.contexto.usuarioId });
           return resultado ?? { ok: true };
         });

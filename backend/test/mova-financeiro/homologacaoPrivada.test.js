@@ -164,8 +164,9 @@ t("13 falha temporária do Gateway: resposta fica pendente e sai na próxima rod
 t("14 preservação: homologação privada desligada por padrão; modo exige confirmação de ambiente; fora do modo a conversa privada nem carrega", async () => {
   const env = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "postgres://x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
   assert.equal(lerConfiguracaoMova(env).modo, "SIMULACAO");
-  assert.equal(lerConfiguracaoMova({ ...env, MOVA_MODO: "HOMOLOGACAO" }).modo, "SIMULACAO", "sem confirmação de ambiente");
-  assert.equal(lerConfiguracaoMova({ ...env, MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao" }).modo, "HOMOLOGACAO");
+  // Execução 05: modo parcial agora BLOQUEIA (antes caía em SIMULACAO) e a homologação exige o marcador do banco.
+  assert.deepEqual(lerConfiguracaoMova({ ...env, MOVA_MODO: "HOMOLOGACAO" }), { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes: ["HOMOLOGACAO_INCOMPLETA"] });
+  assert.equal(lerConfiguracaoMova({ ...env, MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao", MOVA_HOMOLOGACAO_MARCADOR: "marcador-teste-01" }).modo, "HOMOLOGACAO");
   const s = await cenario();
   const fora = await carregarConfiguracao(s.pool, { identidadeServico: CONFIG.identidadeServico });
   assert.deepEqual(fora.gruposAutorizados, []);

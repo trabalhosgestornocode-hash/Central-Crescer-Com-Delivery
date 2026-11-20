@@ -21,8 +21,10 @@ const ADAPTADORES = Object.freeze({ GATEWAY: normalizarGatewayMova, WAMESSAGE: n
  * @param {{cfg:object, motor:{processar:Function}, fila:object, evidencias:object, armazenamento:object,
  *          obterMidia?:(bruto:object) => Promise<Uint8Array>, relogio?:() => Date, registrar?:Function}} deps
  */
-export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obterMidia = null, relogio = () => new Date(), registrar = () => {} }) {
+export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obterMidia = null, relogio = () => new Date(), registrar = () => {}, controle = null }) {
   async function receber(payload, { formato = "GATEWAY" } = {}) {
+    // Interruptor em tempo real (Execução 05): desligado/suspenso ⇒ aceita e descarta (200: o Gateway não re-tenta), sem registro.
+    if (controle && !(await controle.ligado("recebimento"))) return { status: "IGNORADO", motivo: "RECEBIMENTO_DESLIGADO" };
     const adaptar = ADAPTADORES[formato];
     if (!adaptar) return { status: "RECUSADO", motivo: "FORMATO_DESCONHECIDO" };
     const n = adaptar(payload);
@@ -74,6 +76,7 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
 
   /** Processa o que estiver pendente na fila (chamado por um laço/agendador; nos testes, diretamente). */
   async function trabalhar() {
+    if (controle && !(await controle.ligado("processamento"))) return 0; // eventos ficam na fila, intactos, até religar
     return fila.processarPendentes(async (bruto) => {
       const v = await montarEvento(bruto);
       if (!v.ok) {

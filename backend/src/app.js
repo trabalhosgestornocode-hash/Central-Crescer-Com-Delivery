@@ -15,7 +15,7 @@ import { corsOptions, helmetOptions, headersComplementares, LIMITES_CORPO, emPro
 import { limiteDeTaxa } from "./shared/rateLimit.js";
 import { RATE_LIMIT } from "./config/limites.js";
 import { montarWhatsappGatewayRouter } from "./modules/comunicacao/gateway/whatsappGateway.bootstrap.js";
-import { movaParaGateway } from "./modules/fv2-integracao/mova.js";
+import { criarRouterMovaIsolado } from "./modules/fv2-integracao/mova.js";
 import { lerEstadoEvents } from "./modules/ifood/ifoodEventsEstado.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -45,9 +45,10 @@ export function createApp() {
   // WHATSAPP_GATEWAY_SECRET + WHATSAPP_GATEWAY_ORGANIZACAO_ID existirem —
   // hoje NÃO existem em produção, então isto ainda não expõe rota nenhuma
   // (ver whatsappGateway.bootstrap.js).
-  // MOVA: `movaParaGateway()` é null salvo MOVA_HABILITADO=1 + MOVA_RECEBIMENTO_HABILITADO=1 ⇒ por padrão nada muda aqui.
-  const movaGateway = movaParaGateway(process.env);
-  const whatsappGateway = movaGateway ? montarWhatsappGatewayRouter({ mova: movaGateway }) : montarWhatsappGatewayRouter();
+  // MOVA (homologação): canal ISOLADO com segredo próprio, só com MOVA_HABILITADO + MOVA_RECEBIMENTO_HABILITADO; senão null.
+  const movaIsolado = criarRouterMovaIsolado(process.env);
+  if (movaIsolado) app.use("/internal/mova", movaIsolado);
+  const whatsappGateway = montarWhatsappGatewayRouter();
   if (whatsappGateway) app.use(whatsappGateway.path, whatsappGateway.router);
   // Webhook de status da Meta (Cloud API oficial): corpo CRU p/ a assinatura; só existe com WHATSAPP_CLOUD_APP_SECRET.
   const webhookWhatsapp = montarWebhookWhatsapp();

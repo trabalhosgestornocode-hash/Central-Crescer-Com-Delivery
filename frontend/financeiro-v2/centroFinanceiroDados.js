@@ -33,7 +33,7 @@ export async function carregarDados() {
   const caixa = await ler("/api/fv2/mova/caixa");
   if (caixa.status === 404 && caixa.dados?.codigo === "MOVA_DESLIGADO") return { fonte: "MOVA_DESLIGADO", unidade: u };
   if (!caixa.ok) return { fonte: "ERRO", mensagem: caixa.dados?.mensagem ?? "Não foi possível ler a Caixa de Entrada." };
-  const [estadoMova, contas] = await Promise.all([ler("/api/fv2/mova/estado"), ler("/api/fv2/caixa-e-bancos")]);
+  const [estadoMova, contas, erros] = await Promise.all([ler("/api/fv2/mova/estado"), ler("/api/fv2/caixa-e-bancos"), ler("/api/fv2/mova/erros")]);
   const itens = [...caixa.dados.itens, ...caixa.dados.aguardandoUnidade];
   const incompleta = itens.some((i) => i.proposta?.bloqueioDeAplicacao === "REQUISITOS_FINANCEIROS_INCOMPLETOS");
   return {
@@ -44,6 +44,10 @@ export async function carregarDados() {
     estadoMova: estadoMova.ok ? estadoMova.dados : null,
     permissoes: u.permissoes ?? [],
     podeDecidir: NIVEL2.every((p) => (u.permissoes ?? []).includes(p)) && sessao.dados.escritaHabilitada === true,
+    podeConfigurar: (u.permissoes ?? []).includes("financeiro_v2.configurar") && sessao.dados.escritaHabilitada === true,
+    podeAbrirDocumentos: (u.permissoes ?? []).includes("financeiro_v2.documentos"),
+    homologacao: estadoMova.ok && estadoMova.dados?.chaves?.modo === "HOMOLOGACAO",
+    erros: erros.ok ? erros.dados?.itens ?? [] : [],
     contas: (contas.ok ? contas.dados?.contas ?? [] : []).filter((c) => c.ativa !== false).map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo })),
   };
 }
@@ -52,4 +56,15 @@ export async function carregarDados() {
 export const acoes = Object.freeze({
   aplicar: (propostaId, contaId) => enviar("/api/fv2/acoes/mova/aplicar", { propostaId, ...(contaId ? { contaId } : {}) }),
   rejeitar: (propostaId, motivo) => enviar("/api/fv2/acoes/mova/rejeitar", { propostaId, motivo }),
+  async classificar(propostaId, categoria) {
+    const d = await ler(`/api/fv2/mova/proposta?id=${encodeURIComponent(propostaId)}`); // versão atual (concorrência otimista)
+    if (!d.ok) return { ok: false, mensagem: d.dados?.mensagem ?? "Proposta indisponível." };
+    return enviar("/api/fv2/acoes/mova/classificar", { propostaId, versao: d.dados.versao, categoria });
+  },
+  reprocessar: (eventoId) => enviar("/api/fv2/acoes/mova/reprocessar", { eventoId }),
+  controle: (alteracoes) => enviar("/api/fv2/acoes/mova/controle", alteracoes),
+  async arquivo(sha) {
+    const d = await ler(`/api/fv2/mova/arquivo?sha=${encodeURIComponent(sha)}`);
+    return d.ok ? { ok: true, ...d.dados } : { ok: false, mensagem: d.dados?.mensagem ?? "Documento indisponível." };
+  },
 });

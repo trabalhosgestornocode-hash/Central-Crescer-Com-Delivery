@@ -217,7 +217,10 @@ export function criarEvidenciasPostgres({ pool }) {
     /** Conteúdo SÓ para a unidade dona (Centro Financeiro). Removida ou de outra unidade = null. */
     async obterDaUnidade(sha256, escopo) {
       const r = await q("select conteudo, mime, nome_arquivo from mova.evidencia where sha256 = $1 and organizacao_id = $2 and unidade_id = $3 and removida_em is null", [sha256, escopo.organizacaoId, escopo.unidadeId]);
-      return r.rows[0] ? { bytes: r.rows[0].conteudo, mime: r.rows[0].mime, nomeArquivo: r.rows[0].nome_arquivo } : null;
+      if (!r.rows[0]) return null;
+      // Integridade: o conteúdo precisa bater com o hash gravado (adulteração no banco ⇒ recusa, nunca entrega).
+      if (createHash("sha256").update(r.rows[0].conteudo).digest("hex") !== sha256) throw Object.assign(new Error("evidência adulterada"), { codigo: "EVIDENCIA_ADULTERADA" });
+      return { bytes: r.rows[0].conteudo, mime: r.rows[0].mime, nomeArquivo: r.rows[0].nome_arquivo };
     },
     async expurgar(agora = new Date()) { return Number((await q("select mova.expurgar_evidencias($1) as n", [agora.toISOString()])).rows[0].n); },
   });

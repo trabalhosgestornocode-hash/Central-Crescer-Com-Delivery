@@ -40,13 +40,14 @@ export function criarWorker({ receptor, concorrencia = 2, intervaloMs = 2000, ag
  * @param {{armazenamento:object, enviar:(r:{grupoId:string, texto:string, respostaA:string|null, idempotencia:string}) => Promise<{providerMessageId:string}>,
  *          habilitado?:boolean, maxTentativas?:number, registrar?:Function}} deps
  */
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {} }) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5 }) {
   return Object.freeze({
     habilitado,
     /** Envia o que estiver pendente. Desligado: não toca em nada (as respostas ficam PENDENTE). */
     async enviarPendentes({ limite = 10 } = {}) {
       if (!habilitado) return { enviadas: 0, desligado: true };
-      const lote = await armazenamento.saida.tomarParaEnvio({ limite });
+      if (controle && !(await controle.ligado("envio"))) return { enviadas: 0, desligado: true }; // interruptor em tempo real
+      const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada) }); // limite de taxa
       let enviadas = 0;
       for (const r of lote) {
         try {
