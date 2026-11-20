@@ -67,22 +67,53 @@ async function montar(valores = [100000, 23450]) {
 const arquivo = (linhas, nome = "nota.pdf") => ({ conteudo: pdf([linhas]), nome, tipoMime: "application/pdf" });
 const conferido = { emitente: true, tomador: true, periodo: true, valor: true, numero: true, duplicidade: true };
 
-test("anexar a nota em PDF preenche número, emitente, tomador e valor; a aprovação passa com o valor lido", async () => {
+test("anexar a nota em PDF que confere tudo já aprova e LIBERA o pagamento no mesmo ato", async () => {
   const { n, c } = await montar();
   const r = await n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(danfse()) });
-  assert.equal(r.leituraDaNota.lida, true);
-  assert.deepEqual(r.leituraDaNota.avisos, []);
+  assert.deepEqual([r.leituraDaNota.lida, r.leituraDaNota.liberadaAutomaticamente, r.leituraDaNota.motivos, r.situacaoDocumental], [true, true, [], "LIBERADO_PAGAMENTO"]);
   const d = await n.detalharFechamentoDoEntregador(c, { inicio: SEG, entregador: "fulano" });
-  assert.deepEqual([d.notaVigente.numero, d.notaVigente.emitente, d.notaVigente.tomador, d.notaVigente.valorCentavos, d.notaVigente.leitura.chaveAcesso],
-    ["123", "FULANO ENTREGADOR DE TESTE (11.222.333/0001-81)", "EMPRESA TOMADORA TESTE LTDA (44.555.666/0001-99)", 123450, CHAVE]);
-  await n.iniciarConferenciaDaNota(c, { inicio: SEG, entregador: "fulano" });
-  const ok = await n.decidirNotaDoEntregador(c, { inicio: SEG, entregador: "fulano", decisao: "APROVAR", conferido, justificativa: "Conferida." });
-  assert.equal(ok.situacaoDocumental, "NF_APROVADA");
+  assert.deepEqual([d.notaVigente.numero, d.notaVigente.emitente, d.notaVigente.tomador, d.notaVigente.valorCentavos, d.notaVigente.leitura.chaveAcesso, d.notaVigente.situacao],
+    ["123", "FULANO ENTREGADOR DE TESTE (11.222.333/0001-81)", "EMPRESA TOMADORA TESTE LTDA (44.555.666/0001-99)", 123450, CHAVE, "NF_APROVADA"]);
+  assert.equal(d.impedimentoDocumental, false, "sem impedimento: a baixa pelo extrato fica liberada");
+  assert.ok(d.conferencias.at(-1).automatica && d.historico.some((h) => /automaticamente/.test(h.justificativa ?? "")), "o histórico registra que foi automático");
+  await rejeita(n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(danfse({ numero: "321" }), "x.pdf") }), CODIGO.OPERACAO_INVALIDA);
+});
+
+test("liberação automática NÃO acontece se algo não confere: fica para a conferência manual, com o motivo", async () => {
+  const casos = [
+    [{ valor: "R$ 1.000,00" }, /valor da nota é diferente/],
+    [{ tomador: false }, /não identifica o tomador/],
+    [{ descricao: "Entregas de 09/11/2026 a 15/11/2026" }, /período escrito/],
+  ];
+  for (const [opcoes, motivo] of casos) {
+    const { n, c } = await montar();
+    const r = await n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(danfse(opcoes)) });
+    assert.equal(r.situacaoDocumental, "NF_RECEBIDA", JSON.stringify(opcoes));
+    assert.ok(r.leituraDaNota.motivos.some((m) => motivo.test(m)), r.leituraDaNota.motivos.join(" | "));
+  }
+  // sem a permissão de conferir, quem anexa não libera
+  const { n, c } = await montar();
+  const semConferir = { ...c, permissoes: c.permissoes.filter((p) => p !== "financeiro_v2.conciliar") };
+  const r = await n.anexarDocumentoDoEntregador(semConferir, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(danfse()) });
+  assert.equal(r.situacaoDocumental, "NF_RECEBIDA");
+});
+
+test("emitente diferente do entregador: 1ª vez manual; aprovado uma vez, passa a ser reconhecido", async () => {
+  const { n, c } = await montarDois();
+  const outro = (numero, chave) => danfse({ numero, chave, valor: "R$ 50,00" }).map((l) => l.replace("FULANO ENTREGADOR DE TESTE", "PAGADOR DIFERENTE"));
+  const r1 = await n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "beltrano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(outro("7", "2".repeat(50))) });
+  assert.equal(r1.situacaoDocumental, "NF_RECEBIDA");
+  assert.ok(r1.leituraDaNota.motivos.some((m) => /emitente/.test(m)));
+  await n.iniciarConferenciaDaNota(c, { inicio: SEG, entregador: "beltrano" });
+  await n.decidirNotaDoEntregador(c, { inicio: SEG, entregador: "beltrano", decisao: "APROVAR", conferido, justificativa: "Pagador combinado." });
+  const learn = await n.consultarEntregadoresProprios(c, { semana: SEG });
+  assert.ok(learn.fechamentos.some((f) => f.entregador.chave === "beltrano" && f.situacaoDocumental === "NF_APROVADA"));
 });
 
 test("o que a pessoa digita prevalece; valor diferente e tomador ausente viram avisos (nada é aprovado sozinho)", async () => {
   const { n, c } = await montar();
   const r = await n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", numero: "999", arquivo: arquivo(danfse({ valor: "R$ 1.000,00", tomador: false })) });
+  assert.equal(r.leituraDaNota.liberadaAutomaticamente, false);
   assert.equal(r.leituraDaNota.numero, "999");
   assert.deepEqual(r.leituraDaNota.avisos.map((a) => a.codigo), ["VALOR_DIFERENTE", "TOMADOR_NAO_IDENTIFICADO"]);
   assert.equal(r.situacaoDocumental, "NF_RECEBIDA");
@@ -93,7 +124,7 @@ test("o que a pessoa digita prevalece; valor diferente e tomador ausente viram a
 test("PDF que não é DANFSe (ou ilegível) é aceito como antes, sem dados inventados; sem valor, a mensagem é clara", async () => {
   const { n, c } = await montar();
   const r = await n.anexarDocumentoDoEntregador(c, { inicio: SEG, entregador: "fulano", tipoAnexo: "NOTA_FISCAL", arquivo: arquivo(["Recibo simples", "Valor R$ 1.234,50"]) });
-  assert.deepEqual(r.leituraDaNota, { lida: false });
+  assert.deepEqual([r.leituraDaNota.lida, r.leituraDaNota.liberadaAutomaticamente, r.situacaoDocumental], [false, false, "NF_RECEBIDA"]);
   await n.iniciarConferenciaDaNota(c, { inicio: SEG, entregador: "fulano" });
   await assert.rejects(n.decidirNotaDoEntregador(c, { inicio: SEG, entregador: "fulano", decisao: "APROVAR", conferido, justificativa: "x" }), (e) => e.detalhes?.motivo === "VALOR_DA_NOTA_AUSENTE");
 });
