@@ -59,3 +59,35 @@ FV2_PLAYWRIGHT_PATH=<playwright-core> node backend/scripts/fv2/medirRepaginacao.
 FV2_PLAYWRIGHT_PATH=<playwright-core> node backend/scripts/fv2/capturarTelas.mjs frontend <pasta> subway
 ```
 Todos usam dados sintéticos em memória e só `127.0.0.1`.
+
+## Homologação final (19/11)
+
+### Contrato de relatórios esperados (commit a563fb0)
+- Sistema de loja: só o que vigora na competência (SAIPOS ou SWF 45/03).
+- Stone: só com operadora Stone ativa em algum dia da competência. Unicred: só com conta bancária Unicred ativa.
+  Valem quando a unidade tem fontes configuradas OU operadoras/contas bancárias cadastradas; unidade sem nada disso mantém o padrão histórico.
+- Todos são controles documentais (`FONTE_SEM_DOCUMENTO` → `SEM_EFEITO`): não entram nos impedimentos de homologação (teste dedicado).
+- Mudança de comportamento conhecida: unidade com conta bancária que NÃO é Unicred deixa de receber "Falta: Extrato da Unicred" (2 asserções antigas de `conferencias.test.js` ajustadas).
+
+### Configuração lida em produção
+Conferida só por leitura em 19/11: a Subway tem as fontes SWF, iFood e 99Food gravadas, e nada falta para a regra. O detalhe (operadoras e contas) fica
+fora do repositório, nas evidências privadas.
+
+### Testes
+- PostgreSQL LOCAL ISOLADO (servidor próprio, porta 54339, pasta fora do repositório, senhas geradas na hora; nenhum `.env` lido):
+  suíte inteira do Financeiro v2 com `FV2_REPOSITORIO=postgres FV2_CONFERIR_CARGA=1`: 711/714 (1 pulado); as 2 falhas eram as asserções antigas de Unicred,
+  corrigidas e reexecutadas no Postgres e em memória (conferências + contrato + Subway: 30/30 em cada).
+- Frontend: 2058 testes, 0 falhas. Navegador real (plataforma simulada): 71/71.
+
+### Desempenho das leituras de vigência
+| Repositório | leituras de vigência | consulta da Central | Visão Geral |
+| --- | --- | --- | --- |
+| PostgreSQL local isolado | 1,6 ms | 21,9 ms | 22,1 ms |
+| Memória | 0,1 ms | 2,8 ms | 4,6 ms |
+Mediana de 15 execuções em base sintética pequena; não é tempo de produção (latência de rede do Supabase não incluída: 2 consultas indexadas por carga).
+
+### BLOQUEIOS para a homologação autenticada (itens 4 e 5 — NÃO executados)
+1. O projeto de teste (`teste-multiempresarial`, `.env.test-integracao`) não tem o esquema `financeiro_v2`: seria preciso aplicar as 27 migrações nele (migração vetada nesta etapa).
+2. Contas de teste e concessões financeiras precisam ser criadas (exige autorização) e a liberação/administração da unidade exige 2º fator (TOTP) de administrador real — não pode ser contornado.
+3. A produção serve a `main`, sem estas mudanças.
+Portanto entrada, renovação/expiração reais, retorno à plataforma, Dashboard Operacional, permissões e troca de unidade com autenticação real seguem **não homologados**; só há verificação em plataforma simulada.

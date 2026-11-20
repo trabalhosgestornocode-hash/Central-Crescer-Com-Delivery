@@ -187,7 +187,9 @@ test("17, 18, 19, 20 — pendências: documental, classificação, um grupo por 
   assert.equal(new Set(chaves).size, chaves.length, "cada fato aparece uma vez");
   const doGrupo = (g) => r.itens.filter((x) => x.grupo === g);
   assert.ok(doGrupo("DOCUMENTAIS").some((x) => x.codigo === "OBRIGACAO_SEM_COMPROVANTE" && x.valorCentavos === 7000));
-  assert.ok(doGrupo("DOCUMENTAIS").some((x) => x.codigo === "FONTE_SEM_DOCUMENTO" && /Unicred/.test(x.titulo)));
+  // Relatório esperado sem arquivo vira pendência documental. O cenário tem conta bancária que NÃO é Unicred: o extrato da Unicred não é exigido.
+  // (a pendência positiva "falta relatório esperado" é coberta em fontes-esperadas-vigencia.test.js; aqui tudo o que é esperado foi importado)
+  assert.ok(!doGrupo("DOCUMENTAIS").some((x) => x.codigo === "FONTE_SEM_DOCUMENTO" && /Unicred/.test(x.titulo)));
   assert.ok(doGrupo("CLASSIFICACOES").some((x) => x.codigo === "DESPESA_A_CLASSIFICAR" && x.valorCentavos === 3300));
   // A saída sem vínculo é vista pela apuração E pela tesouraria: UMA pendência, com os dois motivos.
   const s = r.itens.filter((x) => x.chave === `MOVIMENTACAO:${saidaSemVinculo.id}`);
@@ -280,7 +282,8 @@ test("Central: abertura com contagens, fontes com e sem documento e o que está 
   const r = await n.consultarCentralDeConferencias(c, SET);
   assert.equal(r.fechamento.estado, "ABERTA");
   assert.ok(r.fontes.comDocumento.some((f) => f.tipoRelatorio === "STONE_VENDAS"));
-  assert.ok(r.fontes.semDocumento.some((f) => f.tipoRelatorio === "UNICRED_EXTRATO"));
+  assert.ok(r.fontes.comDocumento.some((f) => f.tipoRelatorio === "SAIPOS_FATURAMENTO_POR_DIA" || f.tipoRelatorio === "STONE_VENDAS"));
+  assert.ok(!r.fontes.semDocumento.some((f) => f.tipoRelatorio === "UNICRED_EXTRATO"), "conta bancária de outra instituição: Unicred não é esperado");
   assert.ok(r.propostas.pendentes >= 2);
   // Divergência entre relatórios + (06D) operações importadas ainda não decididas.
   assert.deepEqual(r.divergenciasRelevantes.map((x) => x.codigo).sort(), ["DIVERGENCIA_ENTRE_RELATORIOS_SEM_JUSTIFICATIVA", "OPERACOES_IMPORTADAS_PENDENTES"]);
