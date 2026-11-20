@@ -16,6 +16,7 @@
 //   MOVA_IA_HABILITADA=1              Claude (ANTHROPIC_API_KEY) — exige processamento; orçamento persistente obrigatório
 //   MOVA_ENVIO_HABILITADO=1           respostas (exige processamento e MOVA_GATEWAY_URL)
 //   MOVA_SUSPENSO=1                   desliga TUDO (vence qualquer outra)
+//   MOVA_PG_CA                        CA do provedor do banco (PEM); na falta, usa FV2_PG_CA. TLS nunca deixa de ser verificado
 // Além das variáveis, a tabela mova.controle desliga cada etapa NA HORA (sem reiniciar nada) — reversão funcional.
 import { Router } from "express";
 import express from "express";
@@ -131,7 +132,9 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
   if (!cfg.habilitado || !obterDependenciasFv2) return null;
   if (instancia) return instancia;
   instancia = (async () => {
-    const ssl = { rejectUnauthorized: true };
+    // TLS SEMPRE verificado; a CA do provedor (ex.: raiz do Supabase) vem de MOVA_PG_CA ou, na falta, de FV2_PG_CA.
+    const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
+    const ssl = ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
     const pool = new pg.Pool({ connectionString: cfg.databaseUrl, max: 4, idleTimeoutMillis: 30000, ssl });
     pool.on("error", () => {});
     const verificarBancoFinanceiro = async () => {
