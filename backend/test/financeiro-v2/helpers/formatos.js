@@ -77,11 +77,15 @@ const hex2 = (s) => `<${[...s].map((ch) => ch.charCodeAt(0).toString(16).padStar
  * @param {string[][]} paginas linhas de texto por página
  * @param {{declararPaginas?:number, imagemSemTexto?:boolean, toUnicode?:boolean, objStm?:boolean}} opcoes
  */
-export function pdf(paginas, { declararPaginas, imagemSemTexto = false, toUnicode = false, objStm = false } = {}) {
+export function pdf(paginas, { declararPaginas, imagemSemTexto = false, toUnicode = false, objStm = false, semCompressao = false, fechoZlibInvalido = false } = {}) {
   const objetos = [];
   const novo = (corpo) => { objetos.push(corpo); return objetos.length; };
+  // semCompressao: stream cru (o texto do conteúdo, inclusive "endobj", aparece literal no arquivo).
+  // fechoZlibInvalido: soma de verificação final do zlib errada, como fazem alguns geradores (ex.: PDFsharp).
   const stream = (dict, conteudo) => {
-    const dados = deflateSync(Buffer.from(conteudo, "latin1"));
+    if (semCompressao) { const dados = Buffer.from(conteudo, "latin1"); return { dict: `<< ${dict} /Length ${dados.length} >>`, dados }; }
+    const dados = Buffer.from(deflateSync(Buffer.from(conteudo, "latin1")));
+    if (fechoZlibInvalido) dados[dados.length - 1] ^= 0xff;
     return { dict: `<< ${dict} /Filter /FlateDecode /Length ${dados.length} >>`, dados };
   };
   const catalogo = novo(null);

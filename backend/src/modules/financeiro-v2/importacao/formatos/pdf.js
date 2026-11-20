@@ -6,7 +6,7 @@
 // PDF digitalizado (página com imagem e sem texto) é SINALIZADO — não há OCR automático.
 // Suporta: objetos diretos e em object streams (/ObjStm), /FlateDecode, fontes simples (WinAnsi/Latin) e fontes com
 // /ToUnicode (códigos de 1 ou 2 bytes). PDF criptografado é recusado.
-import { inflateSync } from "node:zlib";
+import { constants as zlibConstants, inflateRawSync, inflateSync } from "node:zlib";
 import { CODIGO, falhar } from "../../dominio/erros.js";
 
 const invalido = (mensagem) => falhar(CODIGO.IMPORTACAO_INVALIDA, `PDF inválido: ${mensagem}`);
@@ -19,8 +19,17 @@ function lerObjetos(bin) {
   let m;
   while ((m = re.exec(bin))) {
     const inicio = m.index + m[0].length;
-    const fim = bin.indexOf("endobj", inicio);
+    let fim = bin.indexOf("endobj", inicio);
     if (fim < 0) break;
+    // Stream binário com /Length DIRETO: lê exatamente esse tamanho. Os bytes comprimidos podem conter a sequência "endobj"
+    // por acaso (ex.: PDFs do emissor nacional de NFS-e); procurar o primeiro "endobj" cortaria o stream no meio.
+    const comStream = /^\s*<<((?:(?!endobj)[\s\S])*?)>>\s*stream\r?\n/.exec(bin.slice(inicio, Math.min(bin.length, inicio + 4096)));
+    const tamanho = comStream ? /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(comStream[1])?.[1] : null;
+    if (tamanho !== null && tamanho !== undefined) {
+      const fimDosDados = inicio + comStream[0].length + Number(tamanho);
+      const fimReal = bin.indexOf("endobj", fimDosDados);
+      if (fimDosDados <= bin.length && fimReal > 0) fim = fimReal;
+    }
     let corpo = bin.slice(inicio, fim);
     let stream = null;
     const s = /stream\r?\n/.exec(corpo);
@@ -45,7 +54,14 @@ function decodificarStream(obj) {
     try {
       dados = inflateSync(dados, { maxOutputLength: LIMITE_STREAM });
     } catch {
-      return null; // stream corrompido: a página fica sem texto e é sinalizada
+      // Alguns geradores (ex.: PDFsharp, usado no emissor nacional de NFS-e) gravam o fecho do zlib (soma de verificação)
+      // inválido ou ausente: o conteúdo comprimido está inteiro. Segunda tentativa: o fluxo "deflate" puro, sem o
+      // cabeçalho de 2 bytes nem a soma final; se também falhar, o stream segue tratado como corrompido.
+      try {
+        dados = inflateRawSync(dados.subarray(2), { maxOutputLength: LIMITE_STREAM, finishFlush: zlibConstants.Z_SYNC_FLUSH });
+      } catch {
+        return null; // stream corrompido: a página fica sem texto e é sinalizada
+      }
     }
   } else if (filtros && !/FlateDecode/.test(filtros)) return /DCTDecode|JPX|CCITT|JBIG2/.test(filtros) ? "" : null;
   return dados.toString("latin1");
