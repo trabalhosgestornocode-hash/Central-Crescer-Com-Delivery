@@ -922,3 +922,28 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .ent-acao fieldset { display: grid; gap: 6px; border: 1px solid var(--linha); border-radius: var(--raio-sm); }
 @media (max-width: 760px) { .ent-ciclo { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ent-cards { grid-template-columns: minmax(0, 1fr); } }
 @media print { .navegacao, .filtros, .painel-cabeca button, .ent-acao, .ent-demonstrativo button { display: none !important; } .painel-fundo { position: static; background: none; } .painel { position: static; width: auto; box-shadow: none; } }
+
+/* 20/11/2026 — Quadro da conferência da nota (abre logo depois de anexar; fecha no X, fora do quadro ou com Esc). */
+.conf-nota { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); border: 0; border-radius: 16px; padding: 28px 24px 20px; background: var(--card); color: var(--texto); box-shadow: var(--sombra-alta); overflow-y: auto; }
+.conf-nota[open] { animation: conf-nota-entrar .22s cubic-bezier(.2, 0, 0, 1); }
+.conf-nota::backdrop { background: rgba(20, 12, 16, .45); backdrop-filter: blur(2px); }
+@keyframes conf-nota-entrar { from { transform: translateY(10px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .conf-nota[open] { animation: none; } }
+.conf-nota__x { position: absolute; top: 10px; right: 10px; }
+.conf-nota__topo { text-align: center; }
+.conf-nota__selo { width: 56px; height: 56px; margin: 0 auto 12px; border-radius: 50%; display: grid; place-items: center; font-size: 28px; font-weight: 700; }
+.conf-nota__selo--ok { background: var(--ok-bg); color: var(--ok); }
+.conf-nota__selo--alerta { background: var(--alerta-bg); color: var(--alerta); }
+.conf-nota h2 { margin: 0; font-size: var(--t-titulo); font-weight: 650; letter-spacing: -.01em; }
+.conf-nota__sub { margin: 6px 0 0; color: var(--suave); font-size: var(--t-pequeno); }
+.conf-nota__quem { margin: 16px 0 10px; text-align: center; font-weight: 600; font-size: var(--t-base); }
+.conf-nota__itens { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.conf-nota__item { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 12px; border-radius: var(--raio-sm); background: var(--superficie); border: 1px solid var(--linha); font-size: var(--t-pequeno); }
+.conf-nota__marca { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.conf-nota__item--ok .conf-nota__marca { background: var(--ok-bg); color: var(--ok); }
+.conf-nota__item--alerta { border-color: var(--alerta); }
+.conf-nota__item--alerta .conf-nota__marca { background: var(--alerta-bg); color: var(--alerta); }
+.conf-nota__valor { color: var(--suave); overflow-wrap: anywhere; }
+.conf-nota__motivos { margin: 12px 0 0; padding: 10px 14px 10px 28px; border-radius: var(--raio-sm); background: var(--alerta-bg); color: var(--alerta); font-size: var(--t-pequeno); }
+.conf-nota__rodape { display: flex; justify-content: center; margin-top: 18px; }
+.conf-nota__rodape .botao { min-width: 140px; }
