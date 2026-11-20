@@ -156,7 +156,32 @@ test("conta manual do mesmo serviço bloqueia a geração até uma pessoa decidi
 test("nomes parecidos não são tratados como a mesma pessoa", async () => {
   const m = await preparado();
   await m.n.registrarObrigacao(m.c, { contraparteNova: { tipo: "FORNECEDOR", nome: "Mauricio Souza" }, valorOriginalCentavos: 1500, categoria: "ENTREGADORES_PROPRIOS", descricao: "Outra pessoa", competencia: "2026-11", dataEmissao: "2026-11-09", vencimento: "2026-11-11" });
-  assert.equal((await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG })).duplicidades, 0);
+  // Conta de outra pessoa na mesma categoria e semana: não é duplicidade de ninguém, mas uma pessoa confirma antes de gerar.
+  assert.equal((await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG })).pendencias[0].codigo, "CONTA_MANUAL_SEM_ENTREGADOR");
+  assert.equal((await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, aceitarContasManuais: true, justificativa: "Mauricio Souza é outro entregador, fora do Foody." })).duplicidades, 0);
+});
+test("conta manual ÚNICA da semana em Entregadores Próprios (sem entregador) não é gerada de novo por cima", async () => {
+  const m = await preparado();
+  await m.n.registrarObrigacao(m.c, { contraparteNova: { tipo: "FORNECEDOR", nome: "Entregadores próprios — Unidade" }, valorOriginalCentavos: 2400, categoria: "ENTREGADORES_PROPRIOS", descricao: "ENTREGADORES ENTRE OS DIAS 02/11 A 08/11", competencia: "2026-11", dataEmissao: "2026-11-11", vencimento: "2026-11-11" });
+  const p = await m.n.previaDoFechamentoSemanal(m.c, { inicio: SEG });
+  assert.equal(p.comDuplicidade, 0, "a comparação por nome não enxerga a conta agregada");
+  assert.deepEqual(p.pendencias.map((x) => [x.codigo, x.valorCentavos]), [["CONTA_MANUAL_SEM_ENTREGADOR", 2400]], "a prévia mostra a conta já lançada");
+  const r = await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG });
+  assert.deepEqual([r.situacao, r.contasCriadas], ["PENDENTE", 0], "nada é gerado por cima da conta manual");
+  assert.equal((await m.n.consultarContasAPagar(m.c, {})).quantidade, 1);
+  await rejeita(m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, aceitarContasManuais: true }), CODIGO.ENTRADA_INVALIDA);
+  const ok = await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG, aceitarContasManuais: true, justificativa: "A conta manual é de outro serviço." });
+  assert.deepEqual([ok.situacao, ok.contasCriadas], ["CONSOLIDADA", 2]);
+  assert.equal(ok.semana.dados.contasManuaisAceitas.contas.length, 1, "a decisão fica registrada na semana");
+});
+test("conta manual já lançada: o fechamento automático nunca a aceita sozinho; outra categoria não conta", async () => {
+  const m = await preparado();
+  await m.n.registrarObrigacao(m.c, { contraparteNova: { tipo: "FORNECEDOR", nome: "Entregadores próprios — Unidade" }, valorOriginalCentavos: 2400, categoria: "ENTREGADORES_PROPRIOS", descricao: "Semana manual", competencia: "2026-11", dataEmissao: "2026-11-11", vencimento: "2026-11-11" });
+  await m.n.registrarObrigacao(m.c, { contraparteNova: { tipo: "FORNECEDOR", nome: "Gráfica" }, valorOriginalCentavos: 900, categoria: "OUTRAS_DESPESAS", descricao: "Outra categoria", competencia: "2026-11", dataEmissao: "2026-11-11", vencimento: "2026-11-11" });
+  assert.equal((await m.n.previaDoFechamentoSemanal(m.c, { inicio: SEG })).pendencias[0].quantidade, 1, "só a categoria Entregadores Próprios entra");
+  const ciclo = await m.n.executarCicloDeEntregadores(m.c);
+  assert.ok(ciclo.semanas.every((s) => !s.contasCriadas));
+  assert.equal((await m.n.consultarContasAPagar(m.c, {})).quantidade, 2);
 });
 test("sem nota aprovada a conta segue no calendário, sinaliza impedimento e nenhuma baixa passa", async () => {
   const m = await preparado({ agora: "2026-11-11T15:00:00.000Z" });

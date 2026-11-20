@@ -18,7 +18,7 @@ export const DECISAO_DUPLICIDADE = enumerar("GERAR_NOVA", "VINCULAR_MANUAL", "GE
 /** Identidade técnica exclusiva do fechamento semanal. A migração 0026 impede, no banco, que ela mexa em dinheiro ou permissões. */
 export const IDENTIDADE_DE_AUTOMACAO = "00000000-0000-4000-8000-00000000e7e9";
 export const DECISAO_DIVERGENCIA = enumerar("MANTER", "AJUSTAR_CONTA", "CONTA_COMPLEMENTAR", "COMPENSAR_FUTURO");
-export const CODIGO_PENDENCIA = enumerar("FONTE_INDISPONIVEL", "DIA_SEM_DADOS", "DIA_PROVISORIO", "DIA_EM_TRIAGEM", "CANCELAMENTO_EM_REVISAO", "ENTREGA_SEM_TAXA", "CATEGORIA_AUSENTE", "COMPETENCIA_HOMOLOGADA");
+export const CODIGO_PENDENCIA = enumerar("FONTE_INDISPONIVEL", "DIA_SEM_DADOS", "DIA_PROVISORIO", "DIA_EM_TRIAGEM", "CANCELAMENTO_EM_REVISAO", "ENTREGA_SEM_TAXA", "CATEGORIA_AUSENTE", "COMPETENCIA_HOMOLOGADA", "CONTA_MANUAL_SEM_ENTREGADOR");
 
 /** Calendário da semana da data informada. A semana termina no domingo e o dinheiro vence na quarta seguinte. */
 export function semanaDe(data) {
@@ -120,6 +120,27 @@ export function contasManuaisCandidatas({ nome, inicio, obrigacoes, contrapartes
   return obrigacoes.filter((o) => o.situacao !== "CANCELADA" && !String(o.fonte?.idExterno ?? "").startsWith(PREFIXO_FONTE)
     && mesmoNome(semPrefixo(nomes.get(o.contraparteId)), nome) && (naJanela(o.dataEmissao) || naJanela(o.vencimento)))
     .map((o) => ({ obrigacaoId: o.id, categoria: categoria.get(o.lancamentoId) ?? null, descricao: o.descricao, valorCentavos: o.valorBaseCentavos, saldoCentavos: o.saldoCentavos, dataEmissao: o.dataEmissao, vencimento: o.vencimento, situacao: o.situacao }));
+}
+
+/**
+ * Contas manuais JÁ lançadas na categoria Entregadores Próprios, na janela da semana, que não são de nenhum entregador apurado
+ * (ex.: uma conta única "Entregadores — semana tal"). A comparação por nome não as enxerga; gerar as contas da semana por cima
+ * delas contaria o mesmo custo duas vezes na DRE. Viram pendência: só uma pessoa, com justificativa, decide seguir.
+ */
+export function contasManuaisSemEntregador({ nomes, inicio, obrigacoes, contrapartes, lancamentos }) {
+  const ate = somarDias(inicio, 16);
+  const daCategoria = new Set(lancamentos.map((l) => l.id));
+  const favorecido = new Map(contrapartes.map((c) => [c.id, String(c.nome ?? "").replace(/^\s*entregador(a)?\s+/i, "")]));
+  const naJanela = (d) => d >= inicio && d <= ate;
+  return obrigacoes.filter((o) => o.situacao !== "CANCELADA" && daCategoria.has(o.lancamentoId) && !String(o.fonte?.idExterno ?? "").startsWith(PREFIXO_FONTE)
+    && (naJanela(o.dataEmissao) || naJanela(o.vencimento)) && !nomes.some((n) => mesmoNome(favorecido.get(o.contraparteId), n)))
+    .map((o) => ({ obrigacaoId: o.id, descricao: o.descricao, valorCentavos: o.valorBaseCentavos, saldoCentavos: o.saldoCentavos, vencimento: o.vencimento, situacao: o.situacao }));
+}
+export function pendenciaDeContasManuais(contas) {
+  if (!contas.length) return [];
+  const total = contas.reduce((s, c) => s + c.valorCentavos, 0);
+  return [{ codigo: CODIGO_PENDENCIA.CONTA_MANUAL_SEM_ENTREGADOR, quantidade: contas.length, valorCentavos: total, contas,
+    mensagem: `${contas.length} conta(s) manual(is) já lançada(s) em Entregadores Próprios nesta semana sem entregador identificado (${contas.map((c) => c.descricao).join("; ")}). Fechar a semana geraria o mesmo custo de novo: cancele ou ajuste a conta manual, ou confirme que é outro serviço.` }];
 }
 
 const TRANSICOES = Object.freeze({
