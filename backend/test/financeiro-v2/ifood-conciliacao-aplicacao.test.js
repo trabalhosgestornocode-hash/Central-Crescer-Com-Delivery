@@ -194,3 +194,18 @@ test("permissão: quem só vê não aplica; rota de escrita e de prévia usam o 
   const r = await ESCRITAS["/importacao/ifood-conciliacao/aplicar"].fazer(n, c, { importacao: imp.id, justificativa: JUST });
   assert.equal(r.lancamentos.criar, 8);
 });
+
+test("unidade que usa o SWF (Subway): a conferência com a SAIPOS não se aplica — nada de 'dias sem SAIPOS' pendentes; valores idênticos", async () => {
+  const comSaipos = novo();
+  const { imp: impA } = await importar(comSaipos, base());
+  const a = await comSaipos.previaDaConciliacaoIfood(c, { importacaoId: impA.id });
+  assert.equal(a.conferenciaSaipos.situacao, "PENDENTE_DE_CONFERENCIA", "unidade SAIPOS: segue como antes");
+  const swf = novo();
+  await ESCRITAS["/configuracoes/unidade"].fazer(swf, c, { nomeExibicao: "Subway sintética", justificativa: JUST });
+  await swf.configurarFontesDeFaturamento(c, { fontes: ["SWF", "IFOOD", "NOVENTA_E_NOVE_FOOD"], justificativa: JUST });
+  const { imp: impB } = await importar(swf, base());
+  const b = await swf.previaDaConciliacaoIfood(c, { importacaoId: impB.id });
+  assert.equal(b.conferenciaSaipos.situacao, "NAO_APLICAVEL");
+  assert.deepEqual(b.conferenciaSaipos.diasSemSaipos, []);
+  assert.deepEqual(b.valores, a.valores, "a conferência não muda nenhum valor");
+});

@@ -15,6 +15,7 @@ import {
   SITUACAO_REGISTRO_FONTE, SITUACAO_TITULO, SITUACAO_VENDA, TIPO,
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
+import { unidadeUsaSwf } from "./fontesDeFaturamento.js";
 import { aceitaEscrita, exigeCorrecaoAuditada } from "../dominio/fechamento.js";
 import { competenciaDe, exigirData, somarDias } from "../dominio/tempo.js";
 import { exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
@@ -79,6 +80,11 @@ function desejadosDoDia(dia) {
 
 /** Conferência com a SAIPOS, por dia: só compara e aponta; nada aqui altera valor. */
 async function conferenciaComSaipos(tx, cx, dias, pedidosOficiais) {
+  // Unidade que usa o SWF (Subway) não tem SAIPOS: a conferência não se aplica (nunca "dias sem SAIPOS" pendentes). O iFood/99Food
+  // aparece no SWF 76 só como conferência, na área SWF. Nenhum valor muda.
+  if (unidadeUsaSwf(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"))) {
+    return { porDia: new Map(), soNaSaipos: new Map(), resumo: { diasComparados: 0, diasSemSaipos: [], diasSoNaSaipos: [], diasDivergentes: [], saiposCentavos: 0, ifoodProdutosCentavos: 0, diferencaCentavos: 0, diferencaPedidos: 0, diferencaItensCentavos: 0, pedidosSoNoIfood: 0, pedidosSoNaSaipos: 0, situacao: "NAO_APLICAVEL", motivo: "A unidade usa o SWF: não há relatório SAIPOS para conferir." } };
+  }
   const datas = new Set(dias.map((d) => d.data));
   const saipos = (await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: "SAIPOS", tipoRegistro: "PEDIDO" } }))
     .filter((r) => r.situacao === SITUACAO_REGISTRO_FONTE.ATIVO && r.dados?.canal === "IFOOD" && datas.has(r.dataReferencia));
