@@ -21,3 +21,8 @@ test("sem nota vigente ou já liberada, nada aparece", () => {
   assert.equal(dadosDaNota(base(null)), "");
   assert.equal(dadosDaNota(base(lida, { situacaoDocumental: "LIBERADO_PAGAMENTO" })), "");
 });
+test("mostra por que a nota não foi liberada automaticamente", () => {
+  const h = dadosDaNota(base({ ...lida, automatica: { liberada: false, motivos: ["A nota não identifica o tomador."] } }));
+  assert.match(h, /Não foi liberada automaticamente/); assert.match(h, /não identifica o tomador/);
+  assert.doesNotMatch(dadosDaNota(base({ ...lida, automatica: { liberada: true, motivos: [] } }, { situacaoDocumental: "NF_APROVADA" })), /Não foi liberada/);
+});

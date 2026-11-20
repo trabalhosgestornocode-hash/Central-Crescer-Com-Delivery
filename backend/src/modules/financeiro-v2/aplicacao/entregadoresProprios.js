@@ -43,6 +43,39 @@ function lerNotaDoArquivo(arquivo) {
     return null;
   }
 }
+const normalizarNome = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(Boolean);
+/** O emitente é o próprio entregador quando TODAS as palavras do nome cadastrado aparecem no nome da nota. */
+const emitenteDoEntregador = (nomeEntregador, prestador) => {
+  const nota = new Set(normalizarNome(prestador));
+  const palavras = normalizarNome(nomeEntregador);
+  return palavras.length > 0 && palavras.every((p) => nota.has(p));
+};
+const APROVADAS = new Set([DOC.NF_APROVADA, DOC.LIBERADO_PAGAMENTO]);
+
+/**
+ * LIBERAÇÃO AUTOMÁTICA no ato do anexo (decisão do dono, 20/11): a nota lida do PDF da NFS-e só aprova e libera sozinha
+ * quando TUDO confere. Qualquer dúvida → fica para a conferência manual, com o motivo.
+ *   valor lido = total devido · tomador identificado e igual ao das notas já aprovadas desta unidade (se houver)
+ *   emitente = o entregador (nome) ou um emitente já aprovado antes para ele · período escrito = a semana (se escrito)
+ *   competência da nota não anterior à semana · quem anexa tem a permissão de conferir · sem divergência aberta na semana
+ */
+function avaliarLiberacaoAutomatica({ leitura, nota, f, outros, semana, permissoes }) {
+  const motivos = [];
+  if (!leitura) return { liberada: false, motivos: ["A nota não é um PDF do emissor nacional legível: confira à mão."] };
+  if (!(permissoes ?? []).includes(ACAO.CONCILIAR)) motivos.push("Quem anexou não tem a permissão de conferir notas.");
+  if (nota.valorCentavos !== f.valorCentavos) motivos.push("O valor da nota é diferente do total devido.");
+  if (leitura.tomador?.naoIdentificado || !leitura.tomador?.documento) motivos.push("A nota não identifica o tomador.");
+  const aprovadasDaUnidade = outros.flatMap((x) => (x.dados.notas ?? []).filter((n) => n.vigente && APROVADAS.has(n.situacao) && n.leitura));
+  const tomadores = new Set(aprovadasDaUnidade.map((n) => n.leitura.tomador?.documento).filter(Boolean));
+  if (leitura.tomador?.documento && tomadores.size && !tomadores.has(leitura.tomador.documento)) motivos.push("O tomador é diferente das notas já aprovadas nesta unidade.");
+  const emitentesConhecidos = new Set(outros.filter((x) => x.entregadorChave === f.entregadorChave).flatMap((x) => (x.dados.notas ?? []).filter((n) => n.vigente && APROVADAS.has(n.situacao)).map((n) => n.leitura?.prestador?.documento)).filter(Boolean));
+  if (!emitenteDoEntregador(f.entregadorNome, leitura.prestador?.nome) && !emitentesConhecidos.has(leitura.prestador?.documento)) motivos.push("O emitente da nota não é o entregador (confira e aprove à mão; nas próximas semanas ele passa a ser reconhecido).");
+  if (leitura.periodo && (leitura.periodo.inicio !== f.semanaInicio || leitura.periodo.fim !== f.semanaFim)) motivos.push("O período escrito na nota é diferente da semana.");
+  if (leitura.competencia && leitura.competencia < f.semanaInicio) motivos.push("A competência da nota é anterior à semana.");
+  if ((semana?.dados?.divergencias ?? []).some((d) => d.situacao === "ABERTA" && d.entregadorChave === f.entregadorChave)) motivos.push("Há alteração operacional sem decisão nesta semana.");
+  return { liberada: motivos.length === 0, motivos };
+}
+
 /** Diferenças entre o que a nota diz e a semana — só para a conferência humana; nada é aprovado sozinho. */
 function avisosDaLeitura(l, f) {
   const a = [];
@@ -425,9 +458,18 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         const repetida = outros.some((x) => (x.dados.notas ?? []).some((n) => n.vigente && (n.documentoId === envio.documento.id || (chave && n.leitura?.chaveAcesso === chave) || (dadosFiscais.numero && n.numero === dadosFiscais.numero && n.emitente === dadosFiscais.emitente))));
         if (repetida) falhar(CODIGO.OPERACAO_INVALIDA, "Esta nota fiscal já está vinculada a outra semana ou entregador.", { motivo: "NOTA_DUPLICADA" });
         const notas = (f.dados.notas ?? []).map((n) => ({ ...n, vigente: false, substituidaEm: n.vigente ? b.agora() : n.substituidaEm ?? null }));
-        notas.push({ documentoId: envio.documento.id, enviadaEm: b.agora(), enviadaPor: cx.usuarioId, vigente: true, situacao: DOC.NF_RECEBIDA, ...dadosFiscais });
-        const atualizado = await b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { situacaoDocumental: exigirTransicao(f.situacaoDocumental, DOC.NF_RECEBIDA), dados: { ...f.dados, notas } }, EVENTO_HISTORICO.MUDANCA_ESTADO, leitura ? "Nota fiscal recebida (dados lidos do PDF da NFS-e)." : "Nota fiscal recebida.");
-        return Object.assign(atualizado, { leituraDaNota: leitura ? { lida: true, ...dadosFiscais, avisos: avisosDaLeitura(leitura, atualizado) } : { lida: false } });
+        const recebida = exigirTransicao(f.situacaoDocumental, DOC.NF_RECEBIDA);
+        const semana = await obterSemana(tx, cx, f.semanaInicio);
+        const auto = avaliarLiberacaoAutomatica({ leitura, nota: dadosFiscais, f, outros, semana, permissoes: cx.permissoes });
+        const em = b.agora();
+        notas.push({ documentoId: envio.documento.id, enviadaEm: em, enviadaPor: cx.usuarioId, vigente: true, situacao: auto.liberada ? DOC.NF_APROVADA : recebida, ...dadosFiscais, automatica: auto });
+        const justificativaAuto = "Nota lida do PDF da NFS-e e conferida automaticamente no anexo (valor, tomador, emitente, período e duplicidade); pagamento liberado.";
+        const dados = auto.liberada
+          ? { ...f.dados, notas, conferencias: [...(f.dados.conferencias ?? []), { decisao: "APROVAR", automatica: true, conferido: Object.fromEntries(CONFERENCIAS.map((k) => [k, true])), justificativa: justificativaAuto, por: cx.usuarioId, em }], liberacao: { automatica: true, justificativa: justificativaAuto, por: cx.usuarioId, em } }
+          : { ...f.dados, notas };
+        const atualizado = await b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { situacaoDocumental: auto.liberada ? DOC.LIBERADO_PAGAMENTO : recebida, dados }, EVENTO_HISTORICO.MUDANCA_ESTADO,
+          auto.liberada ? justificativaAuto : leitura ? "Nota fiscal recebida (dados lidos do PDF da NFS-e)." : "Nota fiscal recebida.");
+        return Object.assign(atualizado, { leituraDaNota: leitura ? { lida: true, ...dadosFiscais, avisos: avisosDaLeitura(leitura, atualizado), liberadaAutomaticamente: auto.liberada, motivos: auto.motivos } : { lida: false, liberadaAutomaticamente: false, motivos: auto.motivos } });
       });
     },
 
