@@ -6,6 +6,7 @@ import { ROTAS_PLATAFORMA, aquecerCredenciais, credenciaisDaPlataforma, criarTra
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
 import { definirFontesDaUnidade, esc } from "./formatar.js";
+import { iniciarMenuRecolhivel } from "./menu.js";
 
 // Módulos das telas pesadas: baixados SOB DEMANDA (só o da tela aberta entra no caminho da primeira pintura) e aquecidos logo depois
 // da primeira tela útil. Os nomes abaixo são os mesmos usados no resto do arquivo (adm, conf, ven, can, calCanais, impCanais, ent).
@@ -49,7 +50,7 @@ if (MODO_PLATAFORMA) {
   // Os links da plataforma existem desde a primeira pintura e não dependem da sessão financeira (funcionam também com ela vencida).
   for (const [id, href] of [["#link-operacional", ROTAS_PLATAFORMA.operacional], ["#link-plataforma", ROTAS_PLATAFORMA.inicio]]) {
     const a = document.querySelector(id);
-    if (a) { a.href = href; a.hidden = false; }
+    if (a) a.href = href;
   }
 }
 const consultor = criarConsultor();
@@ -862,16 +863,5 @@ $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia 
 const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
 $("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; estado.fontesDaUnidade = null; reiniciarFiltros(); invalidarCache(); const nome = $("#topo-unidade"); if (nome) nome.textContent = nomeUnidade(); carregar(); });
 $("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; estado.fontesDaUnidade = null; reiniciarFiltros(); carregar(); });
-// Menu recolhível: preferência de interface (só este navegador; nada financeiro é guardado).
-const alternarMenu = $("#nav-alternar");
-function aplicarMenuRecolhido(recolhido) {
-  document.documentElement.dataset.nav = recolhido ? "recolhida" : "aberta";
-  alternarMenu?.setAttribute("aria-expanded", String(!recolhido));
-}
-try { aplicarMenuRecolhido(localStorage.getItem("fv2-menu") === "recolhido"); } catch { aplicarMenuRecolhido(false); }
-alternarMenu?.addEventListener("click", () => {
-  const recolher = document.documentElement.dataset.nav !== "recolhida";
-  aplicarMenuRecolhido(recolher);
-  try { localStorage.setItem("fv2-menu", recolher ? "recolhido" : "aberto"); } catch { /* preferência é só conveniência */ }
-});
+iniciarMenuRecolhivel();
 rotear();

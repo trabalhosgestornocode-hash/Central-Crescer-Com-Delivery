@@ -17,16 +17,18 @@ const opcao = (v, rotulo, atual) => `<option value="${esc(v)}"${v === (atual ?? 
 const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
 /** 08D — formulário de AÇÃO (grava de verdade; exige confirmação; resultado anunciado). */
 let seqForm = 0;
-const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista", embutido = false }) => {
+const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista", embutido = false, recolhivel = false }) => {
   const k = (seqForm += 1);
   if (embutido) {
     return `<form class="acao acao--embutida" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
 <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
 <button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
   }
-  return `<section class="card" aria-labelledby="t-acao-${k}"><h3 id="t-acao-${k}">${esc(titulo)}</h3><form class="acao" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
+  const corpo = `<form class="acao" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
 <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
-<button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>`;
+<button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
+  if (recolhivel) return `<details class="card card--recolhivel"><summary><h3 id="t-acao-${k}">${esc(titulo)}</h3></summary>${corpo}</details>`;
+  return `<section class="card" aria-labelledby="t-acao-${k}"><h3 id="t-acao-${k}">${esc(titulo)}</h3>${corpo}</section>`;
 };
 const podeRegistrar = (ctx) => (ctx?.permissoes ?? []).includes("financeiro_v2.registrar");
 const podeVincular = (ctx) => (ctx?.permissoes ?? []).includes("financeiro_v2.vincular_pagamento");
@@ -65,7 +67,7 @@ const barraDePago = (x) => {
 export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
   const o = r.opcoesDeRegistro;
-  const registrar = podeRegistrar(ctx) && o ? formAcao({ url: "/api/fv2/acoes/obrigacoes/registrar", titulo: "Registrar conta a pagar", rotulo: "Registrar conta", aviso: "Confirmo o registro da conta (a categoria decide a natureza; \"a classificar\" fica fora da DRE até haver evidência).",
+  const registrar = podeRegistrar(ctx) && o ? formAcao({ url: "/api/fv2/acoes/obrigacoes/registrar", titulo: "Registrar conta a pagar", recolhivel: true, rotulo: "Registrar conta", aviso: "Confirmo o registro da conta (a categoria decide a natureza; \"a classificar\" fica fora da DRE até haver evidência).",
     campos: `<input type="hidden" name="chave" value="${esc(globalThis.crypto?.randomUUID?.() ?? "")}">
 <label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Ou novo fornecedor <input name="fornecedorNovo" maxlength="120"></label>

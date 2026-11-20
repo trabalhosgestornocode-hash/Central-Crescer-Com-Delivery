@@ -13,6 +13,9 @@ try {
   if (localStorage.getItem("saci-tema") === "dark") document.documentElement.setAttribute("data-theme", "dark");
 } catch (e) { /* armazenamento bloqueado: segue no tema claro */ }
 
+// 5) MENU recolhido (preferência de interface deste navegador): aplicado antes da primeira pintura para a página não "pular" depois.
+try { document.documentElement.dataset.nav = localStorage.getItem("fv2-menu") === "recolhido" ? "recolhida" : "aberta"; } catch (e) { document.documentElement.dataset.nav = "aberta"; }
+
 const naPlataforma = new URLSearchParams(location.search).get("modo") === "plataforma";
 if (naPlataforma) document.documentElement.dataset.modo = "plataforma";
 

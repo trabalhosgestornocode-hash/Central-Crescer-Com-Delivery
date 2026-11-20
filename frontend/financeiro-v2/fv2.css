@@ -50,7 +50,7 @@ h1, h2, h3, h4 { line-height: 1.25; }
 .marca-empresa { font-size: 12px; font-weight: 500; color: rgba(255, 255, 255, .62); letter-spacing: .01em; }
 .marca-produto { font-size: 21px; font-weight: 700; color: #fff; letter-spacing: -.02em; justify-self: start; border-bottom: 3px solid var(--marca-viva); padding-bottom: 2px; }
 .nav-grupo + .nav-grupo { margin-top: 18px; }
-.nav-titulo { margin: 0 12px 6px; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, .5); }
+.nav-titulo { margin: 0 12px 6px; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, .64); }
 .navegacao ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .navegacao a, .em-breve { display: block; padding: 8px 12px; border-radius: var(--raio-sm); color: rgba(255, 255, 255, .84); text-decoration: none; font-size: 14px; font-weight: 500; }
 .navegacao a:hover:not([aria-current="page"]) { background: rgba(255, 255, 255, .06); color: #fff; }
@@ -72,6 +72,16 @@ h1, h2, h3, h4 { line-height: 1.25; }
 .topo .usuario-logado { font-size: 13px; color: var(--suave); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .botao--icone { display: inline-grid; place-items: center; width: 40px; padding: 0; flex: none; }
 .icone-menu { width: 16px; height: 2px; background: currentColor; box-shadow: 0 -5px 0 currentColor, 0 5px 0 currentColor; border-radius: 2px; }
+@media (min-width: 1181px) {
+  html[data-modo="plataforma"] .topo { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; column-gap: 14px; padding: 10px 0; }
+  html[data-modo="plataforma"] .topo-linha { display: contents; }
+  html[data-modo="plataforma"] .topo #nav-alternar { grid-column: 1; grid-row: 1; }
+  html[data-modo="plataforma"] .topo .topo-unidade { grid-column: 2; grid-row: 1; }
+  html[data-modo="plataforma"] .topo .filtros { grid-column: 3; grid-row: 1; padding: 0; align-items: flex-end; flex-wrap: nowrap; }
+  html[data-modo="plataforma"] .topo .topo-links { grid-column: 4; grid-row: 1; flex-wrap: nowrap; }
+  html[data-modo="plataforma"] .topo-links .usuario-logado { display: none; }
+}
+@media (min-width: 1560px) { html[data-modo="plataforma"] .topo-links .usuario-logado:not([hidden]) { display: inline; } }
 /* barra de filtros global (dentro do cabeçalho) */
 .filtros { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 8px 0 14px; }
 .filtros label { display: grid; gap: 5px; font-size: 12px; font-weight: 500; color: var(--suave); min-width: 0; }
@@ -81,6 +91,8 @@ h1, h2, h3, h4 { line-height: 1.25; }
 #filtro-sessao { max-width: 340px; }
 .filtros > button { align-self: flex-end; font-size: 13px; }
 html[data-modo="plataforma"] .so-demo { display: none; }
+/* Links da plataforma: só dentro da Crescer (decidido por tema.js antes da primeira pintura, sem aparecer depois do JavaScript). */
+html:not([data-modo="plataforma"]) .topo-links a { display: none; }
 /* Entrada em etapas (data-boot): o menu definitivo só aparece quando a unidade e as fontes dela são conhecidas. */
 .nav-esqueleto { display: none; gap: 10px; padding: 6px 12px; }
 html[data-boot="identificando"] .nav-esqueleto, html[data-boot="configurando"] .nav-esqueleto { display: grid; }
@@ -305,7 +317,7 @@ details.card > summary h2.inline { display: inline; font-size: 16px; margin: 0; 
 .estado--carregando > p:first-child { margin: 0 0 12px; }
 .esqueleto-pagina { display: grid; gap: 16px; }
 .esq-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-.esq-cards i, .esq-bloco { display: block; border-radius: var(--raio); border: 1px solid var(--linha); background: linear-gradient(90deg, var(--card) 0%, var(--superficie) 50%, var(--card) 100%); background-size: 200% 100%; animation: brilho 1.6s ease-in-out infinite; }
+.esq-cards i, .esq-bloco { display: block; border-radius: var(--raio); border: 1px solid var(--linha); background: linear-gradient(90deg, var(--card) 0%, var(--hover) 50%, var(--card) 100%); background-size: 200% 100%; animation: brilho 1.6s ease-in-out infinite; }
 .esq-cards i { height: 112px; }
 .esq-bloco { height: 220px; } .esq-bloco--alto { height: 320px; }
 @media (max-width: 760px) { .esq-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .esq-cards i { height: 92px; } .esq-bloco { height: 160px; } .esq-bloco--alto { height: 220px; } }
@@ -387,7 +399,15 @@ details.card > summary h2.inline { display: inline; font-size: 16px; margin: 0; 
 .etapas-fechamento { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 14px 0; counter-reset: etapa; }
 .etapas-fechamento li { counter-increment: etapa; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--linha); font-size: 13px; color: var(--suave); background: var(--card); }
 .etapas-fechamento li::before { content: counter(etapa) ". "; } .etapas-fechamento li.concluida { color: var(--ok); border-color: transparent; background: var(--ok-bg); } .etapas-fechamento li.atual { background: var(--texto); color: var(--card); border-color: var(--texto); font-weight: 600; }
-.acao { border: 1px solid var(--linha); border-radius: 10px; padding: 16px; margin: 14px 0; display: grid; gap: 10px; background: var(--superficie); }
+.acao { border: 1px solid var(--linha); border-radius: 10px; padding: 16px; margin: 14px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 10px 14px; background: var(--superficie); }
+.acao > label:not(.caixa-marcar) { align-content: end; }
+.acao > :not(label), .acao > label.caixa-marcar, .acao > label.campo--largo { grid-column: 1 / -1; }
+.acao--embutida { grid-template-columns: minmax(0, 1fr); }
+/* formulário recolhível: a lista fica na primeira dobra e o cadastro abre sob demanda */
+.card--recolhivel > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; }
+.card--recolhivel > summary::-webkit-details-marker { display: none; }
+.card--recolhivel > summary h3 { margin: 0; }
+.card--recolhivel[open] > summary { margin-bottom: 8px; }
 .acao label { display: grid; gap: 4px; font-size: 13px; } .acao input[type="text"] { font: inherit; padding: 8px 10px; border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-height: 40px; width: 100%; }
 .acao .caixa-marcar { display: flex; align-items: flex-start; gap: 8px; } .acao .caixa-marcar input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--marca-escura); }
 .acao--perigo { border-color: var(--erro-bg); border-left: 3px solid var(--erro); }

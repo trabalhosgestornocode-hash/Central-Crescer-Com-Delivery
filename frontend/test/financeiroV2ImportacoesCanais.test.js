@@ -154,7 +154,7 @@ test("arquitetura: as importações do canal só são consultadas na aba Importa
   const app = arquivo("app.js");
   assert.equal((app.match(/importacoes-canal\?/g) ?? []).length, 1, "uma só montagem da consulta");
   const trecho = app.slice(app.indexOf("function consultaDasImportacoes"), app.indexOf("const contextoDasImportacoes"));
-  assert.equal((trecho.match(/aba === "importacoes"/g) ?? []).length, 3, "só com a aba Importações aberta, nos três canais");
+  assert.equal((trecho.match(/aba === "importacoes"/g) ?? []).length, 4, "só com a aba Importações aberta, nos quatro canais (SAIPOS, SWF, iFood, 99Food)");
   assert.match(app, /\/api\/fv2\/previa-demonstrativo-ifood/);
   const fonte = arquivo("telasImportacoesCanais.js");
   assert.ok(!/reduce\(|Centavos\s*[+\-*\/]\s*\w+Centavos/.test(fonte), "a tela calcula dinheiro");

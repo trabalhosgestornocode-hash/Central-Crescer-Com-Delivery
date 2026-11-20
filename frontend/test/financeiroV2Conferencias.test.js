@@ -258,7 +258,7 @@ test("26, 27 (troca de competência e resposta atrasada) — só a última consu
 
 test("28, 30, 31 — celular, cartões e teclado: abas reais, formulários de ação com botão, Esc e foco", () => {
   const css = arquivo("fv2.css");
-  const movel = css.slice(css.lastIndexOf("@media (max-width: 760px)"));
+  const movel = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(movel, /\.lados \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   assert.match(movel, /\.tabela--cartoes td > \.cel/);
   assert.match(css, /details\.tecnico pre \{[^}]*overflow-wrap: anywhere/);

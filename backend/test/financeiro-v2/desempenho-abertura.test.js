@@ -76,7 +76,9 @@ test("cabeçalho do HTML: favicon oficial versionado, título, e aviso de demons
 
 test("erro de leitura oferece 'Tentar novamente' (só no estado de erro); cache é esvaziado ao sair, trocar sessão/unidade e atualizar", async () => {
   const telas = await readFile(new URL("../../../frontend/financeiro-v2/telas.js", import.meta.url), "utf8");
-  assert.match(telas, /tipo === "erro" \? '<p><button type="button" class="botao" data-tentar-novamente>Tentar novamente<\/button><\/p>'/);
+  // Repaginação: "Tentar novamente" continua só em estados de falha (erro e falta de conexão), nunca em carregando/vazio/negado.
+  assert.match(telas, /\(tipo === "erro" \|\| tipo === "rede"\) && !acoes\.some\(\(a\) => a\.tentar\)/);
+  assert.match(telas, /rotulo: "Tentar novamente", tentar: true/);
   const app = await readFile(new URL("../../../frontend/financeiro-v2/app.js", import.meta.url), "utf8");
   assert.match(app, /closest\("\[data-tentar-novamente\], #atualizar-dados"\)\) \{ invalidarCache\(\); carregar\(\); return; \}/);
   assert.match(app, /invalidarCache\(\); \/\/ ao encerrar a sessão/);

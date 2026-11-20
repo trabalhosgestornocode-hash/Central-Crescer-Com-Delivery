@@ -41,7 +41,7 @@ const INSTRUMENTO = (vigiar) => {
     const fontesOk = performance.getEntriesByType("resource").some((e) => /fontes-faturamento/.test(e.name) && e.responseEnd > 0);
     if (!window.__m.menu && visivel(nav) && fontesOk) window.__m.menu = t;
     const h1 = document.querySelector("#conteudo h1");
-    if (!window.__m.conteudo && h1) { window.__m.conteudo = t; window.__m.h1 = h1.textContent; }
+    if (!window.__m.conteudo && h1) { window.__m.conteudo = t; window.__m.h1 = h1.textContent; window.__m.bytesInicial = performance.getEntriesByType("resource").filter((e) => /\.(js|css)(\?|$)/.test(e.name) && e.name.includes("127.0.0.1")).reduce((a, e) => a + (e.decodedBodySize || 0), 0).toString(); }
     if (vigiar) {
       const texto = document.body.innerText;
       if (/SAIPOS/.test(texto)) { if (window.__m.vazou.saipos === null) window.__m.vazou.saipos = t; window.__m.vazou.saiposUltimo = t; }
@@ -75,7 +75,7 @@ async function abrir(browser, srv, rtt, { vigiar = false } = {}) {
   await page.waitForFunction(() => window.__m?.conteudo, null, { timeout: 60000 });
   await espera(400); // deixa o CLS e as consultas tardias assentarem
   const m = await page.evaluate(() => ({ ...window.__m, bytes: performance.getEntriesByType("resource").filter((e) => /\.(js|css)(\?|$)/.test(e.name) && e.name.includes("127.0.0.1")).reduce((a, e) => a + (e.decodedBodySize || 0), 0) }));
-  bytesJsCss = m.bytes;
+  bytesJsCss = Number(m.bytesInicial ?? m.bytes); // até o 1º conteúdo útil (o resto das telas é aquecido depois, em tempo ocioso)
   const duplicadas = [...idas.values()].filter((n) => n > 1).reduce((a, n) => a + n - 1, 0);
   const total = [...idas.values()].reduce((a, n) => a + n, 0);
   await ctx.close();

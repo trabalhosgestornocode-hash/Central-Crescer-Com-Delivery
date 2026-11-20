@@ -180,7 +180,7 @@ test("26 — mudança rápida de filtros: só a última resposta é aplicada", a
 
 test("27 — responsivo e acessível: tabelas viram cartões, calendário por toque, navegação nova", () => {
   const css = arquivo("fv2.css");
-  const movel = css.slice(css.lastIndexOf("@media (max-width: 760px)"));
+  const movel = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(movel, /\.tabela--cartoes td::before \{ content: attr\(data-rotulo\)/);
   assert.match(movel, /\.calendario \{ gap: 3px; \}/);
   assert.match(css, /\.cal-dia \{[^}]*min-height: 84px/);
