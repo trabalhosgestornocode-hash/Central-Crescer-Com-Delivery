@@ -107,3 +107,22 @@ export function consumirStatusPreResolvido(chaveContexto, agora = Date.now()) {
 
 /** Marcação do carregamento neutro (sem menu, sem número, sem cara de nenhuma das duas versões). */
 export const CARREGAMENTO_NEUTRO = `<div class="fin-carregando" role="status" aria-live="polite" aria-busy="true"><span class="fin-carregando-ponto"></span><span class="fin-carregando-ponto"></span><span class="fin-carregando-ponto"></span><span class="sr-only">Carregando</span></div>`;
+
+/**
+ * Transição para o Crescer Com Delivery Financeiro: tela cheia com a MESMA estrutura do Financeiro v2 (menu escuro + cabeçalho +
+ * blocos), mostrada enquanto o servidor confirma o acesso. Cobre o cabeçalho da plataforma, então quem entra vê UMA só interface
+ * (esta transição vira o esqueleto do v2, que continua exatamente de onde ela parou) — nunca a plataforma com um "Carregando…"
+ * seguida de outra tela.
+ */
+export const TRANSICAO_FINANCEIRO = `<div class="fin-transicao" id="fin-transicao" role="status" aria-live="polite" aria-busy="true"><div class="fin-transicao-menu" aria-hidden="true"><p class="fin-transicao-marca"><span>Crescer Com Delivery</span><strong>Financeiro</strong></p><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="fin-transicao-pagina" aria-hidden="true"><div class="fin-transicao-topo"></div><div class="fin-transicao-cards"><i></i><i></i><i></i><i></i></div><div class="fin-transicao-bloco"></div></div><span class="sr-only">Abrindo o Crescer Com Delivery Financeiro</span></div>`;
+
+// ---------- última resolução (só um booleano, neste navegador): decide se a transição em estilo v2 vale a pena ----------
+// NÃO autoriza nada e não contém dado financeiro: só evita mostrar a transição do v2 a quem usa o financeiro legado.
+const CHAVE_ULTIMO = "crescer:fin-ultimo";
+export function gravarUltimoFinanceiro(chaveContexto, v2, storage = globalThis.localStorage) {
+  try { storage?.setItem(CHAVE_ULTIMO, JSON.stringify({ c: chaveContexto, v2: v2 === true })); } catch { /* sem armazenamento: só conveniência */ }
+}
+/** @returns {boolean|null} true = v2, false = legado, null = desconhecido (outro contexto ou nada guardado) */
+export function lerUltimoFinanceiro(chaveContexto, storage = globalThis.localStorage) {
+  try { const x = JSON.parse(storage?.getItem(CHAVE_ULTIMO) || "null"); return x && x.c === chaveContexto && typeof x.v2 === "boolean" ? x.v2 : null; } catch { return null; }
+}

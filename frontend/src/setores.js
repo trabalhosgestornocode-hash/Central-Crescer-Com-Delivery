@@ -21,10 +21,11 @@ export function setoresValidos(lista) {
  *   setorAtual?: string|null,      // setor já escolhido NESTE contexto
  *   exibicao?: boolean,            // perfil de exibição (TV): fluxo próprio, sem escolha de setor
  *   impersonando?: boolean,
+ *   setorPedido?: string|null,     // pedido de navegação vindo de outra tela (?setor=): "financeiro" | "operacional" | "escolher"
  * }} e
  * @returns {{acao: 'entrar'|'escolher'|'bloqueado', setor?: string, setores: string[]}}
  */
-export function decidirSetor({ setores, setorAtual = null, exibicao = false, impersonando = false }) {
+export function decidirSetor({ setores, setorAtual = null, exibicao = false, impersonando = false, setorPedido = null }) {
   // Perfil de exibição e suporte (impersonação): sempre o operacional, como antes — o financeiro é bloqueado no backend.
   if (exibicao || impersonando) return { acao: "entrar", setor: SETOR.OPERACIONAL, setores: [SETOR.OPERACIONAL] };
   // Falha ao consultar: NÃO libera financeiro. O operacional segue o comportamento atual (o backend continua decidindo).
@@ -32,6 +33,10 @@ export function decidirSetor({ setores, setorAtual = null, exibicao = false, imp
 
   const validos = setoresValidos(setores);
   if (validos.length === 0) return { acao: "bloqueado", setores: validos };
+  // Pedido explícito (botões do Financeiro): só vale se o SERVIDOR ainda autoriza o setor; senão cai na regra normal.
+  // "escolher" mostra a escolha mesmo com um só setor (é como se volta à plataforma sem reentrar no financeiro).
+  if (setorPedido === "escolher") return { acao: "escolher", setores: validos };
+  if (validos.includes(setorPedido)) return { acao: "entrar", setor: setorPedido, setores: validos };
   if (validos.length === 1) return { acao: "entrar", setor: validos[0], setores: validos };
   // Dois setores: mantém a escolha já feita neste contexto, desde que o servidor ainda a autorize; senão pergunta.
   if (setorAtual && validos.includes(setorAtual)) return { acao: "entrar", setor: setorAtual, setores: validos };
@@ -57,4 +62,20 @@ export function gravarPreferencia(usuarioId, setor, storage = globalThis.localSt
     const atual = JSON.parse(storage?.getItem(CHAVE_PREFERENCIA) || "{}");
     storage?.setItem(CHAVE_PREFERENCIA, JSON.stringify({ ...atual, [usuarioId]: setor }));
   } catch { /* storage indisponível: a preferência é só conveniência */ }
+}
+
+const SETORES_PEDIDOS = ["financeiro", "operacional", "escolher"];
+/**
+ * Lê UMA vez o pedido de setor da URL (`/?setor=operacional`), remove o parâmetro da barra de endereço e devolve o valor
+ * (ou null). Valor desconhecido é ignorado. Nunca concede acesso: quem decide é decidirSetor com a lista do servidor.
+ */
+export function consumirSetorPedido(location = globalThis.location, history = globalThis.history) {
+  try {
+    const url = new URL(location.href);
+    const v = url.searchParams.get("setor");
+    if (v === null) return null;
+    url.searchParams.delete("setor");
+    history?.replaceState?.(history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    return SETORES_PEDIDOS.includes(v) ? v : null;
+  } catch { return null; }
 }

@@ -13,10 +13,12 @@ const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
  * @param {{pasta:string, porta?:number, relogio?:()=>Date, atrasoApiMs?:number}} p `pasta` = a pasta `frontend` a servir.
  * @returns {Promise<{url:string, porta:number, fechar:()=>Promise<void>, requisicoesDeApi:string[], falharProximas:(n:number)=>void}>}
  */
-export async function iniciarPlataformaSimulada({ pasta, porta = 0, relogio = () => new Date("2026-11-25T15:00:00Z"), atrasoApiMs = 0 }) {
-  const demo = await criarDemo({ relogio });
+export async function iniciarPlataformaSimulada({ pasta, porta = 0, relogio = () => new Date("2026-11-25T15:00:00Z"), atrasoApiMs = 0, preparar = null, unidadeIndice = 0, atrasoPorRota = {} }) {
+  const demo = await criarDemo({ relogio, ...(preparar ? { preparar } : {}) });
   const raiz = normalize(pasta);
   const requisicoesDeApi = [];
+  let sessaoExpirada = false;
+  let respostas401 = 0; // simulação de login vencido: toda rota financeira responde 401 SESSAO_EXPIRADA
   let falhasRestantes = 0; // simulação de indisponibilidade: as próximas N consultas de dados (não a sessão) respondem 503
   const json = (res, status, corpo, extra = {}) => res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...extra }).end(JSON.stringify(corpo));
   const espera = (ms) => (ms > 0 ? new Promise((ok) => setTimeout(ok, ms)) : Promise.resolve());
@@ -25,19 +27,20 @@ export async function iniciarPlataformaSimulada({ pasta, porta = 0, relogio = ()
     const url = new URL(req.url, "http://127.0.0.1");
     try {
       if (url.pathname === "/api/config") return json(res, 200, { supabaseUrl: "http://127.0.0.1/supabase-simulado", supabaseAnonKey: "chave-anon-simulada" });
+      if (sessaoExpirada && url.pathname.startsWith("/api/v1/financeiro-v2/")) { respostas401 += 1; return json(res, 401, { erro: "SEM_SESSAO", motivo: "SESSAO_EXPIRADA", mensagem: "Sessão expirada (simulação)." }); }
       if (url.pathname === "/api/v1/financeiro-v2/sessao") {
         requisicoesDeApi.push("sessao");
         await espera(atrasoApiMs);
         const r = await demo.responder("/api/fv2/sessao", {}, "administrador");
-        return json(res, r.status, { ...r.corpo, modo: "PLATAFORMA", csrf: null, escritaHabilitada: true, pessoasDemo: [] });
+        return json(res, r.status, { ...r.corpo, unidades: (r.corpo.unidades ?? []).filter((u) => u.id === UNIDADES[unidadeIndice].id), modo: "PLATAFORMA", csrf: null, escritaHabilitada: true, pessoasDemo: [] });
       }
       if (url.pathname.startsWith("/api/v1/financeiro-v2/api/")) {
         const caminho = `/api/fv2/${url.pathname.slice("/api/v1/financeiro-v2/api/".length)}`;
         requisicoesDeApi.push(`${caminho}?${url.searchParams.toString()}`);
-        await espera(atrasoApiMs);
+        await espera(atrasoApiMs + (atrasoPorRota[caminho.slice("/api/fv2/".length)] ?? 0));
         if (falhasRestantes > 0) { falhasRestantes -= 1; return json(res, 503, { erro: "INDISPONIVEL", mensagem: "Serviço indisponível (simulação)." }); }
         // A unidade é SEMPRE a da sessão (como no servidor real): a do cliente é ignorada.
-        const params = { ...Object.fromEntries(url.searchParams), unidade: UNIDADES[0].id };
+        const params = { ...Object.fromEntries(url.searchParams), unidade: UNIDADES[unidadeIndice].id };
         const r = await demo.responder(caminho, params, "administrador");
         return json(res, r.status, r.corpo);
       }
@@ -59,5 +62,5 @@ export async function iniciarPlataformaSimulada({ pasta, porta = 0, relogio = ()
   });
   await new Promise((ok) => servidor.listen(porta, "127.0.0.1", ok));
   const { port } = servidor.address();
-  return { url: `http://127.0.0.1:${port}`, porta: port, requisicoesDeApi, falharProximas: (n) => { falhasRestantes = n; }, fechar: () => new Promise((ok) => servidor.close(ok)) };
+  return { url: `http://127.0.0.1:${port}`, porta: port, requisicoesDeApi, falharProximas: (n) => { falhasRestantes = n; }, expirarSessao: (v = true) => { sessaoExpirada = v; }, respostas401: () => respostas401, fechar: () => new Promise((ok) => servidor.close(ok)) };
 }

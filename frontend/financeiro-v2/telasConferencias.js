@@ -3,10 +3,7 @@
 // núcleo. Códigos técnicos, hashes e JSON ficam só em seções recolhíveis "Detalhes técnicos".
 // Ações (importar, aprovar, aplicar, conciliar) são formulários que chamam as operações REAIS do núcleo pela demonstração
 // local; aparecem só para quem tem a permissão e sempre exigem confirmação explícita.
-import {
-  CONFIANCAS, EVENTOS, ESTADOS_COMPETENCIA, ESTADOS_IMPORTACAO, ESTADOS_PROPOSTA, FONTES_NOME, LINHAS_DRE, PERMISSOES, SITUACOES_CORRESPONDENCIA, SITUACOES_PENDENCIA,
-  SITUACOES_SECAO, competencia, dataBR, esc, moeda,
-} from "./formatar.js";
+import { CONFIANCAS, ESTADOS_COMPETENCIA, ESTADOS_IMPORTACAO, ESTADOS_PROPOSTA, EVENTOS, FONTES_NOME, LINHAS_DRE, PERMISSOES, SITUACOES_CORRESPONDENCIA, SITUACOES_PENDENCIA, SITUACOES_SECAO, competencia, dataBR, esc, moeda, relatorioDeOutroSistema } from "./formatar.js";
 import { documentos, paginacao } from "./telasTesouraria.js";
 import { previaDeMovimentos } from "./telasMovimentosCaixa.js";
 
@@ -68,7 +65,7 @@ function resumo(r, f, ctx) {
 </section>
 </div>
 <section class="card" aria-labelledby="t-docs"><h2 id="t-docs">Documentos da competência</h2>
-  <ul class="lista-simples">${r.fontes.comDocumento.map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--ok">importado (${esc(periodo(x.cobertura))})</span></li>`).join("")}${r.fontes.semDocumento.map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--alerta">falta o documento</span></li>`).join("")}</ul>
+  <ul class="lista-simples">${r.fontes.comDocumento.filter((x) => !relatorioDeOutroSistema(x)).map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--ok">importado (${esc(periodo(x.cobertura))})</span></li>`).join("")}${r.fontes.semDocumento.filter((x) => !relatorioDeOutroSistema(x)).map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--alerta">falta o documento</span></li>`).join("")}</ul>
 </section>
 ${r.divergenciasRelevantes.length ? `<section class="card" aria-labelledby="t-div"><h2 id="t-div">O que impede o fechamento</h2><ul class="lista-simples">${r.divergenciasRelevantes.map((x) => `<li><span>${esc(x.mensagem)}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul><p class="nota">A diferença fica registrada até ter explicação com justificativa; nenhum ajuste é criado para fechar valores.</p></section>` : ""}
 <p class="nota">Faturamento da competência pela DRE: ${esc(moeda(r.faturamento.valorCentavos))}. ${esc(r.observacao)}</p>`;
@@ -312,7 +309,7 @@ ${r.itens.map((x) => `<tr>${td("Documento", `<strong>${esc(x.relatorio)}</strong
 ${paginacao(r.paginacao, ROTA)}
 </section>
 <details class="card"><summary><h2 class="inline">Leitores e formatos homologados</h2></summary>
-<ul class="lista-simples">${r.compatibilidade.map((x) => `<li><span>${esc(x.relatorio)} (${esc(fonte(x.fonte))})</span><span>${x.homologado ? `<span class="selo selo--ok">homologado: ${esc(x.formatosHomologados.join(", ").toUpperCase())}</span>` : '<span class="selo selo--alerta">sem amostra real conferida</span>'}</span></li>`).join("")}</ul>
+<ul class="lista-simples">${r.compatibilidade.filter((x) => !relatorioDeOutroSistema(x)).map((x) => `<li><span>${esc(x.relatorio)} (${esc(fonte(x.fonte))})</span><span>${x.homologado ? `<span class="selo selo--ok">homologado: ${esc(x.formatosHomologados.join(", ").toUpperCase())}</span>` : '<span class="selo selo--alerta">sem amostra real conferida</span>'}</span></li>`).join("")}</ul>
 <p class="nota">Outras variantes de arquivo só passam a valer depois de comprovadas com amostra real.</p></details>`;
 }
 
@@ -433,7 +430,7 @@ function envioReal(c) {
 <ol class="passos"><li>Escolher o relatório e o período</li><li>Enviar e conferir a prévia</li><li>Confirmar a importação</li><li>Gerar e revisar as propostas</li></ol>
 <form class="acao acao--formulario" data-acao="/api/fv2/acoes/importacao/receber" data-recarregar="resultado:documento" data-envio-evidencia>
   <div class="campos-form">
-  <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${(c.relatorios ?? []).map((r) => `<option value="${esc(r.tipoRelatorio)}">${esc(r.nome)}</option>`).join("")}</select></label>
+  <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${(c.relatorios ?? []).filter((r) => !relatorioDeOutroSistema(r)).map((r) => `<option value="${esc(r.tipoRelatorio)}">${esc(r.nome)}</option>`).join("")}</select></label>
   <label>Início do período <input type="date" name="periodoInicio" required></label>
   <label>Fim do período <input type="date" name="periodoFim" required></label>
   <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept=".pdf,.xlsx,.csv,.ofx" required></label>

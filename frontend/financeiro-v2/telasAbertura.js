@@ -5,7 +5,7 @@
 // Fluxo: configurar a abertura (competência de início + data de corte, GRAVADAS por unidade) → plano e contas → saldos de
 // abertura → títulos anteriores → conferência por outra pessoa → concluir. Os formulários de posição NÃO pedem
 // competência: usam a abertura gravada.
-import { competencia, esc, moeda } from "./formatar.js";
+import { competencia, esc, moeda, usaAnotaAi } from "./formatar.js";
 
 /** Proposta inicial (doc 29 §2.1), SEMPRE editável e sujeita à confirmação do proprietário. */
 export const COMPETENCIA_DE_ABERTURA_PROPOSTA = "2026-11";
@@ -106,7 +106,7 @@ export function formRecebivelAnterior(ab) {
     explicacao: `Repasses e créditos de vendas até ${dataCurta(ab.dataDeCorte)} ainda não recebidos, pelo valor a receber do demonstrativo (sem taxas presumidas). Não é faturamento e o recebimento depois não vira receita. Informe o identificador (pedido, ID do repasse, Stone ID): importações posteriores do mesmo título vão à conferência e nunca são aplicadas de novo.`,
     aviso: "Confirmo o registro do valor a receber anterior (reenviar o mesmo formulário não duplica).",
     campos: `<input type="hidden" name="chave" value="${novaChave()}">
-<label>Processador <select name="processador">${opcao("", "— não é processador (cliente) —")}${PROCESSADORES.map(([k, t]) => opcao(k, t)).join("")}</select></label>
+<label>Processador <select name="processador">${opcao("", "— não é processador (cliente) —")}${PROCESSADORES.filter(([k]) => k !== "ANOTA_AI" || usaAnotaAi()).map(([k, t]) => opcao(k, t)).join("")}</select></label>
 <label>Ou cliente <input type="text" name="clienteNovo" maxlength="120" placeholder="Nome do cliente (se não for processador)"></label>
 <label>Identificação <input type="text" name="descricao" maxlength="200" required placeholder="Ex.: repasse da semana de 27/10"></label>
 ${campoIdentificador("Ex.: ID do repasse ou do pedido")}<label>Valor a receber (R$) <input type="text" name="valor" ${VALOR} required></label>

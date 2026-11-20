@@ -2,10 +2,7 @@
 // Nenhuma fórmula financeira: totais, saldos, situações e projeções chegam prontos do backend.
 // Documentos aparecem como "registrado, não acessível nesta versão" — nunca há link, arquivo ou caminho.
 import { blocoNaConta } from "./telasEntregadores.js";
-import {
-  CATEGORIAS_BANCARIAS, EVENTOS, MOTIVOS_PARCIAL, NATUREZAS_FLUXO, OPERACOES_CAIXA, SITUACOES_TITULO, TIPOS_DOCUMENTO, TIPOS_RECEBIVEL, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal,
-  nomeDevedor, situacaoTitulo,
-} from "./formatar.js";
+import { CATEGORIAS_BANCARIAS, EVENTOS, MOTIVOS_PARCIAL, NATUREZAS_FLUXO, OPERACOES_CAIXA, SITUACOES_TITULO, TIPOS_DOCUMENTO, TIPOS_RECEBIVEL, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal, nomeDevedor, situacaoTitulo, usaAnotaAi } from "./formatar.js";
 import { formRecebivelDoPeriodo, formulariosDeCaixa } from "./telasAbertura.js";
 const REFERENCIA_SALDO = { INICIO_DO_DIA: "início do dia", FIM_DO_DIA: "fim do dia" };
 
@@ -320,7 +317,7 @@ ${d.titulos.length + d.pagamentos.length + d.recorrentes.length ? "" : nenhum("N
 export function contasAReceber(r, f = {}, ctx = {}) {
   const t = r.totais;
   return `${cabecalho("Contas a Receber", `Posição em ${esc(dataBR(r.dataBase))} · ${t.registros} título(s) no filtro`)}
-<p class="aviso">Stone, iFood e Anota AI são devedores, não contas bancárias: o valor só entra no saldo quando o crédito aparece na conta.</p>
+<p class="aviso">${usaAnotaAi() ? "Stone, iFood e Anota AI" : "Stone e iFood"} são devedores, não contas bancárias: o valor só entra no saldo quando o crédito aparece na conta.</p>
 ${formRecebivelDoPeriodo(ctx)}
 <section class="resumo" aria-label="Resumo das contas a receber">
   ${card("A receber", valor(t.saldoCentavos), "Saldo pendente de todos os títulos do filtro (esperado − recebido).")}
@@ -332,7 +329,7 @@ ${formRecebivelDoPeriodo(ctx)}
 <form class="filtros-locais" data-filtro-local="contas-a-receber" aria-label="Filtros das contas a receber">
   <label>Situação <select name="situacao">${opcao("", "Todas", f.situacao)}${["A_RECEBER", "SEM_PREVISAO_CONFIAVEL", "ATRASADO", "PARCIALMENTE_RECEBIDO", "EM_DIVERGENCIA", "RECEBIDO", "CANCELADO"].map((s) => opcao(s, SITUACOES_TITULO[s].rotulo, f.situacao)).join("")}</select></label>
   <label>Tipo <select name="tipo">${opcao("", "Todos", f.tipo)}${Object.entries(TIPOS_RECEBIVEL).map(([k, v]) => opcao(k, v, f.tipo)).join("")}</select></label>
-  <label>Processadora <select name="processador">${opcao("", "Todas", f.processador)}${["STONE", "IFOOD", "ANOTA_AI", "OPERADORA_BENEFICIOS"].map((k) => opcao(k, nomeDevedor({ tipo: "PROCESSADORA", nome: k }), f.processador)).join("")}</select></label>
+  <label>Processadora <select name="processador">${opcao("", "Todas", f.processador)}${["STONE", "IFOOD", "ANOTA_AI", "OPERADORA_BENEFICIOS"].filter((k) => k !== "ANOTA_AI" || usaAnotaAi()).map((k) => opcao(k, nomeDevedor({ tipo: "PROCESSADORA", nome: k }), f.processador)).join("")}</select></label>
   <label class="caixa-marcar"><input type="checkbox" name="soCompetencia"${f.soCompetencia ? " checked" : ""}> Só a competência selecionada</label>
 </form>
 <section class="card" aria-labelledby="t-lista-receber"><h2 id="t-lista-receber" class="sr">Lista de contas a receber</h2>
@@ -415,12 +412,12 @@ export function lancamentos(r, f = {}, ctx = {}) {
   const pode = podeRegistrar(ctx);
   const form = pode ? formAcao({ url: "/api/fv2/acoes/vendas/registrar", titulo: "Registrar receita (venda)", rotulo: "Registrar venda", aviso: "Confirmo a venda e a forma de recebimento. Reenviar o mesmo formulário não duplica.",
     campos: `<input type="hidden" name="chave" value="${esc(novaChave())}">
-<label>Canal <select name="canal">${Object.entries(CANAIS_LANC).map(([k, v]) => opcao(k, v, "BALCAO")).join("")}</select></label>
+<label>Canal <select name="canal">${Object.entries(CANAIS_LANC).filter(([k]) => k !== "ANOTA_AI" || usaAnotaAi()).map(([k, v]) => opcao(k, v, "BALCAO")).join("")}</select></label>
 <label>Data da venda <input type="date" name="dataVenda" value="${esc(r.dataBase ?? "")}" required></label>
 <label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" placeholder="0,00" required></label>
 <label>Forma de pagamento <select name="forma">${opcao("", "Ainda sem pagamento (a receber)", "")}${Object.entries(FORMAS).map(([k, v]) => opcao(k, v, "")).join("")}</select></label>
 <label>Cai na conta (dinheiro, Pix) <select name="conta">${opcao("", "—", "")}${contas.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
-<label>Operadora (cartão, apps) <select name="processador">${opcao("", "—", "")}${Object.entries(PROCESSADORES).map(([k, v]) => opcao(k, v, "")).join("")}</select></label>
+<label>Operadora (cartão, apps) <select name="processador">${opcao("", "—", "")}${Object.entries(PROCESSADORES).filter(([k]) => k !== "ANOTA_AI" || usaAnotaAi()).map(([k, v]) => opcao(k, v, "")).join("")}</select></label>
 <label>Descrição <input name="descricao" maxlength="200"></label>` }) : nenhum("Você não tem permissão para lançar nesta unidade. Peça ao administrador financeiro.");
   return `${cabecalho("Lançamentos", "Receitas lançadas à mão, sem depender de integrações")}
 <p class="aviso">Despesas e contas a pagar: <a href="#/contas-a-pagar">Contas a Pagar</a>. Saldos, contas e caixa: <a href="#/caixa-e-bancos">Caixa e Bancos</a> e Configurações › Abertura. Nada é lançado sem a sua confirmação.</p>

@@ -193,3 +193,22 @@ export const PERMISSOES = Object.freeze({
   "financeiro_v2.aprovar": "aprovar ou rejeitar propostas", "financeiro_v2.aplicar": "aplicar propostas aprovadas",
   "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada", "financeiro_v2.reclassificar": "reclassificar lançamentos", "financeiro_v2.enviar_documento": "enviar documentos de evidência", "financeiro_v2.vincular_pagamento": "vincular pagamentos do extrato",
 });
+
+// ---------------------------------------------------------------- fontes de faturamento da unidade ativa
+// O app (app.js) informa aqui as fontes CONFIGURADAS no servidor assim que chegam. As telas puras leem daqui para não mostrar
+// SAIPOS/Anota Aí numa unidade que usa o SWF (e vice-versa). Sem fontes conhecidas (testes, demonstração) NADA é filtrado.
+let fontesAtivas = null;
+export function definirFontesDaUnidade(fontes) { fontesAtivas = fontes ?? null; }
+/** "SAIPOS" | "SWF". Sem configuração conhecida: SAIPOS (o padrão histórico). */
+export const sistemaDeLoja = () => fontesAtivas?.sistemaDeLoja ?? "SAIPOS";
+/** Anota Aí é canal do SAIPOS: só aparece em unidade que usa o SAIPOS (ou enquanto as fontes são desconhecidas). */
+export const usaAnotaAi = () => !fontesAtivas || fontesAtivas.sistemaDeLoja === "SAIPOS";
+/** Artigo + nome do sistema de loja para frases ("a SAIPOS", "o SWF"). */
+export const oSistemaDeLoja = () => (sistemaDeLoja() === "SWF" ? "o SWF" : "a SAIPOS");
+/** Relatório/fonte de um sistema de loja que esta unidade NÃO usa (aceita {fonte, tipoRelatorio, nome}). */
+export function relatorioDeOutroSistema(x) {
+  if (!fontesAtivas) return false;
+  const usa = fontesAtivas.sistemaDeLoja;
+  const texto = `${x?.tipoRelatorio ?? ""} ${x?.fonte ?? ""} ${x?.nome ?? x?.relatorio ?? ""}`;
+  return (usa !== "SAIPOS" && /SAIPOS/i.test(texto)) || (usa !== "SWF" && /(^|[\s_])SWF/.test(texto));
+}

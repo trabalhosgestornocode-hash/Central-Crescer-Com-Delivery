@@ -1,10 +1,7 @@
 // Vendas e Recebimentos (Execução 06B) — funções PURAS: dados das consultas → HTML escapado.
 // Nenhuma fórmula financeira: totais, situações, comprovações e linhas do tempo chegam prontos do backend.
 // Documentos aparecem como "registrado, não acessível nesta versão" — nunca há link, arquivo ou caminho.
-import {
-  COMPROVACOES, CONFIABILIDADES, DIVERGENCIAS_VENDA, ETAPAS, FORMAS, LINHAS_DRE, PENDENCIAS_VENDA, SITUACOES_RECEBIMENTO, SITUACOES_VENDA, TIPOS_COMPONENTE,
-  competencia, dataBR, esc, moeda, nomeCanal, nomeDevedor, situacao, situacaoRecebimento, situacaoVenda,
-} from "./formatar.js";
+import { COMPROVACOES, CONFIABILIDADES, DIVERGENCIAS_VENDA, ETAPAS, FORMAS, LINHAS_DRE, PENDENCIAS_VENDA, SITUACOES_RECEBIMENTO, SITUACOES_VENDA, TIPOS_COMPONENTE, competencia, dataBR, esc, moeda, nomeCanal, nomeDevedor, situacao, situacaoRecebimento, situacaoVenda, usaAnotaAi } from "./formatar.js";
 import { documentos, paginacao } from "./telasTesouraria.js";
 
 export const ABAS = Object.freeze([["vendas", "Vendas"], ["pagamentos", "Pagamentos"], ["taxas", "Taxas e descontos"], ["recebiveis", "Recebíveis e repasses"], ["divergencias", "Divergências"]]);
@@ -53,9 +50,9 @@ function abas(atual) {
 }
 
 function filtros(f, aba) {
-  const canais = [["", "Todos"], ["BALCAO", "Balcão"], ["IFOOD", "iFood"], ["ANOTA_AI", "Anota AI"], ["OUTRO", "Outros canais"], ["NAO_IDENTIFICADO", "Sem canal identificado"]];
+  const canais = [["", "Todos"], ["BALCAO", "Balcão"], ["IFOOD", "iFood"], ["ANOTA_AI", "Anota AI"], ["OUTRO", "Outros canais"], ["NAO_IDENTIFICADO", "Sem canal identificado"]].filter(([k]) => k !== "ANOTA_AI" || usaAnotaAi());
   const formas = [["", "Todas"], ...Object.entries(FORMAS).filter(([k]) => k !== "OUTRA")];
-  const procs = [["", "Todos"], ...["STONE", "IFOOD", "ANOTA_AI", "OPERADORA_BENEFICIOS", "MAQUINA_TERCEIROS"].map((k) => [k, processador(k)]), ["SEM_PROCESSADOR", "Sem processador (direto)"]];
+  const procs = [["", "Todos"], ...["STONE", "IFOOD", "ANOTA_AI", "OPERADORA_BENEFICIOS", "MAQUINA_TERCEIROS"].filter((k) => k !== "ANOTA_AI" || usaAnotaAi()).map((k) => [k, processador(k)]), ["SEM_PROCESSADOR", "Sem processador (direto)"]];
   const especifico = {
     vendas: `<label>Situação <select name="situacao">${opcao("", "Todas", f.situacao)}${Object.entries(SITUACOES_VENDA).map(([k, v]) => opcao(k, v.rotulo, f.situacao)).join("")}</select></label>
   <label>Identificador <input type="search" name="identificador" maxlength="60" value="${esc(f.identificador ?? "")}" placeholder="ex.: pedido"></label>

@@ -14,12 +14,24 @@ const revisarNaCentral = (p) => { const k = chaveNaCentral(p); return k ? ` <a c
 const pendenciasCurtas = (lista = [], max = 3) => (lista.length ? `<ul class="pendencias">${lista.slice(0, max).map((p) => `<li>${esc(p.mensagem)}${p.valorCentavos !== undefined && p.valorCentavos !== null ? ` <strong>${esc(moeda(p.valorCentavos))}</strong>` : ""}${revisarNaCentral(p)}</li>`).join("")}${lista.length > max ? `<li>e mais ${lista.length - max} pendência(s).</li>` : ""}</ul>` : "");
 
 // ------------------------------------------------------------------------------------------- estados
-export function estado(tipo, mensagem = "") {
+/**
+ * Estados da área de conteúdo. Todos dizem o que houve e o que fazer; nenhum deixa a pessoa sem saída.
+ * `acoes`: botões/links ({rotulo, href | tentar, primario}); `compacto`: esqueleto curto (painel lateral).
+ */
+export function estado(tipo, mensagem = "", { titulo = null, acoes = [], compacto = false } = {}) {
   const t = {
     carregando: ["Carregando dados da competência…", "carregando"], erro: ["Não foi possível carregar.", "erro"], negado: ["Acesso negado ao Crescer Com Delivery Financeiro nesta unidade.", "erro"],
     "sem-sessao": ["Sessão ausente ou expirada. Entre novamente para ver o financeiro.", "erro"], vazio: ["Sem dados para esta competência.", "info"],
+    rede: ["Sem conexão com o servidor.", "erro"], "sem-contexto": ["Escolha a unidade para continuar.", "erro"],
   }[tipo] ?? ["", "info"];
-  return `<div class="estado estado--${t[1]}" role="${tipo === "carregando" ? "status" : "alert"}" ${tipo === "carregando" ? 'aria-busy="true"' : ""}><p>${esc(t[0])}</p>${mensagem ? `<p class="estado-detalhe">${esc(mensagem)}</p>` : ""}${tipo === "erro" ? '<p><button type="button" class="botao" data-tentar-novamente>Tentar novamente</button></p>' : ""}${tipo === "carregando" ? '<div class="esqueleto"></div><div class="esqueleto"></div>' : ""}</div>`;
+  const esqueleto = compacto
+    ? '<div class="esqueleto"></div><div class="esqueleto"></div>'
+    : '<div class="esqueleto-pagina" aria-hidden="true"><div class="esq-cards"><i></i><i></i><i></i><i></i></div><div class="esq-bloco"></div><div class="esq-bloco esq-bloco--alto"></div></div>';
+  const botoes = [...acoes, ...((tipo === "erro" || tipo === "rede") && !acoes.some((a) => a.tentar) ? [{ rotulo: "Tentar novamente", tentar: true }] : [])];
+  const html = botoes.map((a) => (a.href
+    ? `<a class="botao${a.primario ? " botao--primario" : ""}" href="${esc(a.href)}">${esc(a.rotulo)}</a>`
+    : `<button type="button" class="botao${a.primario ? " botao--primario" : ""}" data-tentar-novamente>${esc(a.rotulo)}</button>`)).join("");
+  return `<div class="estado estado--${t[1]}" role="${tipo === "carregando" ? "status" : "alert"}" ${tipo === "carregando" ? 'aria-busy="true"' : ""}><p>${esc(titulo ?? t[0])}</p>${mensagem ? `<p class="estado-detalhe">${esc(mensagem)}</p>` : ""}${html ? `<p class="estado-acoes">${html}</p>` : ""}${tipo === "carregando" ? esqueleto : ""}</div>`;
 }
 
 const ESTADO_DA_COMPETENCIA = Object.freeze({ ABERTA: "Competência aberta", FECHAMENTO_PRELIMINAR: "Fechamento preliminar", FECHAMENTO_COM_PENDENCIAS: "Fechamento com pendências documentadas", FECHAMENTO_HOMOLOGADO: "Competência homologada" });
@@ -28,12 +40,24 @@ const ESTADO_DA_COMPETENCIA = Object.freeze({ ABERTA: "Competência aberta", FEC
 /** Fase 08: origem de cada canal na Visão Geral e onde consultar a composição (SAIPOS até os lançamentos; plataformas pela fonte oficial). */
 const ORIGEM_CANAL = Object.freeze({ BALCAO: "Presencial — SAIPOS", ANOTA_AI: "Anota Aí — SAIPOS", IFOOD: "iFood — fonte oficial", NOVENTA_E_NOVE_FOOD: "99Food — fonte oficial" });
 const COMPOSICAO_CANAL = Object.freeze({ BALCAO: "#/saipos", ANOTA_AI: "#/saipos", IFOOD: "#/ifood", NOVENTA_E_NOVE_FOOD: "#/noventa-e-nove-food" });
-const rotuloCanal = (c) => ORIGEM_CANAL[c] ?? nomeCanal(c);
-export function visaoGeral(vg, { unidadeNome = "" } = {}) {
+/**
+ * Canais que a unidade usa, derivados das FONTES DE FATURAMENTO configuradas no servidor (nunca do nome da unidade).
+ * `fontes` = { sistemaDeLoja: "SAIPOS"|"SWF", plataformas: [...] }; null = ainda desconhecidas (não filtra nada).
+ */
+export function canalNaUnidade(canal, fontes) {
+  if (!fontes) return true;
+  if (canal === "ANOTA_AI") return fontes.sistemaDeLoja === "SAIPOS";
+  if (canal === "IFOOD" || canal === "NOVENTA_E_NOVE_FOOD") return (fontes.plataformas ?? []).includes(canal);
+  return true;
+}
+const rotuloCanal = (c, fontes = null) => (c === "BALCAO" && fontes?.sistemaDeLoja === "SWF" ? "SWF — Presencial / Balcão" : ORIGEM_CANAL[c] ?? nomeCanal(c));
+const composicaoDoCanal = (c, fontes = null) => (c === "BALCAO" && fontes?.sistemaDeLoja === "SWF" ? "#/swf" : COMPOSICAO_CANAL[c]);
+export function visaoGeral(vg, { unidadeNome = "", fontes = null } = {}) {
   const fb = vg.faturamentoBruto;
   const liq = vg.faturamentoLiquidoGerencial;
   const res = vg.resultadoGerencial;
-  const canais = fb.porCanal.filter((c) => c.canal !== "NAO_IDENTIFICADO" || (c.valorCentavos ?? 0) !== 0);
+  // Só os canais da unidade. Canal fora das fontes só aparece se TIVER valor ou registro (nenhum dinheiro some da tela).
+  const canais = fb.porCanal.filter((c) => (c.canal !== "NAO_IDENTIFICADO" || (c.valorCentavos ?? 0) !== 0) && (canalNaUnidade(c.canal, fontes) || (c.valorCentavos ?? 0) !== 0 || (c.registros ?? []).length > 0));
   const zeroConfirmado = fb.valorCentavos === 0 && fb.situacao === "CONFIRMADO";
   const grupos = Object.fromEntries((vg.cadaCem?.grupos ?? []).map((g) => [g.codigo, g]));
   const rec = liq.reconciliacaoComDre;
@@ -50,7 +74,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   <div class="card-topo"><h2 id="t-fb">Faturamento Bruto Próprio</h2>${selo(fb.situacao)}${explicar("Faturamento Bruto Próprio", "Soma das vendas pelo valor bruto próprio (produtos, acréscimos e serviços da loja), antes de descontos. Não é saldo bancário, depósito, total Stone nem soma de formas de pagamento.")}</div>
   <p class="numero-principal">${valor(fb.valorCentavos)}${zeroConfirmado ? '<span class="nota-zero">zero confirmado</span>' : ""}</p>
   ${comPeso.length ? `<div class="barra barra--canais" role="img" aria-label="Participação por canal: ${esc(comPeso.map((c) => `${nomeCanal(c.canal)} ${percentual(c.percentualDoBruto)}`).join(", "))}">${comPeso.map((c) => `<span class="segmento segmento--canal-${esc(classeCanal(c.canal))}" data-peso="${c.percentualDoBruto}" title="${esc(`${nomeCanal(c.canal)}: ${percentual(c.percentualDoBruto)}`)}"></span>`).join("")}</div>` : ""}
-  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => { const semDados = !(c.registros ?? []).length; return `<li class="canal${c.comprovado && !semDados ? "" : " canal--sem"}"><span class="canal-nome"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(rotuloCanal(c.canal))}</span>${semDados ? '<span class="valor valor--desconhecido">Sem dados</span>' : valor(c.valorCentavos)}<span class="canal-pct">${semDados ? "" : esc(percentual(c.percentualDoBruto))}</span>${semDados ? `<small>${c.canal === "IFOOD" || c.canal === "NOVENTA_E_NOVE_FOOD" ? "Sem relatório oficial da plataforma nesta competência (não é zero)." : "Sem vendas registradas nesta competência (não é zero confirmado)."}</small>` : c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${COMPOSICAO_CANAL[c.canal] ? `<a class="botao-link" href="${COMPOSICAO_CANAL[c.canal]}">Ver composição<span class="sr"> — ${esc(rotuloCanal(c.canal))}</span></a>` : ""}${!semDados ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`; }).join("")}</ul>
+  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => { const semDados = !(c.registros ?? []).length; return `<li class="canal${c.comprovado && !semDados ? "" : " canal--sem"}"><span class="canal-nome"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(rotuloCanal(c.canal, fontes))}</span>${semDados ? '<span class="valor valor--desconhecido">Sem dados</span>' : valor(c.valorCentavos)}<span class="canal-pct">${semDados ? "" : esc(percentual(c.percentualDoBruto))}</span>${semDados ? `<small>${c.canal === "IFOOD" || c.canal === "NOVENTA_E_NOVE_FOOD" ? "Sem relatório oficial da plataforma nesta competência (não é zero)." : "Sem vendas registradas nesta competência (não é zero confirmado)."}</small>` : c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${composicaoDoCanal(c.canal, fontes) ? `<a class="botao-link" href="${composicaoDoCanal(c.canal, fontes)}">Ver composição<span class="sr"> — ${esc(rotuloCanal(c.canal, fontes))}</span></a>` : ""}${!semDados ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`; }).join("")}</ul>
   ${pendenciasCurtas(fb.pendencias)}
   <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}</div>
 </section>
