@@ -92,12 +92,32 @@ export function montarEventoMova(m, { grupos, origemTipo = "OFFLINE_NORMAL", ago
 }
 
 /**
- * @param {{grupos:readonly string[], notificar:(payload:object) => Promise<any>, baixarMidia?:(m:any, socket:any) => Promise<Uint8Array>,
- *          log?:Function, maxRecentes?:number, maxMidiaBytes?:number}} deps
+ * Homologação privada (src/movaHomologacao.js): payload de uma mensagem do contato JÁ VERIFICADO. A "conversa" é o JID
+ * canônico (PN) do contato; o autor também (conversa 1:1).
  */
-export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, log = () => {}, maxRecentes = 2000, maxMidiaBytes = MIDIA_MAX_BYTES }) {
+export function montarEventoMovaPrivado(m, { jidVerificado, origemTipo = "OFFLINE_NORMAL", agora = () => new Date() }) {
+  const key = m?.key;
+  if (!key || typeof key.id !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(key.id) || key.fromMe === true || m.messageStubType != null) return null;
+  const c = lerConteudo(m.message);
+  const ts = Number(m.messageTimestamp);
+  return {
+    contratoMova: CONTRATO_MOVA_VERSAO, eventoId: `bly:${key.id}`, mensagemId: key.id, grupoId: jidVerificado, participanteId: jidVerificado,
+    telefoneE164: telefoneDe(jidVerificado), nomeExibicao: typeof m.pushName === "string" && m.pushName.trim() ? m.pushName.trim().slice(0, 60) : null, fromMe: false,
+    tipo: c.tipo, texto: c.texto, respostaA: c.respostaA && /^[A-Za-z0-9_.:-]{1,128}$/.test(c.respostaA) ? c.respostaA : null,
+    midia: c.midia ? { mime: c.midia.mime, nomeArquivo: c.midia.nomeArquivo, tamanhoBytes: null, base64: null } : null,
+    recebidoEm: (Number.isFinite(ts) && ts > 0 ? new Date(ts * 1000) : agora()).toISOString(),
+    origemTipo: ["LIVE", "OFFLINE_NORMAL", "OFFLINE_RECOVERY"].includes(origemTipo) ? origemTipo : "OFFLINE_NORMAL",
+  };
+}
+
+/**
+ * @param {{grupos:readonly string[], notificar:(payload:object) => Promise<any>, baixarMidia?:(m:any, socket:any) => Promise<Uint8Array>,
+ *          log?:Function, maxRecentes?:number, maxMidiaBytes?:number, contatoHomologacao?:object|null}} deps
+ *   `contatoHomologacao`: verificador de src/movaHomologacao.js (null = conversa privada nunca passa)
+ */
+export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, log = () => {}, maxRecentes = 2000, maxMidiaBytes = MIDIA_MAX_BYTES, contatoHomologacao = null }) {
   const recentes = new Set();
-  const ativo = Array.isArray(grupos) && grupos.length > 0;
+  const ativo = (Array.isArray(grupos) && grupos.length > 0) || Boolean(contatoHomologacao);
   const lembrar = (id) => { recentes.add(id); if (recentes.size > maxRecentes) recentes.delete(recentes.values().next().value); };
 
   async function encaminhar(m, payload, socket) {
@@ -118,6 +138,21 @@ export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, l
       if (!ativo) return [];
       const enviados = [];
       for (const m of messages ?? []) {
+        const remoto = m?.key?.remoteJid;
+        if (typeof remoto === "string" && !remoto.endsWith("@g.us")) {
+          // Conversa PRIVADA: só o contato de homologação VERIFICADO; qualquer outro privado é ignorado em silêncio.
+          if (!contatoHomologacao || m?.key?.fromMe === true) continue;
+          const origem = origemDe(m?.key?.id);
+          enviados.push((async () => {
+            if (!(await contatoHomologacao.mensagemDoContato(m, socket))) return;
+            const { jid } = await contatoHomologacao.identidade(socket);
+            const payload = montarEventoMovaPrivado(m, { jidVerificado: jid, origemTipo: origem });
+            if (!payload || recentes.has(payload.eventoId)) return;
+            lembrar(payload.eventoId);
+            await encaminhar(m, payload, socket);
+          })().catch(() => log("warn", "mova.privado_falhou", {})));
+          continue;
+        }
         let payload = null;
         try { payload = montarEventoMova(m, { grupos, origemTipo: origemDe(m?.key?.id) }); } catch { payload = null; }
         if (!payload || recentes.has(payload.eventoId)) continue;

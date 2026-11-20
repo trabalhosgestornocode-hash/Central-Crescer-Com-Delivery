@@ -29,6 +29,8 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
     if (!n.ok) return { status: n.motivo === "nao_e_grupo" ? "IGNORADO" : "RECUSADO", motivo: n.motivo === "nao_e_grupo" ? "NAO_E_GRUPO" : n.motivo };
     const bruto = n.bruto;
     try {
+      // Conversa privada que não é a de homologação autorizada: descartada SEM registro (dado de terceiro não fica guardado).
+      if (!bruto.grupoId.endsWith("@g.us") && !grupoAutorizado(cfg, bruto.grupoId)) return { status: "IGNORADO", motivo: "NAO_E_GRUPO" };
       if (!grupoAutorizado(cfg, bruto.grupoId)) {
         await armazenamento.historico.registrar({ organizacaoId: null, unidadeId: null, eventoId: bruto.eventoId, decisao: "IGNORADO", motivo: "GRUPO_NAO_AUTORIZADO", provedor: bruto.provedor });
         registrar({ tipo: "MOVA_GRUPO_NAO_AUTORIZADO", grupo: mascarar(bruto.grupoId) });

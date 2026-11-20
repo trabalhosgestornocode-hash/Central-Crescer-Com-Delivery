@@ -183,7 +183,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     if (!saida.valorCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["valor"]), injecao });
 
-    return PAGAMENTOS.includes(saida.tipoDocumento) ? tratarPagamento(ctx) : tratarConta(ctx);
+    // Execução 04B (achado com a IA real): cupom/nota fiscal JÁ PAGO ("paguei…") é pagamento, não conta a vencer. Sem data de
+    // pagamento, tratarPagamento pergunta — nunca presume a data pela emissão.
+    const notaJaPaga = saida.tipoDocumento === "NOTA_FISCAL" && saida.intencao === "INFORMAR_PAGAMENTO" && !saida.vencimento;
+    return PAGAMENTOS.includes(saida.tipoDocumento) || notaJaPaga ? tratarPagamento(ctx) : tratarConta(ctx);
   }
 
   async function marcarDocumento(evento, escopo, propostaId, leitura) {

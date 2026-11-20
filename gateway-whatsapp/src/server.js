@@ -23,6 +23,7 @@ import { criarRastreadorOrigem } from "./inboundContrato.js";
 import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
 import { criarCacheRetry } from "./retryCache.js";
 import { criarEncaminhadorMova, lerGruposMova } from "./movaGrupo.js";
+import { criarVerificadorDeContato, lerContatoHomologacao } from "./movaHomologacao.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -161,13 +162,16 @@ retryCache.iniciarMetricasPeriodicas();
 // MOVA (src/movaGrupo.js): DESLIGADO sem WHATSAPP_MOVA_GRUPOS_JID. Mesmo socket; mídia baixada pela sessão existente.
 const gruposMova = lerGruposMova(config.movaGruposJid);
 config.movaGrupos = gruposMova; // lista validada, usada pelo envio (enviarGrupoMova)
-const mova = gruposMova.length === 0 ? null : criarEncaminhadorMova({
-  grupos: gruposMova,
+const homologacao = lerContatoHomologacao({ contato: config.movaHomologacaoContato, confirmacao: config.movaHomologacaoConfirmacao });
+const contatoHomologacao = homologacao.ativo ? criarVerificadorDeContato({ telefoneE164: homologacao.telefoneE164 }) : null;
+const encaminhador = gruposMova.length === 0 && !contatoHomologacao ? null : criarEncaminhadorMova({
+  grupos: gruposMova, contatoHomologacao,
   notificar: (payload) => backendClient.notificarEventoMova(payload),
   baixarMidia: (m, sock) => downloadMediaMessage(m, "buffer", {}, { reuploadRequest: sock?.updateMediaMessage }),
   log: (nivel, evento, dados) => log(nivel, evento, dados),
 });
-log("info", "mova.config", { ativo: Boolean(mova), grupos: gruposMova.length });
+const mova = encaminhador ? { aoMensagens: (...a) => encaminhador.aoMensagens(...a), contatoHomologacao } : null;
+log("info", "mova.config", { ativo: Boolean(mova), grupos: gruposMova.length, homologacaoPrivada: Boolean(contatoHomologacao), motivoHomologacao: homologacao.ativo ? null : homologacao.motivo });
 
 const sessao = criarSessaoBaileys({
   authAdapter,

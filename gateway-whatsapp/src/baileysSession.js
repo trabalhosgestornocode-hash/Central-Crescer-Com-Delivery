@@ -1785,6 +1785,19 @@ export function criarSessaoBaileys({
      */
     async enviarGrupoMova({ grupoJid, texto, correlationId = null }) {
       if (config?.movaEnvioHabilitado !== true) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "envio do MOVA desligado"); e.preEnvio = true; throw e; }
+      // Homologação privada: o ÚNICO destino privado possível é o contato verificado (mesmo socket); qualquer outro é recusado.
+      if (typeof grupoJid === "string" && grupoJid.endsWith("@s.whatsapp.net")) {
+        const recusa = (d) => { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, d); e.preEnvio = true; return e; };
+        if (!mova?.contatoHomologacao) throw recusa("homologação privada desligada");
+        if (status !== STATUS_CONEXAO.CONNECTED || !socket) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
+        const sockEnvio = socket;
+        if (!(await mova.contatoHomologacao.jidAutorizadoParaEnvio(grupoJid, sockEnvio))) throw recusa("destino privado não é o contato verificado");
+        if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
+        const id = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
+        log("info", "mova.privado_send_start", { correlationId, providerMessageId: id });
+        const r = await sockEnvio.sendMessage(grupoJid, { text: texto }, { messageId: id });
+        return { providerMessageId: r?.key?.id ?? id, enviadoEm: new Date().toISOString() };
+      }
       const grupos = Array.isArray(config?.movaGrupos) ? config.movaGrupos : [];
       if (!grupos.includes(grupoJid)) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "grupo fora do MOVA"); e.preEnvio = true; throw e; }
       return enviarTextoAGrupo({ grupoJid, texto, correlationId });

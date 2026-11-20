@@ -290,8 +290,8 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
     await tx("insert into mova.instancia_gateway (id) values ($1) on conflict do nothing", [instanciaId]);
     for (const g of cfg.gruposAutorizados) {
       const unidades = cfg.unidades.filter((u) => g.unidades.includes(u.unidadeId));
-      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo) values ($1,$2,$3,true)
-                on conflict (grupo_jid) do update set ativo = true`, [g.grupoId, unidades[0].organizacaoId, instanciaId]);
+      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo, tipo) values ($1,$2,$3,true,$4)
+                on conflict (grupo_jid) do update set ativo = true`, [g.grupoId, unidades[0].organizacaoId, instanciaId, g.grupoId.endsWith("@g.us") ? "GRUPO" : "PRIVADO_HOMOLOGACAO"]);
       for (const u of unidades) {
         await tx(`insert into mova.grupo_unidade (grupo_jid, organizacao_id, unidade_id, nome, apelidos, documentos, fontes) values ($1,$2,$3,$4,$5,$6,$7)
                   on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes`,
@@ -302,14 +302,15 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
 }
 
 /** Lê do banco a configuração BRUTA (para validarConfiguracao): só grupos ATIVOS. */
-export async function carregarConfiguracao(pool, { identidadeServico }) {
+export async function carregarConfiguracao(pool, { identidadeServico, modo = "SIMULACAO" }) {
   const q = consultar(pool);
-  const grupos = (await q("select grupo_jid from mova.grupo_autorizado where ativo")).rows;
-  const unidades = (await q("select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where g.ativo order by gu.nome")).rows;
+  // Conversas privadas de homologação só entram no modo HOMOLOGACAO; fora dele são ignoradas mesmo que ativas no banco.
+  const grupos = (await q("select grupo_jid from mova.grupo_autorizado where ativo and (tipo = 'GRUPO' or $1 = 'HOMOLOGACAO')", [modo])).rows;
+  const unidades = (await q("select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where g.ativo and (g.tipo = 'GRUPO' or $1 = 'HOMOLOGACAO') order by gu.nome", [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
   return {
-    modo: "SIMULACAO", identidadeServico,
+    modo, identidadeServico,
     unidades: [...porId.values()],
     gruposAutorizados: grupos.map((g) => ({ grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id) })),
   };

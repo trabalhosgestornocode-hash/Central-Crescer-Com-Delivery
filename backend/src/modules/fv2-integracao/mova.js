@@ -30,6 +30,8 @@ export function lerConfiguracaoMova(env) {
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
     recebimento: env.MOVA_RECEBIMENTO_HABILITADO === "1", ia: env.MOVA_IA_HABILITADA === "1", envio: env.MOVA_ENVIO_HABILITADO === "1",
+    // Homologação privada: exige o modo E a confirmação de ambiente (as duas, texto exato). Senão, SIMULACAO (só grupos).
+    modo: env.MOVA_MODO === "HOMOLOGACAO" && env.MOVA_AMBIENTE === "homologacao" ? "HOMOLOGACAO" : "SIMULACAO",
   };
 }
 
@@ -41,7 +43,7 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  * @param {{cfg:object, pool:object, repositorio:object, criarClienteIa?:() => object, enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
 export async function montarMova({ cfg, pool, repositorio, criarClienteIa = null, enviarAoGateway = null, relogio = () => new Date(), registrar = () => {} }) {
-  const configuracao = validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId } }));
+  const configuracao = validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));
   // Núcleo de LEITURA do serviço: concessão gravada obrigatória (o banco recusa sem financeiro_v2.ver na unidade).
   const nucleoServico = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, relogio });

@@ -134,6 +134,9 @@ export const config = {
   movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
   // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
   movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
+  // Homologação privada (src/movaHomologacao.js): contato + confirmação explícita de modo. Ausente ⇒ desligada.
+  movaHomologacaoContato: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONTATO ?? "").trim(),
+  movaHomologacaoConfirmacao: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONFIRMACAO ?? "").trim(),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",

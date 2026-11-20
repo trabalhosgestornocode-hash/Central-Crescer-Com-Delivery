@@ -21,8 +21,9 @@ export function normalizarGatewayMova(c) {
   if (c.contratoMova !== CONTRATO_MOVA_VERSAO) return { ok: false, motivo: "contratoMova" };
   if (typeof c.eventoId !== "string" || !ID.test(c.eventoId) || typeof c.mensagemId !== "string" || !ID.test(c.mensagemId)) return { ok: false, motivo: "ids" };
   if (typeof c.grupoId !== "string" || !JID.test(c.grupoId)) return { ok: false, motivo: "grupoId" };
-  // Mensagem PRIVADA (ou qualquer chat que não seja grupo) nunca é do MOVA.
-  if (!c.grupoId.endsWith("@g.us")) return { ok: false, motivo: "nao_e_grupo" };
+  // Conversa privada só no formato de JID de telefone (o Gateway só a envia na homologação privada, com o contato VERIFICADO);
+  // se ela pode ser processada decide a configuração (lista de conversas autorizadas, modo HOMOLOGACAO).
+  if (!c.grupoId.endsWith("@g.us") && !/^[1-9][0-9]{7,14}@s\.whatsapp\.net$/.test(c.grupoId)) return { ok: false, motivo: "nao_e_grupo" };
   if (c.participanteId !== null && (typeof c.participanteId !== "string" || !JID.test(c.participanteId))) return { ok: false, motivo: "participanteId" };
   if (c.telefoneE164 !== null && (typeof c.telefoneE164 !== "string" || !/^\+[1-9][0-9]{7,14}$/.test(c.telefoneE164))) return { ok: false, motivo: "telefoneE164" };
   if (c.nomeExibicao !== null && (typeof c.nomeExibicao !== "string" || c.nomeExibicao.length > 60)) return { ok: false, motivo: "nomeExibicao" };

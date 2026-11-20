@@ -71,9 +71,11 @@ function clienteMedido(real) {
 // ---------------------------------------------------------------- cenário sintético (MOVA em memória + núcleo real em memória)
 const ORG = "dddddddd-0000-4000-8000-000000000001";
 const U = { ALFA: "dddddddd-0000-4000-8000-0000000000a1", BETA: "dddddddd-0000-4000-8000-0000000000b1", GAMA: "dddddddd-0000-4000-8000-0000000000c1" };
-const G = "120363000000000001@g.us";
+// MOVA_VALIDACAO=privado: mesma validação pela CONVERSA PRIVADA de homologação (contato FICTÍCIO, modo HOMOLOGACAO).
+const PRIVADO = process.env.MOVA_VALIDACAO === "privado";
+const G = PRIVADO ? "5500000000777@s.whatsapp.net" : "120363000000000001@g.us";
 const CONFIG = {
-  modo: "SIMULACAO", identidadeServico: { usuarioId: "eeeeeeee-0000-4000-8000-0000000000aa" },
+  modo: PRIVADO ? "HOMOLOGACAO" : "SIMULACAO", identidadeServico: { usuarioId: "eeeeeeee-0000-4000-8000-0000000000aa" },
   unidades: [
     { organizacaoId: ORG, unidadeId: U.ALFA, nome: "Unidade Alfa", apelidos: ["alfa"], fontes: { situacao: "CONFIRMADA", sistemaDeLoja: "SWF", plataformas: ["IFOOD"] } },
     { organizacaoId: ORG, unidadeId: U.BETA, nome: "Unidade Beta", apelidos: ["beta"], fontes: { situacao: "A_CONFIRMAR" } },
@@ -84,7 +86,7 @@ const CONFIG = {
 const FINANCEIRO = { ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR };
 let seq = 0;
 const gw = ({ texto = null, doc = null, mime = "application/pdf" }) => ({
-  contratoMova: 1, eventoId: `bly:IAREAL${++seq}`, mensagemId: `IAREAL${seq}`, grupoId: G, participanteId: "100000000000001@lid", telefoneE164: null, nomeExibicao: "Pessoa Teste", fromMe: false,
+  contratoMova: 1, eventoId: `bly:IAREAL${++seq}`, mensagemId: `IAREAL${seq}`, grupoId: G, participanteId: PRIVADO ? G : "100000000000001@lid", telefoneE164: PRIVADO ? "+5500000000777" : null, nomeExibicao: "Pessoa Teste", fromMe: false,
   tipo: doc ? "DOCUMENTO" : "TEXTO", texto, respostaA: null, midia: doc ? { mime, nomeArquivo: null, tamanhoBytes: doc.length, base64: Buffer.from(doc).toString("base64") } : null,
   recebidoEm: AGORA.toISOString(), origemTipo: "LIVE",
 });
@@ -132,7 +134,9 @@ async function principal() {
     { nome: "6. Pergunta sobre faturamento (dados de teste)", esperado: ["CONSULTA", "FATURAMENTO"],
       p: gw({ texto: "MOVA, quanto faturamos ontem na gama?" }) },
   ];
-  for (const cen of cenarios) {
+  const despesa = { nome: "P. Despesa fictícia sem obrigação", esperado: ["PROPOSTA", "DESPESA_PAGA"], p: gw({ texto: "paguei material de limpeza da gama", doc: pdfFicticio(["CUPOM FISCAL FICTICIO", "Mercado Exemplo Teste", "Material de limpeza", "Total: R$ 120,00", "Data: 13/10/2026"]) }) };
+  const lista = PRIVADO ? [despesa, cenarios[1], cenarios[2]] : cenarios;
+  for (const cen of lista) {
     const antes = medicoes.length;
     try {
       await mova.receptor.receber(cen.p);

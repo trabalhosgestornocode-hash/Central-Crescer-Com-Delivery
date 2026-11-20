@@ -11,7 +11,10 @@
 //     fica "A_CONFIRMAR" e nada de receita é proposto para ela.
 //   - Modo: só "SIMULACAO" nesta execução (nenhuma escrita real, nenhuma resposta enviada ao WhatsApp).
 
-export const MODOS = Object.freeze(["SIMULACAO"]);
+/** SIMULACAO (padrão) ou HOMOLOGACAO (Execução 04B: admite UMA conversa privada de teste, além dos grupos). */
+export const MODOS = Object.freeze(["SIMULACAO", "HOMOLOGACAO"]);
+const JID_PRIVADO = /^[1-9][0-9]{7,14}@s\.whatsapp\.net$/;
+export const ehConversaPrivada = (jid) => JID_PRIVADO.test(String(jid ?? ""));
 export const SITUACAO_FONTES = Object.freeze({ CONFIRMADA: "CONFIRMADA", A_CONFIRMAR: "A_CONFIRMAR" });
 const SISTEMAS_DE_LOJA = ["SAIPOS", "SWF"];
 const PLATAFORMAS = ["IFOOD", "NOVENTA_E_NOVE_FOOD"];
@@ -69,7 +72,7 @@ export function validarConfiguracao(c) {
   const ids = new Set(unidades.map((u) => u.unidadeId));
   exigir(Array.isArray(c.gruposAutorizados), "gruposAutorizados");
   const grupos = c.gruposAutorizados.map((g, i) => {
-    exigir(GRUPO.test(g?.grupoId ?? ""), `gruposAutorizados[${i}].grupoId`);
+    exigir(GRUPO.test(g?.grupoId ?? "") || (c.modo === "HOMOLOGACAO" && JID_PRIVADO.test(g?.grupoId ?? "")), `gruposAutorizados[${i}].grupoId`);
     exigir(Array.isArray(g.unidades) && g.unidades.length > 0 && g.unidades.every((x) => ids.has(String(x).toLowerCase())), `gruposAutorizados[${i}].unidades`);
     return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(g.unidades.map((x) => String(x).toLowerCase())) });
   });

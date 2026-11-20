@@ -20,7 +20,8 @@ export const MIDIA_MAX_BYTES = 15 * 1024 * 1024;
 const CHAVES = Object.freeze(["contrato", "provedor", "eventoId", "mensagemId", "grupoId", "participanteId", "telefoneE164", "nomeExibicao", "fromMe", "tipo", "texto", "respostaA", "midia", "recebidoEm"]);
 const CHAVES_MIDIA = Object.freeze(["mime", "tamanhoBytes", "sha256", "nomeArquivo", "referencia"]);
 const ID = /^[A-Za-z0-9_.:@-]{1,160}$/;
-const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
+// Conversa: grupo (@g.us) ou, SÓ na homologação privada, o JID canônico de telefone do contato verificado pelo Gateway.
+const GRUPO = /^([0-9]{5,40}(-[0-9]{1,20})?@g\.us|[1-9][0-9]{7,14}@s\.whatsapp\.net)$/;
 const SHA = /^[0-9a-f]{64}$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const ehObjeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
