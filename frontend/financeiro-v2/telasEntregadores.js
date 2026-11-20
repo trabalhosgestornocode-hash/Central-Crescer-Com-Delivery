@@ -97,6 +97,38 @@ function abaExtras(r, ctx) {
 
 /** Tela principal. `f.aba` escolhe a seção; os dados vêm prontos do servidor. */
 /**
+ * QUADRO DA CONFERÊNCIA mostrado logo depois de anexar a nota (resposta do servidor: o fechamento + `leituraDaNota`).
+ * Só apresenta o que o servidor já decidiu: liberado no ato ou para conferência, item a item. Puro (HTML).
+ */
+export function quadroDaConferencia(f) {
+  const l = f?.leituraDaNota;
+  if (!l) return "";
+  const nota = l.leitura ?? null;
+  const motivos = l.motivos ?? [];
+  const tem = (re) => motivos.some((m) => re.test(m));
+  const devido = f.valorCentavos;
+  const periodo = nota?.periodo ? `${dataBR(nota.periodo.inicio)} a ${dataBR(nota.periodo.fim)}` : null;
+  const itens = l.lida ? [
+    ["Valor", l.valorCentavos !== null && l.valorCentavos !== undefined ? `${moeda(l.valorCentavos)} na nota · ${moeda(devido)} devido` : "não encontrado na nota", l.valorCentavos === devido],
+    ["Empresa (tomador)", nota?.tomador?.naoIdentificado ? "a nota não identifica a empresa" : (l.tomador ?? "—"), !tem(/tomador/i)],
+    ["Emitente", l.emitente ?? "—", !tem(/emitente/i)],
+    ["Data", [periodo ? `período ${periodo}` : null, nota?.competencia ? `competência ${dataBR(nota.competencia)}` : null, nota?.emissao ? `emitida em ${dataBR(nota.emissao)}` : null].filter(Boolean).join(" · ") || "—", !tem(/período|competência/i)],
+    ["Nota", `nº ${l.numero ?? "—"}${nota?.chaveAcesso ? " · chave única" : ""}`, true],
+  ] : [];
+  const liberada = l.liberadaAutomaticamente === true;
+  const cabeca = liberada
+    ? `<div class="conf-nota__selo conf-nota__selo--ok" aria-hidden="true">✓</div><h2 id="conf-nota-titulo">Pagamento liberado</h2><p class="conf-nota__sub">A nota confere com a semana. Nada mais a fazer: a baixa sai pelo extrato.</p>`
+    : `<div class="conf-nota__selo conf-nota__selo--alerta" aria-hidden="true">!</div><h2 id="conf-nota-titulo">Nota recebida — falta conferir</h2><p class="conf-nota__sub">${l.lida ? "Algum item não bateu. Confira e aprove na ficha do entregador." : "Não foi possível ler os dados deste arquivo (não é o PDF do emissor nacional ou é uma imagem). Confira e aprove na ficha do entregador."}</p>`;
+  return `<button type="button" class="botao-fechar conf-nota__x" data-fechar-quadro aria-label="Fechar">×</button>
+<div class="conf-nota__topo">${cabeca}</div>
+<p class="conf-nota__quem">${esc(f.entregadorNome ?? "")} · semana ${esc(rotuloCurto(f.semanaInicio, f.semanaFim))}</p>
+${itens.length ? `<ul class="conf-nota__itens">${itens.map(([t, v, ok]) => `<li class="conf-nota__item conf-nota__item--${ok ? "ok" : "alerta"}"><span class="conf-nota__marca" aria-hidden="true">${ok ? "✓" : "!"}</span><span><strong>${esc(t)}</strong><br><span class="conf-nota__valor">${esc(v)}</span></span><span class="sr">${ok ? "confere" : "não confere"}</span></li>`).join("")}</ul>` : ""}
+${!liberada && motivos.length ? `<ul class="conf-nota__motivos">${motivos.map((m) => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}
+<div class="conf-nota__rodape"><button type="button" class="botao botao--primario" data-fechar-quadro>${liberada ? "Ok" : "Entendi"}</button></div>`;
+}
+const rotuloCurto = (ini, fim) => (ini && fim ? `${dataBR(ini).slice(0, 5)} a ${dataBR(fim)}` : "");
+
+/**
  * Dados da nota vigente (digitados ou lidos do PDF da NFS-e) e o que não bate com a semana — só para a conferência humana.
  * Nada aqui aprova: a pessoa continua marcando cada item e decidindo.
  */

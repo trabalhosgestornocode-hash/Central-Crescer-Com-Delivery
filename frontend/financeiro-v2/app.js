@@ -579,6 +579,27 @@ async function arquivoEmBase64(arquivo) {
   for (let i = 0; i < bytes.length; i += 0x8000) binario += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binario);
 }
+/** Quadro da conferência da nota, logo depois do anexo. Fecha no X, no botão, clicando fora do quadro ou com Esc. */
+async function mostrarQuadroDaConferencia(fechamento) {
+  try { await garantir("ent"); } catch { return; } // sem o módulo, a ficha recarregada já mostra a situação
+  const html = ent.quadroDaConferencia(fechamento);
+  if (!html) return;
+  document.querySelector("dialog.conf-nota")?.remove();
+  const d = document.createElement("dialog");
+  d.className = "conf-nota";
+  d.setAttribute("aria-labelledby", "conf-nota-titulo");
+  d.innerHTML = html;
+  d.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-fechar-quadro]")) { d.close(); return; }
+    const q = d.getBoundingClientRect(); // clique no fundo escurecido (fora da caixa) também fecha
+    if (ev.target === d && (ev.clientX < q.left || ev.clientX > q.right || ev.clientY < q.top || ev.clientY > q.bottom)) d.close();
+  });
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  if (typeof d.showModal === "function") d.showModal(); else d.setAttribute("open", "");
+  d.querySelector(".conf-nota__rodape .botao")?.focus();
+}
+
 async function executarAcao(form) {
   const saida = form.querySelector(".resultado-acao");
   const botao = form.querySelector('button[type="submit"]');
@@ -616,6 +637,7 @@ async function executarAcao(form) {
   saida.dataset.estado = r.ok ? "ok" : "erro";
   if (!r.ok) { botao.disabled = false; return; }
   recarregarAoFechar = true;
+  if (r.dados?.leituraDaNota) mostrarQuadroDaConferencia(r.dados);
   const proximo = form.dataset.recarregar ?? "";
   if (proximo === "lista") { recarregarAoFechar = false; carregar(); return; }
   if (proximo === "resultado:documento" && r.dados.importacao?.id) { abrirDetalhe(`documento:${r.dados.importacao.id}`, form); return; }
