@@ -158,3 +158,54 @@ t("ISO-10 identidade de serviço só lê: aplicar/configurar/reprocessar com o c
   await assert.rejects(CONSULTAS_MOVA["/mova/falhas-gerais"]({ ctx: servico, mova: s.mova }), { codigoHttp: 403 });
   await assert.rejects(executarAcaoMova(ACOES_MOVA["/mova/aplicar"], { ctx: servico, mova: s.mova, nucleo: s.m.nucleo, b: { propostaId: "dddddddd-0000-4000-8000-00000000ffff" } }));
 });
+
+// ------------------------------------------------------------------------------------------------ privilégio mínimo real
+t("PRIV — fluxo completo como mova_app (papel da aplicação, não dono): orçamento reserva/conclui, recebe, processa e consulta", async () => {
+  const { pool, banco } = await criarBancoMova();
+  await instalarConfiguracao(pool, validarConfiguracao(CONFIG)); // administrativo: dono
+  const { ambiente } = await import("../financeiro-v2/helpers/postgres.js");
+  const { urlDoBanco } = await import("../../scripts/fv2/ambiente.mjs");
+  const pg = (await import("pg")).default;
+  const comoApp = new pg.Pool({ connectionString: urlDoBanco(ambiente().urlAdmin, banco), max: 3 });
+  comoApp.on("connect", (c) => { c.query("set role mova_app"); });
+  try {
+    assert.equal((await comoApp.query("select current_user u")).rows[0].u, "mova_app");
+    const { criarOrcamentoIa, clienteComOrcamento, criarExtratorAnthropic } = await import("../../src/modules/mova-financeiro/index.js");
+    const orcamento = criarOrcamentoIa({ pool: comoApp });
+    const id = await orcamento.reservar();
+    await orcamento.concluir(id, { modelo: "claude-opus-5-5", entrada: 100, saida: 10 });
+    const leitura = { legivel: true, tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", unidadeSugerida: null, documentoDestinatario: null, valorCentavos: 1200, dataPagamento: "2026-10-12", dataEmissao: null, vencimento: null, competencia: null, favorecido: "Mercado Teste", identificadorDocumento: null, categoriaSugerida: null, natureza: "DESPESA", consulta: null, confianca: "ALTA" };
+    const cliente = { beta: { messages: { create: async () => ({ model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: "text", text: JSON.stringify(leitura) }] }) } } };
+    const m = montar({ escopos: [ALFA, GAMA].map((unidadeId) => ({ organizacaoId: ORG, unidadeId })) });
+    const controle = criarControle({ pool: comoApp, cacheMs: 0 });
+    const ref = {};
+    ref.mova = criarMova({ configuracao: CONFIG, nucleo: m.nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: comoApp, relogio: () => AGORA, controle,
+      extrator: criarExtratorAnthropic({ cliente: clienteComOrcamento(cliente, { orcamento, controle }), obterEvidencia: (r) => ref.mova.evidencias.obter(r), relogio: () => AGORA }) });
+    assert.equal((await ref.mova.receptor.receber(msg(CONVERSA_ALFA, { texto: "paguei 12 reais, alfa" }))).status, "ENFILEIRADO");
+    await ref.mova.receptor.trabalhar();
+    const r = await orcamento.resumo();
+    assert.equal(r.chamadas, 2, "reserva + chamada real (simulada) contadas");
+    const dec = (await pool.query("select decisao, motivo from mova.decisao order by seq desc limit 1")).rows[0];
+    assert.notEqual(dec.motivo, "EXTRATOR_FALHOU:ORCAMENTO_INDISPONIVEL", JSON.stringify(dec));
+    assert.equal((await ref.mova.consultas.caixaDeEntrada({ organizacaoId: ORG, unidadeId: ALFA })).itens.length, 1);
+    await CONSULTAS_MOVA["/mova/falhas-gerais"]({ ctx: ver(ALFA, [ACAO.CONFIGURAR]), mova: ref.mova });
+    await CONSULTAS_MOVA["/mova/estado"]({ ctx: ver(ALFA, [ACAO.VER]), mova: ref.mova, controle, orcamento });
+    await assert.rejects(comoApp.query("update mova.orcamento_ia set limite_chamadas = 999"), { code: "42501" }, "aplicação não altera o próprio limite");
+  } finally { await comoApp.end(); }
+});
+
+t("AUTO — leituras do worker passam pelo contexto de automação (sessão da identidade de serviço), nunca direto", async () => {
+  const { pool, banco } = await criarBancoMova();
+  await pool.query(`comment on database ${banco} is 'MOVA_HOMOLOGACAO:marcador-teste-01'`);
+  await instalarConfiguracao(pool, validarConfiguracao(CONFIG));
+  const m = montar({ escopos: [ALFA, GAMA].map((unidadeId) => ({ organizacaoId: ORG, unidadeId })) });
+  const dentro = [];
+  let ativo = false;
+  const comAutomacao = async (fn) => { ativo = true; try { return await fn(); } finally { ativo = false; } };
+  const repositorio = Object.freeze(Object.fromEntries(Object.entries(m.repositorio).map(([k, v]) => [k, typeof v === "function" ? (...a) => { dentro.push(ativo); return v.apply(m.repositorio, a); } : v])));
+  const cfg = lerConfiguracaoMova({ ...PROD_LIKE, MOVA_GATEWAY_SECRET: "s".repeat(40) });
+  const r = await montarMova({ cfg, pool, repositorio, comAutomacao, verificarBancoFinanceiro: async () => {} });
+  await r.mova.porta.contasAPagarAbertas({ organizacaoId: ORG, unidadeId: ALFA, usuarioId: SERVICO }).catch(() => {});
+  assert.ok(dentro.length > 0, "o repositório foi usado");
+  assert.ok(dentro.every(Boolean), "toda leitura dentro do contexto de automação");
+});

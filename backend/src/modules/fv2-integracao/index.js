@@ -77,9 +77,11 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
       poolAutoridade.on("error", () => {});
       const autoridade = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa, registrar });
       // Agendador: sem requisição de pessoa. O BANCO continua exigindo concessão ativa da identidade de automação (FV020).
-      sessoes = { ...autoridade, emitir: async (e) => (automacao.getStore() === true
-        ? (await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, 300, "automacao:entregadores"])).rows[0].t
-        : autoridade.emitir(e)) };
+      // Trabalho SEM pessoa (agendador de entregadores, worker do MOVA): sessão pela função do banco, que exige concessão ATIVA
+      // da identidade na unidade. A referência identifica a automação na trilha (fv2_sessao_banco.referencia).
+      sessoes = { ...autoridade, emitir: async (e) => { const loja = automacao.getStore(); return loja
+        ? (await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, 300, loja === true ? "automacao:entregadores" : loja.referencia])).rows[0].t
+        : autoridade.emitir(e); } };
     } else {
       sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
     }
@@ -87,7 +89,7 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     const vinculos = criarVinculosDaPlataforma(supabase);
     const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
     const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
-    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
+    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, comAutomacaoMova: (fn) => automacao.run({ referencia: "automacao:mova" }, fn), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
   };
   const dependencias = () => (compartilhadas ??= montar());
   dependenciasDaPlataforma = dependencias;

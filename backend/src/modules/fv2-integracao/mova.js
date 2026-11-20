@@ -78,7 +78,7 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, relogio = () => new Date(), registrar = () => {} }) {
+export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
   if (cfg.modo === "HOMOLOGACAO") {
     await exigirBancoDeHomologacao(pool, cfg.marcador);
     if (!verificarBancoFinanceiro) throw Object.assign(new Error("Sem verificação do banco do Financeiro."), { codigo: "BANCO_FINANCEIRO_NAO_VERIFICADO" });
@@ -87,7 +87,12 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const configuracao = validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));
   if (escopos.length === 0) throw Object.assign(new Error("Nenhuma conversa/unidade configurada."), { codigo: "SEM_CONFIGURACAO" });
-  const nucleoServico = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, relogio });
+  const nucleoBase = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, relogio });
+  // Leituras do worker (sem pessoa): cada chamada roda no contexto de AUTOMAÇÃO da plataforma, que abre a sessão de banco da
+  // identidade de serviço só se ela tiver concessão ativa na unidade. Sem o contexto (testes/memória), o núcleo é usado direto.
+  const nucleoServico = comAutomacao
+    ? Object.freeze(Object.fromEntries(Object.entries(nucleoBase).map(([k, f]) => [k, typeof f === "function" ? (...a) => comAutomacao(() => f(...a)) : f])))
+    : nucleoBase;
   const controle = criarControle({ pool });
   const orcamento = criarOrcamentoIa({ pool });
   let mova = null;
@@ -145,7 +150,8 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     let criarClienteIa = null;
     if (cfg.ia) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 1 }); }
     const enviarAoGateway = cfg.envio ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
-    return montarMova({ cfg, pool, repositorio: obterDependenciasFv2().repositorio, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, registrar });
+    const dep = obterDependenciasFv2();
+    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, registrar });
   })().catch((e) => { instancia = null; registrar({ tipo: "MOVA_MONTAGEM_FALHOU", codigo: e?.codigo ?? e?.code ?? "ERRO" }); return null; });
   return instancia;
 }

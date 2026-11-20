@@ -48,7 +48,9 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
       try { cli = await pool.connect(); } catch { throw new ErroDeIa("ORCAMENTO_INDISPONIVEL"); }
       try {
         await cli.query("begin");
-        const o = (await cli.query("select limite_chamadas, limite_custo_microusd, reserva_microusd from mova.orcamento_ia where id for update")).rows[0];
+        // Serializa as reservas com bloqueio CONSULTIVO da transação: o papel mova_app só LÊ o orçamento (FOR UPDATE exigiria UPDATE).
+        await cli.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", ["mova|orcamento_ia"]);
+        const o = (await cli.query("select limite_chamadas, limite_custo_microusd, reserva_microusd from mova.orcamento_ia where id")).rows[0];
         if (!o) throw new ErroDeIa("ORCAMENTO_INDISPONIVEL");
         const u = (await cli.query("select count(*)::int as n, coalesce(sum(custo_microusd), 0)::bigint as c from mova.consumo_ia")).rows[0];
         if (u.n >= o.limite_chamadas || Number(u.c) + Number(o.reserva_microusd) > Number(o.limite_custo_microusd)) throw new ErroDeIa("ORCAMENTO_ESGOTADO");
