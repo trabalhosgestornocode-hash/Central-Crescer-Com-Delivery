@@ -20,6 +20,8 @@ import { exigirTexto, exigirUmDe, semCamposDesconhecidos } from "../dominio/vali
 import { exigirCentavos } from "../dominio/dinheiro.js";
 import { exigirFormatoDeEvidencia } from "../dominio/evidencias.js";
 import { baseNaTransacao } from "./base.js";
+import { lerPdf } from "../importacao/formatos/pdf.js";
+import { lerNotaDeServico, parteComoTexto } from "../dominio/notaFiscalServico.js";
 import { operacoesDeCofreDocumental } from "./cofreDocumental.js";
 import { operacoesEconomicas } from "./economico.js";
 import { resumoDaSemana, visaoDoExtra } from "./extrasEntregadores.js";
@@ -30,6 +32,25 @@ const TIPOS_DE_ANEXO = Object.freeze({ NOTA_FISCAL: "NOTA_FISCAL", DEMONSTRATIVO
 const SEMANAS_DE_REVISAO = 5;
 const HORA_DO_FECHAMENTO = 6; // segunda 06:00 em Fortaleza: a coleta de D-1 (a cada 6 h) já teve tempo de terminar
 const textoOpcional = (v, campo, max = 160) => (v === undefined || v === null || String(v).trim() === "" ? null : exigirTexto(String(v), campo, { max }));
+
+/** Texto do PDF → dados da NFS-e (layout nacional). Qualquer falha de leitura vira "não lida": nunca impede o anexo. */
+function lerNotaDoArquivo(arquivo) {
+  if (!arquivo?.conteudo || !/pdf/i.test(String(arquivo.tipoMime ?? arquivo.nome ?? ""))) return null;
+  try {
+    const pdf = lerPdf(arquivo.conteudo instanceof Uint8Array ? arquivo.conteudo : new Uint8Array(arquivo.conteudo));
+    return lerNotaDeServico(pdf.paginas.flatMap((p) => p.linhas));
+  } catch {
+    return null;
+  }
+}
+/** Diferenças entre o que a nota diz e a semana — só para a conferência humana; nada é aprovado sozinho. */
+function avisosDaLeitura(l, f) {
+  const a = [];
+  if (l.valorCentavos !== null && l.valorCentavos !== f.valorCentavos) a.push({ codigo: "VALOR_DIFERENTE", notaCentavos: l.valorCentavos, devidoCentavos: f.valorCentavos });
+  if (l.tomador?.naoIdentificado) a.push({ codigo: "TOMADOR_NAO_IDENTIFICADO" });
+  if (l.periodo && (l.periodo.inicio !== f.semanaInicio || l.periodo.fim !== f.semanaFim)) a.push({ codigo: "PERIODO_DIFERENTE", periodo: l.periodo });
+  return a;
+}
 
 export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOperacao = null, cofreDeNotas = null, acessosNegados = null } = {}) {
   const hoje = () => hojeEm(new Date(b.agora()), FUSO_OPERACIONAL);
@@ -379,7 +400,17 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
       semCamposDesconhecidos(e, ["inicio", "entregador", "arquivo", "tipoAnexo", "numero", "emitente", "tomador", "valorCentavos", "referencia"], "anexo");
       const tipoAnexo = exigirUmDe(e.tipoAnexo ?? "NOTA_FISCAL", Object.keys(TIPOS_DE_ANEXO), "tipoAnexo");
       const nota = tipoAnexo === "NOTA_FISCAL";
-      const dadosFiscais = { numero: textoOpcional(e.numero, "numero", 60), emitente: textoOpcional(e.emitente, "emitente"), tomador: textoOpcional(e.tomador, "tomador"), referencia: textoOpcional(e.referencia, "referencia"), valorCentavos: e.valorCentavos === undefined || e.valorCentavos === null || e.valorCentavos === "" ? null : exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }) };
+      const digitados = { numero: textoOpcional(e.numero, "numero", 60), emitente: textoOpcional(e.emitente, "emitente"), tomador: textoOpcional(e.tomador, "tomador"), referencia: textoOpcional(e.referencia, "referencia"), valorCentavos: e.valorCentavos === undefined || e.valorCentavos === null || e.valorCentavos === "" ? null : exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }) };
+      // Leitor da NFS-e (layout nacional): preenche SÓ o que a pessoa deixou em branco. O que foi digitado prevalece.
+      const leitura = nota ? lerNotaDoArquivo(e.arquivo) : null;
+      const dadosFiscais = {
+        numero: digitados.numero ?? leitura?.numero ?? null,
+        emitente: digitados.emitente ?? parteComoTexto(leitura?.prestador),
+        tomador: digitados.tomador ?? (leitura?.tomador?.naoIdentificado ? "Não identificado na NFS-e" : parteComoTexto(leitura?.tomador)),
+        referencia: digitados.referencia ?? (leitura?.periodo ? `${leitura.periodo.inicio} a ${leitura.periodo.fim}` : null),
+        valorCentavos: digitados.valorCentavos ?? leitura?.valorCentavos ?? null,
+        ...(leitura ? { leitura } : {}),
+      };
       const alvo = await b.consultar(ctx, (cx, tx) => obterFechamento(tx, cx, e.inicio, e.entregador));
       if (!alvo.obrigacaoId) falhar(CODIGO.OPERACAO_INVALIDA, "Resolva a duplicidade desta semana antes de anexar documentos.", { motivo: "SEM_CONTA_A_PAGAR" });
       if (nota && alvo.situacaoDocumental === DOC.LIBERADO_PAGAMENTO) falhar(CODIGO.OPERACAO_INVALIDA, "O pagamento já foi liberado: a nota aprovada não pode ser substituída.");
@@ -390,11 +421,13 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
       return b.executar(ctx, ACAO.ENVIAR_DOCUMENTO, async (cx, tx) => {
         const f = await obterFechamento(tx, cx, e.inicio, e.entregador);
         const outros = (await listarFechamentos(tx, cx)).filter((x) => x.id !== f.id);
-        const repetida = outros.some((x) => (x.dados.notas ?? []).some((n) => n.vigente && (n.documentoId === envio.documento.id || (dadosFiscais.numero && n.numero === dadosFiscais.numero && n.emitente === dadosFiscais.emitente))));
+        const chave = leitura?.chaveAcesso ?? null;
+        const repetida = outros.some((x) => (x.dados.notas ?? []).some((n) => n.vigente && (n.documentoId === envio.documento.id || (chave && n.leitura?.chaveAcesso === chave) || (dadosFiscais.numero && n.numero === dadosFiscais.numero && n.emitente === dadosFiscais.emitente))));
         if (repetida) falhar(CODIGO.OPERACAO_INVALIDA, "Esta nota fiscal já está vinculada a outra semana ou entregador.", { motivo: "NOTA_DUPLICADA" });
         const notas = (f.dados.notas ?? []).map((n) => ({ ...n, vigente: false, substituidaEm: n.vigente ? b.agora() : n.substituidaEm ?? null }));
         notas.push({ documentoId: envio.documento.id, enviadaEm: b.agora(), enviadaPor: cx.usuarioId, vigente: true, situacao: DOC.NF_RECEBIDA, ...dadosFiscais });
-        return b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { situacaoDocumental: exigirTransicao(f.situacaoDocumental, DOC.NF_RECEBIDA), dados: { ...f.dados, notas } }, EVENTO_HISTORICO.MUDANCA_ESTADO, "Nota fiscal recebida.");
+        const atualizado = await b.alterar(tx, cx, TIPO.FECHAMENTO_ENTREGADOR, f, { situacaoDocumental: exigirTransicao(f.situacaoDocumental, DOC.NF_RECEBIDA), dados: { ...f.dados, notas } }, EVENTO_HISTORICO.MUDANCA_ESTADO, leitura ? "Nota fiscal recebida (dados lidos do PDF da NFS-e)." : "Nota fiscal recebida.");
+        return Object.assign(atualizado, { leituraDaNota: leitura ? { lida: true, ...dadosFiscais, avisos: avisosDaLeitura(leitura, atualizado) } : { lida: false } });
       });
     },
 
@@ -419,6 +452,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         if (decisao === "APROVAR") {
           const faltando = CONFERENCIAS.filter((k) => !conferido[k]);
           if (faltando.length) falhar(CODIGO.ENTRADA_INVALIDA, "Confira emitente, tomador, período, valor, número e duplicidade antes de aprovar.", { faltando });
+          if (nota.valorCentavos === null || nota.valorCentavos === undefined) falhar(CODIGO.OPERACAO_INVALIDA, "A nota foi anexada sem valor. Reenvie a nota (o PDF do emissor nacional é lido sozinho) ou informe o valor.", { motivo: "VALOR_DA_NOTA_AUSENTE", devidoCentavos: f.valorCentavos });
           if (nota.valorCentavos !== f.valorCentavos) falhar(CODIGO.OPERACAO_INVALIDA, "O valor informado na nota é diferente do total devido na semana.", { motivo: "VALOR_DA_NOTA_DIVERGENTE", notaCentavos: nota.valorCentavos, devidoCentavos: f.valorCentavos });
         }
         const nova = decisao === "APROVAR" ? DOC.NF_APROVADA : DOC.NF_REJEITADA;
