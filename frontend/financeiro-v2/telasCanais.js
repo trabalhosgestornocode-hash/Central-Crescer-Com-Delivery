@@ -1,7 +1,7 @@
 // Fases 04–06 (docs 42–44) — "Canais de faturamento": SAIPOS (Resumo, Presencial, Anota Aí, Importações, Fechamento
 // Manual, Conferências), iFood e 99Food (fontes oficiais) e Operadoras e Taxas. Só apresentação: os números vêm prontos do
 // núcleo (nenhum cálculo de dinheiro aqui). Taxa pendente nunca aparece como zero; estimativa nunca aparece como recebido.
-import { dataBR, esc, moeda, percentual } from "./formatar.js";
+import { dataBR, esc, moeda, oSistemaDeLoja, percentual, sistemaDeLoja } from "./formatar.js";
 import { calendarioCanal } from "./telasCalendarioCanais.js";
 import { conferenciaDoDinheiro, movimentosDoDia } from "./telasMovimentosCaixa.js";
 import { importacoesDoCanal } from "./telasImportacoesCanais.js";
@@ -273,7 +273,7 @@ ${d.pendencias?.length ? `<section class="card card--alertas"><h2>Pendências de
 ${ifood && d.conciliacao && tem(ctx.permissoes, "financeiro_v2.conciliar") ? `<section class="card"><h2>Repasses × extrato</h2><p class="nota">Procura, nos créditos que já estão na conta, os que podem ser estes repasses. Nada é baixado aqui: a confirmação é feita em Importações e Conferências.</p>
 <form class="acao" data-acao="/api/fv2/acoes/conciliacoes/gerar-repasses-ifood" data-recarregar="lista"><label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Quero procurar os créditos no extrato.</label><button type="submit" class="botao">Procurar créditos no extrato</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>` : ""}
 <section class="card"><div class="card-topo"><h2>Histórico de importações</h2>${ifood && tem(ctx.permissoes, "financeiro_v2.registrar") ? '<button type="button" class="botao-link" data-aba-canal="importacoes">Registrar demonstrativo (aba Importações)</button>' : ""}</div>${historico}</section>
-<section class="card"><h2>Pedidos no relatório SAIPOS — só conferência</h2><p class="nota">${cs2 ? `${cs2.pedidos} pedido(s) · ${cs2.cancelados} cancelado(s) · ${esc(moeda(cs2.totalCentavos))}` : "—"}. Não entram no faturamento: a SAIPOS não é fonte oficial ${ifood ? "do iFood" : "da 99Food"}.</p></section>`;
+${sistemaDeLoja() === "SWF" ? "" : `<section class="card"><h2>Pedidos no relatório SAIPOS — só conferência</h2><p class="nota">${cs2 ? `${cs2.pedidos} pedido(s) · ${cs2.cancelados} cancelado(s) · ${esc(moeda(cs2.totalCentavos))}` : "—"}. Não entram no faturamento: a SAIPOS não é fonte oficial ${ifood ? "do iFood" : "da 99Food"}.</p></section>`}`;
 }
 
 // ------------------------------------------------------------------------------------------------ Operadoras e Taxas
@@ -399,7 +399,7 @@ ${pode && !o.implicita ? `<details><summary>Alterar operadora (nome, situação,
 <label>Código <input type="text" name="codigo" pattern="[A-Za-z][A-Za-z0-9_]{1,29}" placeholder="ex.: PAGBANK" required></label>
 <label>Começou a operar em <input type="date" name="inicio" required></label><label>Deixou de operar em (opcional) <input type="date" name="encerramento"></label></div>
 <fieldset class="grade-modalidades"><legend>O que esta maquininha recebe</legend>${ORDEM_MOD.map((m) => marcarMod(m, m !== "VOUCHER")).join("")}</fieldset>
-<p class="nota">Duas operadoras ativas na mesma modalidade e no mesmo dia deixam as vendas em conferência (a SAIPOS não diz qual maquininha foi usada). Ao trocar de maquininha, encerre a anterior no dia anterior.</p>
+<p class="nota">Duas operadoras ativas na mesma modalidade e no mesmo dia deixam as vendas em conferência (${oSistemaDeLoja()} não diz qual maquininha foi usada). Ao trocar de maquininha, encerre a anterior no dia anterior.</p>
 <label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>` }) : "";
   return `${cabecalho("Operadoras e Taxas", "Maquininhas da unidade, o que cada uma recebe e quanto cobra")}
 ${d.painel ? painelTaxas(d.painel, ops, ctx.filtro ?? { inicio: d.painel.periodoInicio, fim: d.painel.periodoFim }) : ""}

@@ -177,7 +177,7 @@ test("26, 27 — troca rápida de competência e resposta antiga: só a última 
 
 test("28, 29 — layout móvel, cartões, abas roláveis e teclado (foco restaurado, Escape, botões reais)", () => {
   const css = arquivo("fv2.css");
-  const movel = css.slice(css.lastIndexOf("@media (max-width: 760px)"));
+  const movel = css.slice(css.indexOf("@media (max-width: 760px)"));
   assert.match(movel, /\.abas--botoes \{ flex-wrap: nowrap; overflow-x: auto;/);
   assert.match(movel, /\.ficha \{ grid-template-columns: minmax\(0, 1fr\)/);
   assert.match(movel, /\.tabela--cartoes td::before \{ content: attr\(data-rotulo\)/);

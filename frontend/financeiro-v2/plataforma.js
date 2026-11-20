@@ -24,18 +24,24 @@ export function traduzirEndereco(url) {
 const CABECALHOS_DA_DEMONSTRACAO = ["x-fv2-demo-sessao", "x-fv2-csrf"];
 const respostaLocal = (status, corpo) => new Response(JSON.stringify(corpo), { status, headers: { "content-type": "application/json" } });
 
+/** Rotas OFICIAIS da plataforma (as mesmas do roteador da Crescer; nada aqui é inventado). `setor` é lido uma vez pelo shell da plataforma. */
+export const ROTAS_PLATAFORMA = Object.freeze({
+  entrar: "/?setor=financeiro", // sessão vencida: a plataforma pede o login e, ao entrar, volta ao financeiro (se a pessoa ainda tiver acesso)
+  inicio: "/?setor=escolher", // escolha de setor/unidade da plataforma
+  operacional: "/?setor=operacional", // Dashboard Operacional (só se o servidor ainda autorizar o setor)
+});
+
+const ehMfa = (c) => String(c?.motivo ?? c?.codigo ?? c?.erro ?? "").startsWith("MFA") || c?.motivo === "REAUTENTICACAO_RECENTE";
+
 /**
  * Transporte (assinatura de fetch) que leva as credenciais da plataforma às rotas reais.
- * @param {{credenciais:()=>Promise<{token:string|null, contexto:string|null}>, fetchFn?:typeof fetch}} p
+ * Em 401 (e só então) tenta UMA renovação do login pelo fluxo existente (`renovar`) e UMA repetição da chamada: nunca em laço.
+ * @param {{credenciais:()=>Promise<{token:string|null, contexto:string|null}>, renovar?:()=>Promise<boolean>, fetchFn?:typeof fetch}} p
  */
-export function criarTransportePlataforma({ credenciais, fetchFn = (...a) => fetch(...a) }) {
+export function criarTransportePlataforma({ credenciais, renovar = null, fetchFn = (...a) => fetch(...a) }) {
   return async (url, opcoes = {}) => {
     const alvo = traduzirEndereco(url);
     if (!alvo) return respostaLocal(404, { erro: "INDISPONIVEL_NA_PLATAFORMA", mensagem: "Este recurso não está disponível no Crescer Com Delivery Financeiro." });
-    let c;
-    try { c = await credenciais(); } catch { c = { token: null, contexto: null }; }
-    if (!c?.token) return respostaLocal(401, { erro: "SEM_SESSAO", mensagem: "Sua sessão expirou. Entre novamente pela plataforma." });
-    if (!c?.contexto) return respostaLocal(409, { erro: "SEM_CONTEXTO", mensagem: "Escolha a unidade na plataforma antes de abrir o financeiro." });
     const cab = Object.fromEntries(Object.entries(opcoes.headers ?? {}).filter(([k]) => !CABECALHOS_DA_DEMONSTRACAO.includes(k.toLowerCase())));
     // Ações: a unidade NUNCA vai no corpo (o servidor usa a da sessão e recusa campos fora da lista) e a caixa
     // "confirmar" é só da tela (a pessoa já confirmou para o envio acontecer).
@@ -43,22 +49,56 @@ export function criarTransportePlataforma({ credenciais, fetchFn = (...a) => fet
     if (alvo.startsWith("/api/v1/financeiro-v2/acoes/") && typeof corpo === "string") {
       try { const { unidade: _u, confirmar: _c, ...resto } = JSON.parse(corpo); corpo = JSON.stringify(resto); } catch { /* corpo inválido segue e o servidor recusa */ }
     }
-    return fetchFn(alvo, { ...opcoes, ...(corpo !== undefined ? { body: corpo } : {}), credentials: "same-origin", headers: { ...cab, Authorization: `Bearer ${c.token}`, "x-context-token": c.contexto } });
+    const enviarCom = async () => {
+      let c;
+      try { c = await credenciais(); } catch { c = { token: null, contexto: null }; }
+      if (!c?.token) return { local: respostaLocal(401, { erro: "SEM_SESSAO", motivo: "SESSAO_EXPIRADA", mensagem: "Sua sessão expirou. Entre novamente pela plataforma." }) };
+      if (!c?.contexto) return { local: respostaLocal(409, { erro: "SEM_CONTEXTO", mensagem: "Escolha a unidade na plataforma antes de abrir o financeiro." }) };
+      return { resposta: await fetchFn(alvo, { ...opcoes, ...(corpo !== undefined ? { body: corpo } : {}), credentials: "same-origin", headers: { ...cab, Authorization: `Bearer ${c.token}`, "x-context-token": c.contexto } }) };
+    };
+    let r = await enviarCom();
+    const ruim401 = async (x) => (x.local ? x.local.status === 401 : x.resposta.status === 401 && !ehMfa(await x.resposta.clone().json().catch(() => ({}))));
+    if (renovar && (await ruim401(r))) {
+      let renovou = false;
+      try { renovou = await renovar(); } catch { renovou = false; }
+      if (renovou) r = await enviarCom(); // UMA repetição; se falhar de novo, o 401 segue para a tela
+    }
+    return r.local ?? r.resposta;
   };
+}
+
+async function garantirSupabase() {
+  if (globalThis.window?.supabase) return;
+  await new Promise((ok, falha) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"; // o MESMO script da página da plataforma
+    s.onload = ok; s.onerror = falha;
+    document.head.append(s);
+  });
 }
 
 /** Credenciais da plataforma (mesmos módulos da Crescer; o cliente Supabase renova o token sozinho). */
 export async function credenciaisDaPlataforma() {
-  if (!globalThis.window?.supabase) {
-    await new Promise((ok, falha) => {
-      const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"; // o MESMO script da página da plataforma
-      s.onload = ok; s.onerror = falha;
-      document.head.append(s);
-    });
-  }
+  await garantirSupabase();
   const [{ tokenAtual }, { contextTokenAtual }] = await Promise.all([import("../src/supabaseClient.js"), import("../src/sessao.js")]);
   return { token: await tokenAtual(), contexto: contextTokenAtual() };
+}
+
+// Renovação do login: UMA por vez (as chamadas simultâneas dividem o resultado) e no máximo uma a cada 20 s — sem laço de renovação.
+let renovacaoEmCurso = null;
+let ultimaRenovacao = 0;
+export async function renovarCredenciaisDaPlataforma(agora = () => Date.now()) {
+  if (renovacaoEmCurso) return renovacaoEmCurso;
+  if (agora() - ultimaRenovacao < 20_000) return false;
+  renovacaoEmCurso = (async () => {
+    try {
+      await garantirSupabase();
+      const { getSupabase } = await import("../src/supabaseClient.js");
+      const { data, error } = await (await getSupabase()).auth.refreshSession();
+      return !error && Boolean(data?.session?.access_token);
+    } catch { return false; } finally { ultimaRenovacao = agora(); renovacaoEmCurso = null; }
+  })();
+  return renovacaoEmCurso;
 }
 
 /**
@@ -72,8 +112,9 @@ export function aquecerCredenciais() { credenciaisDaPlataforma().catch(() => {})
 export function estadoDoErro(r) {
   const m = r?.motivo ?? null;
   const e = r?.erro ?? null;
-  if (r?.status === 401 || e === "SEM_SESSAO" || m === "SESSAO_EXPIRADA" || m === "TOKEN_DE_OUTRA_CONTA") return { tipo: "sem-sessao", mensagem: "Sua sessão expirou. Entre novamente pela plataforma: nada foi gravado." };
-  if (r?.status === 409 && e === "SEM_CONTEXTO") return { tipo: "sem-sessao", mensagem: r.mensagem };
+  if (r?.status === 0 || e === "SEM_CONEXAO") return { tipo: "rede", mensagem: "Não foi possível falar com o servidor. Confira a conexão e tente de novo; nada foi alterado." };
+  if (r?.status === 401 || e === "SEM_SESSAO" || m === "SESSAO_EXPIRADA" || m === "TOKEN_DE_OUTRA_CONTA") return { tipo: "sem-sessao", mensagem: "Por segurança, os dados desta tela foram removidos. Nada foi alterado." };
+  if (r?.status === 409 && e === "SEM_CONTEXTO") return { tipo: "sem-contexto", mensagem: r.mensagem };
   if (e === "FINANCEIRO_V2_DESLIGADO") return { tipo: "negado", mensagem: "O Crescer Com Delivery Financeiro está desativado. O financeiro desta unidade segue no painel atual." };
   if (m === "UNIDADE_NAO_LIBERADA" || m === "EMPRESA_NAO_LIBERADA") return { tipo: "negado", mensagem: "O Crescer Com Delivery Financeiro não está liberado para esta unidade." };
   if (m === "SEM_CONCESSAO") return { tipo: "negado", mensagem: "Você não tem permissão no Crescer Com Delivery Financeiro nesta unidade. Peça ao administrador financeiro." };

@@ -98,7 +98,7 @@ test("grade de taxas → texto do servidor: só campos preenchidos, vírgula, ta
 test("menu Canais de faturamento e rotas; nenhuma soma de dinheiro nas telas novas", () => {
   const html = arquivo("index.html");
   for (const r of ["saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas"]) assert.match(html, new RegExp(`href="#/${r}" data-rota="${r}"`));
-  assert.match(html, /Canais de faturamento/);
+  for (const g of ["Análise", "Faturamento", "Contas e caixa", "Operação", "Conferências", "Administração"]) assert.match(html, new RegExp(`class="nav-titulo" id="nav-[a-z]+">${g}<`), `grupo ${g}`);
   const src = arquivo("telasCanais.js");
   assert.ok(!/reduce\(|Centavos\s*[+-]\s*\w+Centavos/.test(src), "tela calculando dinheiro");
   assert.ok(!/<td(?![^>]*data-rotulo)[^>]*>/.test(src.replace(/const td = [^\n]+/, "").replace(/<tr><td>[^\n]*<\/td><\/tr>/g, "")), "td sem rótulo");

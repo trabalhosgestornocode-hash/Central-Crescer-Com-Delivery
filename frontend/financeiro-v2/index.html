@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-boot="identificando">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,30 +14,25 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="fv2.css">
-  <!-- Pré-carga PLANA dos módulos: sem isso o navegador só descobre cada nível depois de baixar o anterior (cascata de 6 viagens). -->
+  <!-- Pré-carga PLANA só dos módulos da primeira tela (as demais telas são baixadas sob demanda e aquecidas em tempo ocioso): sem isso o navegador só descobre cada nível depois de baixar o anterior (cascata de 6 viagens). -->
   <link rel="modulepreload" href="app.js">
   <link rel="modulepreload" href="consulta.js">
   <link rel="modulepreload" href="plataforma.js">
+  <link rel="modulepreload" href="menu.js">
   <link rel="modulepreload" href="formatar.js">
   <link rel="modulepreload" href="telas.js">
   <link rel="modulepreload" href="telasTesouraria.js">
-  <link rel="modulepreload" href="telasVendas.js">
-  <link rel="modulepreload" href="telasAdministracao.js">
-  <link rel="modulepreload" href="telasConferencias.js">
-  <link rel="modulepreload" href="telasCanais.js">
-  <link rel="modulepreload" href="telasCalendarioCanais.js">
-  <link rel="modulepreload" href="telasImportacoesCanais.js">
   <link rel="modulepreload" href="telasAbertura.js">
-  <link rel="modulepreload" href="telasMovimentosCaixa.js">
-  <link rel="modulepreload" href="telasEntregadores.js">
 </head>
 <body>
   <a class="pular" href="#conteudo">Pular para o conteúdo</a>
   <!-- Só da demonstração local: tema.js a esconde na plataforma antes da primeira pintura. -->
   <div class="faixa-demo" role="note">Ambiente demonstrativo local · dados sintéticos · não publicado</div>
-  <div class="layout">
-    <nav class="navegacao" aria-label="Crescer Com Delivery Financeiro">
+  <div class="layout" id="layout">
+    <nav class="navegacao" id="navegacao" aria-label="Crescer Com Delivery Financeiro">
       <p class="marca"><span class="marca-empresa">Crescer Com Delivery</span><span class="marca-produto">Financeiro</span></p>
+      <!-- Enquanto a unidade e as fontes dela não chegam (data-boot ≠ carregando/pronto) só este esqueleto aparece: nenhum item de outra unidade é montado. -->
+      <div class="nav-esqueleto" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
       <div class="nav-grupos">
       <div class="nav-grupo">
         <p class="nav-titulo" id="nav-analise">Análise</p>
@@ -46,13 +41,14 @@
           <li><a href="#/dre" data-rota="dre">DRE Gerencial</a></li>
         </ul>
       </div>
-      <div class="nav-grupo">
-        <p class="nav-titulo" id="nav-canais">Canais de faturamento</p>
+      <div class="nav-grupo" data-grupo="faturamento">
+        <p class="nav-titulo" id="nav-canais">Faturamento</p>
         <ul aria-labelledby="nav-canais">
-          <li><a href="#/saipos" data-rota="saipos">SAIPOS</a></li>
-          <li hidden><a href="#/swf" data-rota="swf">SWF</a></li>
-          <li><a href="#/ifood" data-rota="ifood">iFood</a></li>
-          <li><a href="#/noventa-e-nove-food" data-rota="noventa-e-nove-food">99Food</a></li>
+          <li hidden data-fonte="SAIPOS"><a href="#/saipos" data-rota="saipos">SAIPOS</a></li>
+          <li hidden data-fonte="SWF"><a href="#/swf" data-rota="swf">SWF</a></li>
+          <li hidden data-fonte="IFOOD"><a href="#/ifood" data-rota="ifood">iFood</a></li>
+          <li hidden data-fonte="NOVENTA_E_NOVE_FOOD"><a href="#/noventa-e-nove-food" data-rota="noventa-e-nove-food">99Food</a></li>
+          <li><a href="#/vendas-e-recebimentos" data-rota="vendas-e-recebimentos">Vendas e Recebimentos</a></li>
           <li><a href="#/operadoras-taxas" data-rota="operadoras-taxas">Operadoras e Taxas</a></li>
         </ul>
       </div>
@@ -70,36 +66,55 @@
       <div class="nav-grupo">
         <p class="nav-titulo" id="nav-operacao">Operação</p>
         <ul aria-labelledby="nav-operacao">
-          <li><a href="#/vendas-e-recebimentos" data-rota="vendas-e-recebimentos">Vendas e Recebimentos</a></li>
           <li><a href="#/entregadores-proprios" data-rota="entregadores-proprios">Entregadores Próprios</a></li>
-          <li><a href="#/conferencias" data-rota="conferencias">Importações e Conferências</a></li>
           <li><a href="#/documentos" data-rota="documentos">Documentos</a></li>
+        </ul>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-titulo" id="nav-conferencias">Conferências</p>
+        <ul aria-labelledby="nav-conferencias">
+          <li><a href="#/conferencias" data-rota="conferencias">Importações e Conferências</a></li>
         </ul>
       </div>
       <div class="nav-grupo">
         <p class="nav-titulo" id="nav-administracao">Administração</p>
         <ul aria-labelledby="nav-administracao">
           <li><a href="#/configuracoes" data-rota="configuracoes">Configurações</a></li>
-          <li><a href="corporativo.html">Ativação por unidade</a></li>
+          <li data-exige="financeiro_v2.configurar"><a href="corporativo.html">Ativação por unidade</a></li>
         </ul>
       </div>
       </div>
+      <p class="nav-rodape usuario-logado" id="topo-usuario" hidden></p>
     </nav>
     <div class="principal">
-      <form class="filtros" aria-label="Filtros">
-        <label>Competência <input id="filtro-competencia" type="month" value="2026-09"></label>
-        <label>Unidade <select id="filtro-unidade"></select></label>
-        <label>Sessão (demonstração) <select id="filtro-sessao">
-          <option value="gestor">Gestor com acesso (somente leitura)</option>
-          <option value="operador">Operador da demonstração (importa, revisa e concilia)</option>
-          <option value="administrador">Administrador da demonstração (configura, concede, fecha e homologa)</option>
-          <option value="sem-acesso">Usuário sem concessão</option>
-          <option value="expirada">Sessão expirada</option>
-          <option value="ausente">Sem sessão</option>
-        </select></label>
-        <button type="button" id="atualizar-dados" class="botao" title="Relê esta tela do servidor (descarta os dados guardados por alguns segundos)">Atualizar dados</button>
-      </form>
-      <main id="conteudo" tabindex="-1" aria-live="polite"><div class="estado estado--carregando" role="status" aria-busy="true"><p>Carregando o Crescer Com Delivery Financeiro…</p></div></main>
+      <!-- Cabeçalho ÚNICO e definitivo: existe desde a primeira pintura, com os links da plataforma que funcionam mesmo com a sessão vencida. -->
+      <header class="topo" aria-label="Unidade, competência e navegação">
+        <div class="topo-linha">
+          <button type="button" id="nav-alternar" class="botao botao--icone" aria-controls="navegacao" aria-expanded="true" title="Recolher ou abrir o menu"><span class="sr">Recolher ou abrir o menu</span><span class="icone-menu" aria-hidden="true"></span></button>
+          <div class="topo-unidade">
+            <p class="topo-unidade-nome" id="topo-unidade" aria-live="polite"><span class="esqueleto-texto" aria-hidden="true"></span></p>
+            <p class="topo-unidade-sub" id="topo-fontes"></p>
+          </div>
+          <nav class="topo-links" aria-label="Plataforma Crescer Com Delivery">
+            <a class="botao" id="link-operacional" href="/?setor=operacional">Dashboard Operacional</a>
+            <a class="botao" id="link-plataforma" href="/?setor=escolher">Voltar à plataforma</a>
+          </nav>
+        </div>
+        <form class="filtros" aria-label="Filtros">
+          <label>Competência <input id="filtro-competencia" type="month" value="2026-09"></label>
+          <label class="so-demo">Unidade <select id="filtro-unidade"></select></label>
+          <label class="so-demo">Sessão (demonstração) <select id="filtro-sessao">
+            <option value="gestor">Gestor com acesso (somente leitura)</option>
+            <option value="operador">Operador da demonstração (importa, revisa e concilia)</option>
+            <option value="administrador">Administrador da demonstração (configura, concede, fecha e homologa)</option>
+            <option value="sem-acesso">Usuário sem concessão</option>
+            <option value="expirada">Sessão expirada</option>
+            <option value="ausente">Sem sessão</option>
+          </select></label>
+          <button type="button" id="atualizar-dados" class="botao" title="Relê esta tela do servidor (descarta os dados guardados por alguns segundos)">Atualizar dados</button>
+        </form>
+      </header>
+      <main id="conteudo" tabindex="-1" aria-live="polite"><div class="estado estado--carregando" role="status" aria-busy="true"><p>Abrindo o Crescer Com Delivery Financeiro…</p><div class="esqueleto-pagina" aria-hidden="true"><div class="esq-cards"><i></i><i></i><i></i><i></i></div><div class="esq-bloco"></div><div class="esq-bloco esq-bloco--alto"></div></div></div></main>
     </div>
   </div>
   <div id="painel" class="painel-fundo" hidden>

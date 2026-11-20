@@ -12,6 +12,7 @@ import { EVENTO_HISTORICO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { exigirTexto, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { ehRelatorioSwf } from "../importacao/fontes/swf.js";
+import { operadorasEfetivas } from "../dominio/operadoras.js";
 
 export const SISTEMAS_DE_LOJA = Object.freeze(["SAIPOS", "SWF"]);
 export const PLATAFORMAS = Object.freeze(["IFOOD", "NOVENTA_E_NOVE_FOOD"]);
@@ -28,6 +29,36 @@ export function fontesDaUnidade(config) {
   };
 }
 export const unidadeUsaSwf = (config) => fontesDaUnidade(config).sistemaDeLoja === "SWF";
+
+/**
+ * O que o domínio precisa da configuração da unidade para decidir os relatórios esperados — UMA leitura da configuração e,
+ * se houver fontes configuradas, UMA do histórico dela. Só leitura.
+ * @returns {Promise<{vigenciasDeFontes: Array|null, operadorasDaUnidade: Array}>}
+ */
+export async function carregarFontesDaUnidade(tx, cx) {
+  const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+  return { vigenciasDeFontes: await carregarVigenciasDeFontes(tx, cx, config ?? null), operadorasDaUnidade: operadorasEfetivas(config) };
+}
+
+/**
+ * Vigências das fontes de faturamento da unidade, em ordem cronológica, para o domínio (`d.vigenciasDeFontes`).
+ * `null` = nenhuma configuração gravada (vale o padrão histórico). Só LÊ (configuração e histórico); nunca grava nem recalcula valores.
+ * @returns {Promise<Array<{desde: string|null, fontes: string[]}>|null>}
+ */
+export async function carregarVigenciasDeFontes(tx, cx, config = undefined) {
+  if (config === undefined) config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+  if (!config?.fontesDeFaturamento) return null;
+  const chave = (c) => JSON.stringify(fontesDaUnidade(c).fontes);
+  const mudancas = (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.CONFIGURACAO_UNIDADE, registroId: config.id } }))
+    .filter((h) => (h.depois?.fontesDeFaturamento ?? null) && JSON.stringify(h.antes?.fontesDeFaturamento?.fontes ?? null) !== JSON.stringify(h.depois.fontesDeFaturamento.fontes ?? null))
+    .sort((a, b) => String(a.em).localeCompare(String(b.em)));
+  if (!mudancas.length) return [{ desde: null, fontes: fontesDaUnidade(config).fontes }];
+  // A primeira configuração vale desde sempre (`desde: null`); as seguintes, a partir do dia em que foram gravadas.
+  const vigencias = mudancas.map((h, i) => ({ desde: i === 0 ? null : String(h.em).slice(0, 10), fontes: fontesDaUnidade(h.depois).fontes }));
+  // O estado atual é a verdade: se o histórico não termina nele (registro antigo), acrescenta-o a partir da última mudança.
+  if (chave(config) !== JSON.stringify(vigencias.at(-1).fontes)) vigencias.push({ desde: String(mudancas.at(-1).em).slice(0, 10), fontes: fontesDaUnidade(config).fontes });
+  return vigencias;
+}
 
 /** Sistema de faturamento de um relatório (null = relatório que não é de faturamento: banco, adquirente, entregas). */
 export function sistemaDoRelatorio(fonte, tipoRelatorio) {

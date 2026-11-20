@@ -23,6 +23,8 @@ export function criarConsultor(fetchFn = (...a) => transporte(...a), { usarCache
   let atual = 0;
   let controle = null;
   return {
+    /** Descarta a consulta em andamento (ex.: sessão encerrada): nenhuma resposta antiga será aplicada depois. */
+    cancelar() { atual += 1; controle?.abort(); controle = null; },
     /** @returns {Promise<{ok:true, dados:any} | {ok:false, status:number, erro:string, mensagem:string} | null>} null = resposta obsoleta */
     async consultar(url, cabecalhos = {}) {
       const minha = (atual += 1);

@@ -26,8 +26,8 @@ import {
   listarUnidadesContexto, trocarUnidadeDoContexto,
   carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores, http,
 } from "./sessao.js";
-import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
-import { ESTADO_FINANCEIRO, CARREGAMENTO_NEUTRO, menuDoEstado, rotaDeEntrada, resolverAcessoFinanceiro, guardarStatusPreResolvido, resolverFinanceiroV2, ENDERECO_FINANCEIRO_V2 } from "./financeiroAcesso.js";
+import { SETOR, SETOR_ROTULO, consumirSetorPedido, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
+import { ESTADO_FINANCEIRO, CARREGAMENTO_NEUTRO, menuDoEstado, rotaDeEntrada, resolverAcessoFinanceiro, guardarStatusPreResolvido, resolverFinanceiroV2, ENDERECO_FINANCEIRO_V2, TRANSICAO_FINANCEIRO, gravarUltimoFinanceiro, lerUltimoFinanceiro } from "./financeiroAcesso.js";
 import {
   montarSelecaoPerfil, abrirPinDoPerfil, setErroPin, setPinCarregando,
   fecharPinDoPerfil, mostrarSemPerfil,
@@ -292,6 +292,7 @@ function mostrarTela(qual) {
   // index.html) não tem mais motivo pra existir, em nenhum dos caminhos
   // (login, seleção, senha, app ou admin).
   el("#boot-loading")?.remove();
+  if (qual !== "app") removerTransicaoFinanceiro();
   for (const [nome, sel] of Object.entries(TELAS)) {
     const nodo = el(sel);
     if (nodo) nodo.hidden = nome !== qual;
@@ -457,7 +458,16 @@ async function mostrarApp({ rotaInicial } = {}) {
 
 // ---------- setor Financeiro: resolução do acesso ANTES de montar a interface ----------
 /** Estado `loading`: menu vazio + indicador neutro. Nada do Financeiro legado nem do 2.0 é montado aqui. */
+function mostrarTransicaoFinanceiro() {
+  if (document.getElementById("fin-transicao")) return;
+  document.body.insertAdjacentHTML("beforeend", TRANSICAO_FINANCEIRO);
+}
+function removerTransicaoFinanceiro() { document.getElementById("fin-transicao")?.remove(); }
+
 function mostrarCarregamentoFinanceiro() {
+  // Tela cheia no estilo do Financeiro v2 (a plataforma não aparece com um "Carregando…" próprio). Unidade que se sabe ser do
+  // financeiro legado (última resolução, só um booleano neste navegador) não recebe essa transição.
+  if (lerUltimoFinanceiro(chaveDoContexto(state.sessao)) !== false) mostrarTransicaoFinanceiro();
   state.financeiroEstado = ESTADO_FINANCEIRO.LOADING;
   state.rota = null;
   montarMenu();
@@ -473,9 +483,12 @@ async function entrarNoFinanceiro(g, rotaInicial) {
   mostrarCarregamentoFinanceiro();
   // Execução 10: unidade LIBERADA no Financeiro v2 → só o v2 (nunca os dois). Não liberada/desligado → segue igual.
   const v2 = await resolverFinanceiroV2(http);
-  if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) return;
+  if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) { removerTransicaoFinanceiro(); return; }
+  if (v2.ok) gravarUltimoFinanceiro(chaveDoContexto(state.sessao), v2.liberado);
+  // `replace`: o histórico não guarda a página de transição (o botão Voltar não cai num redirecionamento).
+  if (v2.ok && v2.operavel) { window.location.replace(ENDERECO_FINANCEIRO_V2); return; } // a transição fica no ar até a página nova abrir
   if (!v2.ok || v2.liberado) {
-    if (v2.ok && v2.operavel) { window.location.assign(ENDERECO_FINANCEIRO_V2); return; }
+    removerTransicaoFinanceiro();
     el("#view").innerHTML = v2.ok
       ? `<div class="fin-estado fin-estado--vazio" role="alert"><h3>Sem acesso ao Crescer Com Delivery Financeiro</h3><p>O financeiro desta unidade agora é o Crescer Com Delivery Financeiro e você ainda não tem permissão nele. Peça acesso ao administrador financeiro.</p></div>`
       : `<div class="fin-estado fin-estado--vazio" role="alert"><h3>Não foi possível abrir o Dashboard Financeiro agora</h3><p>Não conseguimos confirmar qual financeiro vale para esta unidade. Tente novamente.</p><p><button type="button" class="btn btn-primary" id="fin-tentar-novamente">Tentar novamente</button></p></div>`;
@@ -483,6 +496,7 @@ async function entrarNoFinanceiro(g, rotaInicial) {
     return;
   }
   const acesso = await resolverAcessoFinanceiro(http);
+  removerTransicaoFinanceiro(); // financeiro legado: a transição sai assim que o acesso está resolvido
   if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) return; // trocou de unidade/empresa/setor no meio
   state.financeiroEstado = acesso.estado;
   if (acesso.estado === ESTADO_FINANCEIRO.NEGADO) {
@@ -502,15 +516,19 @@ async function entrarNoFinanceiro(g, rotaInicial) {
 
 // ---------- setor: Financeiro × Operacional ----------
 /** Consulta os setores autorizados e decide: entrar direto, perguntar ou bloquear. */
+let setorPedido = consumirSetorPedido(); // ?setor= da URL, lido uma vez (os botões "Voltar à plataforma"/"Dashboard Operacional" do Financeiro)
 async function resolverSetor() {
   const sessao = state.sessao;
   const exibicao = ehPerfilExibicao(sessao);
   const semConsulta = exibicao || sessao.impersonando;
   const setores = semConsulta ? null : await carregarSetores();
   const mesmoContexto = sessao.setorContexto === chaveDoContexto(sessao);
+  const pedido = setorPedido;
+  if (setores) setorPedido = null; // consumido só depois de o servidor responder (com a sessão vencida, vale após o novo login)
   return decidirSetor({
     setores, exibicao, impersonando: !!sessao.impersonando,
     setorAtual: mesmoContexto ? sessao.setor : null,
+    setorPedido: pedido,
   });
 }
 
@@ -538,6 +556,7 @@ function mostrarSetor(decisao) {
 /** Registra a escolha (só navegação) e reentra no shell — que reconfere os setores no servidor. */
 function escolherSetor(setor) {
   if (!state.sessao.setores.includes(setor)) return;
+  if (setor === SETOR.FINANCEIRO) mostrarTransicaoFinanceiro(); // sem intervalo entre o clique e a tela do financeiro
   state.sessao.setor = setor;
   state.sessao.setorContexto = chaveDoContexto(state.sessao);
   gravarPreferencia(state.sessao.usuario?.id, setor);

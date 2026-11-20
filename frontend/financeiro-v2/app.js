@@ -2,25 +2,56 @@
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
 import { criarConsultor, definirTransporte, enviar, invalidarCache } from "./consulta.js";
-import { aquecerCredenciais, credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro } from "./plataforma.js";
-import * as adm from "./telasAdministracao.js";
-import * as conf from "./telasConferencias.js";
+import { ROTAS_PLATAFORMA, aquecerCredenciais, credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro, renovarCredenciaisDaPlataforma } from "./plataforma.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
-import * as ven from "./telasVendas.js";
-import * as can from "./telasCanais.js";
-import * as calCanais from "./telasCalendarioCanais.js";
-import * as impCanais from "./telasImportacoesCanais.js";
-import * as ent from "./telasEntregadores.js";
-import { esc } from "./formatar.js";
+import { definirFontesDaUnidade, esc } from "./formatar.js";
+import { iniciarMenuRecolhivel } from "./menu.js";
+
+// Módulos das telas pesadas: baixados SOB DEMANDA (só o da tela aberta entra no caminho da primeira pintura) e aquecidos logo depois
+// da primeira tela útil. Os nomes abaixo são os mesmos usados no resto do arquivo (adm, conf, ven, can, calCanais, impCanais, ent).
+let adm, conf, ven, can, calCanais, impCanais, ent;
+const CARREGADORES = {
+  adm: () => import("./telasAdministracao.js").then((m) => { adm = m; return m; }),
+  conf: () => import("./telasConferencias.js").then((m) => { conf = m; return m; }),
+  ven: () => import("./telasVendas.js").then((m) => { ven = m; return m; }),
+  can: () => import("./telasCanais.js").then((m) => { can = m; return m; }),
+  calCanais: () => import("./telasCalendarioCanais.js").then((m) => { calCanais = m; return m; }),
+  impCanais: () => import("./telasImportacoesCanais.js").then((m) => { impCanais = m; return m; }),
+  ent: () => import("./telasEntregadores.js").then((m) => { ent = m; return m; }),
+};
+const importados = new Map();
+/** Garante os módulos pedidos. Falha de rede NÃO fica guardada: a próxima tentativa baixa de novo. */
+function garantir(...nomes) {
+  return Promise.all(nomes.map((n) => {
+    if (!importados.has(n)) importados.set(n, CARREGADORES[n]().catch((e) => { importados.delete(n); throw e; }));
+    return importados.get(n);
+  }));
+}
+const garantirTodos = () => garantir(...Object.keys(CARREGADORES));
+const CANAIS_MODULOS = ["can", "calCanais", "impCanais"];
+const MODULOS_DA_ROTA = { "entregadores-proprios": ["ent"], saipos: CANAIS_MODULOS, swf: CANAIS_MODULOS, ifood: CANAIS_MODULOS, "noventa-e-nove-food": CANAIS_MODULOS, "operadoras-taxas": ["can"], configuracoes: ["adm"], documentos: ["adm"], "vendas-e-recebimentos": ["ven"], conferencias: ["conf"] };
+let aquecido = false;
+/** Depois da primeira tela útil, baixa o resto em tempo ocioso (a navegação entre abas fica instantânea). */
+function aquecerModulos() {
+  if (aquecido) return;
+  aquecido = true;
+  const f = () => garantirTodos().catch(() => { aquecido = false; });
+  if (typeof requestIdleCallback === "function") requestIdleCallback(f, { timeout: 3000 }); else setTimeout(f, 1200);
+}
 
 const $ = (s) => document.querySelector(s);
 /** Execução 10: dentro da Crescer (mesmo login, mesma unidade da sessão). Fora disso, é a demonstração local. */
 const MODO_PLATAFORMA = emModoPlataforma();
 if (MODO_PLATAFORMA) {
-  definirTransporte(criarTransportePlataforma({ credenciais: credenciaisDaPlataforma }));
+  definirTransporte(criarTransportePlataforma({ credenciais: credenciaisDaPlataforma, renovar: renovarCredenciaisDaPlataforma }));
   document.documentElement.dataset.modo = "plataforma";
   aquecerCredenciais(); // o token fica pronto enquanto os módulos terminam de carregar
+  // Os links da plataforma existem desde a primeira pintura e não dependem da sessão financeira (funcionam também com ela vencida).
+  for (const [id, href] of [["#link-operacional", ROTAS_PLATAFORMA.operacional], ["#link-plataforma", ROTAS_PLATAFORMA.inicio]]) {
+    const a = document.querySelector(id);
+    if (a) a.href = href;
+  }
 }
 const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
@@ -28,6 +59,8 @@ const consultorCalendario = criarConsultor();
 const consultorImportacoes = criarConsultor();
 // Consulta da tela adiantada na plataforma (sai junto com a da sessão): consultor próprio, para uma não abortar a outra.
 const consultorAdiantado = criarConsultor();
+// Fontes de faturamento da unidade (decidem menu e canais): consultor próprio, para sair junto com a sessão sem abortar nada.
+const consultorFontes = criarConsultor();
 let numeroDoCarregamento = 0;
 /** A URL sem o parâmetro `unidade`: na plataforma o servidor a ignora (a unidade é a da sessão), então duas URLs que só diferem nela são a MESMA consulta. */
 const semUnidade = (url) => String(url).replace(/([?&])unidade=[^&]*(&|$)/, (_, ini, fim) => (fim ? ini : "")).replace(/[?&]$/, "");
@@ -64,10 +97,6 @@ const cabecalhos = () => ({ "x-fv2-demo-sessao": estado.sessao });
  * inicial = mês da data-base do servidor; ações escondidas quando a escrita está desligada (o servidor recusa de todo jeito).
  */
 function modoPlataforma(dados) {
-  const seletor = document.querySelector("#filtro-sessao");
-  if (seletor) (seletor.closest("label") ?? seletor).hidden = true;
-  const unidade = document.querySelector("#filtro-unidade");
-  if (unidade) unidade.disabled = true;
   if (!estado.competenciaDaSessao && typeof dados.dataBase === "string") {
     estado.competenciaDaSessao = true;
     estado.competencia = dados.dataBase.slice(0, 7);
@@ -75,15 +104,8 @@ function modoPlataforma(dados) {
     if (campo) campo.value = estado.competencia;
   }
   document.documentElement.dataset.escrita = dados.escritaHabilitada ? "sim" : "nao";
-  if (!document.querySelector(".usuario-logado")) {
-    const quem = document.createElement("span");
-    quem.className = "usuario-logado";
-    quem.textContent = `Usuário: ${dados.usuario ?? "autenticado"}`;
-    const voltar = document.createElement("a");
-    voltar.href = "/";
-    voltar.textContent = "Voltar para a plataforma";
-    (unidade?.closest("label") ?? document.querySelector(".filtros"))?.after(quem, voltar);
-  }
+  const quem = document.querySelector("#topo-usuario");
+  if (quem) { quem.textContent = `Usuário: ${dados.usuario ?? "autenticado"}`; quem.hidden = false; }
 }
 /** 08B: homologação full stack — esconde o seletor de perfil da demonstração; mostra quem entrou e permite sair. */
 function modoHomologacao(usuario) {
@@ -119,11 +141,57 @@ const inicioDoMes = (m) => `${m}-01`;
 const fimDoMes = (m) => { const [a, mm] = m.split("-").map(Number); return iso(new Date(Date.UTC(a, mm, 0))); };
 const somarMes = (m, n) => { const [a, mm] = m.split("-").map(Number); const d = new Date(Date.UTC(a, mm - 1 + n, 1)); return iso(d).slice(0, 7); };
 
-function mensagemDeErro(r) {
-  if (MODO_PLATAFORMA) { const e = estadoDoErro(r); return telas.estado(e.tipo, e.mensagem); }
+const ehSessaoExpirada = (r) => !r?.ok && (MODO_PLATAFORMA ? estadoDoErro(r).tipo === "sem-sessao" : r?.status === 401);
+const LINKS_DA_PLATAFORMA = [{ rotulo: "Voltar à plataforma", href: ROTAS_PLATAFORMA.inicio }, { rotulo: "Dashboard Operacional", href: ROTAS_PLATAFORMA.operacional }];
+function mensagemDeErro(r, { compacto = false } = {}) {
+  if (MODO_PLATAFORMA) {
+    const e = estadoDoErro(r);
+    if (e.tipo === "sem-sessao") return telas.estado("sem-sessao", e.mensagem, { titulo: "Sua sessão expirou", compacto, acoes: [{ rotulo: "Entrar novamente", href: ROTAS_PLATAFORMA.entrar, primario: true }, ...LINKS_DA_PLATAFORMA] });
+    if (e.tipo === "sem-contexto") return telas.estado("sem-contexto", e.mensagem, { compacto, acoes: [{ rotulo: "Escolher a unidade", href: ROTAS_PLATAFORMA.inicio, primario: true }, LINKS_DA_PLATAFORMA[1]] });
+    if (e.tipo === "negado") return telas.estado("negado", e.mensagem, { compacto, acoes: LINKS_DA_PLATAFORMA });
+    return telas.estado(e.tipo, e.mensagem, { compacto });
+  }
   if (r.status === 401) return telas.estado("sem-sessao", /expirad/i.test(r.mensagem ?? "") ? "Sua sessão expirou. Entre novamente: nada foi gravado." : "");
   if (r.status === 403) return telas.estado("negado", r.mensagem);
   return telas.estado("erro", r.mensagem);
+}
+
+// ---- Entrada em etapas. O menu e os canais só são montados quando a unidade é conhecida E as fontes dela foram carregadas.
+//   identificando → configurando → carregando → pronto   (ou erro / sessao-expirada)
+const BOOT = Object.freeze({ IDENTIFICANDO: "identificando", CONFIGURANDO: "configurando", CARREGANDO: "carregando", PRONTO: "pronto", ERRO: "erro", SESSAO_EXPIRADA: "sessao-expirada" });
+function definirBoot(etapa) { estado.boot = etapa; document.documentElement.dataset.boot = etapa; }
+const definirDados = (situacao) => { document.documentElement.dataset.dados = situacao; }; // carregando | disponivel | erro
+const NOME_DA_FONTE = Object.freeze({ SAIPOS: "SAIPOS", SWF: "SWF", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
+/** Aplica as fontes da unidade: itens do menu, grupo vazio escondido, permissões e a linha de fontes do cabeçalho. */
+function aplicarFontes(fontes) {
+  definirFontesDaUnidade(fontes); // as telas leem daqui: nada do sistema de loja que a unidade não usa
+  const usadas = new Set(fontes.fontes ?? []);
+  for (const li of document.querySelectorAll("li[data-fonte]")) li.hidden = !usadas.has(li.dataset.fonte);
+  const perm = permissoesDaUnidade();
+  for (const li of document.querySelectorAll("li[data-exige]")) li.hidden = MODO_PLATAFORMA && !perm.includes(li.dataset.exige);
+  for (const grupo of document.querySelectorAll(".nav-grupo")) grupo.hidden = ![...grupo.querySelectorAll("li")].some((li) => !li.hidden);
+  const sub = $("#topo-fontes");
+  if (sub) sub.textContent = `Faturamento: ${(fontes.fontes ?? []).map((f) => NOME_DA_FONTE[f] ?? f).join(" · ")}`;
+}
+/** Sessão vencida: some tudo que era financeiro (dados, unidade, painel, cache) e a tela passa a dizer só o que fazer. */
+function sessaoExpirada(r) {
+  numeroDoCarregamento += 1;
+  for (const c of [consultor, consultorPainel, consultorCalendario, consultorImportacoes, consultorAdiantado, consultorFontes]) c.cancelar();
+  invalidarCache();
+  definirFontesDaUnidade(null);
+  Object.assign(estado, { unidades: [], unidade: null, fontesDaUnidade: null, calendario: null, calCanal: null, calDia: null, impCanal: null, pessoas: null, configuracoes: null, pessoasDemo: [], csrf: null, diaSelecionado: null, dataBase: null });
+  recarregarAoFechar = false; revisarAoCarregar = null;
+  fecharPainel(false);
+  const alvo = $("#painel .painel-conteudo");
+  if (alvo) alvo.innerHTML = "";
+  const nome = $("#topo-unidade"); if (nome) nome.textContent = "Sessão encerrada";
+  const fontes = $("#topo-fontes"); if (fontes) fontes.textContent = "";
+  const quem = $("#topo-usuario"); if (quem) { quem.textContent = ""; quem.hidden = true; }
+  definirBoot(BOOT.SESSAO_EXPIRADA);
+  definirDados("erro");
+  const conteudo = $("#conteudo");
+  conteudo.innerHTML = mensagemDeErro(r ?? { ok: false, status: 401, erro: "SEM_SESSAO", motivo: "SESSAO_EXPIRADA", mensagem: "" });
+  conteudo.removeAttribute("aria-busy");
 }
 
 /** Aplica pesos da barra (CSP proíbe estilo inline no HTML). */
@@ -233,7 +301,7 @@ function desenhar(dados) {
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);
     case "vendas-e-recebimentos": return ven.vendasERecebimentos(dados, f);
     case "conferencias": return conf.central(dados, f, { competencia: estado.competencia, unidadeNome: nomeUnidade(), permissoes: permissoesDaUnidade() });
-    default: return telas.visaoGeral(dados, { unidadeNome: nomeUnidade() });
+    default: return telas.visaoGeral(dados, { unidadeNome: nomeUnidade(), fontes: estado.fontesDaUnidade ?? null });
   }
 }
 
@@ -244,6 +312,11 @@ async function carregar() {
   conteudo.innerHTML = telas.estado("carregando");
   conteudo.setAttribute("aria-busy", "true");
   fecharPainel(false);
+  definirDados("carregando");
+  // Etapa da entrada: sem unidade conhecida = identificando; unidade conhecida mas sem as fontes dela = configurando. Nada de menu antes disso.
+  if (!estado.unidade) definirBoot(BOOT.IDENTIFICANDO);
+  else if (estado.fontesDaUnidade?.unidade !== estado.unidade) definirBoot(BOOT.CONFIGURANDO);
+  else definirBoot(BOOT.CARREGANDO);
   // PLATAFORMA: a unidade é SEMPRE a da sessão (o servidor ignora a que vier daqui). Então a consulta da tela não precisa esperar a sessão:
   // sai JUNTO com ela. Só é aproveitada se a competência que a sessão escolher for a mesma que se supôs (mês de hoje); senão é descartada e refeita.
   let adiantada = null;
@@ -254,12 +327,20 @@ async function carregar() {
     adiantada = { competencia: estado.competencia, url, promessa: consultorAdiantado.consultar(url, cabecalhos()) };
     estado.competencia = original;
   }
+  // As fontes também só dependem da sessão da plataforma (a unidade é a dela): saem JUNTO com a sessão, em paralelo.
+  const urlDasFontes = () => `/api/fv2/fontes-faturamento?${qs({ competencia: undefined })}`;
+  let fontesAdiantadas = null;
+  if (MODO_PLATAFORMA && !estado.unidade) fontesAdiantadas = consultorFontes.consultar(urlDasFontes(), cabecalhos());
   if (!estado.unidade) {
     const s = await consultor.consultar("/api/fv2/sessao", cabecalhos());
     if (!s) return;
     // 08B: na homologação full stack, sem sessão autenticada o servidor pede login (nunca há perfil escolhido pelo cliente).
     if (!s.ok && s.erro === "LOGIN_EXIGIDO") { window.location.assign("/entrar"); return; }
-    if (!s.ok) { conteudo.innerHTML = mensagemDeErro(s); conteudo.removeAttribute("aria-busy"); return; }
+    if (!s.ok) {
+      if (ehSessaoExpirada(s)) { sessaoExpirada(s); return; }
+      definirBoot(BOOT.ERRO); definirDados("erro");
+      conteudo.innerHTML = mensagemDeErro(s); conteudo.removeAttribute("aria-busy"); return;
+    }
     if (s.dados.modo === "HOMOLOGACAO") modoHomologacao(s.dados.usuario);
     if (s.dados.modo === "PLATAFORMA") modoPlataforma(s.dados);
     estado.unidades = s.dados.unidades;
@@ -269,14 +350,16 @@ async function carregar() {
     estado.pessoas = null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
     preencherUnidades();
+    const nomeNoTopo = $("#topo-unidade"); if (nomeNoTopo) nomeNoTopo.textContent = nomeUnidade();
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
-  if (await ajustarMenuDasFontes(meuCarregamento)) return; // a rota mudou (SAIPOS ↔ SWF): um novo carregamento já começou
+  if (await carregarFontes(meuCarregamento, fontesAdiantadas, urlDasFontes)) return; // erro, sessão vencida ou a rota mudou (SAIPOS ↔ SWF)
   const urlDoCalendario = consultaDoCalendario();
   const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
   const urlDasImportacoes = consultaDasImportacoes();
   const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
   const urlDaRota = consultaDaRota();
+  const modulosDaTela = garantir(...(MODULOS_DA_ROTA[estado.rota] ?? [])); // em paralelo com a consulta
   let r;
   if (adiantada && semUnidade(adiantada.url) === semUnidade(urlDaRota)) {
     r = await adiantada.promessa;
@@ -287,7 +370,12 @@ async function carregar() {
   }
   if (r === null) return; // resposta obsoleta: outra consulta mais nova já está em andamento
   conteudo.removeAttribute("aria-busy");
-  if (!r.ok) { conteudo.innerHTML = mensagemDeErro(r); return; }
+  if (!r.ok) {
+    if (ehSessaoExpirada(r)) { sessaoExpirada(r); return; }
+    definirBoot(BOOT.PRONTO); definirDados("erro"); // a unidade e o menu estão certos; só esta consulta falhou
+    conteudo.innerHTML = mensagemDeErro(r);
+    return;
+  }
   estado.calCanal = null;
   estado.impCanal = null;
   if (dasImportacoes) {
@@ -300,7 +388,16 @@ async function carregar() {
     if (rc === null) return; // outro calendário mais novo já foi pedido
     estado.calCanal = rc.ok ? { dados: rc.dados } : { erro: rc.mensagem || "Não foi possível carregar o calendário deste canal." };
   }
+  try { await modulosDaTela; } catch {
+    definirBoot(BOOT.PRONTO); definirDados("erro");
+    conteudo.innerHTML = telas.estado("rede", "Não foi possível baixar esta tela. Confira a conexão e tente de novo; nada foi alterado.");
+    return;
+  }
+  if (meuCarregamento !== numeroDoCarregamento) return;
   conteudo.innerHTML = desenhar(r.dados);
+  aquecerModulos();
+  definirDados("disponivel");
+  definirBoot(BOOT.PRONTO);
   aplicarPesos(conteudo);
   if (revisarAoCarregar && estado.rota === "conferencias") {
     // Ligação de outra tela (ex.: Caixa e Bancos → crédito não identificado): abre a pendência; se não existir, o painel diz.
@@ -311,20 +408,28 @@ async function carregar() {
 }
 
 /**
- * Doc 54 — o menu mostra o sistema de loja DA unidade (SAIPOS ou SWF); o outro some. Uma consulta por unidade.
+ * Doc 54 — o menu mostra o sistema de loja DA unidade (SAIPOS ou SWF) e só as plataformas que ela usa. Uma consulta por unidade.
+ * Falha NUNCA vira "SAIPOS por padrão": sem as fontes, o menu não é montado e a tela mostra o erro (ou a sessão vencida).
  * Quem abrir a área do sistema que a unidade não usa é levado para a do sistema dela (o servidor recusa os arquivos de todo jeito).
+ * @returns {Promise<boolean>} true = o carregamento deve parar aqui (erro, sessão vencida, obsoleto ou rota trocada)
  */
-async function ajustarMenuDasFontes(meuCarregamento) {
+async function carregarFontes(meuCarregamento, adiantadas, urlDasFontes) {
   if (estado.fontesDaUnidade?.unidade !== estado.unidade) {
-    const r = await consultor.consultar(`/api/fv2/fontes-faturamento?${qs({ competencia: undefined })}`, cabecalhos());
+    const r = await (adiantadas ?? consultorFontes.consultar(urlDasFontes(), cabecalhos()));
     if (r === null || meuCarregamento !== numeroDoCarregamento) return true;
-    estado.fontesDaUnidade = { unidade: estado.unidade, sistema: r.ok ? r.dados.sistemaDeLoja : "SAIPOS" };
+    if (!r.ok) {
+      if (ehSessaoExpirada(r)) { sessaoExpirada(r); return true; }
+      definirBoot(BOOT.ERRO); definirDados("erro");
+      const conteudo = $("#conteudo");
+      conteudo.innerHTML = mensagemDeErro(r);
+      conteudo.removeAttribute("aria-busy");
+      return true;
+    }
+    estado.fontesDaUnidade = { unidade: estado.unidade, ...r.dados };
   }
-  const sistema = estado.fontesDaUnidade.sistema;
-  for (const [rota, visivel] of [["saipos", sistema !== "SWF"], ["swf", sistema === "SWF"]]) {
-    const item = document.querySelector(`[data-rota="${rota}"]`)?.closest("li");
-    if (item) item.hidden = !visivel;
-  }
+  aplicarFontes(estado.fontesDaUnidade);
+  definirBoot(BOOT.CARREGANDO);
+  const sistema = estado.fontesDaUnidade.sistemaDeLoja;
   const destino = sistema === "SWF" && estado.rota === "saipos" ? "swf" : sistema !== "SWF" && estado.rota === "swf" ? "saipos" : null;
   if (!destino) return false;
   window.location.hash = `#/${destino}`;
@@ -344,11 +449,13 @@ async function abrirNoPainel(url, desenhar, origem) {
   if (!painel.contains(origem) || !focoAntesDoPainel) focoAntesDoPainel = origem;
   const alvo = painel.querySelector(".painel-conteudo");
   painel.hidden = false;
-  alvo.innerHTML = telas.estado("carregando");
+  alvo.innerHTML = telas.estado("carregando", "", { compacto: true });
   alvo.focus();
   const r = await consultorPainel.consultar(url, cabecalhos());
   if (r === null) return;
-  alvo.innerHTML = r.ok ? desenhar(r.dados) : `<div class="painel-cabeca"><span></span><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar">×</button></div>${mensagemDeErro(r)}`;
+  try { await garantirTodos(); } catch { alvo.innerHTML = telas.estado("rede", "Não foi possível baixar este detalhe. Confira a conexão e tente de novo.", { compacto: true }); return; }
+  if (!r.ok && ehSessaoExpirada(r)) { sessaoExpirada(r); return; }
+  alvo.innerHTML = r.ok ? desenhar(r.dados) : `<div class="painel-cabeca"><span></span><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar">×</button></div>${mensagemDeErro(r, { compacto: true })}`;
   painel.querySelector("[data-fechar-painel]")?.focus();
 }
 const abrirPainel = (codigo, origem) => abrirNoPainel(`/api/fv2/composicao?${qs({ codigo })}`, (d) => telas.composicao(d, { unidadeNome: nomeUnidade() }), origem);
@@ -486,6 +593,7 @@ async function executarAcao(form) {
   // Caixas de marcar com o mesmo nome (data-multiplo): todos os valores marcados, separados por vírgula.
   for (const nome of new Set([...form.querySelectorAll("[data-multiplo]")].map((x) => x.name))) dados[nome] = new FormData(form).getAll(nome).join(",");
   if (!form.querySelector('[name="confirmar"]')?.checked) { saida.textContent = "Marque a confirmação para continuar."; return; }
+  try { await garantir("conf", "can"); } catch { saida.textContent = "Não foi possível baixar a tela de confirmação. Confira a conexão: nada foi enviado."; return; }
   if (form.hasAttribute("data-grade-taxas")) {
     const g = can.textoDaGradeDeTaxas(entradas.filter(([k]) => daGrade(k)));
     if (g.erros.length) { saida.textContent = g.erros.join(" "); return; }
@@ -500,9 +608,12 @@ async function executarAcao(form) {
   }
   if ("aceitarPendencias" in dados) corpo.aceitarPendencias = true;
   botao.disabled = true;
+  saida.dataset.estado = "enviando";
   saida.textContent = "Enviando…";
   const r = await enviar(form.dataset.acao, corpo, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
+  if (ehSessaoExpirada(r)) { sessaoExpirada(r); return; } // nada foi gravado; a tela explica e oferece entrar de novo
   saida.innerHTML = conf.resultadoDaAcao(r);
+  saida.dataset.estado = r.ok ? "ok" : "erro";
   if (!r.ok) { botao.disabled = false; return; }
   recarregarAoFechar = true;
   const proximo = form.dataset.recarregar ?? "";
@@ -752,6 +863,7 @@ document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[d
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; carregar(); });
 const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
-$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); invalidarCache(); carregar(); });
-$("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
+$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; estado.fontesDaUnidade = null; reiniciarFiltros(); invalidarCache(); const nome = $("#topo-unidade"); if (nome) nome.textContent = nomeUnidade(); carregar(); });
+$("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; estado.fontesDaUnidade = null; reiniciarFiltros(); carregar(); });
+iniciarMenuRecolhivel();
 rotear();
