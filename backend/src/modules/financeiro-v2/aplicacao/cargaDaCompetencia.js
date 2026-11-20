@@ -14,6 +14,7 @@
 // As MESMAS funções puras calculam o resultado; a ordem de cada tabela é a de gravação (a mesma de `listar`).
 // A equivalência com a carga completa é provada em teste (memória e PostgreSQL) — e pode ser conferida em toda a suíte.
 import { TIPO } from "../dominio/catalogos.js";
+import { carregarVigenciasDeFontes } from "./fontesDeFaturamento.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ORDEM_DE_GRAVACAO } from "../contratos/repositorio.js";
 import { competenciaDe, primeiroDiaDe, somarDias, somarMeses, ultimoDiaDe } from "../dominio/tempo.js";
@@ -81,6 +82,7 @@ export async function carregarDaCompetencia(tx, cx, competencias) {
     categorias: await l(TIPO.CATEGORIA), contas: await l(TIPO.CONTA), saldos: await l(TIPO.SALDO_CONTA), sessoes: await l(TIPO.SESSAO_CAIXA),
     contrapartes: await l(TIPO.CONTRAPARTE), competencias: await l(TIPO.COMPETENCIA), documentos: await l(TIPO.DOCUMENTO), importacoes: await l(TIPO.IMPORTACAO),
     divergenciasFonte: await l(TIPO.DIVERGENCIA_FONTE), transferencias: await l(TIPO.TRANSFERENCIA),
+    vigenciasDeFontes: await carregarVigenciasDeFontes(tx, cx), // fontes de faturamento em vigor (só leitura): decide os relatórios esperados
   };
 
   // 2. sementes
@@ -169,7 +171,7 @@ export async function carregarRegistros(tx, cx) {
     registros: await l(TIPO.REGISTRO_FONTE, { onde: { tipoRegistro: "PEDIDO" } }), correspondencias: await l(TIPO.CORRESPONDENCIA),
     divergenciasFonte: await l(TIPO.DIVERGENCIA_FONTE), competencias: await l(TIPO.COMPETENCIA), contas: await l(TIPO.CONTA), saldos: await l(TIPO.SALDO_CONTA),
     sessoes: await l(TIPO.SESSAO_CAIXA), contrapartes: await l(TIPO.CONTRAPARTE), obrigacoes: await l(TIPO.OBRIGACAO), transferencias: await l(TIPO.TRANSFERENCIA),
-    importacoes: await l(TIPO.IMPORTACAO),
+    importacoes: await l(TIPO.IMPORTACAO), vigenciasDeFontes: await carregarVigenciasDeFontes(tx, cx),
   };
 }
 

@@ -38,12 +38,38 @@ export const POLITICA_DE_MATERIALIDADE = Object.freeze({
 });
 
 /** Relatórios esperados para conferir uma competência (fontes da operação). Os demais tipos aparecem quando importados. */
+// `sistema`: o sistema de loja (SAIPOS ou SWF) de que o relatório depende; sem `sistema` vale para toda unidade. O SWF 45 e o SWF 03 são os
+// equivalentes do faturamento diário e das formas de pagamento do SAIPOS (mesmo efeito: pendência documental SEM efeito no fechamento).
 export const FONTES_DA_COMPETENCIA = Object.freeze([
-  { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "Faturamento diário do SAIPOS" },
-  { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "Formas de pagamento do SAIPOS" },
+  { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "Faturamento diário do SAIPOS", sistema: "SAIPOS" },
+  { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "Formas de pagamento do SAIPOS", sistema: "SAIPOS" },
+  { fonte: "SWF", tipoRelatorio: "SWF_ANALISE_FATURAMENTO", nome: "45 — Análise de faturamento do SWF", sistema: "SWF" },
+  { fonte: "SWF", tipoRelatorio: "SWF_PAGAMENTOS", nome: "03 — Formas de pagamento do SWF", sistema: "SWF" },
   { fonte: "STONE", tipoRelatorio: "STONE_VENDAS", nome: "Vendas da Stone" },
   { fonte: "UNICRED", tipoRelatorio: "UNICRED_EXTRATO", nome: "Extrato da Unicred" },
 ]);
+
+/**
+ * Fontes de faturamento em vigor NA competência, pela configuração REAL da unidade (`d.vigenciasDeFontes`, montada do histórico
+ * de configuração: [{ desde: "AAAA-MM-DD"|null, fontes: [...] }] em ordem cronológica).
+ *   - vale a última configuração com `desde` ≤ último dia da competência (competência passada continua com o sistema que valia nela);
+ *   - o período ANTERIOR à primeira configuração gravada usa essa primeira configuração (o padrão SAIPOS é só um valor de partida,
+ *     não uma vigência: a Subway nunca usou SAIPOS);
+ *   - sem configuração conhecida (`vigenciasDeFontes` ausente/nula): padrão histórico, como antes (SAIPOS + iFood + 99Food).
+ */
+export function fontesVigentesNaCompetencia(d, competencia) {
+  const v = d?.vigenciasDeFontes;
+  if (!Array.isArray(v) || !v.length) return ["SAIPOS", "IFOOD", "NOVENTA_E_NOVE_FOOD"];
+  const fim = ultimoDiaDe(competencia);
+  let vigente = v[0].fontes;
+  for (const e of v) if (e.desde === null || e.desde === undefined || String(e.desde).slice(0, 10) <= fim) vigente = e.fontes;
+  return vigente;
+}
+/** Relatórios ESPERADOS da competência: os de toda unidade + os do sistema de loja que estava em vigor nela. */
+export function esperadasDaCompetencia(d, competencia) {
+  const vigentes = fontesVigentesNaCompetencia(d, competencia);
+  return FONTES_DA_COMPETENCIA.filter((f) => !f.sistema || vigentes.includes(f.sistema));
+}
 
 const ROTULO_RELACAO = Object.freeze({
   SAIPOS_X_STONE: "Venda SAIPOS × transação Stone", STONE_X_RECEBIMENTO: "Transação Stone × recebimento Stone", RECEBIMENTO_STONE_X_UNICRED: "Recebimento Stone × crédito Unicred",
@@ -282,7 +308,7 @@ export function pendenciasDaCompetencia(e) {
 export function fontesDaCompetencia(d, competencia) {
   const per = periodoDa(competencia);
   const concluidas = (d.importacoes ?? []).filter((x) => [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(x.estado) && sobrepoe(x.periodoInicio, x.periodoFim, per));
-  const esperadas = FONTES_DA_COMPETENCIA.map((f) => ({ ...f, esperada: true }));
+  const esperadas = esperadasDaCompetencia(d, competencia).map(({ sistema: _s, ...f }) => ({ ...f, esperada: true }));
   const extras = [...new Map(concluidas.filter((x) => !esperadas.some((f) => f.tipoRelatorio === x.tipoRelatorio)).map((x) => [x.tipoRelatorio, { fonte: x.fonte, tipoRelatorio: x.tipoRelatorio, nome: x.tipoRelatorio, esperada: false }])).values()];
   return [...esperadas, ...extras].map((f) => {
     const daFonte = concluidas.filter((x) => x.tipoRelatorio === f.tipoRelatorio);
