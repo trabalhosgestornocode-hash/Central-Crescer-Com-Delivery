@@ -59,10 +59,17 @@ export function lerConfiguracaoMova(env) {
   if ((recebimento || envio) && !(String(env.MOVA_GATEWAY_SECRET ?? "").length >= 32)) contradicoes.push("CANAL_SEM_SEGREDO");
   if (env.MOVA_GATEWAY_SECRET && env.MOVA_GATEWAY_SECRET === env.WHATSAPP_GATEWAY_SECRET) contradicoes.push("SEGREDO_IGUAL_AO_PRINCIPAL");
   if (env.MOVA_DATABASE_URL && env.FV2_APP_DATABASE_URL && env.MOVA_DATABASE_URL === env.FV2_APP_DATABASE_URL && !homologacao) contradicoes.push("BANCO_COMPARTILHADO_FORA_DA_HOMOLOGACAO");
+  // Teto estrito por chamada (Execução 13B): as duas chaves juntas, inteiras e positivas; esforço opcional e de lista fechada.
+  const tetoSaida = env.MOVA_IA_TETO_SAIDA, tetoEntrada = env.MOVA_IA_TETO_ENTRADA, tetoEsforco = env.MOVA_IA_TETO_ESFORCO || null;
+  let teto = null;
+  if (tetoSaida || tetoEntrada || tetoEsforco) {
+    if (!/^[1-9][0-9]{1,5}$/.test(tetoSaida ?? "") || !/^[1-9][0-9]{1,6}$/.test(tetoEntrada ?? "") || (tetoEsforco && !["low", "medium", "high"].includes(tetoEsforco))) contradicoes.push("TETO_IA_INVALIDO");
+    else teto = Object.freeze({ maxSaida: Number(tetoSaida), maxEntrada: Number(tetoEntrada), esforco: tetoEsforco });
+  }
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto,
   };
 }
 
@@ -100,7 +107,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   let mova = null;
   const obterEvidencia = (ref) => mova.evidencias.obter(ref);
   const extrator = cfg.ia && criarClienteIa
-    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle }), obterEvidencia, relogio })
+    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio })
     : EXTRATOR_DESLIGADO;
   mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;

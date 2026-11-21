@@ -76,9 +76,30 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
 }
 
 /** Envolve o cliente Anthropic: cada `create` reserva antes e acerta depois; IA desligada no controle = nenhuma chamada. */
-export function clienteComOrcamento(cliente, { orcamento, controle = null }) {
-  return { beta: { messages: { async create(req) {
+/**
+ * Execução 13B — TETO ESTRITO por chamada (`teto = {maxSaida, maxEntrada, esforco?}`), para orçamentos pequenos em que a
+ * reserva contábil precisa corresponder à exposição real: max_tokens reduzido de fato, só texto (mídia recusada), entrada
+ * conferida ANTES pelo endpoint gratuito de contagem (inclui o formato estruturado) e sem fallback para outro modelo.
+ * Qualquer recusa acontece antes de reservar: nenhuma chamada cobrada sai.
+ */
+export async function aplicarTeto(cliente, req, teto) {
+  if (!teto) return req;
+  const blocos = (req.messages ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content : [{ type: "text" }]));
+  if (blocos.some((b) => b.type !== "text")) throw new ErroDeIa("IA_TETO_MIDIA_RECUSADA");
+  const { betas: _b, fallbacks: _f, ...resto } = req;
+  const ajustado = { ...resto, max_tokens: Math.min(req.max_tokens ?? teto.maxSaida, teto.maxSaida),
+    output_config: { ...(req.output_config ?? {}), ...(teto.esforco ? { effort: teto.esforco } : {}) } };
+  let n;
+  try { n = (await cliente.beta.messages.countTokens({ model: ajustado.model, system: ajustado.system, messages: ajustado.messages, output_config: ajustado.output_config })).input_tokens; }
+  catch { throw new ErroDeIa("IA_TETO_CONTAGEM_INDISPONIVEL"); }
+  if (!Number.isFinite(n) || n > teto.maxEntrada) throw new ErroDeIa("IA_TETO_ENTRADA_EXCEDIDA");
+  return ajustado;
+}
+
+export function clienteComOrcamento(cliente, { orcamento, controle = null, teto = null }) {
+  return { beta: { messages: { async create(reqOriginal) {
     if (controle && !(await controle.ligado("ia"))) throw new ErroDeIa("IA_DESLIGADA_NO_CONTROLE");
+    const req = await aplicarTeto(cliente, reqOriginal, teto);
     const id = await orcamento.reservar();
     let r;
     try { r = await cliente.beta.messages.create(req); } catch (e) {
