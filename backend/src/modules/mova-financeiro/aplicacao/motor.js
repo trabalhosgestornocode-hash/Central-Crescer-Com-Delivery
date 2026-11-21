@@ -16,7 +16,7 @@
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
-import { mascararDadosSensiveis, pedidoRestrito } from "../dominio/privacidade.js";
+import { mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
@@ -117,12 +117,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 7. Guardas determinísticas ANTES da IA (nada restrito vai ao modelo): dado restrito e pedido de aprovação pelo grupo.
     const injecao = sinaisDeInjecao(evento.texto) || sinaisDeInjecao(esclarecimento?.texto);
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoRestrito(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "DADO_RESTRITO", resposta: RESPOSTA.dadoRestrito(), injecao });
+    if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.
     let saida = esclarecimento?.saida ?? null;
     if (!saida) {
       const lida = await lerDocumento(evento, grupo);
+      // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
+      if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
       if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : RESPOSTA.falhaLeitura(), injecao });
       saida = lida.saida;
     }

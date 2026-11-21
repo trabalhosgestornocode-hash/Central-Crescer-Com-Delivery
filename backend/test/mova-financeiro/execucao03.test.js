@@ -358,7 +358,7 @@ t("23 falha no provedor de IA: transitória volta à fila; recusa/erro permanent
   await s.enviar(gw({ id: "E3IA0001", doc: bytes("ia-1"), mime: "image/jpeg", texto: "limite, alfa" }));
   assert.equal((await s.mova.fila.estado("bly:E3IA0001")).estado, "PENDENTE");
   await s.enviar(gw({ doc: bytes("ia-2"), mime: "image/jpeg", texto: "recusa, alfa" }));
-  assert.equal((await s.ultima()).motivo, "EXTRATOR_FALHOU:IA_RECUSOU");
+  assert.equal((await s.ultima()).motivo, "IA_RECUSOU"); // 13C: recusa vira BLOQUEADO, não falha de leitura
   await s.enviar(gw({ doc: bytes("ia-3"), mime: "image/jpeg", texto: "alfa" }));
   assert.equal((await s.ultima()).motivo, "IA_SAIDA_INVALIDA:campo_nao_permitido");
   assert.equal(await s.mova.armazenamento.propostas.quantidade(), 0);

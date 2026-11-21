@@ -14,6 +14,8 @@ export const RESPOSTA = Object.freeze({
   /** Execução 13B: conversa sem pedido financeiro (saudação etc.) — não pergunta unidade nem cria nada. */
   conversaSemPedido: () => "Olá! Sou o MOVA, assistente financeiro. Envie um comprovante, boleto ou nota (ou descreva o pagamento com valor e unidade) que eu preparo a proposta para revisão, ou pergunte sobre contas e faturamento. Nada foi registrado.",
   aprovacaoSoNoDashboard: () => "Aprovar, corrigir ou aplicar lançamentos é feito por um administrador financeiro no Centro Financeiro (com login). Pelo grupo eu só registro propostas.",
+  foraDoEscopo: () => "Só trato dados das unidades atendidas por esta conversa. Não compartilho informações de outras empresas ou unidades. Nada foi consultado.",
+  pedidoNaoAtendido: () => "Não posso atender esse pedido por aqui. Se for uma consulta das suas unidades, reformule com a unidade e o período. Nada foi registrado.",
   dadoRestrito: () => "Essa informação é restrita e não é compartilhada no grupo. Consulte o Centro Financeiro com seu login.",
   transferenciaInterna: () => "Isso parece uma transferência entre contas da própria empresa: não é despesa. Ela será reconhecida pelo extrato bancário, na conciliação. Nada foi registrado.",
   solicitacaoRevisao: (p) => `Pedido ${curto(p.id)} registrado para o administrador financeiro revisar. Nada foi alterado.`,
