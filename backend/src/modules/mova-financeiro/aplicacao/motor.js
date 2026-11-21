@@ -186,7 +186,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "RECEITA_SO_PELA_FONTE_OFICIAL", escopo, resposta: RESPOSTA.fonteOficial(canais), injecao });
     }
 
-    if (![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
+    // Execução 14: relato só por TEXTO (sem documento) — a INTENÇÃO decide (pagamento feito × conta a vencer), não um "tipo de
+    // documento" que não existe. Com documento, segue valendo o tipo lido.
+    const textoPuro = !evento.midia;
+    const relatoPagamento = textoPuro && saida.intencao === "INFORMAR_PAGAMENTO";
+    const relatoConta = textoPuro && saida.intencao === "REGISTRAR_CONTA";
+    if (!relatoPagamento && !relatoConta && ![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
     if (!saida.valorCentavos && saida.camposAusentes.includes("valorCentavos") && saida.incertezas.length > 0) {
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AMBIGUO", escopo, resposta: RESPOSTA.faltaInformacao(["qual é o valor correto (o documento tem mais de um valor possível)"]), injecao });
     }
@@ -195,6 +200,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Execução 04B (achado com a IA real): cupom/nota fiscal JÁ PAGO ("paguei…") é pagamento, não conta a vencer. Sem data de
     // pagamento, tratarPagamento pergunta — nunca presume a data pela emissão.
     const notaJaPaga = saida.tipoDocumento === "NOTA_FISCAL" && saida.intencao === "INFORMAR_PAGAMENTO" && !saida.vencimento;
+    if (relatoPagamento) return tratarPagamento(ctx);
+    if (relatoConta) return tratarConta(ctx);
     return PAGAMENTOS.includes(saida.tipoDocumento) || notaJaPaga ? tratarPagamento(ctx) : tratarConta(ctx);
   }
 
@@ -209,6 +216,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   }
 
   async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento }, dados, textoResposta) {
+    // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
+    // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
+    if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
+      const mesma = (await a.propostas.listar(escopo)).find((p) => p.estado === "AGUARDANDO_REVISAO" && p.eventoId !== evento.eventoId && !p.evidencia
+        && p.tipo === dados.tipo && p.valorCentavos === dados.valorCentavos
+        && (p.datas?.caixa ?? null) === (dados.datas?.caixa ?? null) && (p.datas?.vencimento ?? null) === (dados.datas?.vencimento ?? null));
+      if (mesma) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "PROPOSTA_SEMELHANTE_PENDENTE", escopo, propostaId: mesma.id, resposta: RESPOSTA.relatoRepetido(mesma.id), injecao });
+    }
     const incompleta = !requisitosCompletos(unidade);
     const { proposta } = await a.propostas.criar(escopo, {
       chaveIdempotencia: `${evento.eventoId}|${dados.tipo}`, origem: "MOVA", eventoId: evento.eventoId, mensagemId: evento.mensagemId,
