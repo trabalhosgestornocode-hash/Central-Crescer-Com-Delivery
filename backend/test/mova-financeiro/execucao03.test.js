@@ -166,13 +166,13 @@ t("05 comprovante Pix com legenda (imagem): IA real recebe a imagem + legenda de
   const s = await cenario({ responder: () => comprovante({}) });
   await s.enviar(gw({ doc, mime: "image/jpeg", texto: "pix pago, gama" }));
   const req = s.cliente.pedidos[0];
-  assert.equal(req.model, "claude-opus-5-5");
+  assert.equal(req.model, "claude-haiku-5-5");
   assert.equal(temBloco(req, "image"), true);
   assert.equal(req.messages[0].content[0].source.media_type, "image/jpeg");
   assert.equal(req.output_config.format.type, "json_schema");
   assert.deepEqual(req.output_config.format.schema, esquemaDaSaida());
   assert.equal(req.tools, undefined, "o modelo não recebe ferramentas");
-  assert.equal(req.fallbacks, "default");
+  assert.equal(req.fallbacks, undefined, "Haiku exclusivo: sem fallback para outro modelo");
   assert.equal((await s.propostas(GAMA))[0].tipo, TIPO_PROPOSTA.DESPESA_PAGA);
 });
 

@@ -44,7 +44,7 @@ export const PRECOS_IA = Object.freeze({ "claude-opus-5-5": [4, 20], "claude-son
 export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPorMilhao = 20 }) {
   // Execução 13C: o custo segue o modelo que RESPONDEU; modelo desconhecido usa o maior preço tabelado (conservador).
   const microusd = (entrada, saida, modelo) => {
-    const tab = PRECOS_IA[String(modelo ?? "").replace(/-d{8}$/, "")];
+    const tab = PRECOS_IA[String(modelo ?? "").replace(/-\d{8}$/, "")];
     const [pe, ps] = tab ?? [Math.max(precoEntradaPorMilhao, 4), Math.max(precoSaidaPorMilhao, 20)];
     return Math.ceil(entrada * pe + saida * ps); // tokens × US$/M = µUS$
   };

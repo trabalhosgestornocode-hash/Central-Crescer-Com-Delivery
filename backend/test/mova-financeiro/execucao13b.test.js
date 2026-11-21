@@ -66,18 +66,33 @@ test("13C custo por modelo que respondeu: Haiku/Sonnet/Opus tabelados; desconhec
   assert.deepEqual(params.map((p) => p[4]), [460, 18400, 9200, 18400]);
 });
 
-test("13C extrator: raciocínio desligado só onde a API aceita (Haiku 5.5); Opus segue sem o campo", async () => {
-  const { criarExtratorAnthropic } = await import("../../src/modules/mova-financeiro/index.js");
-  const pedidos = []; const cliente = { beta: { messages: { async create(r) { pedidos.push(r); throw Object.assign(new Error("x"), { status: 400 }); } } } };
-  for (const modelo of ["claude-haiku-5-5", "claude-opus-5-5"]) await criarExtratorAnthropic({ cliente, obterEvidencia: async () => null, modelo, esforco: "low" }).extrair({ texto: "oi", tipo: "TEXTO", midia: null }).catch(() => {});
-  assert.deepEqual(pedidos[0].thinking, { type: "disabled" });
-  assert.equal(pedidos[1].thinking, undefined);
-  assert.match(pedidos[0].system, /NO MÁXIMO 12 palavras/);
+test("Haiku exclusivo: pedido sem fallback, sem raciocínio, saída limitada; outro modelo é recusado na montagem e na resposta", async () => {
+  const { criarExtratorAnthropic, MODELO_PADRAO } = await import("../../src/modules/mova-financeiro/index.js");
+  assert.equal(MODELO_PADRAO, "claude-haiku-5-5");
+  const pedidos = []; const cliente = { beta: { messages: { async create(r) { pedidos.push(r); return { model: "claude-opus-5-5", stop_reason: "end_turn", content: [{ type: "text", text: "{}" }] }; } } } };
+  const ex = criarExtratorAnthropic({ cliente, obterEvidencia: async () => null });
+  await assert.rejects(ex.extrair({ texto: "oi", tipo: "TEXTO", midia: null }), (e) => e.codigo === "IA_MODELO_INESPERADO");
+  const [r] = pedidos;
+  assert.equal(r.model, "claude-haiku-5-5");
+  assert.deepEqual(r.thinking, { type: "disabled" });
+  assert.equal(r.max_tokens, 600);
+  assert.equal(r.fallbacks, undefined); assert.equal(r.betas, undefined);
+  assert.match(r.system, /NO MÁXIMO 12 palavras/);
+  for (const modelo of ["claude-opus-5-5", "claude-sonnet-5-5"]) assert.throws(() => criarExtratorAnthropic({ cliente, obterEvidencia: async () => null, modelo }), /não permitido/);
+  const ok = { beta: { messages: { async create() { return { model: "claude-haiku-5-5-20261101", stop_reason: "end_turn", content: [{ type: "text", text: "{}" }] }; } } } };
+  assert.deepEqual(await criarExtratorAnthropic({ cliente: ok, obterEvidencia: async () => null }).extrair({ texto: "oi", tipo: "TEXTO", midia: null }), {});
 });
 
-test("13C MOVA_IA_MODELO: lista fechada (modelo sem preço tabelado não liga o MOVA)", () => {
+test("MOVA_IA_MODELO: só Haiku 5.5 (decisão do proprietário); outro modelo não liga o MOVA", () => {
   const base = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
   assert.equal(lerConfiguracaoMova({ ...base, MOVA_IA_MODELO: "claude-haiku-5-5" }).modeloIa, "claude-haiku-5-5");
   assert.equal(lerConfiguracaoMova(base).modeloIa, null);
-  assert.deepEqual(lerConfiguracaoMova({ ...base, MOVA_IA_MODELO: "gpt-x" }).contradicoes, ["MODELO_IA_DESCONHECIDO"]);
+  for (const m of ["claude-opus-5-5", "claude-sonnet-5-5", "gpt-x"]) assert.deepEqual(lerConfiguracaoMova({ ...base, MOVA_IA_MODELO: m }).contradicoes, ["MODELO_IA_NAO_PERMITIDO"]);
+});
+
+test("custo: identificador datado do modelo usa o preço do modelo base", async () => {
+  const { criarOrcamentoIa } = await import("../../src/modules/mova-financeiro/infra/operacao.js");
+  const params = []; const o = criarOrcamentoIa({ pool: { query: async (_s, p) => { params.push(p); return { rows: [] }; } } });
+  await o.concluir(1, { modelo: "claude-haiku-5-5-20261101", entrada: 3100, saida: 300 });
+  assert.equal(params[0][4], 460);
 });

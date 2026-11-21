@@ -25,7 +25,7 @@ export { OPERACOES_PERMITIDAS, criarPortaFinanceira, exigirContratoFinanceiro } 
 export { DECISAO, TIPO_PROPOSTA, criarMotor } from "./aplicacao/motor.js";
 export { ErroDeAprovacao, criarAprovador } from "./aplicacao/aprovacao.js";
 export { criarFerramentas, periodoDaConsulta } from "./aplicacao/ferramentas.js";
-export { ErroDeIa, MODELO_PADRAO, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
+export { ErroDeIa, MODELO_PADRAO, MODELOS_PERMITIDOS, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
 export { criarEnviadorDeRespostas, criarWorker } from "./gateway/worker.js";
 export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
 export { ESTADO_ITEM, ErroTransitorio, criarFilaMemoria } from "./gateway/fila.js";

@@ -45,7 +45,7 @@ async function cenario({ pool: poolDado, limiteChamadas } = {}) {
   await instalarConfiguracao(pool, validarConfiguracao(CONFIG));
   if (limiteChamadas !== undefined) await pool.query("update mova.orcamento_ia set limite_chamadas = $1", [limiteChamadas]);
   const chamadasIa = [];
-  const real = { beta: { messages: { async create(req) { chamadasIa.push(req); return { model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 4000, output_tokens: 500 }, content: [{ type: "text", text: JSON.stringify(leitura({})) }] }; } } } };
+  const real = { beta: { messages: { async create(req) { chamadasIa.push(req); return { model: "claude-haiku-5-5", stop_reason: "end_turn", usage: { input_tokens: 4000, output_tokens: 500 }, content: [{ type: "text", text: JSON.stringify(leitura({})) }] }; } } } };
   const controle = criarControle({ pool, cacheMs: 0 });
   const orcamento = criarOrcamentoIa({ pool });
   const ref = {};
@@ -103,9 +103,9 @@ t("19 orçamento da IA: persistente; ao esgotar, nenhuma chamada nova (e conta r
   assert.match((await s.mova.armazenamento.historico.todos()).at(-1).motivo, /ORCAMENTO_ESGOTADO/);
   const r = await s.orcamento.resumo();
   assert.deepEqual([r.chamadas, r.tokensEntrada, r.tokensSaida], [2, 8000, 1000]);
-  assert.equal(r.custoUsd, 0.052); // 2 × (4000×4 + 500×20) µUS$
-  // limite de custo: reserva de US$ 0,10 não cabe em US$ 0,15 já com US$ 0,052 gastos
-  await s.pool.query("update mova.orcamento_ia set limite_chamadas = 100, limite_custo_microusd = 150000");
+  assert.equal(r.custoUsd, 0.0013); // Haiku 5.5: 2 × (4000×0,10 + 500×0,50) µUS$
+  // limite de custo: reserva de US$ 0,10 não cabe em US$ 0,10 já com US$ 0,0013 gastos
+  await s.pool.query("update mova.orcamento_ia set limite_chamadas = 100, limite_custo_microusd = 100000");
   await s.enviar(msg({ texto: "paguei 15 reais, alfa" }));
   assert.equal(s.chamadasIa.length, 2);
 });
