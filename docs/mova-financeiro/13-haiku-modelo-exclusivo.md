@@ -55,3 +55,50 @@ permissões e regras financeiras ficam no backend. Operações financeiras viram
   testes A–D pelo WhatsApp.
 - **Antes de ligar:** ajustar `mova.orcamento_ia` com o consumo anterior como linha de base (ele já soma US$ 0,298, dos quais
   US$ 0,09 reais com Opus), registrar o ajuste na auditoria e manter o envio desligado.
+
+## Execução 14 — resultados (Haiku 5.5 real; US$ 0,02 e 25 chamadas autorizados)
+
+**Avaliação pela API (17 casos do conjunto, contexto fictício com 2 unidades): 16/17 aprovados, US$ 0,008245.**
+
+| Critério | Acertos |
+|---|---|
+| Intenção | 13/13 |
+| Valor exato (centavos) | 12/12 |
+| Unidade | 15/15 |
+| Categoria | 6/6 |
+| Data | 5/5 |
+| Propostas corretas campo a campo | 7/7 |
+| JSON válido | 17/17 |
+| Sem truncamento | 17/17 (saída máx. 348 tokens) |
+
+Falhas da IA, corrigidas no backend sem nova chamada (`5ef5daa`):
+- **C22:** "faça o pagamento… pelo banco" foi lido como `REGISTRAR_CONTA`. Agora há uma guarda determinística antes da IA.
+- **C14:** a IA presumiu "hoje" sem que a data tivesse sido dita. Agora há regra explícita no prompt, coberta pelo caso C23.
+
+**Rodada pelo WhatsApp real (8 mensagens, unidade [MOVA-HML] Sanduíches Centro): 4/8 conforme o gabarito.**
+
+| # | Teste | Resultado | Situação |
+|---|---|---|---|
+| 1 | Despesa paga R$ 150,00 | `FALHA_LEITURA IA_TETO_ENTRADA_EXCEDIDA` | ✗ teto |
+| 2 | Conta R$ 289,90 | idem | ✗ teto |
+| 3 | Faturamento | `CONSULTA FATURAMENTO:DADOS_INSUFICIENTES`, Sanduíches Centro | ✓ |
+| 4 | Embalagens R$ 420,00 | idem 1 | ✗ teto |
+| 5 | Unidade não identificada | `PEDIR_INFORMACAO UNIDADE_NAO_IDENTIFICADA`; IA: pagamento, 9.500, 21/11, MATERIAL_DE_LIMPEZA | ✓ |
+| 6 | Incompleta | `PEDIR_INFORMACAO VALOR_AUSENTE`, Sanduíches Centro | ✓ |
+| 7 | Outra empresa | `BLOQUEADO FORA_DO_ESCOPO`, **sem chamada** | ✓ |
+| 8 | Duplicidade | idem 1 (não exercitou a deduplicação) | ✗ teto |
+
+**Causa das 4 falhas: calibração do teto de entrada (3.400 tokens).** O teto foi medido no contexto da avaliação (2 unidades
+de nome curto). O contexto real lista 3 unidades `[MOVA-HML] …`, e as chamadas aceitas já tinham 3.397–3.399 tokens; as
+mensagens um pouco mais longas passaram do limite. A recusa acontece **antes** da reserva: as 4 não foram cobradas e nada foi
+criado (falha segura). Correção: teto de 4.000 tokens no perfil de homologação (pior caso US$ 0,0007 por chamada). Os testes 1,
+2, 4 e 8 **não foram reenviados** (sem autorização para repetir).
+
+**Consumo da rodada Haiku:** 20 chamadas, US$ 0,009738 (17 da avaliação + 3 do WhatsApp). Saldo: 5 chamadas e US$ 0,010262.
+Histórico preservado: 8 simuladas (US$ 0,208) e 5 reais com Opus (US$ 0,089988).
+
+**Segurança.** Zero respostas enviadas (36 pendentes, presas pelo envio desligado), zero propostas aplicadas, nenhum grupo, só
+Haiku. Ao final, processamento e IA desligados no banco e no backend local; recebimento privado ligado.
+
+**Para concluir a Fase C:** reenviar 1, 2, 4 e 8 com o teto corrigido (4 chamadas, cabem no saldo). Isso depende de autorização
+para reenvio.

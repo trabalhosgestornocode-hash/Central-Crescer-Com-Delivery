@@ -24,7 +24,7 @@ if (!chave || !/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(chave)) { console.error("RECUS
 const ca = process.env.MOVA_PG_CA ?? process.env.FV2_PG_CA ?? null;
 const pool = new pg.Pool({ connectionString: process.env.MOVA_DATABASE_URL, max: 2, ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
 await exigirBancoDeHomologacao(pool, process.env.MOVA_HOMOLOGACAO_MARCADOR);
-const teto = Object.freeze({ maxSaida: 600, maxEntrada: 3400, esforco: "low" });
+const teto = Object.freeze({ maxSaida: 600, maxEntrada: 4000, esforco: "low" }); // 14B: 3.400 recusou 4 de 8 mensagens reais (contexto com 3 unidades)
 const orcamento = criarOrcamentoIa({ pool });
 const controle = criarControle({ pool, cacheMs: 0 });
 const real = new Anthropic({ apiKey: chave, maxRetries: 0 }); // sem nova tentativa automática
