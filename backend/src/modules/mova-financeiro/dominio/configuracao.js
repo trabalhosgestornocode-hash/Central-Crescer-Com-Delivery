@@ -80,6 +80,22 @@ export function validarConfiguracao(c) {
 }
 
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;
+/** Celular brasileiro: o WhatsApp pode identificar a mesma linha com ou sem o nono dígito (55+DDD+9+8 ⇄ 55+DDD+8). */
+const variantesBr = (jid) => {
+  const m = /^55([1-9][0-9])(9?)([6-9][0-9]{7})@s\.whatsapp\.net$/.exec(String(jid ?? ""));
+  return m ? [`55${m[1]}9${m[3]}@s.whatsapp.net`, `55${m[1]}${m[3]}@s.whatsapp.net`] : [];
+};
+/**
+ * Conversa autorizada para o JID recebido: igualdade exata; para conversa PRIVADA (só no modo HOMOLOGACAO), também a
+ * variante com/sem nono dígito. Devolve a entrada CADASTRADA (o JID canônico usado em fila, unidades e participantes).
+ */
+export function conversaAutorizada(cfg, jid) {
+  const exata = grupoAutorizado(cfg, jid);
+  if (exata || cfg.modo !== "HOMOLOGACAO" || !ehConversaPrivada(jid)) return exata;
+  const vs = variantesBr(jid);
+  const achadas = cfg.gruposAutorizados.filter((g) => vs.includes(g.grupoId));
+  return achadas.length === 1 ? achadas[0] : null; // ambíguo (as duas formas cadastradas) ⇒ nenhuma
+}
 export const unidadePorId = (cfg, id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
 /** Requisitos financeiros completos para APLICAR propostas (hoje: fontes de faturamento confirmadas no cadastro). */
 export const requisitosCompletos = (unidade) => unidade?.fontes?.situacao === SITUACAO_FONTES.CONFIRMADA;

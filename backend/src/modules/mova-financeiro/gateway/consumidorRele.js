@@ -42,6 +42,7 @@ export function criarConsumidorRele({ pool, receptor, segredo, controle = null, 
       catch { await devolver(r.evento_id, "RECEPTOR_ERRO"); continue; }
       if (res.status === "INDISPONIVEL" || res.motivo === "RECEBIMENTO_DESLIGADO") { await devolver(r.evento_id, res.motivo ?? "INDISPONIVEL"); continue; }
       if (res.status === "RECUSADO") { await devolver(r.evento_id, `RECUSADO_${String(res.motivo ?? "CONTRATO").toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 60)}`, true); continue; }
+      if (res.status === "IGNORADO") registrar({ tipo: "MOVA_RELE_IGNORADO", motivo: res.motivo ?? null }); // descarte deliberado, rastreável no log
       const ok = (await pool.query("select mova_rele.confirmar($1, $2) as ok", [r.evento_id, consumidor])).rows[0].ok;
       if (ok) entregues += 1; else registrar({ tipo: "MOVA_RELE_LEASE_PERDIDO" }); // outro consumidor retomou: o receptor deduplica
     }
