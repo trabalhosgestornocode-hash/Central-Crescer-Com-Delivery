@@ -376,7 +376,7 @@ export function criarConsultasPostgres({ pool }) {
     async falhasGerais({ organizacaoId, unidadeId, limite = 100 }) {
       const itens = (await q(`select d.evento_id as "eventoId", d.decisao as tipo, d.motivo, d.em, f.estado, f.tentativas
           from mova.decisao d join mova.fila f on f.evento_id = d.evento_id
-         where d.unidade_id is null and d.decisao not in ('IGNORADO','REPROCESSAR')
+         where d.unidade_id is null and d.decisao in ('FALHA_LEITURA','FALHOU') -- só FALHAS (pergunta pendente, ignorado etc. não são falha)
            and d.seq = (select max(x.seq) from mova.decisao x where x.evento_id = d.evento_id)
            and f.carga->>'grupoId' in (${CONVERSAS})
          order by d.seq desc limit $3`, [organizacaoId, unidadeId, limite])).rows;

@@ -209,3 +209,11 @@ t("AUTO — leituras do worker passam pelo contexto de automação (sessão da i
   assert.ok(dentro.length > 0, "o repositório foi usado");
   assert.ok(dentro.every(Boolean), "toda leitura dentro do contexto de automação");
 });
+
+t("H1-7 (12A) falhas gerais listam só FALHAS: pergunta pendente sem unidade (PEDIR_INFORMACAO) não aparece", async () => {
+  const s = await cenario();
+  await s.enviar(msg(CONVERSA_ALFA));
+  await s.pool.query("insert into mova.decisao (evento_id, decisao, motivo) select evento_id, 'PEDIR_INFORMACAO', 'UNIDADE_AMBIGUA' from mova.fila");
+  const r = await CONSULTAS_MOVA["/mova/falhas-gerais"]({ ctx: ver(ALFA, [ACAO.CONFIGURAR]), mova: s.mova });
+  assert.equal(r.total, 0, JSON.stringify(r.porTipo));
+});
