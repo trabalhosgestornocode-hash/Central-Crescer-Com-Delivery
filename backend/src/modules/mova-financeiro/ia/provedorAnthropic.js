@@ -13,6 +13,8 @@ import { ErroTransitorio } from "../gateway/fila.js";
 import { PROMPT_DO_EXTRATOR, esquemaDaSaida, montarEntradaDoModelo } from "./contratos.js";
 
 export const MODELO_PADRAO = "claude-opus-5-5";
+/** Modelos em que `thinking: {type: "disabled"}` é aceito (até esforço high). */
+export const MODELOS_SEM_RACIOCINIO = Object.freeze(["claude-haiku-5-5"]);
 const MIDIA_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export class ErroDeIa extends Error {
@@ -71,6 +73,8 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
           model: modelo, max_tokens: 16000,
           betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
           output_config: { effort: esforco, format: { type: "json_schema", schema: esquema } },
+          // Execução 13C: extração estruturada não precisa de raciocínio; só os modelos que ACEITAM desligá-lo (Opus 5.5 recusa: 400).
+          ...(MODELOS_SEM_RACIOCINIO.includes(modelo) && ["low", "medium", "high"].includes(esforco) ? { thinking: { type: "disabled" } } : {}),
           system,
           messages: [{ role: "user", content: [...blocos, { type: "text", text: entrada.conteudo }] }],
         });

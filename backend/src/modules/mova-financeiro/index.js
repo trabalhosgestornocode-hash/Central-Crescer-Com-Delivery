@@ -33,7 +33,7 @@ export { criarEvidenciasMemoria } from "./gateway/evidencias.js";
 export { criarReceptor } from "./gateway/receptor.js";
 export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorRele.js";
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
-export { CHAVES_DE_CONTROLE, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
+export { CHAVES_DE_CONTROLE, PRECOS_IA, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
 export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
 
 /**

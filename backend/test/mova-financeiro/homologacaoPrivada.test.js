@@ -232,3 +232,51 @@ t("13C recusa da IA vira BLOQUEADO IA_RECUSOU (não 'falha de leitura'), uma cha
   assert.doesNotMatch(r.texto, /Não consegui ler este documento/);
   assert.equal((await s.propostas(ALFA)).length, 0);
 });
+
+t("13C Teste A simulado: despesa por TEXTO vira UMA proposta na unidade certa; reenvio é DUPLICADO; outra unidade intacta", async () => {
+  const s = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-11-21", favorecido: null, categoriaSugerida: "ENERGIA_ELETRICA", unidadeSugerida: "Unidade Teste Alfa" }));
+  const p = msg({ texto: "MOVA, teste de homologação: paguei R$ 150,00 de energia elétrica da alfa hoje." });
+  await s.enviar(p);
+  assert.equal((await s.ultima()).decisao, DECISAO.PROPOSTA);
+  assert.equal((await s.enviar({ ...p })).status, "DUPLICADO");
+  const [prop] = await s.propostas(ALFA);
+  assert.equal(prop.valorCentavos, 15000);
+  assert.equal((await s.propostas(ALFA)).length, 1);
+  assert.equal((await s.propostas(GAMA)).length, 0);
+  assert.equal(s.pedidos.length, 1);
+});
+
+t("13C Teste B simulado: faturamento sem dados responde 'dados insuficientes' sem estimar", async () => {
+  const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "FATURAMENTO", unidadeSugerida: "Unidade Teste Alfa", periodoInicio: "2026-11-20", periodoFim: "2026-11-20" }));
+  await s.enviar(msg({ texto: "MOVA, teste de homologação: quanto a alfa faturou ontem?" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.CONSULTA);
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.doesNotMatch(r.texto, /R\$\s?\d/);
+});
+
+t("13C Teste C simulado: cálculo hipotético não é capacidade do MOVA — orientação, sem lançar nem calcular", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.enviar(msg({ texto: "MOVA, teste de homologação: se eu faturar R$ 8.000,00 e gastar R$ 2.000,00 em mercadorias, quanto sobra?" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.ORIENTACAO);
+  assert.equal((await s.propostas(ALFA)).length + (await s.propostas(GAMA)).length, 0);
+});
+
+t("13C resposta truncada em TEXTO: FALHA_LEITURA com pedido de reenvio curto, uma chamada, nada criado", async () => {
+  const s = await cenario(() => ({ stop_reason: "max_tokens", content: [] }));
+  await s.enviar(msg({ texto: "MOVA, paguei 150 de luz da alfa" }));
+  const h = await s.ultima();
+  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA");
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.match(r.texto, /Não consegui interpretar a mensagem/);
+  assert.equal(s.pedidos.length, 1);
+});
+
+t("13C mensagem incompleta: despesa sem valor pede o valor (nada criado)", async () => {
+  const s = await cenario(() => comprovante({ valorCentavos: null, unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "paguei a luz da alfa" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.PEDIR_INFORMACAO);
+  assert.equal((await s.propostas(ALFA)).length, 0);
+});

@@ -25,7 +25,7 @@ import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  carregarConfiguracao, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  PRECOS_IA, carregarConfiguracao, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -66,10 +66,13 @@ export function lerConfiguracaoMova(env) {
     if (!/^[1-9][0-9]{1,5}$/.test(tetoSaida ?? "") || !/^[1-9][0-9]{1,6}$/.test(tetoEntrada ?? "") || (tetoEsforco && !["low", "medium", "high"].includes(tetoEsforco))) contradicoes.push("TETO_IA_INVALIDO");
     else teto = Object.freeze({ maxSaida: Number(tetoSaida), maxEntrada: Number(tetoEntrada), esforco: tetoEsforco });
   }
+  // Modelo da IA (Execução 13C): lista FECHADA dos que têm preço tabelado no orçamento; vazio = padrão do extrator.
+  const modeloIa = env.MOVA_IA_MODELO || null;
+  if (modeloIa && !Object.hasOwn(PRECOS_IA, modeloIa)) contradicoes.push("MODELO_IA_DESCONHECIDO");
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto,
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa,
   };
 }
 
@@ -107,7 +110,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   let mova = null;
   const obterEvidencia = (ref) => mova.evidencias.obter(ref);
   const extrator = cfg.ia && criarClienteIa
-    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio })
+    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio, ...(cfg.modeloIa ? { modelo: cfg.modeloIa } : {}) })
     : EXTRATOR_DESLIGADO;
   mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;

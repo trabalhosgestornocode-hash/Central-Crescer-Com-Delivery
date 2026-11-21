@@ -126,7 +126,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const lida = await lerDocumento(evento, grupo);
       // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
-      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : RESPOSTA.falhaLeitura(), injecao });
+      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : evento.midia ? RESPOSTA.falhaLeitura() : RESPOSTA.falhaInterpretacao(), injecao });
       saida = lida.saida;
     }
 

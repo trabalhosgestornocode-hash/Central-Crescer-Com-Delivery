@@ -39,8 +39,15 @@ export function criarControle({ pool, cacheMs = 5000, relogio = () => Date.now()
 /**
  * @param {{pool:object, precoEntradaPorMilhao?:number, precoSaidaPorMilhao?:number}} deps  preços em US$ por milhão de tokens
  */
+/** US$ por milhão de tokens [entrada, saída] (preço-base, roteamento global; conferido na documentação em 21/11/2026). */
+export const PRECOS_IA = Object.freeze({ "claude-opus-5-5": [4, 20], "claude-sonnet-5-5": [2, 10], "claude-haiku-5-5": [0.1, 0.5] });
 export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPorMilhao = 20 }) {
-  const microusd = (entrada, saida) => Math.ceil((entrada * precoEntradaPorMilhao + saida * precoSaidaPorMilhao)); // tokens × US$/M = µUS$
+  // Execução 13C: o custo segue o modelo que RESPONDEU; modelo desconhecido usa o maior preço tabelado (conservador).
+  const microusd = (entrada, saida, modelo) => {
+    const tab = PRECOS_IA[String(modelo ?? "").replace(/-d{8}$/, "")];
+    const [pe, ps] = tab ?? [Math.max(precoEntradaPorMilhao, 4), Math.max(precoSaidaPorMilhao, 20)];
+    return Math.ceil(entrada * pe + saida * ps); // tokens × US$/M = µUS$
+  };
   return Object.freeze({
     /** Reserva ANTES da chamada. Lança ErroDeIa ORCAMENTO_ESGOTADO / ORCAMENTO_INDISPONIVEL (nunca transitório: não re-tenta sozinho). */
     async reservar() {
@@ -63,7 +70,7 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
       } finally { cli.release(); }
     },
     async concluir(id, { modelo, entrada, saida }) {
-      await pool.query("update mova.consumo_ia set estado = 'CONCLUIDA', modelo = $2, entrada = $3, saida = $4, custo_microusd = $5 where id = $1", [id, modelo ?? null, entrada, saida, microusd(entrada, saida)]);
+      await pool.query("update mova.consumo_ia set estado = 'CONCLUIDA', modelo = $2, entrada = $3, saida = $4, custo_microusd = $5 where id = $1", [id, modelo ?? null, entrada, saida, microusd(entrada, saida, modelo)]);
     },
     /** Falha antes do modelo responder: libera a reserva (custo 0) mas mantém o registro (conta como chamada tentada). */
     async falhar(id) { await pool.query("update mova.consumo_ia set estado = 'FALHOU', custo_microusd = 0 where id = $1", [id]); },
@@ -90,7 +97,7 @@ export async function aplicarTeto(cliente, req, teto) {
   const ajustado = { ...resto, max_tokens: Math.min(req.max_tokens ?? teto.maxSaida, teto.maxSaida),
     output_config: { ...(req.output_config ?? {}), ...(teto.esforco ? { effort: teto.esforco } : {}) } };
   let n;
-  try { n = (await cliente.beta.messages.countTokens({ model: ajustado.model, system: ajustado.system, messages: ajustado.messages, output_config: ajustado.output_config })).input_tokens; }
+  try { n = (await cliente.beta.messages.countTokens({ model: ajustado.model, system: ajustado.system, messages: ajustado.messages, output_config: ajustado.output_config, ...(ajustado.thinking ? { thinking: ajustado.thinking } : {}) })).input_tokens; }
   catch { throw new ErroDeIa("IA_TETO_CONTAGEM_INDISPONIVEL"); }
   if (!Number.isFinite(n) || n > teto.maxEntrada) throw new ErroDeIa("IA_TETO_ENTRADA_EXCEDIDA");
   return ajustado;
