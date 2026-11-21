@@ -133,3 +133,48 @@ mudança no conjunto muda o código e o script recusa. **Nada foi descartado.**
   - consumo de 1 chamada Haiku.
 
 - **Orçamento:** saldo atual de 1 chamada Haiku (US$ 0,008274), suficiente para este teste.
+
+## Execução 15C — implantação no Supabase de HOMOLOGAÇÃO (feita) e saída DESLIGADA
+
+**Ambiente:** projeto `wiqqsxnysbzhcrzrrean`, banco com a marca `MOVA_HOMOLOGACAO:…`, schema `mova_rele` com dono
+`homolog_instalador`. Produção não foi tocada. O Gateway e o Render não foram alterados.
+
+**Auditoria antes de aplicar** (corrigida em `2c8d32a`, com testes):
+- **A-1:** faltava revogar `EXECUTE` das funções novas de `anon`/`authenticated`/`service_role` (a 0001 já fazia isso).
+- **A-2:** `lote` não numérico gerava exceção (503) em vez de 400.
+
+**Aplicação:**
+- Migração `0002` aplicada pelo instalador local (`rele-instalar.mjs saida`): papel dono, marca conferida, uma transação, fila de
+  entrada conferida antes e depois (31 eventos, intacta) e saída **desligada** conferida antes do commit.
+- **Edge Function `mova-rele` v4** publicada (`verify_jwt=false`, como a v3), com fonte idêntica à do repositório.
+
+**Testes pós-implantação** (função e banco reais, assinatura feita localmente no papel do Gateway, destino fictício, sem
+Gateway, sem WhatsApp, sem IA): 10/10.
+1. Recebimento: evento sintético 202; repetido DUPLICADO; consumido pelo backend local e descartado pelo MOVA sem registro.
+2. Saída desligada: reservar devolve vazio.
+3. Republicar o mesmo id: 1 linha.
+4. Destino de grupo: recusado.
+5. Assinatura inválida, cabeçalho ausente e replay: 401.
+6. Duas reservas simultâneas: cada saída reservada uma vez.
+7. Estados confirmar → ENVIADA e falhar pós-envio → INCERTA.
+8. Suspensão: reservar devolve vazio.
+
+Os papéis públicos não têm `USAGE` no schema nem `EXECUTE`/`SELECT` nos objetos novos. As 40 respostas antigas não estão no
+relé. Restam 3 saídas sintéticas (destino fictício) como histórico; a que ficou `RESERVADA` vira `INCERTA` na próxima reserva,
+e nunca é enviada.
+
+**Rollback operacional** (preserva tabelas, auditoria e dados):
+- `select mova_rele.definir_saida(false, '<quem>')` — estado atual; cancela as pendentes;
+- `envio=false` no controle do MOVA, que propaga o desligamento ao relé;
+- não publicar (backend sem `MOVA_ENVIO_HABILITADO`).
+
+**Rollback de código:**
+- republicar a Edge Function v3 a partir de `C:\dev\mova-homologacao\edge-mova-rele-v3\` (cópia da fonte publicada) ou de
+  `git show 2c8d32a~4:supabase/functions/mova-rele/`;
+- conferir o recebimento com um evento sintético (202).
+
+As tabelas da 0002 **não** são apagadas automaticamente: a v3 simplesmente não as usa.
+
+**Próximo passo mínimo para o Gateway:** merge do PR #155 e deploy manual numa janela combinada, com
+`WHATSAPP_MOVA_ENVIO_HABILITADO` ainda **desligado**. O efeito é nulo (log `mova.saida_config ativo:false`). Só depois, com
+autorização separada: descarte das 40 respostas e ativação.
