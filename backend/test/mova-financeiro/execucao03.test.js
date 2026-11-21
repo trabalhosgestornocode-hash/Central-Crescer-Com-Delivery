@@ -369,7 +369,7 @@ t("24 falha no Gateway: resposta volta para PENDENTE e, no teto, FALHOU; envio b
   await s.enviar(gw({ texto: "situação das propostas?" }));
   let gatewayFora = true;
   const enviados = [];
-  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, maxTentativas: 2,
+  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [G], maxTentativas: 2,
     enviar: async (r) => { if (gatewayFora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r); return { providerMessageId: "PROVMOVA0001" }; } });
   await enviador.enviarPendentes();
   assert.deepEqual(await s.mova.armazenamento.saida.contagem(), { PENDENTE: 1 });
@@ -383,7 +383,7 @@ t("24 falha no Gateway: resposta volta para PENDENTE e, no teto, FALHOU; envio b
   assert.deepEqual(await desligado.enviarPendentes(), { enviadas: 0, desligado: true });
   const s2 = await cenario({ responder: () => consulta("SITUACAO_PROPOSTAS") });
   await s2.enviar(gw({ texto: "situação?" }));
-  const sempreFora = criarEnviadorDeRespostas({ armazenamento: s2.mova.armazenamento, habilitado: true, maxTentativas: 2, enviar: async () => { throw new Error("x"); } });
+  const sempreFora = criarEnviadorDeRespostas({ armazenamento: s2.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [G], maxTentativas: 2, enviar: async () => { throw new Error("x"); } });
   await sempreFora.enviarPendentes(); await sempreFora.enviarPendentes();
   assert.deepEqual(await s2.mova.armazenamento.saida.contagem(), { FALHOU: 1 });
 });

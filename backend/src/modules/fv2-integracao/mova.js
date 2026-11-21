@@ -25,7 +25,7 @@ import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  MODELOS_PERMITIDOS, carregarConfiguracao, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -56,6 +56,9 @@ export function lerConfiguracaoMova(env) {
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
   if (envio && !processamento) contradicoes.push("ENVIO_SEM_PROCESSAMENTO");
   if (envio && !env.MOVA_GATEWAY_URL) contradicoes.push("ENVIO_SEM_GATEWAY");
+  // 15A: envio exige o MARCO de ativação (ISO UTC): respostas criadas antes dele nunca são enviadas (nada retroativo).
+  const envioNaoAntesDe = env.MOVA_ENVIO_NAO_ANTES_DE || null;
+  if (envio && !(envioNaoAntesDe && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(envioNaoAntesDe))) contradicoes.push("ENVIO_SEM_MARCO");
   if ((recebimento || envio) && !(String(env.MOVA_GATEWAY_SECRET ?? "").length >= 32)) contradicoes.push("CANAL_SEM_SEGREDO");
   if (env.MOVA_GATEWAY_SECRET && env.MOVA_GATEWAY_SECRET === env.WHATSAPP_GATEWAY_SECRET) contradicoes.push("SEGREDO_IGUAL_AO_PRINCIPAL");
   if (env.MOVA_DATABASE_URL && env.FV2_APP_DATABASE_URL && env.MOVA_DATABASE_URL === env.FV2_APP_DATABASE_URL && !homologacao) contradicoes.push("BANCO_COMPARTILHADO_FORA_DA_HOMOLOGACAO");
@@ -72,7 +75,7 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa,
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null,
   };
 }
 
@@ -116,7 +119,9 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
-    habilitado: Boolean(cfg.envio && enviarAoGateway) });
+    habilitado: Boolean(cfg.envio && enviarAoGateway), naoAntesDe: cfg.envioNaoAntesDe ?? null,
+    // Só conversas PRIVADAS autorizadas (homologação); grupo nunca recebe resposta nesta fase.
+    destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter(ehConversaPrivada) });
   return { mova, worker, enviador, configuracao, controle, orcamento };
 }
 

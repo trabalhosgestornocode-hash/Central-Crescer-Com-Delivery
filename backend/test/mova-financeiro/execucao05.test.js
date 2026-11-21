@@ -65,13 +65,14 @@ test("01/14/15 MOVA desligado por padrão; credenciais ausentes e configuraçõe
   assert.deepEqual(c({ MOVA_PROCESSAMENTO_HABILITADO: "1" }), ["PROCESSAMENTO_SEM_RECEBIMENTO"]);
   assert.ok(c({ MOVA_IA_HABILITADA: "1" }).includes("IA_SEM_PROCESSAMENTO"));
   assert.ok(c({ MOVA_ENVIO_HABILITADO: "1" }).includes("ENVIO_SEM_GATEWAY"));
+  assert.ok(c({ MOVA_ENVIO_HABILITADO: "1" }).includes("ENVIO_SEM_MARCO"), "15A: envio sem marco de ativação é contradição");
   assert.deepEqual(c({ MOVA_RECEBIMENTO_HABILITADO: "1" }), ["CANAL_SEM_SEGREDO"]);
   assert.ok(c({ MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_GATEWAY_SECRET: SEG_PRINCIPAL, WHATSAPP_GATEWAY_SECRET: SEG_PRINCIPAL }).includes("SEGREDO_IGUAL_AO_PRINCIPAL"));
   assert.deepEqual(c({ MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao" }), ["HOMOLOGACAO_INCOMPLETA"]);
   assert.deepEqual(c({ MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao", MOVA_HOMOLOGACAO_MARCADOR: "curto" }), ["MARCADOR_INVALIDO"]);
   assert.deepEqual(c({ MOVA_MODO: "PRODUCAO" }), ["MODO_DESCONHECIDO"]);
   assert.ok(c({ FV2_APP_DATABASE_URL: "postgres://homolog" }).includes("BANCO_COMPARTILHADO_FORA_DA_HOMOLOGACAO"));
-  const ok = lerConfiguracaoMova({ ...ENV, MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao", MOVA_HOMOLOGACAO_MARCADOR: "marcador-teste-01", MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_PROCESSAMENTO_HABILITADO: "1", MOVA_IA_HABILITADA: "1", MOVA_ENVIO_HABILITADO: "1", MOVA_GATEWAY_URL: "https://gw", MOVA_GATEWAY_SECRET: SEG_MOVA });
+  const ok = lerConfiguracaoMova({ ...ENV, MOVA_MODO: "HOMOLOGACAO", MOVA_AMBIENTE: "homologacao", MOVA_HOMOLOGACAO_MARCADOR: "marcador-teste-01", MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_PROCESSAMENTO_HABILITADO: "1", MOVA_IA_HABILITADA: "1", MOVA_ENVIO_HABILITADO: "1", MOVA_ENVIO_NAO_ANTES_DE: "2026-11-21T19:00:00Z", MOVA_GATEWAY_URL: "https://gw", MOVA_GATEWAY_SECRET: SEG_MOVA });
   assert.deepEqual([ok.habilitado, ok.modo, ok.recebimento, ok.processamento, ok.ia, ok.envio], [true, "HOMOLOGACAO", true, true, true, true]);
 });
 
@@ -137,7 +138,7 @@ t("20 reversão funcional em tempo real: cada interruptor e a suspensão geral d
   assert.match((await s.mova.armazenamento.historico.todos()).at(-1).motivo, /IA_DESLIGADA_NO_CONTROLE/);
   await s.controle.alterar({ ia: true }, { autor: "teste" });
   const enviados = [];
-  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, controle: s.controle, habilitado: true, enviar: async (r) => { enviados.push(r); return { providerMessageId: "PROV0001" }; } });
+  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, controle: s.controle, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], enviar: async (r) => { enviados.push(r); return { providerMessageId: "PROV0001" }; } });
   await s.controle.alterar({ envio: false }, { autor: "teste" });
   assert.deepEqual(await enviador.enviarPendentes(), { enviadas: 0, desligado: true });
   await s.controle.alterar({ envio: true, suspenso: true }, { autor: "teste", motivo: "parar tudo" });

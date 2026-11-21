@@ -83,7 +83,7 @@ t("04 resposta vai SÓ ao contato autorizado (enviador)", async () => {
   const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "SITUACAO_PROPOSTAS" }));
   await s.enviar(msg({ texto: "situação?" }));
   const destinos = [];
-  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0001" }; } }).enviarPendentes();
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0001" }; } }).enviarPendentes();
   assert.deepEqual(destinos, [CONTATO]);
 });
 
@@ -154,7 +154,7 @@ t("13 falha temporária do Gateway: resposta fica pendente e sai na próxima rod
   const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "SITUACAO_PROPOSTAS" }));
   await s.enviar(msg({ texto: "situação?" }));
   let fora = true; const enviados = [];
-  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
   await e.enviarPendentes();
   fora = false;
   await e.enviarPendentes(); await e.enviarPendentes();
@@ -182,7 +182,7 @@ t("15 nenhum envio a outro contato ou grupo: mensagens de terceiros e do 'grupo 
   await s.enviar(msg({ conversa: G_REAL, texto: "situação?" }));
   await s.enviar(msg({ texto: "situação?" }));
   const destinos = [];
-  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0003" }; } }).enviarPendentes();
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0003" }; } }).enviarPendentes();
   assert.deepEqual(destinos, [CONTATO]);
 });
 
@@ -310,4 +310,57 @@ t("15A Caixa de Entrada: texto puro mostra a leitura da IA (com justificativa) e
   assert.equal(dup.proposta, null);
   assert.equal(dup.decisoes.at(-1).decisao, "DUPLICADO");
   assert.equal(dup.decisoes.at(-1).propostaId, original.proposta.id);
+});
+
+t("15A envio: resposta ANTERIOR ao marco nunca é reservada; destino fora da lista nunca vai ao Gateway; sem marco o enviador fica desligado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.enviar(msg({ id: "AN1", texto: "oi" }));                                   // resposta "antiga"
+  await s.pool.query("update mova.resposta set criada_em = '2026-11-20T12:00:00Z'");
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "X1", texto: "nova", eventoId: null });
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: OUTRO, respostaA: "X2", texto: "para outro", eventoId: null });
+  const enviados = []; const logs = [];
+  const semMarco = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, destinosPermitidos: [CONTATO], registrar: (x) => logs.push(x.tipo), enviar: async () => { throw new Error("nunca"); } });
+  assert.equal(semMarco.habilitado, false);
+  assert.deepEqual(await semMarco.enviarPendentes(), { enviadas: 0, desligado: true });
+  assert.ok(logs.includes("MOVA_ENVIO_RECUSADO_SEM_MARCO_OU_DESTINOS"));
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2026-11-21T00:00:00Z", destinosPermitidos: [CONTATO],
+    enviar: async (r) => { enviados.push(r); return { providerMessageId: `P${enviados.length}` }; } });
+  assert.equal((await e.enviarPendentes()).enviadas, 1);
+  assert.deepEqual(enviados.map((r) => [r.grupoId, r.texto]), [[CONTATO, "nova"]]);
+  const estados = (await s.pool.query("select texto, estado from mova.resposta order by seq")).rows.map((r) => `${r.texto.slice(0, 10)}:${r.estado}`);
+  assert.equal(estados.filter((x) => x.endsWith(":PENDENTE")).length, 2, "antiga e a de outro destino continuam PENDENTE, intocadas");
+  assert.equal((await e.enviarPendentes()).enviadas, 0, "segunda rodada não reenvia (já ENVIADA)");
+});
+
+t("15A suspensão imediata: desligar o envio no meio do lote para antes da próxima mensagem", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2, 3]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `S${n}`, texto: `r${n}`, eventoId: null });
+  let ligado = true; const enviados = [];
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO],
+    controle: { ligado: async () => ligado }, enviar: async (r) => { enviados.push(r.texto); ligado = false; return { providerMessageId: `PS${enviados.length}` }; } });
+  await e.enviarPendentes();
+  assert.deepEqual(enviados, ["r1"]);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((r) => r.estado), ["ENVIADA", "PENDENTE", "PENDENTE"]);
+});
+
+t("15A descarte auditável: SUPRIMIDA (sem DELETE), só PENDENTE até o corte, auditoria com quem/por quê/quais; nunca mais selecionada", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `D${n}`, texto: `velha${n}`, eventoId: null });
+  await s.pool.query("update mova.resposta set criada_em = '2026-11-20T12:00:00Z'");
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "D3", texto: "nova", eventoId: null });
+  await assert.rejects(s.mova.armazenamento.saida.suprimir({ criadasAte: "2026-11-21T00:00:00Z", motivo: "minusculo", ator: "x" }), /CÓDIGO/);
+  const r = await s.mova.armazenamento.saida.suprimir({ criadasAte: "2026-11-21T00:00:00Z", motivo: "TESTES_ANTERIORES_FASE_D", ator: "admin-ficticio" });
+  assert.equal(r.suprimidas, 2);
+  const { rows } = await s.pool.query("select texto, estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((x) => x.estado), ["SUPRIMIDA", "SUPRIMIDA", "PENDENTE"]);
+  assert.equal(rows[0].ultimo_erro, "SUPRIMIDA:TESTES_ANTERIORES_FASE_D");
+  const aud = (await s.pool.query("select ator_ref, dados from mova.auditoria where acao = 'RESPOSTAS_SUPRIMIDAS'")).rows;
+  assert.equal(aud.length, 1); assert.equal(aud[0].ator_ref, "admin-ficticio"); assert.equal(aud[0].dados.quantidade, 2);
+  assert.ok(!JSON.stringify(aud[0].dados).includes("velha"), "auditoria sem o texto das respostas");
+  const enviados = [];
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO],
+    enviar: async (x) => { enviados.push(x.texto); return { providerMessageId: "PD1" }; } }).enviarPendentes();
+  assert.deepEqual(enviados, ["nova"], "SUPRIMIDA nunca é selecionada, mesmo com marco antigo");
+  assert.equal((await s.pool.query("select count(*)::int n from mova.resposta")).rows[0].n, 3, "nada apagado");
 });

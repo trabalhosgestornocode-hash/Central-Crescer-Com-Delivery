@@ -40,16 +40,26 @@ export function criarWorker({ receptor, concorrencia = 2, intervaloMs = 2000, ag
  * @param {{armazenamento:object, enviar:(r:{grupoId:string, texto:string, respostaA:string|null, idempotencia:string}) => Promise<{providerMessageId:string}>,
  *          habilitado?:boolean, maxTentativas?:number, registrar?:Function}} deps
  */
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5 }) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null }) {
+  // 15A (Fase D): habilitado EXIGE marco de ativação e lista fechada de destinos — sem eles, o enviador fica desligado
+  // (nunca "envia tudo o que está pendente" desde o início da homologação).
+  const marcoValido = typeof naoAntesDe === "string" && !Number.isNaN(Date.parse(naoAntesDe));
+  const destinos = Array.isArray(destinosPermitidos) && destinosPermitidos.length > 0 ? [...destinosPermitidos] : null;
+  const ativo = habilitado && marcoValido && destinos !== null;
+  if (habilitado && !ativo) registrar({ tipo: "MOVA_ENVIO_RECUSADO_SEM_MARCO_OU_DESTINOS" });
   return Object.freeze({
-    habilitado,
+    habilitado: ativo,
     /** Envia o que estiver pendente. Desligado: não toca em nada (as respostas ficam PENDENTE). */
     async enviarPendentes({ limite = 10 } = {}) {
-      if (!habilitado) return { enviadas: 0, desligado: true };
+      if (!ativo) return { enviadas: 0, desligado: true };
       if (controle && !(await controle.ligado("envio"))) return { enviadas: 0, desligado: true }; // interruptor em tempo real
-      const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada) }); // limite de taxa
+      const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos }); // limite de taxa
       let enviadas = 0;
       for (const r of lote) {
+        // Segunda barreira (além do filtro no banco): destino fora da lista nunca vai ao Gateway.
+        if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
+        // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
+        if (controle && !(await controle.ligado("envio"))) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "ENVIO_SUSPENSO", { final: false }); continue; }
         try {
           const { providerMessageId } = await enviar({ grupoId: r.grupoId, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);

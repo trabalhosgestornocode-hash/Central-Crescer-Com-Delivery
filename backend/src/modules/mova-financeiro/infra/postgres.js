@@ -169,13 +169,34 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2, enviada_em = now(), lease_ate = null where id = $1", [id, providerMessageId]);
       },
       /** Pega até `limite` respostas PENDENTES (ou ENVIANDO com lease vencido) para envio — dois enviadores nunca pegam a mesma. */
-      async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date() } = {}) {
+      // 15A: `naoAntesDe` (marco de ativação do envio) e `destinos` (conversas autorizadas) filtram NO BANCO — resposta antiga ou
+      // para destino fora da lista nunca é sequer reservada (proteção contra envio retroativo, independente do descarte).
+      async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date(), naoAntesDe = null, destinos = null } = {}) {
         return emTransacao(pool, async (tx) => (await tx(`
           update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
-           where id in (select id from mova.resposta where estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1)
+           where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
+                           and ($4::timestamptz is null or criada_em >= $4::timestamptz)
+                           and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
-          returning id, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
-        [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite])).rows);
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
+        [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
+          // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
+          .sort((a, b) => Number(a.seq) - Number(b.seq)));
+      },
+      /**
+       * 15A: DESCARTE auditável de respostas PENDENTES (nunca DELETE): estado SUPRIMIDA + motivo; uma linha de auditoria com
+       * quem, por quê, quantas e quais ids (sem texto nem número). Só PENDENTE criada até `criadasAte` (e, se dado, só os `ids`).
+       */
+      async suprimir({ criadasAte, motivo, ator, ids = null }) {
+        if (!criadasAte || !/^[A-Z0-9_]{3,40}$/.test(motivo ?? "") || !ator) throw new TypeError("suprimir exige criadasAte, motivo (CÓDIGO) e ator");
+        return emTransacao(pool, async (tx) => {
+          const r = (await tx(`update mova.resposta set estado = 'SUPRIMIDA', ultimo_erro = $2, lease_ate = null
+                                where estado = 'PENDENTE' and criada_em <= $1::timestamptz and ($3::uuid[] is null or id = any($3::uuid[]))
+                              returning id`, [criadasAte, `SUPRIMIDA:${motivo}`, ids])).rows.map((x) => x.id);
+          await tx(`insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('RESPOSTAS_SUPRIMIDAS', 'USUARIO', $1, 'resposta', $2)`,
+            [String(ator).slice(0, 80), JSON.stringify({ motivo, criadasAte, quantidade: r.length, ids: r })]);
+          return { suprimidas: r.length, ids: r };
+        });
       },
       async marcarFalhaDeEnvio(id, codigo, { final }) {
         await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo]);

@@ -16,7 +16,7 @@ import { criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPost
 export { CONTRATO_EVENTO_VERSAO, validarEvento, chaveDoDocumento } from "./contratos/evento.js";
 export { CONTRATO_MOVA_VERSAO, normalizarGatewayMova } from "./adaptadores/gatewayBaileys.js";
 export { normalizarBaileys } from "./adaptadores/baileys.js";
-export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES } from "./dominio/configuracao.js";
+export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES, ehConversaPrivada } from "./dominio/configuracao.js";
 export { RESULTADO_UNIDADE, resolverUnidade } from "./dominio/unidade.js";
 export { fontesOficiais, receitaPodeVirDe } from "./dominio/fontesDeReceita.js";
 export { mascararDadosSensiveis, pedidoRestrito } from "./dominio/privacidade.js";
