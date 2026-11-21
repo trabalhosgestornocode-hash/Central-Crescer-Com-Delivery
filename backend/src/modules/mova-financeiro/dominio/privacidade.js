@@ -55,3 +55,22 @@ export function mascararDadosSensiveis(texto) {
     .replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, "[dado oculto]")
     .replace(/\+?\d{2}\s?\(?\d{2}\)?\s?9?\d{4}-?\d{4}\b/g, "[dado oculto]");
 }
+
+// 15H (H-1, achado com WhatsApp real): saudação ou pergunta sobre o próprio MOVA é respondida SEM IA e SEM pedir unidade.
+// Só quando o texto é CLARAMENTE conversa: casa um padrão de saudação/ajuda, não tem número e não tem NENHUMA palavra
+// financeira (então "oi MOVA, quanto a alfa faturou?" continua indo para a IA). Na dúvida, não é saudação.
+const FIM = "(?![\\p{L}\\p{N}])"; // fronteira que reconhece letras acentuadas (o \b do JS não reconhece "ê", "á")
+const PADROES_SAUDACAO = [
+  new RegExp(`^(oi+|ol[aá]+|bom dia|boa tarde|boa noite|e a[ií]|opa|hey|hello|tudo bem|tudo bom|salve)${FIM}`, "iu"),
+  new RegExp(`(voc[eê]|vc)\\s+(est[aá]|t[aá])\\s+(funcionando|a[ií]|on|online|ativo)${FIM}`, "iu"),
+  new RegExp(`(est[aá]|t[aá])\\s+(funcionando|on|online)${FIM}`, "iu"),
+  new RegExp(`o\\s+que\\s+(voc[eê]|vc)\\s+(faz|pode\\s+fazer|sabe\\s+fazer)${FIM}`, "iu"),
+  new RegExp(`(quem\\s+[eé]\\s+(voc[eê]|vc)|como\\s+(voc[eê]|vc)\\s+funciona|como\\s+funciona|me\\s+ajuda|^ajuda)${FIM}`, "iu"),
+];
+const PALAVRAS_FINANCEIRAS = /\b(pag\w*|boleto\w*|conta\w*|valor\w*|reais|real|r\$|fatur\w*|vend\w*|despes\w*|receit\w*|lan[cç]\w*|nota\w*|pix|saldo\w*|quanto\w*|gast\w*|cust\w*|compr\w*|caixa|dre|lucro\w*|recib\w*|comprovante\w*|fornecedor\w*|transfer\w*|venc\w*|cobr\w*|deposit\w*|extrato\w*|categoria\w*|competencia|compet[eê]ncia|proposta\w*|aprov\w*)\b/i;
+/** O texto é SÓ saudação/pergunta sobre o MOVA (determinístico, antes da IA)? */
+export const ehSaudacaoOuAjuda = (texto) => {
+  const t = String(texto ?? "").trim();
+  if (!t || t.length > 120 || /\d/.test(t) || PALAVRAS_FINANCEIRAS.test(t)) return false;
+  return PADROES_SAUDACAO.some((r) => r.test(t.replace(/^\s*(mova)[\s,!.:-]*/i, "")) || r.test(t));
+};
