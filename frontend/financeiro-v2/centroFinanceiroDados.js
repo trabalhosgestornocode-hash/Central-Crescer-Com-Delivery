@@ -64,6 +64,11 @@ export const acoes = Object.freeze({
     if (!d.ok) return { ok: false, mensagem: d.dados?.mensagem ?? "Proposta indisponível." };
     return enviar("/api/fv2/acoes/mova/classificar", { propostaId, versao: d.dados.versao, categoria });
   },
+  async competencia(propostaId, competencia) {
+    const d = await ler(`/api/fv2/mova/proposta?id=${encodeURIComponent(propostaId)}`);
+    if (!d.ok) return { ok: false, mensagem: d.dados?.mensagem ?? "Proposta indisponível." };
+    return enviar("/api/fv2/acoes/mova/competencia", { propostaId, versao: d.dados.versao, competencia });
+  },
   reprocessar: (eventoId) => enviar("/api/fv2/acoes/mova/reprocessar", { eventoId }),
   controle: (alteracoes) => enviar("/api/fv2/acoes/mova/controle", alteracoes),
   async arquivo(sha) {

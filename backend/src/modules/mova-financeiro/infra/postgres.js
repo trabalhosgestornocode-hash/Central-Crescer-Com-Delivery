@@ -378,7 +378,8 @@ export function criarConsultasPostgres({ pool }) {
     // 15A (V-1): texto puro não tem documento — a leitura da IA vem da proposta (marcada como tal).
     dadosExtraidos: r.leitura ?? (r.dados?.leitura ? { ...r.dados.leitura, fonte: "PROPOSTA" } : null),
     proposta: r.proposta_id ? { id: r.proposta_id, tipo: r.proposta_tipo, estado: r.proposta_estado, valorCentavos: r.valor_centavos === null ? null : Number(r.valor_centavos),
-      categoriaSugerida: r.dados?.categoriaSugerida ?? null, datas: r.dados?.datas ?? null, bloqueioDeAplicacao: r.dados?.bloqueioDeAplicacao ?? null, sinaisDeInjecao: r.dados?.sinaisDeInjecao ?? false } : null,
+      categoriaSugerida: r.dados?.categoriaSugerida ?? null, datas: r.dados?.datas ?? null, bloqueioDeAplicacao: r.dados?.bloqueioDeAplicacao ?? null, sinaisDeInjecao: r.dados?.sinaisDeInjecao ?? false,
+      competenciaPendente: r.dados?.competenciaPendente === true, competenciaRevisada: r.dados?.competenciaRevisada ?? null } : null,
     decisoes: r.decisoes,
   });
   const SQL = `

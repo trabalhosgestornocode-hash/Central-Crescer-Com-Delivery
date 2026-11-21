@@ -277,23 +277,25 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: t.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
       }, RESPOSTA.propostaBaixa);
     }
-    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? mes(saida.dataPagamento);
-    const bloqueioEconomico = await competenciaAberta(ctx, competencia);
+    // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
+    // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
+    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;
+    const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
     const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
-      datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento },
+      datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento }, competenciaPendente: !competencia,
       comando: { operacao: "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
-    }, RESPOSTA.propostaDespesaPaga);
+    }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia));
   }
 
   async function tratarConta(ctx) {
     const { evento, escopo, saida, injecao } = ctx;
     if (!saida.vencimento) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VENCIMENTO_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["vencimento"]), injecao });
-    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? mes(saida.vencimento);
-    const bloqueio = await competenciaAberta(ctx, competencia);
+    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null; // 15A: nunca o mês do vencimento
+    const bloqueio = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueio) return bloqueio;
     const todas = await porta.contasAPagarTodas(escopo);
     const igual = todas.find((t) => t.situacao !== "CANCELADO" && t.valorOriginalCentavos === saida.valorCentavos && t.vencimento === saida.vencimento && (!saida.favorecido || fornecedorCompativel(saida.favorecido, t)));
@@ -305,13 +307,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.NOVA_OBRIGACAO, valorCentavos: saida.valorCentavos, parcial: false,
-      datas: { competencia, caixa: null, vencimento: saida.vencimento },
+      datas: { competencia, caixa: null, vencimento: saida.vencimento }, competenciaPendente: !competencia,
       comando: { operacao: "registrarObrigacao", entrada: comando.valor },
-    }, RESPOSTA.propostaObrigacao);
+    }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia));
   }
+
+  const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
 
   /** Comando no contrato REAL do Financeiro v2; categoria PROVISÓRIA (a sugestão da IA fica ao lado, para quem aprova). */
   function comandoDeObrigacao(saida, { competencia, vencimento }) {
+    // 15A: competência pendente — os DEMAIS campos são validados (com um mês provisório só para a validação) e o comando é
+    // guardado SEM competência; quem revisa informa a competência e a aplicação recusa enquanto ela faltar.
+    if (!competencia) {
+      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento });
+      if (!r.ok) return r;
+      const { competencia: _provisoria, ...semCompetencia } = r.valor;
+      return { ok: true, valor: semCompetencia };
+    }
     const emissao = saida.dataEmissao && saida.dataEmissao <= vencimento ? saida.dataEmissao : (hoje() <= vencimento ? hoje() : vencimento);
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: saida.favorecido ?? "Favorecido a identificar" },

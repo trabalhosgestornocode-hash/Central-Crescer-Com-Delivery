@@ -364,3 +364,36 @@ t("15A descarte auditável: SUPRIMIDA (sem DELETE), só PENDENTE até o corte, a
   assert.deepEqual(enviados, ["nova"], "SUPRIMIDA nunca é selecionada, mesmo com marco antigo");
   assert.equal((await s.pool.query("select count(*)::int n from mova.resposta")).rows[0].n, 3, "nada apagado");
 });
+
+t("15A competência NUNCA presumida: conta sem competência nasce pendente; aplicar recusa; revisão informa (auditada) e aí aplica", async () => {
+  const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, R$ 289,90, vence 25/10/2026" }));
+  const [p] = await s.propostas(ALFA);
+  assert.equal(p.tipo, "NOVA_OBRIGACAO");
+  assert.equal(p.competenciaPendente, true);
+  assert.equal(p.datas.competencia, null, "não usa o mês do vencimento");
+  assert.equal(p.comando.entrada.competencia, undefined, "comando guardado sem competência");
+  assert.match((await s.mova.armazenamento.saida.listar()).at(-1).texto, /competência ficou para confirmar/);
+  const adm = s.c(ALFA);
+  await assert.rejects(s.mova.aprovador.aplicar(adm, { propostaId: p.id, categoria: "INSUMOS" }), { codigo: "COMPETENCIA_PENDENTE" });
+  assert.equal((await s.propostas(ALFA))[0].estado, "AGUARDANDO_REVISAO", "recusa antes de qualquer transição");
+  await assert.rejects(s.mova.aprovador.revisarCompetencia(adm, { propostaId: p.id, versao: p.versao, competencia: "2026-13" }), { codigo: "COMPETENCIA_INVALIDA" });
+  await assert.rejects(s.mova.aprovador.revisarCompetencia(s.c(ALFA, [ACAO.VER]), { propostaId: p.id, versao: p.versao, competencia: "2026-10" }), { codigo: "PERMISSAO_INSUFICIENTE" });
+  await s.mova.aprovador.revisarCompetencia(adm, { propostaId: p.id, versao: p.versao, competencia: "2026-10" });
+  const r = await s.mova.aprovador.aplicar(adm, { propostaId: p.id, categoria: "INSUMOS" });
+  assert.equal(r.estado, "APLICADA");
+  const ob = (await s.m.nucleo.consultarContasAPagar(adm, {})).itens.find((x) => x.id === r.resultado.obrigacaoId);
+  assert.deepEqual([ob.valorOriginalCentavos, ob.vencimento, ob.competencia], [28990, "2026-10-25", "2026-10"]);
+  assert.ok((await s.mova.armazenamento.auditoria.listar()).some((x) => x.acao === "COMPETENCIA_REVISADA"));
+});
+
+t("15A competência explícita é respeitada (sem pendência); despesa paga sem competência também fica pendente", async () => {
+  const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 60000, vencimento: "2026-11-05", competencia: "2026-09", unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "contabilidade de setembro da alfa, 600, vence 05/11/2026" }));
+  const [p] = await s.propostas(ALFA);
+  assert.deepEqual([p.competenciaPendente, p.datas.competencia, p.comando.entrada.competencia], [false, "2026-09", "2026-09"]);
+  const s2 = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: "Unidade Teste Alfa" }));
+  await s2.enviar(msg({ texto: "paguei hoje 150 de luz, alfa" }));
+  const [p2] = await s2.propostas(ALFA);
+  assert.deepEqual([p2.tipo, p2.competenciaPendente, p2.datas.competencia, p2.datas.caixa], ["DESPESA_PAGA", true, null, "2026-10-15"]);
+});

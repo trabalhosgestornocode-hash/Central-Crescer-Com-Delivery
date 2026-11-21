@@ -9,6 +9,7 @@
 //   GET  /api/mova/estado                fila, respostas, worker e chaves (ver)
 //   GET  /api/mova/erros                 eventos que falharam (só código e tentativas) (ver)
 //   POST /acoes/mova/classificar         revisar categoria (aprovar)
+//   POST /acoes/mova/competencia         informar a competência pendente (aprovar)
 //   POST /acoes/mova/aplicar             aprovar e aplicar pelo Financeiro (aprovar + aplicar + registrar; unidade com escrita liberada)
 //   POST /acoes/mova/rejeitar            rejeitar (aprovar)
 //   POST /acoes/mova/reprocessar         devolver evento com falha à fila (aprovar)
@@ -68,6 +69,9 @@ export const CONSULTAS_MOVA = Object.freeze({
 });
 
 export const ACOES_MOVA = Object.freeze({
+  // 15A: competência informada na revisão humana (nunca presumida pelo MOVA); não escreve no Financeiro.
+  "/mova/competencia": { campos: ["propostaId", "versao", "competencia"], escreveNoFinanceiro: false,
+    fazer: ({ ctx, mova, b }) => mova.aprovador.revisarCompetencia(ctx, { propostaId: b.propostaId, versao: b.versao, competencia: b.competencia }) },
   "/mova/classificar": { campos: ["propostaId", "versao", "categoria"], escreveNoFinanceiro: false,
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarClassificacao(ctx, { propostaId: b.propostaId, versao: b.versao, categoria: b.categoria }) },
   "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria"], escreveNoFinanceiro: true,

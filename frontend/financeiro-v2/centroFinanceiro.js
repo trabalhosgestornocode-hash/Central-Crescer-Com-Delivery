@@ -24,6 +24,9 @@ const ESTADO = { AGUARDANDO_REVISAO: ["Aguardando revisão", "alerta"], APLICAND
 const TIPO_PROPOSTA = { DESPESA_PAGA: "Despesa paga", NOVA_OBRIGACAO: "Nova conta a pagar", BAIXA_DE_OBRIGACAO: "Baixa de conta existente", SOLICITACAO_DE_REVISAO: "Pedido de revisão" };
 const INTENCAO_LIDA = { INFORMAR_PAGAMENTO: "Pagamento feito", REGISTRAR_CONTA: "Conta a pagar", CONSULTAR: "Consulta", INFORMAR_TRANSFERENCIA: "Transferência", PEDIR_CORRECAO: "Pedido de correção", PEDIR_CLASSIFICACAO: "Pedido de classificação", OUTRA: "Outra", DESCONHECIDA: "Não identificada" };
 /** 15A (V-3): decisão de duplicidade aponta a proposta original (só o id; mesma unidade, filtrado no servidor). */
+/** 15A: competência nunca presumida — sem ela (e sem revisão), não dá para aplicar. */
+const competenciaAConfirmar = (p) => Boolean(p?.competenciaPendente && !p?.competenciaRevisada && p?.estado === "AGUARDANDO_REVISAO");
+const competenciaDe = (p) => p?.competenciaRevisada ?? p?.datas?.competencia ?? null;
 const duplicadoDe = (i) => [...(i.decisoes ?? [])].reverse().find((d) => d.decisao === "DUPLICADO" && d.propostaId)?.propostaId ?? null;
 const TIPO_DOC = { COMPROVANTE_PAGAMENTO: "Comprovante", BOLETO: "Boleto", NOTA_FISCAL: "Nota fiscal", RECIBO: "Recibo", EXTRATO: "Extrato", RELATORIO_VENDAS: "Relatório de vendas", OUTRO: "Outro", DESCONHECIDO: "Não identificado" };
 const PENDENCIA = { REQUISITOS_FINANCEIROS_INCOMPLETOS: "Cadastro financeiro da unidade incompleto: aplicação bloqueada" };
@@ -73,6 +76,7 @@ function pendenciasDe(i) {
   if (u?.decisao === "PEDIR_INFORMACAO") p.push(u.motivo === "UNIDADE_NAO_IDENTIFICADA" || u.motivo === "UNIDADE_CONFLITANTE" ? "Aguardando o participante informar a unidade no grupo" : "Aguardando informação do participante");
   if (i.proposta?.bloqueioDeAplicacao) p.push(PENDENCIA[i.proposta.bloqueioDeAplicacao] ?? i.proposta.bloqueioDeAplicacao);
   if (i.proposta?.sinaisDeInjecao) p.push("Mensagem com texto suspeito: revisar com atenção");
+  if (competenciaAConfirmar(i.proposta)) p.push("Competência a confirmar na revisão (não foi informada na mensagem)");
   return p;
 }
 
@@ -104,7 +108,7 @@ function detalhe(i) {
     el("h3", { texto: "Proposta" }),
     !p && duplicadoDe(i) ? el("p", {}, "Duplicado da proposta ", el("code", { texto: duplicadoDe(i).slice(0, 8) }), " (nenhuma proposta nova foi criada).") : null,
     p ? dl([["Proposta", el("code", { texto: p.id.slice(0, 8) })], ["Tipo", TIPO_PROPOSTA[p.tipo] ?? p.tipo], ["Situação", selo(ESTADO[p.estado] ?? [p.estado, "neutro"])], ["Valor", reais(p.valorCentavos)],
-      ["Competência", p.datas?.competencia], ["Caixa", p.datas?.caixa ? dataBr(p.datas.caixa) : undefined], ["Vencimento", p.datas?.vencimento ? dataBr(p.datas.vencimento) : undefined],
+      ["Competência", competenciaDe(p) ?? selo(["A confirmar", "alerta"])], ["Caixa", p.datas?.caixa ? dataBr(p.datas.caixa) : undefined], ["Vencimento", p.datas?.vencimento ? dataBr(p.datas.vencimento) : undefined],
       ["Categoria sugerida", p.categoriaSugerida ?? "—"]]) : duplicadoDe(i) ? null : vazio("Nenhuma proposta vinculada."),
     p ? el("p", { classe: "cf-dica", texto: "A categoria sugerida não é aplicada sozinha: quem aprova escolhe a categoria definitiva." }) : null,
     el("h3", { texto: "Pendências" }),
@@ -165,11 +169,12 @@ function propostas() {
     const motivo = p.bloqueioDeAplicacao ? PENDENCIA[p.bloqueioDeAplicacao]
       : dados.fonte !== "API" ? "Simulação: aprovação só no ambiente com a API do MOVA"
       : !dados.podeDecidir ? "Sua sessão não tem permissão para aprovar e aplicar (ou a escrita está desligada)"
-      : p.estado !== "AGUARDANDO_REVISAO" ? "Proposta já decidida" : null;
+      : p.estado !== "AGUARDANDO_REVISAO" ? "Proposta já decidida"
+      : competenciaAConfirmar(p) ? "Informe a competência antes de aprovar" : null;
     const precisaConta = PAGAMENTO.includes(p.tipo) && !motivo;
     return { id: i.eventoId, celulas: [
       el("code", { texto: p.id.slice(0, 8) }), TIPO_PROPOSTA[p.tipo] ?? p.tipo, el("span", { classe: "cf-num", texto: reais(p.valorCentavos) }),
-      `Competência ${p.datas?.competencia ?? "—"}${p.datas?.caixa ? ` · caixa ${dataBr(p.datas.caixa)}` : p.datas?.vencimento ? ` · vence ${dataBr(p.datas.vencimento)}` : ""}`,
+      `Competência ${competenciaDe(p) ?? "a confirmar"}${p.datas?.caixa ? ` · caixa ${dataBr(p.datas.caixa)}` : p.datas?.vencimento ? ` · vence ${dataBr(p.datas.vencimento)}` : ""}`,
       el("span", {}, p.categoriaSugerida ? `Sugestão: ${p.categoriaSugerida}` : "—",
         dados.podeDecidir && p.estado === "AGUARDANDO_REVISAO" && p.tipo !== "BAIXA_DE_OBRIGACAO"
           ? el("span", { classe: "cf-quebra" }, el("input", { classe: "cf-categoria", "data-categoria": p.id, "aria-label": "Categoria (código)", placeholder: "CODIGO_DA_CATEGORIA", value: p.categoriaSugerida ?? "" }),
@@ -177,6 +182,8 @@ function propostas() {
           : null),
       selo(ESTADO[p.estado] ?? [p.estado, "neutro"]),
       el("div", { classe: "cf-acoes" },
+        competenciaAConfirmar(p) && dados.podeDecidir && dados.fonte === "API"
+          ? el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "competencia", "data-proposta": p.id, texto: "Informar competência" }) : null,
         precisaConta ? el("select", { classe: "cf-conta", "data-conta": p.id, "aria-label": "Conta de onde saiu o pagamento" }, el("option", { value: "", texto: "Conta do pagamento…" }), dados.contas.map((c) => el("option", { value: c.id, texto: c.nome }))) : null,
         el("button", { classe: "botao botao--pequeno botao--primario", type: "button", disabled: Boolean(motivo), title: motivo ?? "Aprovar e aplicar no Financeiro", "data-acao": "aplicar", "data-proposta": p.id, "aria-label": motivo ? `Aprovar (indisponível: ${motivo})` : "Aprovar e aplicar", texto: "Aprovar" }),
         el("button", { classe: "botao botao--pequeno", type: "button", disabled: Boolean(motivo && p.estado !== "AGUARDANDO_REVISAO") || dados.fonte !== "API" || !dados.podeDecidir, title: "Rejeitar a proposta", "data-acao": "rejeitar", "data-proposta": p.id, texto: "Rejeitar" })),
@@ -274,6 +281,13 @@ async function decidir(botao) {
     const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(a.base64), (c) => c.charCodeAt(0))], { type: a.mime }));
     globalThis.open?.(url, "_blank", "noopener"); setTimeout(() => URL.revokeObjectURL(url), 60_000);
     return;
+  }
+  if (botao.dataset.acao === "competencia") {
+    const c = globalThis.prompt?.("Competência (AAAA-MM) — o mês a que a despesa pertence:")?.trim() ?? "";
+    if (!c) return;
+    r = await acoes.competencia(id, c);
+    estado.aviso = r.ok ? { ok: true, texto: "Competência informada (será usada na aplicação)." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    dados = await carregarDados(); return desenhar();
   }
   if (botao.dataset.acao === "classificar") {
     const cat = document.querySelector(`[data-categoria="${id}"]`)?.value?.trim().toUpperCase();
