@@ -25,6 +25,7 @@ export { OPERACOES_PERMITIDAS, criarPortaFinanceira, exigirContratoFinanceiro } 
 export { DECISAO, TIPO_PROPOSTA, criarMotor } from "./aplicacao/motor.js";
 export { ErroDeAprovacao, criarAprovador } from "./aplicacao/aprovacao.js";
 export { criarFerramentas, periodoDaConsulta } from "./aplicacao/ferramentas.js";
+export { criarRedator, validarRedacao } from "./aplicacao/redator.js";
 export { ErroDeIa, MODELO_PADRAO, MODELOS_PERMITIDOS, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
 export { criarEnviadorDeRespostas, criarWorker } from "./gateway/worker.js";
 export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
@@ -45,13 +46,13 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null }) {
   const cfg = validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
-  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar });
+  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;

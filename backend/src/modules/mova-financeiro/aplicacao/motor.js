@@ -50,7 +50,7 @@ function fornecedorCompativel(favorecido, titulo) {
  * @param {{cfg:object, porta:object, extrator:{extrair:Function}, armazenamento:object, relogio?:() => Date, registrar?:(e:object)=>void}} deps
  *   `registrar` recebe só códigos e ids mascarados (log operacional) — nunca texto, valor ou documento.
  */
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {} }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -356,7 +356,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo } });
     }
     const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), "Detalhes no Centro Financeiro."];
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: RESPOSTA.consulta(linhas), injecao });
+    // 15A (desligado por padrão): resposta natural redigida SÓ a partir das linhas calculadas aqui; o redator valida e, em
+    // qualquer dúvida, devolve o texto determinístico.
+    const padrao = RESPOSTA.consulta(linhas);
+    const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${c.periodo.rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {} });
   }
 
   /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */

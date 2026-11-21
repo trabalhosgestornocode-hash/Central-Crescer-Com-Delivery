@@ -25,7 +25,7 @@ import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -75,7 +75,7 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null,
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
   };
 }
 
@@ -115,7 +115,11 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const extrator = cfg.ia && criarClienteIa
     ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio, ...(cfg.modeloIa ? { modelo: cfg.modeloIa } : {}) })
     : EXTRATOR_DESLIGADO;
-  mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle });
+  // 15A: respostas naturais — desligadas por padrão; exigem IA ligada e passam pelo MESMO orçamento/teto do extrator.
+  const redator = cfg.ia && cfg.respostasNaturais && criarClienteIa
+    ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
+    : null;
+  mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),

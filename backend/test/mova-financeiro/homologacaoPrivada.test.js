@@ -397,3 +397,21 @@ t("15A competência explícita é respeitada (sem pendência); despesa paga sem 
   const [p2] = await s2.propostas(ALFA);
   assert.deepEqual([p2.tipo, p2.competenciaPendente, p2.datas.competencia, p2.datas.caixa], ["DESPESA_PAGA", true, null, "2026-10-15"]);
 });
+
+t("15A resposta natural na consulta: redação com números dos fatos é usada; número inventado cai no texto determinístico", async () => {
+  const { criarRedator } = await import("../../src/modules/mova-financeiro/index.js");
+  for (const [redigido, esperado] of [["A Unidade Teste Alfa tem conta aberta de R$ 350,00. Detalhes no Centro Financeiro.", "IA"], ["Você deve R$ 999,00.", "PADRAO"]]) {
+    const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }));
+    const redator = criarRedator({ cliente: { beta: { messages: { create: async () => ({ model: "claude-haiku-5-5", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ texto: redigido }) }] }) } } } });
+    const { criarMova } = await import("../../src/modules/mova-financeiro/index.js");
+    const comRedator = criarMova({ configuracao: CONFIG, nucleo: s.m.nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: s.pool, relogio: () => AGORA, redator,
+      extrator: { extrair: async () => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }) } });
+    await comRedator.receptor.receber(msg({ texto: "quais contas a pagar estão abertas na alfa?" }));
+    await comRedator.receptor.trabalhar();
+    const h = (await comRedator.armazenamento.historico.todos()).at(-1);
+    assert.equal(h.decisao, DECISAO.CONSULTA);
+    assert.equal(h.redacao, esperado);
+    const texto = (await comRedator.armazenamento.saida.listar()).at(-1).texto;
+    if (esperado === "IA") assert.equal(texto, redigido); else assert.doesNotMatch(texto, /999/);
+  }
+});
