@@ -6,6 +6,29 @@
 // Logs: só códigos — nunca corpo, telefone, assinatura ou segredo.
 export const ROTA = "/internal/mova/eventos/mova-grupo";
 export const LIMITE_BYTES = 21 * 1024 * 1024; // mesmo limite do backend MOVA (mídia de até 15 MB em base64 + envelope)
+export const ROTA_SAIDA = "/internal/mova/saida";
+export const LIMITE_SAIDA_BYTES = 16 * 1024;
+
+/** 15B: reservar | confirmar | falhar — o banco (mova_rele.saida_gateway) confere assinatura, janela e nonce antes de tudo. */
+async function tratarSaida(req, { saida, log }) {
+  if (req.method !== "POST") return json(405, { error: "method_not_allowed" });
+  if (Number(req.headers.get("content-length") ?? "0") > LIMITE_SAIDA_BYTES) return json(413, { error: "payload_too_large" });
+  const ts = req.headers.get("x-gateway-timestamp"); const nonce = req.headers.get("x-gateway-nonce"); const assinatura = req.headers.get("x-gateway-signature");
+  if (!ts || !nonce || !assinatura || !/^\d{10,13}$/.test(ts) || !/^[A-Za-z0-9_-]{16,64}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(assinatura)) {
+    log("rele.saida_nao_autorizada", { motivo: "CABECALHO" }); return json(401, { error: "unauthorized" });
+  }
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  if (bytes.byteLength === 0 || bytes.byteLength > LIMITE_SAIDA_BYTES) return json(400, { error: "invalid_body" });
+  let corpo;
+  try { corpo = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return json(400, { error: "invalid_body" }); }
+  let r;
+  try { r = await saida({ corpo, ts, nonce, assinatura, caminho: ROTA_SAIDA, origem: "gateway-whatsapp" }); }
+  catch (e) { log("rele.saida_banco_indisponivel", { codigo: String(e?.code ?? e?.name ?? "ERRO").slice(0, 40) }); return json(503, { error: "unavailable" }); }
+  log("rele.saida_resultado", { resultado: r?.resultado ?? "?", itens: Array.isArray(r?.itens) ? r.itens.length : undefined });
+  if (r?.resultado === "OK" || r?.resultado === "SEM_RESERVA") return json(200, r);
+  if (r?.resultado === "INVALIDO") return json(400, { error: "invalid_body" });
+  return json(401, { error: "unauthorized" }); // NAO_AUTORIZADO | REPLAY — genérico
+}
 
 const json = (status, corpo) => new Response(JSON.stringify(corpo), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
 
@@ -20,9 +43,12 @@ export function caminhoDaRota(url) {
  * @param {{receber:(a:object)=>Promise<string>, log?:(evento:string, dados?:object)=>void, limiteBytes?:number}} deps
  *   `receber` chama mova_rele.receber no banco e devolve GRAVADO|DUPLICADO|NAO_AUTORIZADO|REPLAY|LIMITE|INVALIDO.
  */
-export async function tratar(req, { receber, log = () => {}, limiteBytes = LIMITE_BYTES }) {
+export async function tratar(req, { receber, saida = null, log = () => {}, limiteBytes = LIMITE_BYTES }) {
   const u = new URL(req.url);
-  if (caminhoDaRota(req.url) !== ROTA || u.search) { log("rele.rota_desconhecida"); return json(404, { error: "not_found" }); }
+  const rota = caminhoDaRota(req.url);
+  // 15B — fila de SAÍDA: o Gateway (serviço privado) pergunta/confirma respostas; mesma autenticação, conferida no banco.
+  if (rota === ROTA_SAIDA && !u.search && saida) return tratarSaida(req, { saida, log });
+  if (rota !== ROTA || u.search) { log("rele.rota_desconhecida"); return json(404, { error: "not_found" }); }
   if (req.method !== "POST") { log("rele.metodo_recusado"); return json(405, { error: "method_not_allowed" }); }
   const declarado = Number(req.headers.get("content-length") ?? "0");
   if (declarado > limiteBytes) { log("rele.grande_demais"); return json(413, { error: "payload_too_large" }); }

@@ -16,4 +16,13 @@ async function receber(a: { corpo: string; ts: string; nonce: string; assinatura
   });
 }
 
-Deno.serve((req) => tratar(req, { receber, log }));
+// 15B: fila de saída — mesmo papel mínimo (mova_rele_gravador), que só executa as funções do relé.
+async function saida(a: { corpo: string; ts: string; nonce: string; assinatura: string; caminho: string; origem: string }) {
+  return await sql.begin(async (t) => {
+    await t`set local role mova_rele_gravador`;
+    const [r] = await t`select mova_rele.saida_gateway(${a.corpo}, ${a.ts}, ${a.nonce}, ${a.assinatura}, ${a.caminho}, ${a.origem}) as r`;
+    return r.r;
+  });
+}
+
+Deno.serve((req) => tratar(req, { receber, saida, log }));
