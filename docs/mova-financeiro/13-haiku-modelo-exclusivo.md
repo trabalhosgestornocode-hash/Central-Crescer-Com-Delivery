@@ -102,3 +102,34 @@ Haiku. Ao final, processamento e IA desligados no banco e no backend local; rece
 
 **Para concluir a Fase C:** reenviar 1, 2, 4 e 8 com o teto corrigido (4 chamadas, cabem no saldo). Isso depende de autorização
 para reenvio.
+
+## Execução 14C — conclusão da rodada pelo WhatsApp (testes 1, 2, 4 e 8, sequenciais)
+
+Antes de ativar, a contagem gratuita com o contexto real de 3 unidades deu **3.409 / 3.417 / 3.407 tokens** (confirma a causa
+da 14B). Teto de 4.000 de entrada e 600 de saída; reserva de 700 µUS$ por chamada (auditada; limites e contadores inalterados).
+
+| Teste | Evento | Resultado | Entrada/saída | Custo |
+|---|---|---|---|---|
+| 1 Despesa paga | `…C9B8` | `DESPESA_PAGA` `c5aecdc0`: 15000, ENERGIA_ELETRICA, Sanduíches Centro, caixa 21/11, AGUARDANDO_REVISAO | 3.409 / 315 | US$ 0,000499 |
+| 2 Conta a pagar | `…23CC7E` | `NOVA_OBRIGACAO` `2017e319`: 28990, INTERNET, vencimento 2026-12-05, sem caixa | 3.417 / 315 | US$ 0,000500 |
+| 4 Embalagens | `…2D5F` | `DESPESA_PAGA` `9a40bc6d`: 42000, EMBALAGENS (CUSTO), caixa 21/11 | 3.407 / 308 | US$ 0,000495 |
+| 8 Duplicidade | `…6AD4` | `DUPLICADO PROPOSTA_SEMELHANTE_PENDENTE` → `c5aecdc0`; **nenhuma** proposta nova | 3.409 / 306 | US$ 0,000494 |
+
+**Resultado consolidado pelo WhatsApp real: 8/8 testes conforme o gabarito.** Os testes 3, 5, 6 e 7 foram aprovados na 14B;
+os testes 1, 2, 4 e 8 na 14C.
+
+Observação: no teste 2, a competência ficou 2026-12, porque a mensagem não a informa e o motor usa o mês do vencimento. A
+competência pode ser ajustada na revisão humana. Não é erro da IA.
+
+**Orçamento da rodada Haiku: 24 chamadas, US$ 0,011726** (17 da avaliação + 3 da 14B + 4 da 14C), todas `claude-haiku-5-5` e
+concluídas. Saldo: 1 chamada e US$ 0,008274. Histórico preservado.
+
+**Segurança.** 0 respostas enviadas (40 pendentes, presas pelo envio desligado), 0 propostas aplicadas, 0 grupos, só Haiku.
+Ao final, processamento e IA desligados no banco (auditado) e no backend local (perfil sem IA); recebimento privado ligado.
+
+**Pendências para a Fase D**
+1. Descartar as 40 respostas PENDENTES (testes antigos e desta rodada) antes de qualquer envio.
+2. Conferir no Centro Financeiro, com login, as 3 propostas desta rodada na Caixa de Entrada e a revisão humana (não foi
+   verificado visualmente nesta execução).
+3. Regra de competência de conta sem competência informada (mês do vencimento × mês do recebimento): decisão do negócio.
+4. Adiadas por decisão: respostas naturais, memória de conversa, cálculo hipotético, áudio.
