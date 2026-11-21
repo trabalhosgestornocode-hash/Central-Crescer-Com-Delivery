@@ -16,6 +16,8 @@
 //   MOVA_IA_HABILITADA=1              Claude (ANTHROPIC_API_KEY) — exige processamento; orçamento persistente obrigatório
 //   MOVA_ENVIO_HABILITADO=1           respostas (exige processamento e MOVA_GATEWAY_URL)
 //   MOVA_SUSPENSO=1                   desliga TUDO (vence qualquer outra)
+//   MOVA_RELE_DATABASE_URL            (homologação) fila durável do relé (papel mova_rele_consumidor); com recebimento ligado,
+//                                     o backend CONSOME o relé em vez de receber direto do Gateway (Execução 11)
 //   MOVA_PG_CA                        CA do provedor do banco (PEM); na falta, usa FV2_PG_CA. TLS nunca deixa de ser verificado
 // Além das variáveis, a tabela mova.controle desliga cada etapa NA HORA (sem reiniciar nada) — reversão funcional.
 import { Router } from "express";
@@ -23,7 +25,7 @@ import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  carregarConfiguracao, clienteComOrcamento, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  carregarConfiguracao, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -179,18 +181,28 @@ export function movaParaGateway(env) {
 }
 
 let laco = null;
+let consumidorRele = null;
 /** Worker + enviador em laço (server.js, depois do listen). Desligado por padrão; nunca derruba o backend. */
 export async function iniciarMovaEmbutido({ env, log = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado) return { habilitado: false, motivo: cfg.motivo };
-  if (!cfg.processamento) return { habilitado: false, motivo: "PROCESSAMENTO_DESLIGADO" };
+  // Fase B: só recebimento pelo relé (sem processamento) também inicia — o consumidor enfileira no MOVA, o worker fica parado.
+  if (!cfg.processamento && !(env.MOVA_RELE_DATABASE_URL && cfg.recebimento)) return { habilitado: false, motivo: "PROCESSAMENTO_DESLIGADO" };
   const m = await movaDaPlataforma({ env, registrar: (e) => log("warn", "mova.evento", e) });
   if (!m) return { habilitado: false, motivo: "MOVA_NAO_MONTADO" };
   m.worker?.iniciar();
+  if (env.MOVA_RELE_DATABASE_URL && cfg.recebimento && !consumidorRele) {
+    const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
+    const poolRele = new pg.Pool({ connectionString: env.MOVA_RELE_DATABASE_URL, max: 2, idleTimeoutMillis: 30000, ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+    poolRele.on("error", () => {});
+    consumidorRele = criarConsumidorRele({ pool: poolRele, receptor: m.mova.receptor, segredo: env.MOVA_GATEWAY_SECRET, controle: m.controle, registrar: (e) => log("warn", "mova.rele", e) });
+    consumidorRele.iniciar();
+  }
   if (m.enviador.habilitado && !laco) laco = setInterval(() => { m.enviador.enviarPendentes().catch(() => {}); }, 5000);
-  return { habilitado: true, envio: m.enviador.habilitado };
+  return { habilitado: true, envio: m.enviador.habilitado, rele: Boolean(consumidorRele) };
 }
 export async function pararMovaEmbutido({ env }) {
+  consumidorRele?.parar(); consumidorRele = null;
   if (laco) { clearInterval(laco); laco = null; }
   const m = instancia ? await instancia : null;
   m?.worker?.parar();

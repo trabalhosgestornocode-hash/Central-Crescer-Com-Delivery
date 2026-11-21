@@ -31,6 +31,7 @@ export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
 export { ESTADO_ITEM, ErroTransitorio, criarFilaMemoria } from "./gateway/fila.js";
 export { criarEvidenciasMemoria } from "./gateway/evidencias.js";
 export { criarReceptor } from "./gateway/receptor.js";
+export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorRele.js";
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
 export { CHAVES_DE_CONTROLE, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
 export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
