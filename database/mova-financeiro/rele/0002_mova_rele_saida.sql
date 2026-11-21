@@ -107,6 +107,8 @@ begin
   if v_gw is null or v_gw !~ '^[A-Za-z0-9_.:-]{1,80}$' then return jsonb_build_object('resultado', 'INVALIDO'); end if;
 
   if v_acao = 'reservar' then
+    -- 15C (A-2): lote não numérico é corpo INVÁLIDO (400), nunca exceção (que viraria "banco indisponível").
+    if coalesce(c ->> 'lote', '1') !~ '^[0-9]{1,3}$' then return jsonb_build_object('resultado', 'INVALIDO'); end if;
     -- 1) lease vencido = o Gateway pode ter enviado e caído antes de confirmar ⇒ INCERTA (nunca volta à fila)
     with venc as (update mova_rele.saida set estado = 'INCERTA', codigo = 'LEASE_VENCIDO', lease_ate = null
                    where estado = 'RESERVADA' and lease_ate < clock_timestamp() returning id, gateway)
@@ -182,5 +184,13 @@ end $$;
 
 revoke all on function mova_rele.autenticar(text, text, text, text, text, text), mova_rele.saida_gateway(text, text, text, text, text, text),
   mova_rele.publicar_saida(uuid, text, text), mova_rele.estado_saidas(uuid[]), mova_rele.definir_saida(boolean, text) from public;
+-- 15C (A-1): o Supabase concede EXECUTE a anon/authenticated/service_role por padrão — revogado (como na 0001).
+do $$ declare r text; begin
+  foreach r in array array['anon','authenticated','service_role'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on function mova_rele.autenticar(text, text, text, text, text, text), mova_rele.saida_gateway(text, text, text, text, text, text), mova_rele.publicar_saida(uuid, text, text), mova_rele.estado_saidas(uuid[]), mova_rele.definir_saida(boolean, text) from %I', r);
+    end if;
+  end loop;
+end $$;
 grant execute on function mova_rele.saida_gateway(text, text, text, text, text, text) to mova_rele_gravador;
 grant execute on function mova_rele.publicar_saida(uuid, text, text), mova_rele.estado_saidas(uuid[]), mova_rele.definir_saida(boolean, text) to mova_rele_consumidor;
