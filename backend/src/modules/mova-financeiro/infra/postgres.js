@@ -153,6 +153,21 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1 and resolvida_em is null returning leitura, grupo_jid", [mensagemId]);
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
+      /**
+       * 15A — memória curta: a pendência MAIS RECENTE da MESMA conversa e do MESMO participante, dentro da validade. O prazo
+       * usa o relógio do BANCO (o mesmo de criada_em) — nunca compara dois relógios.
+       * Atômica (FOR UPDATE SKIP LOCKED + resolvida_em): nunca retomada duas vezes. Nada de outra conversa ou participante.
+       */
+      async tomarPendenteRecente({ grupoId, participanteId, validadeMs }) {
+        const r = await q(`update mova.mensagem_pendente set resolvida_em = now()
+                            where mensagem_id = (select mensagem_id from mova.mensagem_pendente
+                                                  where grupo_jid = $1 and resolvida_em is null and criada_em >= now() - make_interval(secs => $3::double precision / 1000)
+                                                    and leitura->'evento'->>'participanteId' = $2
+                                                  order by criada_em desc limit 1 for update skip locked)
+                              and resolvida_em is null
+                          returning leitura, grupo_jid`, [grupoId, participanteId, validadeMs]);
+        return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
+      },
     }),
     saida: Object.freeze({
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {

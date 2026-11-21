@@ -33,6 +33,9 @@ const CONSULTAS_DO_GRUPO = ["COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS"];
 const PEDIDO_DE_APROVACAO = /^\s*(aprov[ao]r?|aprovad[oa]|aplic[ao]r?|pode\s+aprovar|autoriz[ao]r?)\b/i;
 // Execução 14 (achado real: o Haiku leu "faça o pagamento" como REGISTRAR_CONTA): pedido para EXECUTAR pagamento/transferência
 // é barrado pelo backend antes da IA. "paguei" (relato) não casa: só imperativo/pedido.
+/** 15A: validade da memória curta (esclarecimento sem citação). */
+export const MEMORIA_CURTA_MS = 10 * 60 * 1000;
+const PALAVRAS_DE_LIGACAO = new Set(["e", "eh", "a", "o", "da", "do", "de", "na", "no", "em", "foi", "unidade", "loja", "mova", "pra", "para", "sim", "ok", "hml"]);
 const PEDIDO_DE_EXECUCAO = [
   /\b(fa[çc]a|faz|efetue|realize|execute|agende|programe|mande)\s+(o|a|os|as|um|uma)?\s*(pagamento|pix|transfer[eê]ncia|ted|doc)s?\b/i,
   /\b(pague|transfira|deposite)\s+(o|a|os|as|um|uma|r\$|\d)/i,
@@ -86,6 +89,21 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return v;
   }
 
+  /**
+   * 15A: o texto é SÓ a resposta a "de qual unidade?" — curto, sem números, uma única unidade da conversa e, tirando o
+   * nome/apelido dela e palavras de ligação, NADA sobra. ("paguei a luz da alfa" é pedido NOVO, não esclarecimento:
+   * achado do conjunto de avaliação, caso C14.)
+   */
+  function ehEsclarecimentoDeUnidade(texto, grupo) {
+    const t = String(texto ?? "").trim();
+    if (!t || t.length > 60 || /\d/.test(t)) return false;
+    const u = resolverUnidade({ cfg, grupo, textos: [t] });
+    if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) return false;
+    let resto = ` ${normalizar(t)} `;
+    for (const ap of [...u.unidade.apelidos].sort((a, b) => b.length - a.length)) resto = resto.split(` ${ap} `).join(" ");
+    return resto.split(" ").filter(Boolean).every((p) => PALAVRAS_DE_LIGACAO.has(p));
+  }
+
   async function processar(evento, { esclarecimento = null } = {}) {
     // 1. Grupo autorizado. Fora da lista: nada é lido, guardado nem respondido.
     const grupo = grupoAutorizado(cfg, evento.grupoId);
@@ -110,6 +128,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const pend = await a.mensagens.tomarPendente(evento.respostaA);
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_RECEBIDO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null });
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
+        }
+      }
+      // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
+      // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
+      // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
+      if (!evento.respostaA && evento.tipo === "TEXTO" && typeof a.mensagens.tomarPendenteRecente === "function" && ehEsclarecimentoDeUnidade(evento.texto, grupo)) {
+        const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
+        if (pend?.pendente) {
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
           return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }

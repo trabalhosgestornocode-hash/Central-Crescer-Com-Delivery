@@ -415,3 +415,42 @@ t("15A resposta natural na consulta: redação com números dos fatos é usada; 
     if (esperado === "IA") assert.equal(texto, redigido); else assert.doesNotMatch(texto, /999/);
   }
 });
+
+t("15A memória curta: 'paguei 150 de energia' → 'de qual unidade?' → 'alfa' (sem citar) monta UMA proposta; repetição não duplica", async () => {
+  let n = 0;
+  const s = await cenario(() => (++n === 1 ? comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null, categoriaSugerida: "ENERGIA_ELETRICA" }) : base({ intencao: "OUTRA" })));
+  await s.enviar(msg({ id: "MC1", texto: "paguei hoje R$ 150 de energia" }));
+  assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
+  await s.enviar(msg({ id: "MC2", texto: "Alfa" }));
+  const props = await s.propostas(ALFA);
+  assert.equal(props.length, 1);
+  assert.deepEqual([props[0].tipo, props[0].valorCentavos, props[0].eventoId], ["DESPESA_PAGA", 15000, "bly:MC1"]);
+  assert.ok((await s.mova.armazenamento.historico.todos()).some((h) => h.motivo === "ESCLARECIMENTO_POR_CONTEXTO" && h.eventoId === "bly:MC2"));
+  assert.equal(s.pedidos.length, 1, "o esclarecimento reaproveita a leitura: nenhuma chamada nova à IA");
+  await s.enviar(msg({ id: "MC3", texto: "Alfa" }));
+  assert.equal((await s.propostas(ALFA)).length, 1, "a pendência já foi consumida: nada é lançado de novo");
+  assert.equal((await s.propostas(GAMA)).length, 0);
+});
+
+t("15A memória curta: outro participante, prazo vencido, texto com números ou unidade ambígua NÃO retomam a pendência", async () => {
+  // 1ª chamada lê a despesa sem unidade; as seguintes (se houver) são conversa — o teste mede só a RETOMADA indevida.
+  const leitura = () => { let n = 0; return () => (++n === 1 ? comprovante({ valorCentavos: 9500, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null }) : base({ intencao: "OUTRA" })); };
+  // outro participante na mesma conversa
+  const s1 = await cenario(leitura());
+  await s1.enviar(msg({ id: "OP1", texto: "paguei 95 de limpeza hoje" }));
+  await s1.enviar({ ...msg({ id: "OP2", texto: "alfa" }), participanteId: "5500000000999@s.whatsapp.net" });
+  assert.equal((await s1.propostas(ALFA)).length, 0);
+  // prazo vencido
+  const s2 = await cenario(leitura());
+  await s2.enviar(msg({ id: "PV1", texto: "paguei 95 de limpeza hoje" }));
+  await s2.pool.query("update mova.mensagem_pendente set criada_em = now() - interval '11 minutes'");
+  await s2.enviar(msg({ id: "PV2", texto: "alfa" }));
+  assert.equal((await s2.propostas(ALFA)).length, 0);
+  // texto com número e texto ambíguo
+  for (const texto of ["alfa 95", "alfa ou gama", "MOVA, paguei a conta de luz da alfa."]) {
+    const s3 = await cenario(leitura());
+    await s3.enviar(msg({ id: `AM${texto.length}a`, texto: "paguei 95 de limpeza hoje" }));
+    await s3.enviar(msg({ id: `AM${texto.length}b`, texto }));
+    assert.ok(!(await s3.mova.armazenamento.historico.todos()).some((h) => h.motivo === "ESCLARECIMENTO_POR_CONTEXTO"), texto);
+  }
+});
