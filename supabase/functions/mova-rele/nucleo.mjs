@@ -47,7 +47,7 @@ export async function tratar(req, { receber, log = () => {}, limiteBytes = LIMIT
   if (!corpo) { log("rele.invalido", { motivo: "VAZIO" }); return json(400, { error: "invalid_body" }); }
   let r;
   try { r = await receber({ corpo, ts, nonce, assinatura, caminho: ROTA, origem: "gateway-whatsapp" }); }
-  catch { log("rele.banco_indisponivel"); return json(503, { error: "unavailable" }); } // o Gateway tenta de novo (5xx)
+  catch (e) { log("rele.banco_indisponivel", { codigo: String(e?.code ?? e?.name ?? "ERRO").slice(0, 40), ...(/^42/.test(String(e?.code)) ? { detalhe: String(e?.message ?? "").slice(0, 140) } : {}) }); return json(503, { error: "unavailable" }); } // o Gateway tenta de novo (5xx); só o CÓDIGO vai ao log
   log("rele.resultado", { resultado: r, bytes: total });
   switch (r) {
     case "GRAVADO": return json(202, { status: "ENFILEIRADO" });

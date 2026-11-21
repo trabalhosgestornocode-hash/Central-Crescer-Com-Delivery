@@ -12,6 +12,8 @@
 -- * Tabelas com RLS ligada e SEM políticas; nenhum privilégio de tabela para anon/authenticated/service_role/public.
 --   O schema não está exposto na Data API. Os papéis do relé só executam as funções do relé.
 -- * A entrega no relé NÃO é processamento financeiro: o consumidor entrega ao receptor MOVA, que deduplica por evento.
+-- PRÉ-REQUISITO no Supabase: o papel dono precisa de USAGE no schema `extensions` (pgcrypto), concedido pelo postgres:
+--   grant usage on schema extensions to <papel dono>;   (sem isso, digest/hmac "não existem" para as funções)
 -- =====================================================================================================================
 do $$ begin
   if coalesce(shobj_description((select oid from pg_database where datname = current_database()), 'pg_database'), '') not like 'MOVA_HOMOLOGACAO:%'
