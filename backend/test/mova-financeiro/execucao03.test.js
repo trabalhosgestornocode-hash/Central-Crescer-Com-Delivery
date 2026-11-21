@@ -370,7 +370,7 @@ t("24 falha no Gateway: resposta volta para PENDENTE e, no teto, FALHOU; envio b
   let gatewayFora = true;
   const enviados = [];
   const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [G], maxTentativas: 2,
-    enviar: async (r) => { if (gatewayFora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r); return { providerMessageId: "PROVMOVA0001" }; } });
+    enviar: async (r) => { if (gatewayFora) throw Object.assign(new Error("fora"), { codigo: "WHATSAPP_GATEWAY_NOT_CONNECTED" }); enviados.push(r); return { providerMessageId: "PROVMOVA0001" }; } });
   await enviador.enviarPendentes();
   assert.deepEqual(await s.mova.armazenamento.saida.contagem(), { PENDENTE: 1 });
   gatewayFora = false;

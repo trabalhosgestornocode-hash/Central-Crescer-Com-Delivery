@@ -154,7 +154,7 @@ t("13 falha temporária do Gateway: resposta fica pendente e sai na próxima rod
   const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "SITUACAO_PROPOSTAS" }));
   await s.enviar(msg({ texto: "situação?" }));
   let fora = true; const enviados = [];
-  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("conexão recusada"), { codigo: "GATEWAY_INALCANCAVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
   await e.enviarPendentes();
   fora = false;
   await e.enviarPendentes(); await e.enviarPendentes();
@@ -453,4 +453,28 @@ t("15A memória curta: outro participante, prazo vencido, texto com números ou 
     await s3.enviar(msg({ id: `AM${texto.length}b`, texto }));
     assert.ok(!(await s3.mova.armazenamento.historico.todos()).some((h) => h.motivo === "ESCLARECIMENTO_POR_CONTEXTO"), texto);
   }
+});
+
+t("15A G-1: resposta INCERTA do Gateway (tempo esgotado, 5xx, 2xx sem id) nunca é repetida — FALHOU para revisão, sem mensagem duplicada", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "G1", texto: "r", eventoId: null });
+  let chamadas = 0;
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 5,
+    enviar: async () => { chamadas += 1; throw Object.assign(new Error("timeout"), { codigo: "ENVIO_INCERTO" }); } });
+  await e.enviarPendentes(); await e.enviarPendentes(); await e.enviarPendentes();
+  assert.equal(chamadas, 1);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta");
+  assert.deepEqual([rows[0].estado, rows[0].ultimo_erro], ["FALHOU", "ENVIO_INCERTO"]);
+});
+
+t("15A G-1: o canal classifica tempo esgotado, 5xx e 2xx sem id como ENVIO_INCERTO; conexão recusada como repetível", async () => {
+  const { criarEnvioPeloCanal } = await import("../../src/modules/fv2-integracao/mova.js");
+  const seg = "s".repeat(40);
+  const caso = async (fetchFn) => { try { await criarEnvioPeloCanal({ gatewayUrl: "https://gw", segredo: seg, fetchFn, timeoutMs: 20 })({ grupoId: CONTATO, texto: "t", idempotencia: "k" }); return "OK"; } catch (x) { return x.codigo; } };
+  assert.equal(await caso((u, o) => new Promise((_, rej) => o.signal.addEventListener("abort", () => rej(Object.assign(new Error("a"), { name: "AbortError" }))))), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => { throw new TypeError("fetch failed"); }), "GATEWAY_INALCANCAVEL");
+  assert.equal(await caso(async () => ({ ok: false, status: 502, json: async () => ({}) })), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({}) })), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => ({ ok: false, status: 409, json: async () => ({ error: "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED" }) })), "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED");
+  assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({ providerMessageId: "P1" }) })), "OK");
 });

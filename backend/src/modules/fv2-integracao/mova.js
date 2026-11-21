@@ -137,12 +137,19 @@ export function criarEnvioPeloCanal({ gatewayUrl, segredo, fetchFn = (...a) => f
     const headers = { ...assinarRequisicao({ segredo, metodo: "POST", caminho, corpo }), "Content-Type": "application/json" };
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
     let r;
+    // 15A (achado G-1): o Gateway gera id de mensagem aleatório e NÃO deduplica pela chave de idempotência. Então só é
+    // seguro repetir o que comprovadamente NÃO chegou a ser enviado; o resto é ENVIO_INCERTO (sem nova tentativa automática).
     try { r = await fetchFn(`${gatewayUrl.replace(/\/$/, "")}${caminho}`, { method: "POST", headers, body: corpo, signal: ctrl.signal }); }
-    catch { throw Object.assign(new Error("gateway inalcançável"), { codigo: "GATEWAY_INALCANCAVEL" }); }
+    catch (e) {
+      // Tempo esgotado: o Gateway pode ter enviado e a resposta se perdido. Falha de conexão (antes de qualquer byte): seguro repetir.
+      if (e?.name === "AbortError") throw Object.assign(new Error("resposta do gateway incerta"), { codigo: "ENVIO_INCERTO" });
+      throw Object.assign(new Error("gateway inalcançável"), { codigo: "GATEWAY_INALCANCAVEL" });
+    }
     finally { clearTimeout(t); }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.providerMessageId) throw Object.assign(new Error("gateway recusou"), { codigo: j.error ?? `GATEWAY_${r.status}` });
-    return { providerMessageId: j.providerMessageId };
+    if (r.ok && j.providerMessageId) return { providerMessageId: j.providerMessageId };
+    if (r.ok) throw Object.assign(new Error("gateway sem id"), { codigo: "ENVIO_INCERTO" }); // 2xx sem id: pode ter saído
+    throw Object.assign(new Error("gateway recusou"), { codigo: j.error ?? (r.status >= 500 ? "ENVIO_INCERTO" : `GATEWAY_${r.status}`) });
   };
 }
 

@@ -40,6 +40,8 @@ export function criarWorker({ receptor, concorrencia = 2, intervaloMs = 2000, ag
  * @param {{armazenamento:object, enviar:(r:{grupoId:string, texto:string, respostaA:string|null, idempotencia:string}) => Promise<{providerMessageId:string}>,
  *          habilitado?:boolean, maxTentativas?:number, registrar?:Function}} deps
  */
+/** Erros que garantem que a mensagem NÃO saiu (seguro repetir). Qualquer outro código ⇒ sem nova tentativa automática. */
+export const ERROS_ANTES_DO_ENVIO = Object.freeze(["GATEWAY_INALCANCAVEL", "WHATSAPP_GATEWAY_NOT_CONNECTED", "GATEWAY_429"]);
 export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null }) {
   // 15A (Fase D): habilitado EXIGE marco de ativação e lista fechada de destinos — sem eles, o enviador fica desligado
   // (nunca "envia tudo o que está pendente" desde o início da homologação).
@@ -66,7 +68,9 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
           enviadas += 1;
         } catch (err) {
           const codigo = err?.codigo ?? err?.code ?? "FALHA_NO_GATEWAY";
-          await armazenamento.saida.marcarFalhaDeEnvio(r.id, String(codigo).slice(0, 60), { final: r.tentativas >= maxTentativas });
+          // 15A (G-1): só repete o que comprovadamente não foi enviado; incerto/recusado vira FALHOU (revisão humana) — nunca duplica.
+          const repetivel = ERROS_ANTES_DO_ENVIO.includes(codigo);
+          await armazenamento.saida.marcarFalhaDeEnvio(r.id, String(codigo).slice(0, 60), { final: !repetivel || r.tentativas >= maxTentativas });
           registrar({ tipo: "MOVA_ENVIO_FALHOU", codigo });
         }
       }
