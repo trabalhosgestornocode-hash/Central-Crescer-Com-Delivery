@@ -504,3 +504,18 @@ t("15H H-1: a IA devolver CONSULTAR sem assunto (caso real) ⇒ ORIENTACAO, nunc
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo, s.pedidos.length], [DECISAO.ORIENTACAO, "CONVERSA_SEM_PEDIDO_FINANCEIRO", 1]);
 });
+
+t("15I teto da sessão: com maximoDeEnvios=1 só a primeira resposta sai; a excedente vira FALHOU (TETO), visível, e nada mais é reservado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `T${n}`, texto: `r${n}`, eventoId: null });
+  const enviados = [];
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maximoDeEnvios: 1,
+    enviar: async (r) => { enviados.push(r.texto); return { providerMessageId: `PT${enviados.length}` }; } });
+  await e.enviarPendentes(); await e.enviarPendentes();
+  assert.deepEqual(enviados, ["r1"]);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((r) => r.estado + "/" + (r.ultimo_erro ?? "")), ["ENVIADA/", "FALHOU/TETO_DE_ENVIOS_DA_SESSAO"]);
+  const { lerConfiguracaoMova } = await import("../../src/modules/fv2-integracao/mova.js");
+  const base_ = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
+  assert.equal(lerConfiguracaoMova({ ...base_, MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_PROCESSAMENTO_HABILITADO: "1", MOVA_ENVIO_HABILITADO: "1", MOVA_ENVIO_NAO_ANTES_DE: "2026-11-21T00:00:00Z", MOVA_RELE_DATABASE_URL: "x", MOVA_GATEWAY_SECRET: "s".repeat(40), MOVA_ENVIO_MAXIMO: "abc" }).envioMaximo, 0, "inválido ⇒ nada sai");
+});

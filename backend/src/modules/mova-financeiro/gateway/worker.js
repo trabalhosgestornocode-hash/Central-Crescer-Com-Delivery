@@ -54,7 +54,10 @@ export function enderecoDeEnvio(r) {
   if (original && original !== r.grupoId && mesmoCelularBr(original, r.grupoId)) return original;
   return r.grupoId;
 }
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null }) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null }) {
+  // 15I: teto de respostas entregues ao transporte NESTE processo (teste controlado: 1). Atingido, nada mais sai até reiniciar.
+  let entregues = 0;
+  const tetoAtingido = () => Number.isInteger(maximoDeEnvios) && entregues >= maximoDeEnvios;
   // 15B: com `rele` (criarSaidaPeloRele), o envio é ASSÍNCRONO: publica na fila do relé (id estável = id da resposta) e o
   // Gateway (serviço privado) busca, envia e confirma lá. O resultado volta por `sincronizar`.
   let releLigado = null;
@@ -82,9 +85,12 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       const envioLigado = controle ? await controle.ligado("envio") : true;
       if (rele) await sincronizarRele(envioLigado);
       if (!envioLigado) return { enviadas: 0, desligado: true }; // interruptor em tempo real
+      if (tetoAtingido()) return { enviadas: 0, desligado: false, teto: true };
       const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos }); // limite de taxa
       let enviadas = 0;
       for (const r of lote) {
+        // 15I: teto da sessão atingido ⇒ a resposta excedente NÃO sai (FALHOU, visível para revisão).
+        if (tetoAtingido()) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "TETO_DE_ENVIOS_DA_SESSAO", { final: true }); registrar({ tipo: "MOVA_ENVIO_TETO" }); continue; }
         // Segunda barreira (além do filtro no banco): destino fora da lista nunca vai ao Gateway.
         if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
         // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
@@ -93,13 +99,14 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
         // respondida, quando for o MESMO celular (nono dígito). O Gateway compara com a identidade verificada pelo WhatsApp.
         const destino = enderecoDeEnvio(r);
         if (rele) {
-          try { await rele.publicar({ id: r.id, destino, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; }
+          try { await rele.publicar({ id: r.id, destino, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; entregues += 1; }
           catch { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "RELE_INDISPONIVEL", { final: r.tentativas >= maxTentativas }); registrar({ tipo: "MOVA_RELE_INDISPONIVEL" }); }
           continue;
         }
         try {
           const { providerMessageId } = await enviar({ grupoId: destino, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);
+          entregues += 1;
           enviadas += 1;
         } catch (err) {
           const codigo = err?.codigo ?? err?.code ?? "FALHA_NO_GATEWAY";

@@ -77,7 +77,9 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
+    // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
+    envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
   };
 }
 
@@ -125,7 +127,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
-    habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida,
+    habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
     // Só conversas PRIVADAS autorizadas (homologação); grupo nunca recebe resposta nesta fase.
     destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter(ehConversaPrivada) });
   return { mova, worker, enviador, configuracao, controle, orcamento };
