@@ -1794,9 +1794,22 @@ export function criarSessaoBaileys({
         if (!(await mova.contatoHomologacao.jidAutorizadoParaEnvio(grupoJid, sockEnvio))) throw recusa("destino privado não é o contato verificado");
         if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
         const id = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
-        log("info", "mova.privado_send_start", { correlationId, providerMessageId: id });
-        const r = await sockEnvio.sendMessage(grupoJid, { text: texto }, { messageId: id });
-        return { providerMessageId: r?.key?.id ?? id, enviadoEm: new Date().toISOString() };
+        log("info", "mova.privado_send_start", { correlationId, providerMessageId: id, idHash: hashId(id) });
+        // 15J: guarda o conteúdo cifrado para RESPONDER a retry receipts (mesmo mecanismo do envio empresarial). Sem isto, o
+        // aparelho que não descriptografou a 1ª entrega pede reenvio, o getMessage não acha nada e a conversa fica em
+        // "Aguardando mensagem" (visto na 15I: 4 retry.received ⇒ 4 retry.message_missing). O destino é o contato
+        // VERIFICADO (checado acima); o LID dele vem da mesma verificação. O cache nunca interfere no envio.
+        const ident = await mova.contatoHomologacao.identidade(sockEnvio).catch(() => null);
+        try { retryCache?.marcarEnvioIniciado?.(id); } catch { /* cache nunca interfere */ }
+        let r;
+        try { r = await sockEnvio.sendMessage(grupoJid, { text: texto }, { messageId: id }); }
+        catch (e) { try { retryCache?.cancelarEnvio?.(id); } catch { /* idem */ } throw e; }
+        const pid = r?.key?.id ?? id;
+        try {
+          retryCache?.registrarEnvio?.({ providerMessageId: pid, mensagem: r?.message, destinoJid: grupoJid, destinoLid: ident?.lid ?? null, socketGeneration: geracaoSocket })?.catch?.(() => {});
+          if (pid !== id) retryCache?.cancelarEnvio?.(id);
+        } catch { /* cache nunca interfere no envio */ }
+        return { providerMessageId: pid, enviadoEm: new Date().toISOString() };
       }
       const grupos = Array.isArray(config?.movaGrupos) ? config.movaGrupos : [];
       if (!grupos.includes(grupoJid)) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "grupo fora do MOVA"); e.preEnvio = true; throw e; }
