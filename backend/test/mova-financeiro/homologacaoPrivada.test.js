@@ -280,3 +280,19 @@ t("13C mensagem incompleta: despesa sem valor pede o valor (nada criado)", async
   assert.equal(h.decisao, DECISAO.PEDIR_INFORMACAO);
   assert.equal((await s.propostas(ALFA)).length, 0);
 });
+
+t("14 pedido de EXECUÇÃO de pagamento: BLOQUEADO antes da IA; relato de pagamento feito passa para a IA", async () => {
+  for (const texto of ["MOVA, faça o pagamento do boleto da Distribuidora Teste pelo banco.", "pague o boleto da internet", "MOVA, pode pagar a luz?", "faz um pix de 200 pro fornecedor"]) {
+    const s = await cenario(() => { throw new Error("a IA não deveria ser chamada"); });
+    await s.enviar(msg({ texto }));
+    const h = await s.ultima();
+    assert.equal(h.motivo, "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", texto);
+    assert.equal(s.pedidos.length, 0, texto);
+  }
+  for (const texto of ["paguei o boleto da internet, R$ 89,90 hoje, alfa", "agendei o pagamento do aluguel para dia 10, alfa", "o pagamento foi feito ontem, alfa"]) {
+    const s = await cenario(() => base({ intencao: "OUTRA" }));
+    await s.enviar(msg({ texto }));
+    assert.equal(s.pedidos.length, 1, texto);
+    assert.notEqual((await s.ultima()).motivo, "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", texto);
+  }
+});

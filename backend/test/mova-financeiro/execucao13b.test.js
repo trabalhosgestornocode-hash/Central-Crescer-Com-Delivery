@@ -96,3 +96,8 @@ test("custo: identificador datado do modelo usa o preço do modelo base", async 
   await o.concluir(1, { modelo: "claude-haiku-5-5-20261101", entrada: 3100, saida: 300 });
   assert.equal(params[0][4], 460);
 });
+
+test("14 sem caracteres de controle no motor (edições automatizadas não podem corromper expressões)", async () => {
+  const fonte = (await import("node:fs")).readFileSync(new URL("../../src/modules/mova-financeiro/aplicacao/motor.js", import.meta.url), "utf8");
+  assert.ok(!/[ -]/.test(fonte));
+});

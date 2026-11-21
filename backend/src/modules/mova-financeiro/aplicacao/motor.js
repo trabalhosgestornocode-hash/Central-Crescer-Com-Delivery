@@ -31,6 +31,13 @@ const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
 const CONTAS = ["BOLETO", "NOTA_FISCAL"];
 const CONSULTAS_DO_GRUPO = ["COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS"];
 const PEDIDO_DE_APROVACAO = /^\s*(aprov[ao]r?|aprovad[oa]|aplic[ao]r?|pode\s+aprovar|autoriz[ao]r?)\b/i;
+// Execução 14 (achado real: o Haiku leu "faça o pagamento" como REGISTRAR_CONTA): pedido para EXECUTAR pagamento/transferência
+// é barrado pelo backend antes da IA. "paguei" (relato) não casa: só imperativo/pedido.
+const PEDIDO_DE_EXECUCAO = [
+  /\b(fa[çc]a|faz|efetue|realize|execute|agende|programe|mande)\s+(o|a|os|as|um|uma)?\s*(pagamento|pix|transfer[eê]ncia|ted|doc)s?\b/i,
+  /\b(pague|transfira|deposite)\s+(o|a|os|as|um|uma|r\$|\d)/i,
+  /\b(pode|consegue|voc[eê]\s+pode)\s+(pagar|transferir|fazer\s+(o|um)\s+pix)\b/i,
+];
 const mes = (d) => (d ? d.slice(0, 7) : null);
 
 /** Fornecedor da conta compatível com o favorecido do documento (contém um no outro, sem acento/caixa). */
@@ -117,6 +124,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 7. Guardas determinísticas ANTES da IA (nada restrito vai ao modelo): dado restrito e pedido de aprovação pelo grupo.
     const injecao = sinaisDeInjecao(evento.texto) || sinaisDeInjecao(esclarecimento?.texto);
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoRestrito(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "DADO_RESTRITO", resposta: RESPOSTA.dadoRestrito(), injecao });
+    if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_EXECUCAO.some((r) => r.test(evento.texto ?? ""))) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", resposta: RESPOSTA.operacaoBloqueada(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
