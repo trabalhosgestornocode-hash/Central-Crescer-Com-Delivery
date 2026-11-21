@@ -195,3 +195,19 @@ t("16 (achado com a IA real) cupom/nota fiscal já pago: vira despesa paga; sem 
   await s.enviar(msg({ texto: "paguei, gama, sem data", doc: pdf("cupom-2") }));
   assert.equal((await s.ultima()).motivo, "DATA_DE_PAGAMENTO_AUSENTE");
 });
+
+t("13B saudação real (IA devolve OUTRA, sem valor): ORIENTACAO sem perguntar unidade, nada criado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  assert.equal((await s.enviar(msg({ texto: "Olá MOVA! Este é nosso primeiro teste." }))).status, "ENFILEIRADO");
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.ORIENTACAO);
+  assert.equal(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.doesNotMatch(r.texto, /pertence à/);
+  assert.equal((await s.propostas(ALFA)).length + (await s.propostas(GAMA)).length, 0);
+  assert.equal(s.pedidos.length, 1);
+  // texto com valor e sem unidade continua no fluxo financeiro (pergunta a unidade)
+  const s2 = await cenario(() => base({ intencao: "OUTRA", valorCentavos: 15000 }));
+  await s2.enviar(msg({ texto: "gastei 150" }));
+  assert.equal((await s2.ultima()).decisao, DECISAO.PEDIR_INFORMACAO);
+});

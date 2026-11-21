@@ -136,6 +136,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const consulta = (saida.intencao === "CONSULTAR" && saida.consulta) || null;
     if (consulta && (CONSULTAS_DO_GRUPO.includes(consulta) || saida.todasUnidades)) return responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao);
 
+    // 10b. Execução 13B (achado com IA real + WhatsApp real): texto puro sem pedido financeiro (saudação, conversa) não é
+    // lançamento — antes caía na pergunta "Esse lançamento pertence à…?". Sem documento, sem valor e sem esclarecimento pendente.
+    if (!evento.midia && !esclarecimento && ["OUTRA", "DESCONHECIDA"].includes(saida.intencao) && !saida.valorCentavos) {
+      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO", resposta: RESPOSTA.conversaSemPedido(), injecao });
+    }
+
     // 11. Unidade (determinística; IA só confirma; nunca pelo histórico do participante).
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
     // Áudio: a TRANSCRIÇÃO conta como texto da mensagem (a unidade pode ter sido dita no áudio).
