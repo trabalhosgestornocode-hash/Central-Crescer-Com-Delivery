@@ -25,6 +25,7 @@ import { criarCacheRetry } from "./retryCache.js";
 import { criarEncaminhadorMova, lerGruposMova } from "./movaGrupo.js";
 import { criarVerificadorDeContato, lerContatoHomologacao } from "./movaHomologacao.js";
 import { criarCanalMova, lerCanalMova } from "./movaCanal.js";
+import { criarSaidaMova, lerSaidaMova } from "./movaSaida.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -191,6 +192,15 @@ const sessao = criarSessaoBaileys({
   mova,
 });
 
+// MOVA (15B) — fila de SAÍDA pelo relé: INERTE salvo canal ativo + WHATSAPP_MOVA_ENVIO_HABILITADO=1 + contato verificado.
+// Só age na instância LÍDER do lease. Não toca nos envios empresariais, relatórios, lease nem heartbeat.
+const decisaoSaidaMova = lerSaidaMova({ canalAtivo: canalMova.ativo, envioHabilitado: config.movaEnvioHabilitado === true, contatoHomologacao });
+const saidaMova = decisaoSaidaMova.ativo
+  ? criarSaidaMova({ url: canalMova.url, segredo: canalMova.segredo, sessao, gatewayId: `gw-${gatewayProcessId.slice(0, 8)}`, souLider: () => leaseManager.souLeader(), log: (nivel, evento, dados) => log(nivel, evento, dados) })
+  : null;
+log("info", "mova.saida_config", { ativo: Boolean(saidaMova), motivo: decisaoSaidaMova.ativo ? null : decisaoSaidaMova.motivo });
+saidaMova?.iniciar();
+
 const app = express();
 app.disable("x-powered-by");
 
@@ -262,6 +272,7 @@ async function encerrar(sinal) {
   encerrando = true;
   log("warn", "gateway.encerrando", { sinal });
   servidor.close();
+  saidaMova?.parar(); // MOVA (15B): nenhuma reserva nova; uma em voo termina ou vira INCERTA no relé (nunca reenvio)
   try { retryCache.emitirMetricas({ forcar: true }); retryCache.parar(); } catch { /* métricas nunca atrasam o shutdown */ }
 
   leaseManager.pararTemporizadores();
