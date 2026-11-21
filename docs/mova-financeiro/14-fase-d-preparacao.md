@@ -103,7 +103,7 @@ avaliação ("paguei a luz da alfa") retomou a pendência do C10 e criou uma pro
 desconectado, 429). Tempo esgotado, 5xx e 2xx sem id viram `ENVIO_INCERTO` → `FALHOU`, para revisão humana. Uma mensagem
 nunca é enviada duas vezes por nova tentativa automática.
 
-**Caminho de retorno:** não depende do relé. O backend local chama o Gateway por HTTPS de saída (`MOVA_GATEWAY_URL` = URL
+**Caminho de retorno — CORRIGIDO na 15B (doc 15):** o Gateway é serviço privado, inalcançável daqui; o retorno passa pela fila de saída do relé. Texto original (incorreto): não depende do relé. O backend local chama o Gateway por HTTPS de saída (`MOVA_GATEWAY_URL` = URL
 pública do Gateway, `MOVA_GATEWAY_SECRET` = o segredo do canal MOVA, o mesmo usado pelo Gateway → relé).
 
 Proteções em camadas:
