@@ -200,7 +200,9 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                            and ($4::timestamptz is null or criada_em >= $4::timestamptz)
                            and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
-          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    -- 15H: o JID com que o WhatsApp entregou a mensagem respondida (o endereço que o Gateway reconhece)
+                    (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
         [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
           // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
           .sort((a, b) => Number(a.seq) - Number(b.seq)));

@@ -8,6 +8,7 @@
 //   Ligado, cada resposta é tomada com lease, enviada pelo Gateway existente (rota de envio do MOVA, mesmo socket) e marcada
 //   ENVIADA com o id do provedor — o eco dessa mensagem é reconhecido e ignorado (sem laço). Falha: tenta de novo até o teto.
 
+import { mesmoCelularBr } from "../dominio/configuracao.js";
 /**
  * @param {{receptor:{trabalhar:Function}, concorrencia?:number, intervaloMs?:number, agendar?:Function, cancelar?:Function, registrar?:Function}} deps
  */
@@ -42,6 +43,17 @@ export function criarWorker({ receptor, concorrencia = 2, intervaloMs = 2000, ag
  */
 /** Erros que garantem que a mensagem NÃO saiu (seguro repetir). Qualquer outro código ⇒ sem nova tentativa automática. */
 export const ERROS_ANTES_DO_ENVIO = Object.freeze(["GATEWAY_INALCANCAVEL", "WHATSAPP_GATEWAY_NOT_CONNECTED", "GATEWAY_429"]);
+
+/**
+ * 15H (H-2): endereço de envio. Conversa privada cadastrada com o nono dígito e mensagem entregue pelo WhatsApp sem ele ⇒
+ * responde no JID que o WhatsApp usou (o mesmo celular). Qualquer outro caso (grupo, sem evento, celular diferente) ⇒ o JID
+ * cadastrado. Nunca troca para um contato diferente: só a variante com/sem nono dígito do MESMO número.
+ */
+export function enderecoDeEnvio(r) {
+  const original = r?.participanteOriginal ?? null;
+  if (original && original !== r.grupoId && mesmoCelularBr(original, r.grupoId)) return original;
+  return r.grupoId;
+}
 export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null }) {
   // 15B: com `rele` (criarSaidaPeloRele), o envio é ASSÍNCRONO: publica na fila do relé (id estável = id da resposta) e o
   // Gateway (serviço privado) busca, envia e confirma lá. O resultado volta por `sincronizar`.
@@ -77,13 +89,16 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
         if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
         // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
         if (controle && !(await controle.ligado("envio"))) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "ENVIO_SUSPENSO", { final: false }); continue; }
+        // 15H (H-2): a AUTORIZAÇÃO é pelo JID cadastrado (acima); o ENDEREÇO é o JID com que o WhatsApp entregou a mensagem
+        // respondida, quando for o MESMO celular (nono dígito). O Gateway compara com a identidade verificada pelo WhatsApp.
+        const destino = enderecoDeEnvio(r);
         if (rele) {
-          try { await rele.publicar({ id: r.id, destino: r.grupoId, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; }
+          try { await rele.publicar({ id: r.id, destino, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; }
           catch { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "RELE_INDISPONIVEL", { final: r.tentativas >= maxTentativas }); registrar({ tipo: "MOVA_RELE_INDISPONIVEL" }); }
           continue;
         }
         try {
-          const { providerMessageId } = await enviar({ grupoId: r.grupoId, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
+          const { providerMessageId } = await enviar({ grupoId: destino, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);
           enviadas += 1;
         } catch (err) {

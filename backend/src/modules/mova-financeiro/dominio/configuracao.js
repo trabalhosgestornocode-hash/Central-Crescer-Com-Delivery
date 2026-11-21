@@ -85,6 +85,9 @@ const variantesBr = (jid) => {
   const m = /^55([1-9][0-9])(9?)([6-9][0-9]{7})@s\.whatsapp\.net$/.exec(String(jid ?? ""));
   return m ? [`55${m[1]}9${m[3]}@s.whatsapp.net`, `55${m[1]}${m[3]}@s.whatsapp.net`] : [];
 };
+/** 15H: os dois JIDs privados são o MESMO celular brasileiro (com ou sem o nono dígito)? Iguais também valem. */
+export const mesmoCelularBr = (a, b) => typeof a === "string" && typeof b === "string" && JID_PRIVADO.test(a) && JID_PRIVADO.test(b)
+  && (a === b || variantesBr(a).includes(b));
 /**
  * Conversa autorizada para o JID recebido: igualdade exata; para conversa PRIVADA (só no modo HOMOLOGACAO), também a
  * variante com/sem nono dígito. Devolve a entrada CADASTRADA (o JID canônico usado em fila, unidades e participantes).

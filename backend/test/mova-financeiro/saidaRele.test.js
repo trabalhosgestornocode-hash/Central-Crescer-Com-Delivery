@@ -188,3 +188,19 @@ t("S15 Gateway inerte por padrão: sem envio habilitado, sem contato verificado 
   assert.deepEqual(await s.gateway({ souLider: () => false }).rodada(), { enviadas: 0, pulada: true });
   assert.equal(s.envios.length, 0);
 });
+
+t("15H H-2 ponta a ponta: conversa cadastrada COM o nono dígito e mensagem entregue SEM ele ⇒ publicado e enviado no JID do WhatsApp (autorização segue pelo cadastrado)", async () => {
+  const s = await cenario();
+  const CAD = "5599990000001@s.whatsapp.net", WA = "559990000001@s.whatsapp.net";
+  await s.pool.query("insert into mova.evento (evento_id, grupo_jid, mensagem_id, participante_jid, provedor, tipo, texto, recebido_em) values ('bly:H2', $1, 'H2', $2, 'BAILEYS', 'TEXTO', 'oi', now())", [CAD, WA]);
+  await s.pool.query("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1, 'H2', 'bly:H2', 'resposta')", [CAD]);
+  const id = (await s.pool.query("select id from mova.resposta where evento_id = 'bly:H2'")).rows[0].id;
+  await s.enviador({ destinosPermitidos: [CAD] }).enviarPendentes();
+  assert.equal((await s.pool.query("select destino from mova_rele.saida where id = $1", [id])).rows[0].destino, WA);
+  await s.gateway().rodada();
+  assert.deepEqual(s.envios.map((e) => e.grupoJid), [WA]);
+  // contato não autorizado continua barrado pela autorização (cadastrado), mesmo que o participante seja o mesmo celular
+  await s.pool.query("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1, 'H2', 'bly:H2', 'outra')", ["5599990000009@s.whatsapp.net"]);
+  await s.enviador({ destinosPermitidos: [CAD] }).enviarPendentes();
+  assert.equal((await s.pool.query("select count(*)::int n from mova_rele.saida")).rows[0].n, 1);
+});
