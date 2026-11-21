@@ -354,7 +354,8 @@ export function criarConsultasPostgres({ pool }) {
     eventoId: r.evento_id, recebidoEm: r.recebido_em.toISOString(), tipo: r.tipo, texto: r.texto,
     participante: { referencia: mascararJid(r.participante_jid), nomeExibicao: r.nome_exibicao, nomeNaoEProvaDeIdentidade: true },
     documento: r.sha256 ? { sha256: r.sha256, mime: r.mime, nomeArquivo: r.nome_arquivo } : null,
-    dadosExtraidos: r.leitura ?? null,
+    // 15A (V-1): texto puro não tem documento — a leitura da IA vem da proposta (marcada como tal).
+    dadosExtraidos: r.leitura ?? (r.dados?.leitura ? { ...r.dados.leitura, fonte: "PROPOSTA" } : null),
     proposta: r.proposta_id ? { id: r.proposta_id, tipo: r.proposta_tipo, estado: r.proposta_estado, valorCentavos: r.valor_centavos === null ? null : Number(r.valor_centavos),
       categoriaSugerida: r.dados?.categoriaSugerida ?? null, datas: r.dados?.datas ?? null, bloqueioDeAplicacao: r.dados?.bloqueioDeAplicacao ?? null, sinaisDeInjecao: r.dados?.sinaisDeInjecao ?? false } : null,
     decisoes: r.decisoes,
@@ -362,7 +363,7 @@ export function criarConsultasPostgres({ pool }) {
   const SQL = `
     select e.evento_id, e.recebido_em, e.tipo, e.texto, e.participante_jid, pa.nome_exibicao, ev.sha256, ev.mime, ev.nome_arquivo, d.leitura,
            p.id as proposta_id, p.tipo as proposta_tipo, p.estado as proposta_estado, p.valor_centavos, p.dados,
-           (select coalesce(jsonb_agg(jsonb_build_object('decisao', x.decisao, 'motivo', x.motivo, 'em', x.em) order by x.seq), '[]'::jsonb)
+           (select coalesce(jsonb_agg(jsonb_build_object('decisao', x.decisao, 'motivo', x.motivo, 'em', x.em, 'propostaId', x.proposta_id) order by x.seq), '[]'::jsonb)
               from mova.decisao x where x.evento_id = e.evento_id) as decisoes
       from mova.evento e
       left join mova.participante pa on pa.grupo_jid = e.grupo_jid and pa.participante_jid = e.participante_jid

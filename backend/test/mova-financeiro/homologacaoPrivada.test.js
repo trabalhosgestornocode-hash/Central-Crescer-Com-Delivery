@@ -296,3 +296,18 @@ t("14 pedido de EXECUÇÃO de pagamento: BLOQUEADO antes da IA; relato de pagame
     assert.notEqual((await s.ultima()).motivo, "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", texto);
   }
 });
+
+t("15A Caixa de Entrada: texto puro mostra a leitura da IA (com justificativa) e o duplicado aponta a proposta original", async () => {
+  const { criarConsultasPostgres } = await import("../../src/modules/mova-financeiro/infra/postgres.js");
+  const s = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, categoriaSugerida: "ENERGIA_ELETRICA", unidadeSugerida: "Unidade Teste Alfa", justificativa: "Pagamento de energia informado por texto." }));
+  await s.enviar(msg({ id: "CX1", texto: "paguei hoje R$ 150,00 de energia, alfa" }));
+  await s.enviar(msg({ id: "CX2", texto: "paguei hoje R$ 150,00 de energia, alfa" }));
+  const { itens } = await criarConsultasPostgres({ pool: s.pool }).caixaDeEntrada({ organizacaoId: ORG, unidadeId: ALFA });
+  const original = itens.find((i) => i.eventoId === "bly:CX1"); const dup = itens.find((i) => i.eventoId === "bly:CX2");
+  assert.equal(original.dadosExtraidos.fonte, "PROPOSTA");
+  assert.equal(original.dadosExtraidos.intencao, "INFORMAR_PAGAMENTO");
+  assert.equal(original.dadosExtraidos.justificativa, "Pagamento de energia informado por texto.");
+  assert.equal(dup.proposta, null);
+  assert.equal(dup.decisoes.at(-1).decisao, "DUPLICADO");
+  assert.equal(dup.decisoes.at(-1).propostaId, original.proposta.id);
+});

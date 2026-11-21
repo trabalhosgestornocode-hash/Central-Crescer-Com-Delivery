@@ -22,6 +22,9 @@ const ABAS = [
 const DECISAO = { PROPOSTA: ["Proposta criada", "info"], PEDIR_INFORMACAO: ["Aguardando informação", "alerta"], DUPLICADO: ["Duplicado", "neutro"], BLOQUEADO: ["Bloqueado", "erro"], IGNORADO: ["Ignorado", "neutro"], FALHA_LEITURA: ["Falha de leitura", "alerta"], CONSULTA: ["Consulta", "info"], ORIENTACAO: ["Orientação", "neutro"], RELACIONADA: ["Esclarecimento", "info"] };
 const ESTADO = { AGUARDANDO_REVISAO: ["Aguardando revisão", "alerta"], APLICANDO: ["Aplicando", "info"], APLICADA: ["Aplicada", "ok"], REJEITADA: ["Rejeitada", "neutro"] };
 const TIPO_PROPOSTA = { DESPESA_PAGA: "Despesa paga", NOVA_OBRIGACAO: "Nova conta a pagar", BAIXA_DE_OBRIGACAO: "Baixa de conta existente", SOLICITACAO_DE_REVISAO: "Pedido de revisão" };
+const INTENCAO_LIDA = { INFORMAR_PAGAMENTO: "Pagamento feito", REGISTRAR_CONTA: "Conta a pagar", CONSULTAR: "Consulta", INFORMAR_TRANSFERENCIA: "Transferência", PEDIR_CORRECAO: "Pedido de correção", PEDIR_CLASSIFICACAO: "Pedido de classificação", OUTRA: "Outra", DESCONHECIDA: "Não identificada" };
+/** 15A (V-3): decisão de duplicidade aponta a proposta original (só o id; mesma unidade, filtrado no servidor). */
+const duplicadoDe = (i) => [...(i.decisoes ?? [])].reverse().find((d) => d.decisao === "DUPLICADO" && d.propostaId)?.propostaId ?? null;
 const TIPO_DOC = { COMPROVANTE_PAGAMENTO: "Comprovante", BOLETO: "Boleto", NOTA_FISCAL: "Nota fiscal", RECIBO: "Recibo", EXTRATO: "Extrato", RELATORIO_VENDAS: "Relatório de vendas", OUTRO: "Outro", DESCONHECIDO: "Não identificado" };
 const PENDENCIA = { REQUISITOS_FINANCEIROS_INCOMPLETOS: "Cadastro financeiro da unidade incompleto: aplicação bloqueada" };
 
@@ -84,7 +87,7 @@ function detalhe(i) {
     el("h3", { texto: "Mensagem original" }),
     el("blockquote", { classe: "cf-mensagem", texto: i.texto ?? "(sem texto)" }),
     dl([
-      ["Recebida", horaBr(i.recebidoEm)], ["Tipo", i.tipo],
+      ["Recebida", horaBr(i.recebidoEm)], ["Origem", "WhatsApp · MOVA"], ["Tipo", i.tipo],
       ["Participante", el("span", {}, `${i.participante.nomeExibicao ?? "Sem nome"} (${i.participante.referencia ?? "—"})`, el("span", { classe: "cf-dica cf-quebra", texto: "Nome exibido no WhatsApp: não é prova de identidade." }))],
       ["Unidade", i.proposta || ultimaDecisao(i)?.decisao !== "PEDIR_INFORMACAO" ? unidade().nome : selo(["Não identificada", "alerta"])],
     ]),
@@ -94,12 +97,15 @@ function detalhe(i) {
       ? el("p", {}, el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "arquivo", "data-sha": i.documento.sha256, texto: "Abrir documento" }))
       : el("p", { classe: "cf-dica", texto: dados.fonte === "API" ? "Abrir o arquivo exige a permissão de documentos." : "Abrir o arquivo: só no ambiente com a API do MOVA." })) : null,
     el("h3", { texto: "Dados extraídos" }),
-    x ? dl([["Tipo documental", TIPO_DOC[x.tipoDocumento] ?? x.tipoDocumento], ["Valor", reais(x.valorCentavos)], ["Pagamento", x.dataPagamento ? dataBr(x.dataPagamento) : undefined], ["Emissão", x.dataEmissao ? dataBr(x.dataEmissao) : undefined], ["Vencimento", x.vencimento ? dataBr(x.vencimento) : undefined], ["Favorecido", x.favorecido], ["Confiança da leitura", x.confianca]])
+    x ? dl([["Tipo documental", TIPO_DOC[x.tipoDocumento] ?? x.tipoDocumento], ["Intenção lida", x.intencao ? (INTENCAO_LIDA[x.intencao] ?? x.intencao) : undefined], ["Valor", x.valorCentavos != null ? reais(x.valorCentavos) : undefined], ["Pagamento", x.dataPagamento ? dataBr(x.dataPagamento) : undefined], ["Emissão", x.dataEmissao ? dataBr(x.dataEmissao) : undefined], ["Vencimento", x.vencimento ? dataBr(x.vencimento) : undefined], ["Favorecido", x.favorecido], ["Confiança da leitura", x.confianca],
+      ["Justificativa da IA", x.justificativa ?? undefined], ["Campos ausentes", x.camposAusentes?.length ? x.camposAusentes.join(", ") : undefined]])
       : vazio("Sem dados extraídos (texto puro, ou ainda aguardando esclarecimento)."),
+    x?.fonte === "PROPOSTA" ? el("p", { classe: "cf-dica", texto: "Mensagem só de texto: leitura registrada junto da proposta." }) : null,
     el("h3", { texto: "Proposta" }),
+    !p && duplicadoDe(i) ? el("p", {}, "Duplicado da proposta ", el("code", { texto: duplicadoDe(i).slice(0, 8) }), " (nenhuma proposta nova foi criada).") : null,
     p ? dl([["Proposta", el("code", { texto: p.id.slice(0, 8) })], ["Tipo", TIPO_PROPOSTA[p.tipo] ?? p.tipo], ["Situação", selo(ESTADO[p.estado] ?? [p.estado, "neutro"])], ["Valor", reais(p.valorCentavos)],
       ["Competência", p.datas?.competencia], ["Caixa", p.datas?.caixa ? dataBr(p.datas.caixa) : undefined], ["Vencimento", p.datas?.vencimento ? dataBr(p.datas.vencimento) : undefined],
-      ["Categoria sugerida", p.categoriaSugerida ?? "—"]]) : vazio("Nenhuma proposta vinculada."),
+      ["Categoria sugerida", p.categoriaSugerida ?? "—"]]) : duplicadoDe(i) ? null : vazio("Nenhuma proposta vinculada."),
     p ? el("p", { classe: "cf-dica", texto: "A categoria sugerida não é aplicada sozinha: quem aprova escolhe a categoria definitiva." }) : null,
     el("h3", { texto: "Pendências" }),
     pend.length ? el("ul", { classe: "cf-lista" }, pend.map((t) => el("li", { texto: t }))) : vazio("Nenhuma."),
