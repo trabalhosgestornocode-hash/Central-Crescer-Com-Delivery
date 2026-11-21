@@ -64,7 +64,7 @@ test("01/14/15 MOVA desligado por padrão; credenciais ausentes e configuraçõe
   const c = (x) => lerConfiguracaoMova({ ...ENV, ...x }).contradicoes ?? [];
   assert.deepEqual(c({ MOVA_PROCESSAMENTO_HABILITADO: "1" }), ["PROCESSAMENTO_SEM_RECEBIMENTO"]);
   assert.ok(c({ MOVA_IA_HABILITADA: "1" }).includes("IA_SEM_PROCESSAMENTO"));
-  assert.ok(c({ MOVA_ENVIO_HABILITADO: "1" }).includes("ENVIO_SEM_GATEWAY"));
+  assert.ok(c({ MOVA_ENVIO_HABILITADO: "1" }).includes("ENVIO_SEM_TRANSPORTE"));
   assert.ok(c({ MOVA_ENVIO_HABILITADO: "1" }).includes("ENVIO_SEM_MARCO"), "15A: envio sem marco de ativação é contradição");
   assert.deepEqual(c({ MOVA_RECEBIMENTO_HABILITADO: "1" }), ["CANAL_SEM_SEGREDO"]);
   assert.ok(c({ MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_GATEWAY_SECRET: SEG_PRINCIPAL, WHATSAPP_GATEWAY_SECRET: SEG_PRINCIPAL }).includes("SEGREDO_IGUAL_AO_PRINCIPAL"));

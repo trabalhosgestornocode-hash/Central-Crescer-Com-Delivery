@@ -28,6 +28,7 @@ export { criarFerramentas, periodoDaConsulta } from "./aplicacao/ferramentas.js"
 export { criarRedator, validarRedacao } from "./aplicacao/redator.js";
 export { ErroDeIa, MODELO_PADRAO, MODELOS_PERMITIDOS, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
 export { criarEnviadorDeRespostas, criarWorker } from "./gateway/worker.js";
+export { ESTADOS_FINAIS_RELE, criarSaidaPeloRele } from "./gateway/saidaRele.js";
 export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
 export { ESTADO_ITEM, ErroTransitorio, criarFilaMemoria } from "./gateway/fila.js";
 export { criarEvidenciasMemoria } from "./gateway/evidencias.js";

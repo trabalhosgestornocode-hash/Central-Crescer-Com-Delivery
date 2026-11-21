@@ -25,7 +25,7 @@ import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -55,7 +55,9 @@ export function lerConfiguracaoMova(env) {
   if (processamento && !recebimento) contradicoes.push("PROCESSAMENTO_SEM_RECEBIMENTO");
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
   if (envio && !processamento) contradicoes.push("ENVIO_SEM_PROCESSAMENTO");
-  if (envio && !env.MOVA_GATEWAY_URL) contradicoes.push("ENVIO_SEM_GATEWAY");
+  // 15B: o Gateway é serviço PRIVADO — em homologação o envio vai pela fila de saída do relé (MOVA_RELE_DATABASE_URL);
+  // MOVA_GATEWAY_URL (chamada direta) só serve para um backend dentro da rede privada do Render.
+  if (envio && !env.MOVA_GATEWAY_URL && !env.MOVA_RELE_DATABASE_URL) contradicoes.push("ENVIO_SEM_TRANSPORTE");
   // 15A: envio exige o MARCO de ativação (ISO UTC): respostas criadas antes dele nunca são enviadas (nada retroativo).
   const envioNaoAntesDe = env.MOVA_ENVIO_NAO_ANTES_DE || null;
   if (envio && !(envioNaoAntesDe && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(envioNaoAntesDe))) contradicoes.push("ENVIO_SEM_MARCO");
@@ -75,7 +77,7 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
+    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
   };
 }
 
@@ -93,7 +95,7 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
+export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
   if (cfg.modo === "HOMOLOGACAO") {
     await exigirBancoDeHomologacao(pool, cfg.marcador);
     if (!verificarBancoFinanceiro) throw Object.assign(new Error("Sem verificação do banco do Financeiro."), { codigo: "BANCO_FINANCEIRO_NAO_VERIFICADO" });
@@ -123,7 +125,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
-    habilitado: Boolean(cfg.envio && enviarAoGateway), naoAntesDe: cfg.envioNaoAntesDe ?? null,
+    habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida,
     // Só conversas PRIVADAS autorizadas (homologação); grupo nunca recebe resposta nesta fase.
     destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter(ehConversaPrivada) });
   return { mova, worker, enviador, configuracao, controle, orcamento };
@@ -177,9 +179,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     };
     let criarClienteIa = null;
     if (cfg.ia) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 1 }); }
-    const enviarAoGateway = cfg.envio ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
+    const enviarAoGateway = cfg.envio && cfg.transporteEnvio === "DIRETO" ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
+    const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
     const dep = obterDependenciasFv2();
-    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, registrar });
+    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });
   })().catch((e) => { instancia = null; registrar({ tipo: "MOVA_MONTAGEM_FALHOU", codigo: e?.codigo ?? e?.code ?? "ERRO" }); return null; });
   return instancia;
 }
@@ -208,6 +211,15 @@ export function movaParaGateway(env) {
 
 let laco = null;
 let consumidorRele = null;
+let poolReleUnico = null;
+/** Pool ÚNICO do relé (papel mova_rele_consumidor): entrada (consumidor) e saída (fila de respostas) usam a mesma conexão. */
+function obterPoolRele(env) {
+  if (poolReleUnico) return poolReleUnico;
+  const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
+  poolReleUnico = new pg.Pool({ connectionString: env.MOVA_RELE_DATABASE_URL, max: 2, idleTimeoutMillis: 30000, ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+  poolReleUnico.on("error", () => {});
+  return poolReleUnico;
+}
 /** Worker + enviador em laço (server.js, depois do listen). Desligado por padrão; nunca derruba o backend. */
 export async function iniciarMovaEmbutido({ env, log = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
@@ -218,10 +230,7 @@ export async function iniciarMovaEmbutido({ env, log = () => {} }) {
   if (!m) return { habilitado: false, motivo: "MOVA_NAO_MONTADO" };
   m.worker?.iniciar();
   if (env.MOVA_RELE_DATABASE_URL && cfg.recebimento && !consumidorRele) {
-    const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
-    const poolRele = new pg.Pool({ connectionString: env.MOVA_RELE_DATABASE_URL, max: 2, idleTimeoutMillis: 30000, ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
-    poolRele.on("error", () => {});
-    consumidorRele = criarConsumidorRele({ pool: poolRele, receptor: m.mova.receptor, segredo: env.MOVA_GATEWAY_SECRET, controle: m.controle, registrar: (e) => log("warn", "mova.rele", e) });
+    consumidorRele = criarConsumidorRele({ pool: obterPoolRele(env), receptor: m.mova.receptor, segredo: env.MOVA_GATEWAY_SECRET, controle: m.controle, registrar: (e) => log("warn", "mova.rele", e) });
     consumidorRele.iniciar();
   }
   if (m.enviador.habilitado && !laco) laco = setInterval(() => { m.enviador.enviarPendentes().catch(() => {}); }, 5000);

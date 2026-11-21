@@ -42,7 +42,20 @@ export function criarWorker({ receptor, concorrencia = 2, intervaloMs = 2000, ag
  */
 /** Erros que garantem que a mensagem NÃO saiu (seguro repetir). Qualquer outro código ⇒ sem nova tentativa automática. */
 export const ERROS_ANTES_DO_ENVIO = Object.freeze(["GATEWAY_INALCANCAVEL", "WHATSAPP_GATEWAY_NOT_CONNECTED", "GATEWAY_429"]);
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null }) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null }) {
+  // 15B: com `rele` (criarSaidaPeloRele), o envio é ASSÍNCRONO: publica na fila do relé (id estável = id da resposta) e o
+  // Gateway (serviço privado) busca, envia e confirma lá. O resultado volta por `sincronizar`.
+  let releLigado = null;
+  async function sincronizarRele(ligado) {
+    if (releLigado !== ligado) { await rele.definir(ligado, "backend-mova"); releLigado = ligado; } // suspensão chega ao relé
+    const aguardando = await armazenamento.saida.aguardandoRele();
+    if (!aguardando.length) return;
+    for (const s of await rele.estados(aguardando)) {
+      if (s.estado === "ENVIADA") await armazenamento.saida.marcarEnviada(s.id, s.providerMessageId ?? "SEM_ID");
+      else if (s.estado === "INCERTA") { await armazenamento.saida.marcarFalhaDeEnvio(s.id, "ENVIO_INCERTO", { final: true }); registrar({ tipo: "MOVA_ENVIO_INCERTO" }); }
+      else if (s.estado === "FALHOU" || s.estado === "CANCELADA") await armazenamento.saida.marcarFalhaDeEnvio(s.id, String(s.codigo ?? s.estado).slice(0, 60), { final: true });
+    }
+  }
   // 15A (Fase D): habilitado EXIGE marco de ativação e lista fechada de destinos — sem eles, o enviador fica desligado
   // (nunca "envia tudo o que está pendente" desde o início da homologação).
   const marcoValido = typeof naoAntesDe === "string" && !Number.isNaN(Date.parse(naoAntesDe));
@@ -54,7 +67,9 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
     /** Envia o que estiver pendente. Desligado: não toca em nada (as respostas ficam PENDENTE). */
     async enviarPendentes({ limite = 10 } = {}) {
       if (!ativo) return { enviadas: 0, desligado: true };
-      if (controle && !(await controle.ligado("envio"))) return { enviadas: 0, desligado: true }; // interruptor em tempo real
+      const envioLigado = controle ? await controle.ligado("envio") : true;
+      if (rele) await sincronizarRele(envioLigado);
+      if (!envioLigado) return { enviadas: 0, desligado: true }; // interruptor em tempo real
       const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos }); // limite de taxa
       let enviadas = 0;
       for (const r of lote) {
@@ -62,6 +77,11 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
         if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
         // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
         if (controle && !(await controle.ligado("envio"))) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "ENVIO_SUSPENSO", { final: false }); continue; }
+        if (rele) {
+          try { await rele.publicar({ id: r.id, destino: r.grupoId, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; }
+          catch { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "RELE_INDISPONIVEL", { final: r.tentativas >= maxTentativas }); registrar({ tipo: "MOVA_RELE_INDISPONIVEL" }); }
+          continue;
+        }
         try {
           const { providerMessageId } = await enviar({ grupoId: r.grupoId, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);

@@ -176,6 +176,13 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async listar() {
         return (await q("select grupo_jid as \"grupoId\", resposta_a as \"respostaA\", texto, estado from mova.resposta order by seq")).rows;
       },
+      /** 15B: publicada no relé — fica ENVIANDO com lease longo (o resultado vem por sincronização, não por nova reserva). */
+      async marcarNoRele(id) {
+        await q("update mova.resposta set estado = 'ENVIANDO', ultimo_erro = 'AGUARDANDO_RELE', lease_ate = now() + interval '1 day' where id = $1", [id]);
+      },
+      async aguardandoRele() {
+        return (await q("select id from mova.resposta where estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE' order by seq limit 100")).rows.map((r) => r.id);
+      },
       /** Eco de uma resposta do próprio agente (id do provedor registrado no envio) ⇒ nunca reprocessar. */
       async ehRespostaPropria(mensagemId) {
         return (await q("select 1 from mova.resposta where provider_message_id = $1", [mensagemId])).rowCount > 0;
