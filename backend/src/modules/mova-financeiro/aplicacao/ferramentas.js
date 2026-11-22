@@ -37,6 +37,64 @@ export function periodoDaConsulta(saida, hoje) {
   return { inicio: `${competencia}-01`, fim: competencia === mes(hoje) ? hoje : ultimoDia(competencia), competencia, rotulo: `competência ${competencia}` };
 }
 
+// Detalhe por conta (só quando o motor libera: todos os leitores são FINANCEIRO na unidade). Tudo vem do Financeiro v2:
+// saldo pendente (já descontados os pagamentos), situação e fornecedor cadastrado; nada é estimado nem deduzido.
+const LIMITE_DETALHE_CARACTERES = 2600; // a mensagem inteira fica abaixo do limite do Gateway (4096)
+const curto = (s, n = 40) => { const t = String(s ?? "").replace(/\s+/g, " ").trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+/** A descrição sem o nome do fornecedor (ex.: "MORANGOS (FULANO)" com fornecedor FULANO ⇒ "MORANGOS"); vazia ⇒ null. */
+export function descricaoSemFornecedor(descricao, fornecedor) {
+  let d = String(descricao ?? "").replace(/\s+/g, " ").trim();
+  const f = String(fornecedor ?? "").replace(/\s+/g, " ").trim();
+  if (f) {
+    const i = d.toLowerCase().indexOf(f.toLowerCase());
+    if (i >= 0) d = (d.slice(0, i) + d.slice(i + f.length)).replace(/\(\s*\)|\[\s*\]/g, "").replace(/\s*[-–·:|]\s*$/, "").replace(/^\s*[-–·:|]\s*/, "").replace(/\s+/g, " ").trim();
+  }
+  return d || null;
+}
+const centavosValidos = (t) => Number.isSafeInteger(t?.saldoCentavos) && t.saldoCentavos > 0;
+function situacaoDaConta(t) {
+  const pago = Number.isSafeInteger(t.pagoCentavos) && t.pagoCentavos > 0 ? t.pagoCentavos : 0;
+  const parcial = pago > 0 && Number.isSafeInteger(t.valorOriginalCentavos) ? `parcial, pago ${reais(pago)} de ${reais(t.valorOriginalCentavos)}` : null;
+  if (t.situacao === "VENCIDO" || t.vencido) return parcial ? `vencida, ${parcial}` : "vencida";
+  if (t.situacao === "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA") return parcial ? `${parcial}, aguardando classificação` : "aberta, aguardando classificação";
+  return parcial ?? "aberta";
+}
+export function detalharContas({ todas, lista, de, ate }) {
+  const validas = lista.filter(centavosValidos).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || curto(a.fornecedor?.nome).localeCompare(curto(b.fornecedor?.nome)));
+  const incompletas = lista.length - validas.length;
+  const total = validas.reduce((s, t) => s + t.saldoCentavos, 0);
+  const linhas = [validas.length
+    ? `vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${validas.length} conta${validas.length === 1 ? "" : "s"}, total ${reais(total)}`
+    : `nenhuma conta a pagar vencendo de ${dataBr(de)} a ${dataBr(ate)}`];
+  let usados = 0; let mostradas = 0;
+  for (const t of validas) {
+    const fornecedor = t.fornecedor?.nome ? curto(t.fornecedor.nome) : "fornecedor não informado";
+    const resto = descricaoSemFornecedor(t.descricao, t.fornecedor?.nome);
+    const descricao = resto ? ` · ${curto(resto)}` : "";
+    const l = `${dataBr(t.vencimento).slice(0, 5)} · ${fornecedor}${descricao} — ${reais(t.saldoCentavos)} (${situacaoDaConta(t)})`;
+    if (usados + l.length > LIMITE_DETALHE_CARACTERES) break;
+    linhas.push(l); usados += l.length; mostradas += 1;
+  }
+  if (mostradas < validas.length) {
+    const resto = validas.slice(mostradas);
+    linhas.push(`… e mais ${resto.length} conta${resto.length === 1 ? "" : "s"}, ${reais(resto.reduce((s, t) => s + t.saldoCentavos, 0))} (lista completa no Centro Financeiro)`);
+  }
+  // Pendências relevantes: só as que o Financeiro aponta (sem documento, classificação provisória), contas já vencidas antes do
+  // período e registros sem dado suficiente para entrar na soma.
+  const p = [];
+  const semDoc = validas.filter((t) => (t.pendencias ?? []).includes("SEM_DOCUMENTO")).length;
+  const provisoria = validas.filter((t) => (t.pendencias ?? []).includes("CLASSIFICACAO_PROVISORIA")).length;
+  if (semDoc) p.push(`${semDoc} sem documento anexado`);
+  if (provisoria) p.push(`${provisoria} com classificação provisória`);
+  if (incompletas) p.push(`${incompletas} sem saldo informado (fora do total)`);
+  if (p.length) linhas.push(`pendências: ${p.join("; ")}`);
+  const antes = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && centavosValidos(t) && typeof t.vencimento === "string" && t.vencimento < de);
+  if (antes.length) linhas.push(`também em aberto: ${antes.length} conta${antes.length === 1 ? "" : "s"} vencida${antes.length === 1 ? "" : "s"} antes de ${dataBr(de)}, ${reais(antes.reduce((s, t) => s + t.saldoCentavos, 0))}`);
+  const semVencimento = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && centavosValidos(t) && !t.vencimento).length;
+  if (semVencimento) linhas.push(`${semVencimento} conta${semVencimento === 1 ? "" : "s"} em aberto sem vencimento cadastrado`);
+  return linhas;
+}
+
 /**
  * @param {{porta:object, armazenamento:object}} deps
  */
@@ -132,12 +190,13 @@ export function criarFerramentas({ porta, armazenamento }) {
       const vencido = abertas.filter((t) => t.vencido).reduce((s, t) => s + t.saldoCentavos, 0);
       return ok([`a pagar em aberto: ${abertas.length} contas, ${reais(abertas.reduce((s, t) => s + t.saldoCentavos, 0))} (vencido: ${reais(vencido)})`]);
     },
-    async CONTAS_VENCENDO(escopo, { periodo, hoje }) {
+    async CONTAS_VENCENDO(escopo, { periodo, hoje, detalhe = false }) {
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
       const [de, ate] = periodo.explicito ? [periodo.inicio, periodo.fim] : [hoje, somarDias(hoje, 7)];
       const lista = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.vencimento >= de && t.vencimento <= ate);
-      return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
+      if (!detalhe) return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
+      return ok(detalharContas({ todas, lista, de, ate }));
     },
     /** Agente 2: contas VENCIDAS e não pagas (até hoje), com a mais antiga. */
     async CONTAS_VENCIDAS(escopo, { hoje }) {

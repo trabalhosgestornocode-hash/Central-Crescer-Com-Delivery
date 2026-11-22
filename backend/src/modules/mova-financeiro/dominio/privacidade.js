@@ -14,6 +14,9 @@
 //   - documentos pessoais (CPF, RG, CNH), dados INDIVIDUAIS de funcionários e entregadores (nome, pagamento, salário, nota);
 //   - credenciais (senhas, tokens, códigos, chaves de API);
 //   - DRE linha a linha/por fornecedor; listas de fornecedores com valores; extratos.
+// EXCEÇÃO (Agente 2, diretriz do proprietário de 22/11/2026): a lista das contas a pagar da semana por conta e fornecedor
+// (vencimento, saldo pendente, situação) sai SÓ quando todos os leitores são FINANCEIRO na unidade: no grupo GRUPO_FINANCEIRO
+// com retrato recente e todos os membros FINANCEIRO; no privado, quando quem perguntou é FINANCEIRO. Senão, só agregados.
 // A decisão é determinística (`pedidoRestrito`), independe da IA, e as respostas passam por `mascararDadosSensiveis`.
 
 const PADROES_RESTRITOS = [

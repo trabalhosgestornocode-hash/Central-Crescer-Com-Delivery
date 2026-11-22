@@ -69,3 +69,11 @@ test("fora da liderança do lease: não reserva nada", async () => {
   assert.deepEqual(await s.rodada(), { enviadas: 0, pulada: true });
   assert.equal(chamadas.length, 0);
 });
+
+test("Agente 2: WHATSAPP_MOVA_SAIDA_MODO=DIRETO ⇒ a fila do relé NÃO sobe (produção entrega por /internal/mova/messages); RELE segue igual", () => {
+  const base = { canalAtivo: true, envioHabilitado: true, contatoHomologacao: {} };
+  assert.deepEqual(lerSaidaMova({ ...base, modo: "DIRETO" }), { ativo: false, motivo: "TRANSPORTE_DIRETO" });
+  assert.deepEqual(lerSaidaMova({ ...base, modo: "RELE" }), { ativo: true });
+  assert.deepEqual(lerSaidaMova(base), { ativo: true }, "ausente = RELE (homologação inalterada)");
+  assert.deepEqual(lerSaidaMova({ ...base, envioHabilitado: false, modo: "DIRETO" }), { ativo: false, motivo: "ENVIO_DESLIGADO" });
+});

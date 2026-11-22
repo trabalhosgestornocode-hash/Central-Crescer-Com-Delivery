@@ -22,7 +22,7 @@ import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjeca
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
-import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
 import { interpretarComando } from "./comandos.js";
 
 export const DECISAO = Object.freeze({
@@ -478,7 +478,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Política do grupo: GRUPO_FINANCEIRO só responde no grupo com o retrato RECENTE dos membros e todos autorizados.
     const retrato = grupo.politicaResposta === POLITICA_RESPOSTA.GRUPO_FINANCEIRO && typeof a.membros?.obter === "function" ? await a.membros.obter(grupo.grupoId) : null;
     const d = decidirSaidaNoGrupo({ grupo, consulta, unidades, retrato, agora: relogio() });
-    if (d.saida === "GRUPO") return { noGrupo: true, motivo: d.motivo };
+    if (d.saida === "GRUPO") return { noGrupo: true, motivo: d.motivo, detalhe: d.detalhe === true };
     const jid = destinoPrivado(participante, evento.participanteId);
     // Só endereça uma conversa privada que a configuração conhece (derivada da lista): nunca um JID qualquer.
     const destino = jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null;
@@ -498,7 +498,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const marca = { interpretacao, ...extraRota };
     const ferramenta = ferramentas[consulta];
     if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, escopo, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
-    const c = contextoDaConsulta(saida);
+    // Detalhe por conta e fornecedor: no grupo, só com TODOS os membros FINANCEIRO na unidade; no privado (a conversa derivada ou
+    // o desvio da resposta para o privado), só se quem perguntou é FINANCEIRO na unidade. Fora disso, só agregados.
+    const detalhe = rota?.noGrupo ? rota.detalhe === true
+      : rota?.destino ? podeVerDetalhe(participante, unidade.unidadeId)
+      : !rota && grupo?.derivada === true && !evento.grupoId.endsWith("@g.us") ? podeVerDetalhe(participante, unidade.unidadeId) : false;
+    const c = { ...contextoDaConsulta(saida), detalhe };
     const r = await ferramenta(escopo, c);
     if (r.dadosInsuficientes) {
       return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta });

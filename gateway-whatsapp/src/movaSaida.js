@@ -17,9 +17,14 @@ export const CAMINHO_SAIDA_MOVA = "/internal/mova/saida";
 const JID_PRIVADO = /^[1-9][0-9]{7,14}@s\.whatsapp\.net$/;
 
 /** Decide se a saída pode existir neste processo (sem efeitos). */
-export function lerSaidaMova({ canalAtivo, envioHabilitado, contatoHomologacao }) {
+// Agente 2: em produção o backend ENTREGA a resposta direto ao Gateway (POST /internal/mova/messages, canal MOVA). Lá não existe
+// /internal/mova/saida, e a consulta ao relé só gerava 404 a cada 5 s. Com WHATSAPP_MOVA_SAIDA_MODO=DIRETO a fila do relé não
+// sobe. O padrão (ausente) continua RELE, que é o comportamento da homologação; o envio direto não depende desta fila.
+export const MODOS_SAIDA_MOVA = Object.freeze(["RELE", "DIRETO"]);
+export function lerSaidaMova({ canalAtivo, envioHabilitado, contatoHomologacao, modo = "RELE" }) {
   if (!canalAtivo) return { ativo: false, motivo: "SEM_CANAL" };
   if (!envioHabilitado) return { ativo: false, motivo: "ENVIO_DESLIGADO" };
+  if (modo === "DIRETO") return { ativo: false, motivo: "TRANSPORTE_DIRETO" };
   if (!contatoHomologacao) return { ativo: false, motivo: "SEM_CONTATO_VERIFICADO" };
   return { ativo: true };
 }

@@ -54,10 +54,37 @@ export function enderecoDeEnvio(r) {
   if (original && original !== r.grupoId && mesmoCelularBr(original, r.grupoId)) return original;
   return r.grupoId;
 }
+/** Quantas respostas antes do teto passam a avisar no próprio texto (e a 1ª delas gera auditoria). */
+export const AVISO_TETO = 3;
 export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null }) {
-  // 15I: teto de respostas entregues ao transporte NESTE processo (teste controlado: 1). Atingido, nada mais sai até reiniciar.
+  // 15I: teto de respostas entregues ao transporte. Agente 2: a contagem é PERSISTENTE (respostas enviadas desde o marco, no
+  // banco), então reiniciar ou publicar não zera o teto. Perto do fim, a própria resposta avisa no grupo e fica na auditoria;
+  // atingido, a resposta excedente não sai (FALHOU, com auditoria). O teto nunca é ampliado aqui.
   let entregues = 0;
-  const tetoAtingido = () => Number.isInteger(maximoDeEnvios) && entregues >= maximoDeEnvios;
+  const comTeto = Number.isInteger(maximoDeEnvios);
+  const tetoAtingido = () => comTeto && entregues >= maximoDeEnvios;
+  async function sincronizarTeto() {
+    if (!comTeto || typeof armazenamento.saida.contarEnviadasDesde !== "function") return;
+    try { entregues = Math.max(entregues, await armazenamento.saida.contarEnviadasDesde(naoAntesDe)); } catch { /* sem leitura: mantém a contagem local */ }
+  }
+  const auditar = async (acao, dados) => {
+    registrar({ tipo: acao, ...dados });
+    try { await armazenamento.auditoria?.registrar?.({ acao, atorTipo: "SISTEMA", atorRef: "mova-enviador", alvo: "resposta", dados }); } catch { /* auditoria nunca impede o envio */ }
+  };
+  /** Texto com o aviso do teto: as últimas AVISO_TETO respostas dizem quantas restam; a última diz que o limite foi atingido. */
+  function comAvisoDoTeto(texto) {
+    if (!comTeto) return texto;
+    const restantes = maximoDeEnvios - (entregues + 1);
+    if (restantes === 0) return `${texto}\n\n⚠️ Limite de respostas do MOVA atingido (${maximoDeEnvios} de ${maximoDeEnvios}). Novas perguntas ficam sem resposta até o gestor liberar.`;
+    if (restantes > 0 && restantes <= AVISO_TETO) return `${texto}\n\nAviso: restam ${restantes} resposta${restantes === 1 ? "" : "s"} do MOVA antes do limite configurado.`;
+    return texto;
+  }
+  async function depoisDeEntregar() {
+    const restantes = maximoDeEnvios - entregues;
+    if (!comTeto) return;
+    if (restantes === AVISO_TETO) await auditar("MOVA_ENVIO_TETO_PROXIMO", { enviadas: entregues, maximo: maximoDeEnvios });
+    if (restantes === 0) await auditar("MOVA_ENVIO_TETO_ATINGIDO", { enviadas: entregues, maximo: maximoDeEnvios });
+  }
   // 15B: com `rele` (criarSaidaPeloRele), o envio é ASSÍNCRONO: publica na fila do relé (id estável = id da resposta) e o
   // Gateway (serviço privado) busca, envia e confirma lá. O resultado volta por `sincronizar`.
   let releLigado = null;
@@ -85,12 +112,20 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       const envioLigado = controle ? await controle.ligado("envio") : true;
       if (rele) await sincronizarRele(envioLigado);
       if (!envioLigado) return { enviadas: 0, desligado: true }; // interruptor em tempo real
-      if (tetoAtingido()) return { enviadas: 0, desligado: false, teto: true };
+      await sincronizarTeto();
+      if (tetoAtingido()) {
+        // Atingido: as pendentes não ficam esperando em silêncio — cada uma vira FALHOU com auditoria (gestor vê o motivo).
+        for (const r of await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos })) {
+          await armazenamento.saida.marcarFalhaDeEnvio(r.id, "TETO_DE_ENVIOS_DA_SESSAO", { final: true });
+          await auditar("MOVA_ENVIO_BLOQUEADO_PELO_TETO", { resposta: r.id, maximo: maximoDeEnvios });
+        }
+        return { enviadas: 0, desligado: false, teto: true };
+      }
       const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos }); // limite de taxa
       let enviadas = 0;
       for (const r of lote) {
         // 15I: teto da sessão atingido ⇒ a resposta excedente NÃO sai (FALHOU, visível para revisão).
-        if (tetoAtingido()) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "TETO_DE_ENVIOS_DA_SESSAO", { final: true }); registrar({ tipo: "MOVA_ENVIO_TETO" }); continue; }
+        if (tetoAtingido()) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "TETO_DE_ENVIOS_DA_SESSAO", { final: true }); await auditar("MOVA_ENVIO_BLOQUEADO_PELO_TETO", { resposta: r.id, maximo: maximoDeEnvios }); continue; }
         // Segunda barreira (além do filtro no banco): destino fora da lista nunca vai ao Gateway.
         if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
         // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
@@ -99,15 +134,16 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
         // respondida, quando for o MESMO celular (nono dígito). O Gateway compara com a identidade verificada pelo WhatsApp.
         const destino = enderecoDeEnvio(r);
         if (rele) {
-          try { await rele.publicar({ id: r.id, destino, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; entregues += 1; }
+          try { await rele.publicar({ id: r.id, destino, texto: comAvisoDoTeto(r.texto) }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; entregues += 1; await depoisDeEntregar(); }
           catch { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "RELE_INDISPONIVEL", { final: r.tentativas >= maxTentativas }); registrar({ tipo: "MOVA_RELE_INDISPONIVEL" }); }
           continue;
         }
         try {
-          const { providerMessageId } = await enviar({ grupoId: destino, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
+          const { providerMessageId } = await enviar({ grupoId: destino, texto: comAvisoDoTeto(r.texto), respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);
           entregues += 1;
           enviadas += 1;
+          await depoisDeEntregar();
         } catch (err) {
           const codigo = err?.codigo ?? err?.code ?? "FALHA_NO_GATEWAY";
           // 15A (G-1): só repete o que comprovadamente não foi enviado; incerto/recusado vira FALHOU (revisão humana) — nunca duplica.
