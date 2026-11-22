@@ -16,6 +16,12 @@ const ROTULO_SITUACAO = { CONFIRMADO: "confirmado", CALCULADO_AGUARDANDO_CONFERE
 const DRE = [["FATURAMENTO_BRUTO_PROPRIO", "Faturamento bruto"], ["RECEITA_LIQUIDA_COMERCIAL", "Receita líquida comercial"], ["CUSTOS_OPERACIONAIS", "Custos operacionais"], ["DESPESAS_OPERACIONAIS", "Despesas operacionais"], ["RESULTADO_GERENCIAL", "Resultado gerencial"]];
 const SITUACOES_ABERTAS = ["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"];
 const mes = (d) => d.slice(0, 7);
+// 16A — faturamento por canal: o valor de cada canal é o da DRE (o Financeiro já escolhe a fonte oficial de cada canal e
+// nunca soma fontes diferentes); o MOVA só mostra, com a situação e a cobertura de dias do calendário do canal.
+const NOME_DO_CANAL = Object.freeze({ BALCAO: "Balcão", IFOOD: "iFood", ANOTA_AI: "Anota AI", NOVENTA_E_NOVE_FOOD: "99Food", OUTRO: "Outros canais" });
+const FONTE_DO_CANAL = Object.freeze({ IFOOD: "relatório oficial do iFood", NOVENTA_E_NOVE_FOOD: "relatório oficial da 99Food", ANOTA_AI: "SAIPOS" });
+const DIA_COM_DADO = ["PROVISORIO", "FECHAMENTO_MANUAL", "IMPORTADO", "CONCILIADO", "SEM_MOVIMENTO_CONFIRMADO"];
+const ROTULO_SITUACAO_CURTO = { CONFIRMADO: "confirmado", CALCULADO_AGUARDANDO_CONFERENCIA: "aguardando conferência", PRELIMINAR: "preliminar", PARCIAL: "parcial" };
 const ultimoDia = (comp) => { const [a, m] = comp.split("-").map(Number); return new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10); };
 const somarDias = (data, n) => { const d = new Date(`${data}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const insuficiente = (motivo) => ({ dadosInsuficientes: true, motivo, linhas: [] });
@@ -36,13 +42,47 @@ export function periodoDaConsulta(saida, hoje) {
  */
 export function criarFerramentas({ porta, armazenamento }) {
   const contasTodas = async (escopo) => porta.contasAPagarTodas(escopo);
+  /** Cobertura de dias do canal no mês (calendário do Financeiro). Erro de REGRA (canal fora da unidade) ⇒ sem cobertura. */
+  async function coberturaDoCanal(escopo, canal, competencia) {
+    let cal;
+    try { cal = await porta.ler("consultarCalendarioDeFaturamento", escopo, { canal, mes: competencia }); }
+    catch (e) { if (porta.ehErroDeRegra?.(e)) return null; throw e; }
+    const dias = Array.isArray(cal?.dias) ? cal.dias : [];
+    const comDado = dias.filter((d) => (d.estados ?? []).some((x) => DIA_COM_DADO.includes(x))).map((d) => d.data).sort();
+    const r = cal?.resumo ?? {};
+    const textos = [];
+    if (comDado.length) textos.push(`dados até ${dataBr(comDado.at(-1))}`); else if (!cal?.granularidadeDiaria) textos.push("relatório por período, sem valor por dia");
+    if (r.semRegistro) textos.push(`${r.semRegistro} dia(s) sem registro`);
+    if (r.comPendencias) textos.push(`${r.comPendencias} dia(s) com pendência de conferência`);
+    if (r.comDivergencias) textos.push(`${r.comDivergencias} dia(s) com divergência`);
+    const fonte = canal === "BALCAO" ? (cal?.swf ? "SWF" : cal?.sistemaDeLoja ?? null) : null;
+    return { texto: textos.join(", ") || null, fonte, diasComDado: comDado.length };
+  }
 
   const ferramentas = {
-    async FATURAMENTO(escopo, { periodo }) {
+    async FATURAMENTO(escopo, { periodo, hoje }) {
       const r = await porta.ler("consultarVendas", escopo, { inicio: periodo.inicio, fim: periodo.fim });
       const s = r?.resumo;
       if (!s || s.operacoes === 0 || s.brutoProprioCentavos === null) return insuficiente("SEM_VENDAS_REGISTRADAS");
       const linhas = [`faturamento bruto próprio: ${reais(s.brutoProprioCentavos)} (${s.operacoes} registros)`];
+      // 16A: competência inteira (ou até hoje, no mês corrente) ⇒ a composição por canal da DRE, com situação e cobertura.
+      const comp = periodo.competencia;
+      const competenciaInteira = comp && periodo.inicio === `${comp}-01` && (periodo.fim === ultimoDia(comp) || periodo.fim === hoje);
+      const porCanal = competenciaInteira ? (s.dre?.porCanal ?? []) : [];
+      if (porCanal.length) {
+        if (s.dre.situacao && ROTULO_SITUACAO_CURTO[s.dre.situacao]) linhas[0] += ` — na DRE: ${ROTULO_SITUACAO_CURTO[s.dre.situacao]}`;
+        if (s.conferenciaComDre && s.conferenciaComDre.confere === false) linhas.push("atenção: o total das vendas listadas difere do faturamento da DRE; confira no Centro Financeiro antes de usar");
+        for (const c of porCanal) {
+          const cob = await coberturaDoCanal(escopo, c.canal, comp);
+          const fonte = FONTE_DO_CANAL[c.canal] ?? cob?.fonte ?? null;
+          // Valor zero sem nenhum dia com dado (ou sem cobertura conhecida) NÃO é "zero confirmado": é ausência de dado.
+          if (c.valorCentavos === 0 && (!cob || cob.diasComDado === 0)) { linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: sem dados registrados${fonte ? ` (${fonte})` : ""} — não é zero confirmado`); continue; }
+          const partes = [fonte, c.comprovado ? "comprovado" : "sem comprovação", cob?.texto ?? null].filter(Boolean);
+          linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: ${reais(c.valorCentavos)} (${partes.join("; ")})`);
+        }
+      } else if (comp && !competenciaInteira) {
+        linhas.push("divisão por canal só para a competência inteira (peça o mês)");
+      }
       if (s.recebidoComprovadoCentavos !== null && s.recebidoComprovadoCentavos !== undefined) linhas.push(`recebido com comprovação no período: ${reais(s.recebidoComprovadoCentavos)} (recebimento não é faturamento)`);
       return ok(linhas, { valorCentavos: s.brutoProprioCentavos });
     },
