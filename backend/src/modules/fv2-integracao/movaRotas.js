@@ -29,7 +29,7 @@ import { ACAO } from "../financeiro-v2/index.js";
 import { AUTOMACAO, ErroDeAprovacao } from "../mova-financeiro/index.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
-const STATUS = { OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
+const STATUS = { BAIXA_CONFERIDA_COM_EXTRATO: 409, EXTRATO_NAO_CONFERIDO: 409, OPERACAO_NAO_REVERSIVEL: 409, OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const escopo = (ctx) => ({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
 
@@ -74,6 +74,31 @@ export const CONSULTAS_MOVA = Object.freeze({
       notas: a.notasEntregador ? await a.notasEntregador.listar(escopo(ctx)) : [],
       envios: a.enviosEntregador ? await a.enviosEntregador.listar(escopo(ctx)) : [],
     };
+  },
+  // Agente 2 — Frente E: Central de Operações (contagens reais; IA = consumo registrado no orçamento).
+  "/mova/visao-geral": async ({ ctx, mova, orcamento, controle, params }) => {
+    exigirVer(ctx);
+    if (!mova.consultas) throw recusa(404, "MOVA_SEM_CONSULTAS", "Visão geral indisponível.");
+    const dias = /^[0-9]{1,2}$/.test(String(params?.dias ?? "")) ? Number(params.dias) : 7;
+    return { ...(await mova.consultas.visaoGeral({ ...escopo(ctx), dias })), modo: mova.cfg.modo, autonomiaLigada: Boolean(mova.execucao), identidadeOperacional: Boolean(mova.execucao?.operacional),
+      entregadoresLigado: Boolean(mova.entregadores), controle: controle ? await controle.estado() : null, orcamentoIa: orcamento ? await orcamento.resumo().catch(() => null) : null };
+  },
+  // Grupos e participantes da unidade: identificadores MASCARADOS; retrato dos membros com quem NÃO está autorizado.
+  "/mova/grupos": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const mascarar = (j) => { const d = String(j ?? "").split("@")[0].replace(/\D/g, ""); return d ? `…${d.slice(-4)}` : "—"; };
+    const grupos = mova.cfg.gruposAutorizados.filter((g) => g.unidades.includes(ctx.unidadeId));
+    const itens = [];
+    for (const g of grupos) {
+      const retrato = !g.privada && mova.armazenamento.membros ? await mova.armazenamento.membros.obter(g.grupoId) : null;
+      const autorizados = new Set(g.participantes?.flatMap((p) => p.ids) ?? []);
+      const fora = retrato ? retrato.membros.filter((m) => !autorizados.has(m)) : [];
+      itens.push({ grupo: mascarar(g.grupoId), tipo: g.entregador ? "ENTREGADOR" : g.privada ? (g.derivada ? "PRIVADO_DERIVADO" : "PRIVADO") : "GRUPO", acesso: g.acesso ?? "ABERTO",
+        politicaResposta: g.politicaResposta ?? (g.privada ? null : "PRIVADO_RESTRITO"), unidades: g.unidades.length,
+        participantes: (g.participantes ?? []).map((p) => ({ id: mascarar(p.ids[0]), perfil: p.perfil ?? (p.perfilPorUnidade?.[ctx.unidadeId] ?? null), nome: p.nome ?? null, privado: Boolean(p.privado) })),
+        membros: retrato ? { total: retrato.membros.length, verificadoEm: retrato.verificadoEm instanceof Date ? retrato.verificadoEm.toISOString() : retrato.verificadoEm, naoAutorizados: fora.map(mascarar) } : null });
+    }
+    return { itens };
   },
   "/mova/automacoes": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.armazenamento.automacoes ? await mova.armazenamento.automacoes.listar(escopo(ctx)) : [] }; },
   "/mova/historico": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: await mova.consultas.historico(escopo(ctx)) }; },

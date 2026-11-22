@@ -90,6 +90,8 @@ t("A2-L3 sem concessão operacional não escreve; acima do limite pede CONFIRMA�
   // Pessoa sem permissão de vincular: recusada. Com permissão: confirma (o contexto DELA vai ao Financeiro).
   await assert.rejects(s.mova.aprovador.confirmarBaixaPorExtrato(ctx(ORG, ALFA, ["financeiro_v2.ver", "financeiro_v2.aprovar"], "eeeeeeee-0000-4000-8000-000000000009"), { propostaId: p.id }), /PERMISSAO_INSUFICIENTE/);
   const humano = ctx(ORG, ALFA, TODAS, "eeeeeeee-0000-4000-8000-000000000001");
+  // O "Aprovar" antigo (pagarContaAPagar) criaria uma SEGUNDA saída: recusado para baixa já conferida com o extrato.
+  await assert.rejects(s.mova.aprovador.aplicar(humano, { propostaId: p.id, contaId: s.banco.id }), /BAIXA_CONFERIDA_COM_EXTRATO/);
   const r = await s.mova.aprovador.confirmarBaixaPorExtrato(humano, { propostaId: p.id });
   assert.equal(r.ok, true);
   assert.equal((await s.titulo()).saldoCentavos, 0);
