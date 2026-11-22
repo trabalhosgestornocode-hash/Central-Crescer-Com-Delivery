@@ -63,3 +63,6 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
 }
 /** Nome mantido da Execução 01. */
 export const criarMovaSimulado = criarMova;
+// Agente 2 — Frente C (autonomia configurável, só decisão) e Frente D (rotina dos entregadores, só composição).
+export { NIVEL as NIVEL_AUTONOMIA, OPERACAO as OPERACAO_AUTONOMA, conferirComExtrato, decidirAutonomia, validarPolitica, validarPoliticas } from "./dominio/autonomia.js";
+export { identificarEntregador, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, precisaCobrarNota, validarEntregadores } from "./dominio/entregadores.js";
