@@ -19,6 +19,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const aprovacoes = [];
   const auditoria = [];
   const conversas = new Map();
+  const retratos = new Map();
 
   return Object.freeze({
     eventos: Object.freeze({
@@ -94,6 +95,10 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         return c && c.ate > relogio().getTime() ? { unidadeId: c.unidadeId, consulta: c.consulta } : null;
       },
       async encerrar({ grupoId, participanteId }) { conversas.delete(`${grupoId}|${participanteId}`); },
+    }),
+    membros: Object.freeze({
+      async registrar({ grupoId, membros, verificadoEm = null }) { retratos.set(grupoId, { membros: [...membros], verificadoEm: verificadoEm ?? relogio().toISOString() }); },
+      async obter(grupoId) { return retratos.get(grupoId) ?? null; },
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */

@@ -28,7 +28,7 @@ const SISTEMAS_DE_LOJA = ["SAIPOS", "SWF"];
 const PLATAFORMAS = ["IFOOD", "NOVENTA_E_NOVE_FOOD"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
-import { ACESSO, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
+import { ACESSO, POLITICA_RESPOSTA, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
 import { CONSULTAS } from "../ia/contratos.js";
 
 export class ErroDeConfiguracao extends Error {
@@ -94,7 +94,9 @@ export function validarConfiguracao(c) {
     exigir(acesso !== ACESSO.LISTA || participantes.length > 0, `${campo}.participantes`);
     const consultasNoGrupo = Array.isArray(g.consultasNoGrupo) ? g.consultasNoGrupo : [];
     exigir(consultasNoGrupo.every((x) => CONSULTAS.includes(x) && x !== "DADO_RESTRITO"), `${campo}.consultasNoGrupo`);
-    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), privada: !g.grupoId.endsWith("@g.us"), derivada: false });
+    const politicaResposta = g.politicaResposta ?? POLITICA_RESPOSTA.PRIVADO_RESTRITO;
+    exigir(Object.values(POLITICA_RESPOSTA).includes(politicaResposta) && (politicaResposta === POLITICA_RESPOSTA.PRIVADO_RESTRITO || acesso === ACESSO.LISTA), `${campo}.politicaResposta`);
+    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
   exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
   // OPERACAO: as conversas privadas nascem da lista de participantes (nunca cadastradas à parte).

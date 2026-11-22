@@ -21,7 +21,7 @@ import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjeca
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
-import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, algumaUnidadePermite, consultaPodeSairNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar } from "../dominio/participantes.js";
 import { interpretarComando } from "./comandos.js";
 
 export const DECISAO = Object.freeze({
@@ -439,17 +439,29 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
   /** Consulta de UMA unidade, pela ferramenta do catálogo. Sem dados = diz que não há (nunca estima). */
   /** Agente 2: a resposta desta consulta sai no grupo ou no privado do participante? (conversa privada = sai nela mesma) */
-  function roteamento(grupo, participante, evento, consulta) {
+  async function roteamento(grupo, participante, evento, consulta, unidades) {
     if (!grupo || !evento.grupoId.endsWith("@g.us") || (grupo.acesso ?? ACESSO.ABERTO) !== ACESSO.LISTA || consultaPodeSairNoGrupo(grupo, consulta)) return null;
+    // Política do grupo: GRUPO_FINANCEIRO só responde no grupo com o retrato RECENTE dos membros e todos autorizados.
+    const retrato = grupo.politicaResposta === POLITICA_RESPOSTA.GRUPO_FINANCEIRO && typeof a.membros?.obter === "function" ? await a.membros.obter(grupo.grupoId) : null;
+    const d = decidirSaidaNoGrupo({ grupo, consulta, unidades, retrato, agora: relogio() });
+    if (d.saida === "GRUPO") return { noGrupo: true, motivo: d.motivo };
+    if (d.saida === "RECUSAR") return { recusar: true, motivo: d.motivo };
     const jid = destinoPrivado(participante, evento.participanteId);
     // Só endereça uma conversa privada que a configuração conhece (derivada da lista): nunca um JID qualquer.
-    return { destino: jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null };
+    return { destino: jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null, motivo: d.motivo };
+  }
+  /** Concluir uma consulta conforme a rota: no grupo (null/noGrupo), no privado, ou recusada (grupo operacional). */
+  function rotaParaConcluir(rota) {
+    if (!rota || rota.noGrupo) return { privado: null, extraRota: rota ? { politicaResposta: rota.motivo } : {} };
+    return { privado: rota, extraRota: { politicaResposta: rota.motivo } };
   }
   const perfilPodeConsultarAlguma = (participante, consulta) => participante.aberto || participante.unidades.some((u) => perfilPodeConsultar(perfilNa(participante, u), consulta));
 
   async function responderConsulta({ evento, escopo, unidade, saida, injecao, grupo = null, participante = null, interpretacao = "IA" }, consulta) {
-    const privado = roteamento(grupo, participante, evento, consulta);
-    const marca = { interpretacao };
+    const rota = await roteamento(grupo, participante, evento, consulta, [unidade.unidadeId]);
+    if (rota?.recusar) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: rota.motivo, escopo, resposta: RESPOSTA.grupoOperacional(), injecao });
+    const { privado, extraRota } = rotaParaConcluir(rota);
+    const marca = { interpretacao, ...extraRota };
     const ferramenta = ferramentas[consulta];
     if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, escopo, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
     const c = contextoDaConsulta(saida);
@@ -469,8 +481,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
   /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */
   async function responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao, { grupo: original = null, participante = null, interpretacao = "IA" } = {}) {
-    const privado = roteamento(original, participante, evento, consulta);
     const unidades = cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId));
+    const rota = await roteamento(original, participante, evento, consulta, unidades.map((x) => x.unidadeId));
+    if (rota?.recusar) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: rota.motivo, resposta: RESPOSTA.grupoOperacional(), injecao });
+    const { privado, extraRota } = rotaParaConcluir(rota);
     const ferramenta = ferramentas[consulta];
     if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
     const c = contextoDaConsulta(saida);
@@ -482,7 +496,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       valores.push(r.dadosInsuficientes ? null : r.valorCentavos ?? null);
     }
     if (consulta === "FATURAMENTO") linhas.push(valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, extra: { interpretacao } });
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, extra: { interpretacao, ...extraRota } });
   }
 
   return Object.freeze({ processar });

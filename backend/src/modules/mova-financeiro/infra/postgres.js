@@ -194,6 +194,20 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         await q("delete from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2", [grupoId, participanteId]);
       },
     }),
+    /**
+     * Agente 2 — RETRATO DOS MEMBROS do grupo (gravado pelo Gateway/relé; o MOVA só confere). Base da política GRUPO_FINANCEIRO:
+     * sem retrato recente, valores nunca saem no grupo.
+     */
+    membros: Object.freeze({
+      async registrar({ grupoId, membros, verificadoEm = null, fonte = "GATEWAY" }) {
+        await q(`insert into mova.grupo_membros (grupo_jid, membros, verificado_em, fonte) values ($1, $2, coalesce($3::timestamptz, now()), $4)
+                 on conflict (grupo_jid) do update set membros = excluded.membros, verificado_em = excluded.verificado_em, fonte = excluded.fonte`, [grupoId, membros, verificadoEm, fonte]);
+      },
+      async obter(grupoId) {
+        const r = await q("select membros, verificado_em from mova.grupo_membros where grupo_jid = $1", [grupoId]);
+        return r.rows[0] ? { membros: r.rows[0].membros, verificadoEm: r.rows[0].verificado_em } : null;
+      },
+    }),
     saida: Object.freeze({
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
         await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4)", [grupoId, respostaA, eventoId, texto]);
@@ -393,9 +407,9 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
     await tx("insert into mova.instancia_gateway (id) values ($1) on conflict do nothing", [instanciaId]);
     for (const g of cfg.gruposAutorizados) {
       const unidades = cfg.unidades.filter((u) => g.unidades.includes(u.unidadeId));
-      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo, tipo, acesso, consultas_no_grupo) values ($1,$2,$3,true,$4,$5,$6)
-                on conflict (grupo_jid) do update set ativo = true, acesso = excluded.acesso, consultas_no_grupo = excluded.consultas_no_grupo`,
-      [g.grupoId, unidades[0].organizacaoId, instanciaId, tipoDe(g), g.acesso ?? "ABERTO", g.consultasNoGrupo ?? []]);
+      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo, tipo, acesso, consultas_no_grupo, politica_resposta) values ($1,$2,$3,true,$4,$5,$6,$7)
+                on conflict (grupo_jid) do update set ativo = true, acesso = excluded.acesso, consultas_no_grupo = excluded.consultas_no_grupo, politica_resposta = excluded.politica_resposta`,
+      [g.grupoId, unidades[0].organizacaoId, instanciaId, tipoDe(g), g.acesso ?? "ABERTO", g.consultasNoGrupo ?? [], g.politicaResposta ?? "PRIVADO_RESTRITO"]);
       for (const u of unidades) {
         await tx(`insert into mova.grupo_unidade (grupo_jid, organizacao_id, unidade_id, nome, apelidos, documentos, fontes) values ($1,$2,$3,$4,$5,$6,$7)
                   on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes`,
@@ -429,7 +443,7 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
     modo, identidadeServico,
     unidades: [...porId.values()],
     gruposAutorizados: grupos.map((g) => ({
-      grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id), acesso: g.acesso, consultasNoGrupo: g.consultas_no_grupo,
+      grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id), acesso: g.acesso, consultasNoGrupo: g.consultas_no_grupo, politicaResposta: g.politica_resposta,
       ...(g.acesso === "LISTA" ? { participantes: participantes.filter((p) => p.grupo_jid === g.grupo_jid).map((p) => ({ ids: p.ids, telefones: p.telefones, perfil: p.perfil, unidades: p.unidades.length ? p.unidades : undefined, privado: p.privado, nome: p.nome })) } : {}),
     })),
   };

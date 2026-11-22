@@ -50,6 +50,7 @@ export const RESPOSTA = Object.freeze({
   respondidoNoPrivado: () => "Te respondi no privado (essa consulta tem valores e não aparece no grupo).",
   semConversaPrivada: () => "Essa consulta tem valores e não aparece no grupo. Peça ao administrador para cadastrar seu número para respostas no privado.",
   perfilSemDocumentos: () => "Seu acesso ao MOVA é só de consultas: documentos e lançamentos são enviados por quem cuida do financeiro da unidade. Nada foi registrado.",
+  grupoOperacional: () => "Este grupo é operacional: aqui eu trato documentos e pendências, sem valores financeiros. Para valores, use a conversa privada com o MOVA ou o Centro Financeiro. Nada foi consultado.",
   perfilSemConsulta: () => "Seu acesso ao MOVA não inclui consultas com valores. Fale com o administrador financeiro. Nada foi consultado.",
 });
 
