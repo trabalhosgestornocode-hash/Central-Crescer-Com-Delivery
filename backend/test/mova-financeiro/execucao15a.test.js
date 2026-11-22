@@ -49,3 +49,18 @@ test("redator: outro modelo é recusado na montagem; configuração exige IA lig
   const base = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
   assert.equal(lerConfiguracaoMova({ ...base, MOVA_RESPOSTAS_NATURAIS: "1" }).respostasNaturais, false, "sem IA, não liga");
 });
+
+test("15H H-2: endereço de envio — mesmo celular sem o nono dígito usa o JID do WhatsApp; outro número, grupo e malformado mantêm o cadastrado", async () => {
+  const { enderecoDeEnvio } = await import("../../src/modules/mova-financeiro/gateway/worker.js");
+  const { mesmoCelularBr } = await import("../../src/modules/mova-financeiro/dominio/configuracao.js");
+  const CAD = "5599990000001@s.whatsapp.net", WA = "559990000001@s.whatsapp.net";
+  assert.equal(enderecoDeEnvio({ grupoId: CAD, participanteOriginal: WA }), WA, "privado autorizado: o endereço que o WhatsApp reconhece");
+  assert.equal(enderecoDeEnvio({ grupoId: CAD, participanteOriginal: CAD }), CAD);
+  assert.equal(enderecoDeEnvio({ grupoId: CAD, participanteOriginal: null }), CAD);
+  assert.equal(enderecoDeEnvio({ grupoId: CAD, participanteOriginal: "559990000002@s.whatsapp.net" }), CAD, "outro número nunca vira destino");
+  assert.equal(enderecoDeEnvio({ grupoId: "120363000000000001@g.us", participanteOriginal: WA }), "120363000000000001@g.us", "grupo não é trocado");
+  assert.equal(enderecoDeEnvio({ grupoId: CAD, participanteOriginal: "123456789012345@lid" }), CAD, "LID/malformado não é usado");
+  assert.equal(mesmoCelularBr(CAD, WA), true);
+  assert.equal(mesmoCelularBr("5599930000001@s.whatsapp.net", "559930000001@s.whatsapp.net"), false, "fixo não tem nono dígito");
+  assert.equal(mesmoCelularBr(CAD, "x"), false);
+});

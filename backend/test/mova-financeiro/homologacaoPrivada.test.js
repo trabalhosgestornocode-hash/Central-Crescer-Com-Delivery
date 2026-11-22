@@ -198,7 +198,8 @@ t("16 (achado com a IA real) cupom/nota fiscal já pago: vira despesa paga; sem 
 
 t("13B saudação real (IA devolve OUTRA, sem valor): ORIENTACAO sem perguntar unidade, nada criado", async () => {
   const s = await cenario(() => base({ intencao: "OUTRA" }));
-  assert.equal((await s.enviar(msg({ texto: "Olá MOVA! Este é nosso primeiro teste." }))).status, "ENFILEIRADO");
+  // 15H: texto com uma palavra que não é de saudação ("teste") vai à IA; a regra pós-IA garante a orientação.
+  assert.equal((await s.enviar(msg({ texto: "MOVA, registrando aqui um teste de conversa." }))).status, "ENFILEIRADO");
   const h = await s.ultima();
   assert.equal(h.decisao, DECISAO.ORIENTACAO);
   assert.equal(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
@@ -477,4 +478,44 @@ t("15A G-1: o canal classifica tempo esgotado, 5xx e 2xx sem id como ENVIO_INCER
   assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({}) })), "ENVIO_INCERTO");
   assert.equal(await caso(async () => ({ ok: false, status: 409, json: async () => ({ error: "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED" }) })), "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED");
   assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({ providerMessageId: "P1" }) })), "OK");
+});
+
+t("15H H-1: saudação e pergunta de funcionamento ⇒ ORIENTACAO sem IA e sem pedir unidade; saudação+consulta e pedido sem unidade seguem normais", async () => {
+  for (const texto of ["Olá MOVA, você está funcionando?", "Oi MOVA", "Bom dia", "O que você faz?"]) {
+    const s = await cenario(() => { throw new Error("a IA não deveria ser chamada"); });
+    await s.enviar(msg({ texto }));
+    const h = await s.ultima();
+    assert.deepEqual([h.decisao, h.motivo, s.pedidos.length], [DECISAO.ORIENTACAO, "SAUDACAO", 0], texto);
+    assert.doesNotMatch((await s.mova.armazenamento.saida.listar()).at(-1).texto, /pertence à/, texto);
+  }
+  // saudação seguida de consulta financeira: vai à IA e responde a consulta
+  const c = await cenario(() => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }));
+  await c.enviar(msg({ texto: "Oi MOVA, quais contas a pagar estão abertas na alfa?" }));
+  assert.deepEqual([(await c.ultima()).decisao, c.pedidos.length], [DECISAO.CONSULTA, 1]);
+  // pedido financeiro sem unidade: continua perguntando a unidade
+  const p = await cenario(() => comprovante({ valorCentavos: 9500, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null }));
+  await p.enviar(msg({ texto: "Bom dia, paguei 95 de limpeza hoje" }));
+  assert.equal((await p.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
+});
+
+t("15H H-1: a IA devolver CONSULTAR sem assunto (caso real) ⇒ ORIENTACAO, nunca pergunta de unidade", async () => {
+  const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: null }));
+  await s.enviar(msg({ texto: "MOVA, está tudo certo com o sistema hoje?" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo, s.pedidos.length], [DECISAO.ORIENTACAO, "CONVERSA_SEM_PEDIDO_FINANCEIRO", 1]);
+});
+
+t("15I teto da sessão: com maximoDeEnvios=1 só a primeira resposta sai; a excedente vira FALHOU (TETO), visível, e nada mais é reservado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `T${n}`, texto: `r${n}`, eventoId: null });
+  const enviados = [];
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maximoDeEnvios: 1,
+    enviar: async (r) => { enviados.push(r.texto); return { providerMessageId: `PT${enviados.length}` }; } });
+  await e.enviarPendentes(); await e.enviarPendentes();
+  assert.deepEqual(enviados, ["r1"]);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((r) => r.estado + "/" + (r.ultimo_erro ?? "")), ["ENVIADA/", "FALHOU/TETO_DE_ENVIOS_DA_SESSAO"]);
+  const { lerConfiguracaoMova } = await import("../../src/modules/fv2-integracao/mova.js");
+  const base_ = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
+  assert.equal(lerConfiguracaoMova({ ...base_, MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_PROCESSAMENTO_HABILITADO: "1", MOVA_ENVIO_HABILITADO: "1", MOVA_ENVIO_NAO_ANTES_DE: "2026-11-21T00:00:00Z", MOVA_RELE_DATABASE_URL: "x", MOVA_GATEWAY_SECRET: "s".repeat(40), MOVA_ENVIO_MAXIMO: "abc" }).envioMaximo, 0, "inválido ⇒ nada sai");
 });

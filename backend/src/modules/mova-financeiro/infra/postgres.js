@@ -200,7 +200,9 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                            and ($4::timestamptz is null or criada_em >= $4::timestamptz)
                            and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
-          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    -- 15H: o JID com que o WhatsApp entregou a mensagem respondida (o endereço que o Gateway reconhece)
+                    (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
         [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
           // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
           .sort((a, b) => Number(a.seq) - Number(b.seq)));
@@ -374,9 +376,11 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
 /** Lê do banco a configuração BRUTA (para validarConfiguracao): só grupos ATIVOS. */
 export async function carregarConfiguracao(pool, { identidadeServico, modo = "SIMULACAO" }) {
   const q = consultar(pool);
-  // Conversas privadas de homologação só entram no modo HOMOLOGACAO; fora dele são ignoradas mesmo que ativas no banco.
-  const grupos = (await q("select grupo_jid from mova.grupo_autorizado where ativo and (tipo = 'GRUPO' or $1 = 'HOMOLOGACAO')", [modo])).rows;
-  const unidades = (await q("select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where g.ativo and (g.tipo = 'GRUPO' or $1 = 'HOMOLOGACAO') order by gu.nome", [modo])).rows;
+  // Conversas privadas só entram nos modos HOMOLOGACAO e PILOTO; fora deles são ignoradas mesmo que ativas no banco.
+  // 16A: no PILOTO entram SÓ as conversas privadas — nenhum grupo, mesmo ativo.
+  const filtro = "g.ativo and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
+  const grupos = (await q(`select g.grupo_jid from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
+  const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
   return {

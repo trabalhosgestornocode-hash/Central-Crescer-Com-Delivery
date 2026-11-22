@@ -12,7 +12,9 @@
 //   - Modo: só "SIMULACAO" nesta execução (nenhuma escrita real, nenhuma resposta enviada ao WhatsApp).
 
 /** SIMULACAO (padrão) ou HOMOLOGACAO (Execução 04B: admite UMA conversa privada de teste, além dos grupos). */
-export const MODOS = Object.freeze(["SIMULACAO", "HOMOLOGACAO"]);
+export const MODOS = Object.freeze(["SIMULACAO", "HOMOLOGACAO", "PILOTO"]);
+/** 16A: conversa PRIVADA (1 pessoa) só na homologação e no piloto de consultas; nos demais modos, só grupos. */
+export const aceitaConversaPrivada = (modo) => modo === "HOMOLOGACAO" || modo === "PILOTO";
 const JID_PRIVADO = /^[1-9][0-9]{7,14}@s\.whatsapp\.net$/;
 export const ehConversaPrivada = (jid) => JID_PRIVADO.test(String(jid ?? ""));
 export const SITUACAO_FONTES = Object.freeze({ CONFIRMADA: "CONFIRMADA", A_CONFIRMAR: "A_CONFIRMAR" });
@@ -72,7 +74,7 @@ export function validarConfiguracao(c) {
   const ids = new Set(unidades.map((u) => u.unidadeId));
   exigir(Array.isArray(c.gruposAutorizados), "gruposAutorizados");
   const grupos = c.gruposAutorizados.map((g, i) => {
-    exigir(GRUPO.test(g?.grupoId ?? "") || (c.modo === "HOMOLOGACAO" && JID_PRIVADO.test(g?.grupoId ?? "")), `gruposAutorizados[${i}].grupoId`);
+    exigir(GRUPO.test(g?.grupoId ?? "") || (aceitaConversaPrivada(c.modo) && JID_PRIVADO.test(g?.grupoId ?? "")), `gruposAutorizados[${i}].grupoId`);
     exigir(Array.isArray(g.unidades) && g.unidades.length > 0 && g.unidades.every((x) => ids.has(String(x).toLowerCase())), `gruposAutorizados[${i}].unidades`);
     return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(g.unidades.map((x) => String(x).toLowerCase())) });
   });
@@ -85,13 +87,16 @@ const variantesBr = (jid) => {
   const m = /^55([1-9][0-9])(9?)([6-9][0-9]{7})@s\.whatsapp\.net$/.exec(String(jid ?? ""));
   return m ? [`55${m[1]}9${m[3]}@s.whatsapp.net`, `55${m[1]}${m[3]}@s.whatsapp.net`] : [];
 };
+/** 15H: os dois JIDs privados são o MESMO celular brasileiro (com ou sem o nono dígito)? Iguais também valem. */
+export const mesmoCelularBr = (a, b) => typeof a === "string" && typeof b === "string" && JID_PRIVADO.test(a) && JID_PRIVADO.test(b)
+  && (a === b || variantesBr(a).includes(b));
 /**
- * Conversa autorizada para o JID recebido: igualdade exata; para conversa PRIVADA (só no modo HOMOLOGACAO), também a
+ * Conversa autorizada para o JID recebido: igualdade exata; para conversa PRIVADA (só nos modos HOMOLOGACAO e PILOTO), também a
  * variante com/sem nono dígito. Devolve a entrada CADASTRADA (o JID canônico usado em fila, unidades e participantes).
  */
 export function conversaAutorizada(cfg, jid) {
   const exata = grupoAutorizado(cfg, jid);
-  if (exata || cfg.modo !== "HOMOLOGACAO" || !ehConversaPrivada(jid)) return exata;
+  if (exata || !aceitaConversaPrivada(cfg.modo) || !ehConversaPrivada(jid)) return exata;
   const vs = variantesBr(jid);
   const achadas = cfg.gruposAutorizados.filter((g) => vs.includes(g.grupoId));
   return achadas.length === 1 ? achadas[0] : null; // ambíguo (as duas formas cadastradas) ⇒ nenhuma

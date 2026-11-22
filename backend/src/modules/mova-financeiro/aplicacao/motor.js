@@ -16,7 +16,7 @@
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
-import { mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
+import { ehSaudacaoOuAjuda, mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
@@ -53,7 +53,9 @@ function fornecedorCompativel(favorecido, titulo) {
  * @param {{cfg:object, porta:object, extrator:{extrair:Function}, armazenamento:object, relogio?:() => Date, registrar?:(e:object)=>void}} deps
  *   `registrar` recebe só códigos e ids mascarados (log operacional) — nunca texto, valor ou documento.
  */
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null }) {
+/** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
+const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -154,6 +156,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoRestrito(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "DADO_RESTRITO", resposta: RESPOSTA.dadoRestrito(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_EXECUCAO.some((r) => r.test(evento.texto ?? ""))) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", resposta: RESPOSTA.operacaoBloqueada(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
+    // 15H (H-1): saudação/pergunta sobre o MOVA, sem número nem palavra financeira ⇒ orientação determinística, SEM IA.
+    if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
+    // 16A (piloto): documento/áudio não é lido (nada vai à IA, nada é criado) — o piloto só responde consultas.
+    if (somenteConsultas && evento.midia) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.
@@ -162,6 +168,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const lida = await lerDocumento(evento, grupo);
       // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
+      // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
+      if (!lida.ok && IA_PAUSADA.includes(lida.codigo)) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.iaPausada(), injecao });
       if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : evento.midia ? RESPOSTA.falhaLeitura() : RESPOSTA.falhaInterpretacao(), injecao });
       saida = lida.saida;
     }
@@ -177,9 +185,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
     // 10b. Execução 13B (achado com IA real + WhatsApp real): texto puro sem pedido financeiro (saudação, conversa) não é
     // lançamento — antes caía na pergunta "Esse lançamento pertence à…?". Sem documento, sem valor e sem esclarecimento pendente.
-    if (!evento.midia && !esclarecimento && ["OUTRA", "DESCONHECIDA"].includes(saida.intencao) && !saida.valorCentavos) {
-      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO", resposta: RESPOSTA.conversaSemPedido(), injecao });
+    // 15H (H-1): CONSULTAR sem assunto definido (ex.: "você está funcionando?") também é conversa — nunca pergunta de unidade.
+    if (!evento.midia && !esclarecimento && !saida.valorCentavos && (["OUTRA", "DESCONHECIDA"].includes(saida.intencao) || (saida.intencao === "CONSULTAR" && !saida.consulta && !saida.todasUnidades))) {
+      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
     }
+    // 16A (piloto): qualquer coisa que não seja consulta (pagamento, conta, correção, transferência) NÃO vira proposta.
+    if (somenteConsultas && !consulta) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
 
     // 11. Unidade (determinística; IA só confirma; nunca pelo histórico do participante).
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
@@ -383,7 +394,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (r.dadosInsuficientes) {
       return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo } });
     }
-    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), "Detalhes no Centro Financeiro."];
+    // 16A: rastreabilidade — quando o Financeiro foi lido (os números podem mudar com novas importações).
+    const lidoEm = relogio().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), `Posição do Financeiro em ${lidoEm}. Detalhes no Centro Financeiro.`];
     // 15A (desligado por padrão): resposta natural redigida SÓ a partir das linhas calculadas aqui; o redator valida e, em
     // qualquer dúvida, devolve o texto determinístico.
     const padrao = RESPOSTA.consulta(linhas);
