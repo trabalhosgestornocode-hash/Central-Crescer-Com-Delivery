@@ -50,6 +50,26 @@ export async function abrirPool(url, opcoes) {
 let admin;
 const poolAdmin = async () => (admin ??= await abrirPool(ambiente().urlAdmin, { max: 2 }));
 
+// 17B: cada teste cria um banco NOVO (~13 MB) e antes NINGUÉM o apagava: o cluster isolado chegou a 42 mil bancos e encheu o disco
+// do computador. Agora todo banco criado por um teste é REGISTRADO aqui e APAGADO no fim do arquivo de teste (também quando o
+// teste falha). Só nomes `fv2_teste_*` que NÃO sejam o modelo nem o controle. FV2_MANTER_BANCOS=1 mantém os bancos para depuração.
+const bancosParaApagar = new Set();
+export function registrarBancoParaApagar(nome) {
+  if (typeof nome === "string" && /^fv2_teste_[a-z0-9_]+$/.test(nome) && !/^fv2_teste_modelo_/.test(nome) && nome !== "fv2_teste_controle") bancosParaApagar.add(nome);
+}
+async function apagarBancosRegistrados() {
+  if (!bancosParaApagar.size || process.env.FV2_MANTER_BANCOS === "1") { bancosParaApagar.clear(); return; }
+  try {
+    const a = ambiente();
+    if (a.disponivel) {
+      const controle = await abrirPoolSeguro(a.urlAdmin, a.marcador, { max: 1 });
+      for (const b of bancosParaApagar) await controle.query(`drop database if exists ${b} with (force)`).catch(() => {});
+      await controle.end().catch(() => {});
+    }
+  } catch { /* a limpeza nunca derruba o teste */ }
+  bancosParaApagar.clear();
+}
+
 /**
  * Cria um banco NOVO, só deste teste, a partir do modelo já migrado (ou vazio, com `vazio: true`), com o marcador do
  * ambiente e os escopos sintéticos. Devolve as URLs de aplicação (papel sem privilégio de dono) e de administração.
@@ -59,6 +79,7 @@ export async function criarBancoDeTeste(escopos = [], { vazio = false } = {}) {
   const banco = `fv2_teste_${randomBytes(6).toString("hex")}`;
   const adm = await poolAdmin();
   await adm.query(`create database ${banco} template ${vazio ? "template0" : a.bancoModelo}`);
+  registrarBancoParaApagar(banco);
   await adm.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   await fixarSearchPathDoBanco(adm, banco); // o módulo vive no schema dedicado (financeiro_v2)
   const urlAdmin = urlDoBanco(a.urlAdmin, banco);
@@ -180,4 +201,5 @@ after(async () => {
   for (const p of pools) await p.end().catch(() => {});
   pools.clear();
   admin = undefined;
+  await apagarBancosRegistrados();
 });

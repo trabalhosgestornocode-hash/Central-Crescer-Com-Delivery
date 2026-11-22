@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { abrirPool, ambiente } from "../../financeiro-v2/helpers/postgres.js";
+import { abrirPool, ambiente, registrarBancoParaApagar } from "../../financeiro-v2/helpers/postgres.js";
 import { lerAmbiente, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
 
 const PASTA = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "database", "mova-financeiro", "migracoes");
@@ -24,6 +24,7 @@ export async function criarBancoMova() {
   admin ??= await abrirPool(a.urlAdmin, { max: 2 });
   const banco = `fv2_teste_mova_${randomBytes(6).toString("hex")}`; // nome dentro da guarda de destino do ambiente isolado
   await admin.query(`create database ${banco} template template0`);
+  registrarBancoParaApagar(banco); // 17B: apagado no fim do arquivo de teste (antes ficava para sempre)
   await admin.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   const pool = await abrirPool(urlDoBanco(a.urlAdmin, banco), { max: 8 });
   for (const f of MIGRACOES) await pool.query(readFileSync(join(PASTA, f), "utf8"));

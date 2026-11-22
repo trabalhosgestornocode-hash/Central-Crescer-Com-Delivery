@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { CODIGO, comprovarDestinoIsolado, criarRepositorioPostgres, exigirDestinoLocal } from "../../src/modules/financeiro-v2/index.js";
 import { abrirPoolSeguro, aplicarMigracoes, urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
 import { ORG_A, UNI_A, rejeita } from "./helpers/cenario.js";
-import { abrirPool, ambiente, motivoParaPular } from "./helpers/postgres.js";
+import { abrirPool, ambiente, motivoParaPular, registrarBancoParaApagar } from "./helpers/postgres.js";
 
 const recusado = (fn) => assert.throws(fn, (e) => e.codigo === CODIGO.DESTINO_NAO_AUTORIZADO);
 const MARCADOR = "ab".repeat(32);
@@ -111,6 +111,7 @@ test("no ambiente real: banco local SEM o marcador do ambiente é recusado na pr
   // Um banco criado "por fora" no mesmo servidor local, com nome válido, mas sem o marcador: não é ambiente conferido.
   const semMarcador = `fv2_teste_${randomBytes(6).toString("hex")}`;
   await adm.query(`create database ${semMarcador} template template0`);
+  registrarBancoParaApagar(semMarcador);
   const pool = await abrirPool(urlDoBanco(a.urlApp, semMarcador), { max: 1 });
   await rejeita(pool.connect(), CODIGO.DESTINO_NAO_AUTORIZADO);
   await rejeita(pool.query("select 1"), CODIGO.DESTINO_NAO_AUTORIZADO);
