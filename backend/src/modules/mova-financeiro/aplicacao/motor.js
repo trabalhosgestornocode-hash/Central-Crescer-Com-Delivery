@@ -27,6 +27,7 @@ import { interpretarComando } from "./comandos.js";
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
   CONSULTA: "CONSULTA", ORIENTACAO: "ORIENTACAO", PROPOSTA: "PROPOSTA", FALHA_LEITURA: "FALHA_LEITURA",
+  EXECUTADO: "EXECUTADO", // Agente 2 — Frente C: operação aplicada pelo serviço oficial conforme a política de autonomia
 });
 export const TIPO_PROPOSTA = Object.freeze({ BAIXA_DE_OBRIGACAO: "BAIXA_DE_OBRIGACAO", DESPESA_PAGA: "DESPESA_PAGA", NOVA_OBRIGACAO: "NOVA_OBRIGACAO", SOLICITACAO_DE_REVISAO: "SOLICITACAO_DE_REVISAO" });
 const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
@@ -57,7 +58,7 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -75,7 +76,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (resposta && privado) {
       // Agente 2 — confidencialidade: o valor vai SÓ para a conversa privada do participante; no grupo fica o aviso (sem valores).
       if (privado.destino) await a.saida.enfileirar({ grupoId: privado.destino, respostaA: null, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
-      await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: privado.destino ? RESPOSTA.respondidoNoPrivado() : RESPOSTA.semConversaPrivada(), simulada: true });
+      const aviso = privado.destino ? (privado.aviso ?? RESPOSTA.respondidoNoPrivado()) : (privado.avisoSemPrivado ?? RESPOSTA.semConversaPrivada());
+      await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: aviso, simulada: true });
     } else if (resposta) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
     // Continuidade: depois de responder, escuta a próxima mensagem DESTE participante nesta conversa (e lembra unidade/consulta).
     if (resposta && evento.participanteId && typeof a.conversas?.registrar === "function") {
@@ -310,7 +312,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: `COMPETENCIA_${estado}`, escopo, resposta: RESPOSTA.competenciaFechada(competencia), injecao });
   }
 
-  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento }, dados, textoResposta) {
+  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento, grupo = null, participante = null }, dados, textoResposta, { posCriacao = null } = {}) {
     // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
     // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
     if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
@@ -340,8 +342,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     });
     await marcarDocumento(evento, escopo, proposta.id, saida);
     await a.auditoria.registrar({ acao: "PROPOSTA_CRIADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { tipo: dados.tipo, unidadeId: escopo.unidadeId } });
-    const texto = textoResposta(proposta) + (incompleta ? ` ${RESPOSTA.pendenteUnidadeIncompleta()}` : "");
-    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao });
+    // Agente 2 — Frente C: depois de criada, a baixa é conferida com o extrato e, se a política autorizar, liquidada.
+    const pos = posCriacao ? await posCriacao(proposta) : null;
+    const texto = (pos?.texto ?? textoResposta(proposta)) + (incompleta ? ` ${RESPOSTA.pendenteUnidadeIncompleta()}` : "");
+    const extra = pos ? { conciliacao: pos.situacao, autonomia: pos.nivel, ...(pos.motivo ? { motivoExecucao: pos.motivo } : {}) } : {};
+    // Agente 2: a resposta do documento leva VALOR — num grupo por LISTA segue a política (privado, ou grupo comprovado).
+    const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
+    const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
+    return concluir(evento, { decisao: pos?.situacao === "EXECUTADA" ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
   }
 
   async function tratarPagamento(ctx) {
@@ -366,7 +374,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         tipo: TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, valorCentavos: valor, parcial: valor < t.saldoCentavos,
         datas: { competencia: t.competencia, caixa: saida.dataPagamento, vencimento: t.vencimento },
         comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: t.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
-      }, RESPOSTA.propostaBaixa);
+      }, RESPOSTA.propostaBaixa, { posCriacao: execucao ? async (p) => textoDaExecucao(p, await execucao.aposBaixa(p, escopo)) : null });
     }
     // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
     // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
@@ -401,6 +409,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       datas: { competencia, caixa: null, vencimento: saida.vencimento }, competenciaPendente: !competencia,
       comando: { operacao: "registrarObrigacao", entrada: comando.valor },
     }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia));
+  }
+
+  /** Texto da resposta conforme o que a execução fez com a baixa (nada é dito como lançado sem ter sido). */
+  function textoDaExecucao(p, r) {
+    if (r.situacao === "EXECUTADA") return { ...r, texto: RESPOSTA.baixaExecutada(p, r.resultado) };
+    if (r.situacao === "CONFERIDA") return { ...r, texto: RESPOSTA.baixaConferida(p) };
+    if (r.situacao === "AMBIGUA") return { ...r, texto: `${RESPOSTA.propostaBaixa(p)} ${RESPOSTA.extratoAmbiguo()}` };
+    return { ...r, texto: `${RESPOSTA.propostaBaixa(p)} ${RESPOSTA.aguardandoExtrato()}` };
   }
 
   const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
@@ -445,10 +461,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const retrato = grupo.politicaResposta === POLITICA_RESPOSTA.GRUPO_FINANCEIRO && typeof a.membros?.obter === "function" ? await a.membros.obter(grupo.grupoId) : null;
     const d = decidirSaidaNoGrupo({ grupo, consulta, unidades, retrato, agora: relogio() });
     if (d.saida === "GRUPO") return { noGrupo: true, motivo: d.motivo };
-    if (d.saida === "RECUSAR") return { recusar: true, motivo: d.motivo };
     const jid = destinoPrivado(participante, evento.participanteId);
     // Só endereça uma conversa privada que a configuração conhece (derivada da lista): nunca um JID qualquer.
-    return { destino: jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null, motivo: d.motivo };
+    const destino = jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null;
+    return { destino, motivo: d.motivo, ...(d.saida === "RECUSAR" ? { recusar: true } : {}) };
   }
   /** Concluir uma consulta conforme a rota: no grupo (null/noGrupo), no privado, ou recusada (grupo operacional). */
   function rotaParaConcluir(rota) {

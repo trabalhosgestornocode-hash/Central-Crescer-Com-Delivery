@@ -34,6 +34,7 @@ import { Router } from "express";
 import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
+import { criarPortaOperacional } from "../mova-financeiro/index.js";
 import {
   MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
@@ -78,6 +79,14 @@ export function lerConfiguracaoMova(env) {
     if (operacao && env.MOVA_PILOTO_UNIDADE_ID) contradicoes.push("OPERACAO_COM_UNIDADE_DO_PILOTO");
     if (String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase() !== IDENTIDADE_MOVA) contradicoes.push("PILOTO_IDENTIDADE_DIFERENTE_DO_LEITOR");
   }
+  // Agente 2 — Frente C: AUTONOMIA (conferência com o extrato + políticas; só leitura) e ESCRITA (liquidação pelo serviço oficial).
+  // Escrita exige a autonomia, a OPERACAO e uma identidade OPERACIONAL própria (nunca a de leitura do MOVA).
+  const autonomia = sim(env.MOVA_OPERACAO_AUTONOMIA);
+  const escrita = sim(env.MOVA_OPERACAO_ESCRITA);
+  if ((autonomia || escrita) && !operacao) contradicoes.push("AUTONOMIA_FORA_DA_OPERACAO");
+  if (escrita && !autonomia) contradicoes.push("ESCRITA_SEM_AUTONOMIA");
+  if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) contradicoes.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
+  if (escrita && String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase() === String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase()) contradicoes.push("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA");
   if (processamento && !recebimento) contradicoes.push("PROCESSAMENTO_SEM_RECEBIMENTO");
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
   if (envio && !processamento) contradicoes.push("ENVIO_SEM_PROCESSAMENTO");
@@ -106,7 +115,8 @@ export function lerConfiguracaoMova(env) {
     recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
-      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), comandosDeterministicos: true } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
+      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), comandosDeterministicos: true, autonomia, escrita,
+      identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
     // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
     envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
   };
@@ -152,7 +162,7 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
+export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null }) {
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
     await exigirBancoDeHomologacao(pool, cfg.marcador); // o estado do MOVA fica SEMPRE no banco de homologação
     if (!verificarBancoFinanceiro) throw Object.assign(new Error("Sem verificação do banco do Financeiro."), { codigo: "BANCO_FINANCEIRO_NAO_VERIFICADO" });
@@ -181,7 +191,15 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const redator = cfg.ia && cfg.respostasNaturais && criarClienteIa
     ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
     : null;
-  mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true });
+  // Agente 2 — Frente C: a escrita só existe com a identidade OPERACIONAL implantada pela plataforma (núcleo de escrita + concessões
+  // dela). Sem isso a montagem RECUSA (nada sobe pela metade); sem `escrita`, o MOVA confere e propõe, nunca escreve.
+  let operacional = null;
+  if (cfg.escrita) {
+    const op = operacionalDaPlataforma ? await operacionalDaPlataforma({ identidade: cfg.identidadeOperacional, escopos }) : null;
+    if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
+    operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
+  }
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
@@ -246,7 +264,9 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: 2, idleTimeoutMillis: 30000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
       poolLeitor.on("error", () => {});
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });
-      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar });
+      // Escrita (Frente C/D): só se a plataforma registrar o provedor da identidade operacional (implantação do Agente 1).
+      const operacionalDaPlataforma = cfg.escrita ? (obterDependenciasFv2?.()?.operacionalMova ?? null) : null;
+      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma });
     }
     const dep = obterDependenciasFv2();
     return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });

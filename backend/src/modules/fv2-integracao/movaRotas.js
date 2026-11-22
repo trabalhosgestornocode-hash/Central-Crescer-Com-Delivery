@@ -13,11 +13,18 @@
 //   POST /acoes/mova/aplicar             aprovar e aplicar pelo Financeiro (aprovar + aplicar + registrar; unidade com escrita liberada)
 //   POST /acoes/mova/rejeitar            rejeitar (aprovar)
 //   POST /acoes/mova/reprocessar         devolver evento com falha à fila (aprovar)
+//   Agente 2 — Frente C (operações com autonomia):
+//   GET  /api/mova/operacoes             operações executadas pelo MOVA na unidade (ver)
+//   GET  /api/mova/politicas             políticas de autonomia da empresa (ver)
+//   POST /acoes/mova/confirmar-baixa-extrato  responsável confirma a baixa já conferida com o extrato (aprovar + vincular + documentos)
+//   POST /acoes/mova/reverter-operacao   estorno oficial de uma operação executada (cancelar)
+//   POST /acoes/mova/politica            cadastrar política de autonomia (configurar)
+//   POST /acoes/mova/politica-revogar    revogar política (configurar)
 import { ACAO } from "../financeiro-v2/index.js";
 import { ErroDeAprovacao } from "../mova-financeiro/index.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
-const STATUS = { PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
+const STATUS = { OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const escopo = (ctx) => ({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
 
@@ -43,6 +50,12 @@ export const CONSULTAS_MOVA = Object.freeze({
     const d = typeof params.evento === "string" && /^[A-Za-z0-9_.:@-]{1,160}$/.test(params.evento) ? await mova.consultas.documento({ ...escopo(ctx), eventoId: params.evento }) : null;
     if (!d) throw recusa(404, "DOCUMENTO_NAO_ENCONTRADO", "Mensagem não encontrada nesta unidade.");
     return d;
+  },
+  "/mova/operacoes": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.armazenamento.operacoes ? await mova.armazenamento.operacoes.listar(escopo(ctx)) : [] }; },
+  "/mova/politicas": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const todas = mova.armazenamento.politicas ? await mova.armazenamento.politicas.listar(ctx.organizacaoId) : [];
+    return { autonomiaLigada: Boolean(mova.execucao), identidadeOperacional: Boolean(mova.execucao?.operacional), itens: todas.filter((p) => !p.unidadeId || p.unidadeId === ctx.unidadeId) };
   },
   "/mova/historico": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: await mova.consultas.historico(escopo(ctx)) }; },
   "/mova/estado": async ({ ctx, mova, worker, enviador, chaves, controle, orcamento }) => {
@@ -76,6 +89,14 @@ export const ACOES_MOVA = Object.freeze({
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarClassificacao(ctx, { propostaId: b.propostaId, versao: b.versao, categoria: b.categoria }) },
   "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria"], escreveNoFinanceiro: true,
     fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.aplicar(ctx, { propostaId: b.propostaId, contaId: b.contaId ?? null, categoria: b.categoria ?? null }, { nucleo }) },
+  "/mova/confirmar-baixa-extrato": { campos: ["propostaId"], escreveNoFinanceiro: true,
+    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.confirmarBaixaPorExtrato(ctx, { propostaId: b.propostaId }, { nucleo }) },
+  "/mova/reverter-operacao": { campos: ["operacaoId", "justificativa"], escreveNoFinanceiro: true,
+    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.reverterOperacao(ctx, { operacaoId: b.operacaoId, justificativa: b.justificativa }, { nucleo }) },
+  "/mova/politica": { campos: ["operacao", "unidadeId", "nivel", "limiteCentavos", "responsavel", "motivo", "vigenteDe", "vigenteAte"], escreveNoFinanceiro: false,
+    fazer: ({ ctx, mova, b }) => mova.aprovador.criarPolitica(ctx, b) },
+  "/mova/politica-revogar": { campos: ["politicaId"], escreveNoFinanceiro: false,
+    fazer: ({ ctx, mova, b }) => mova.aprovador.revogarPolitica(ctx, { politicaId: b.politicaId }) },
   "/mova/rejeitar": { campos: ["propostaId", "motivo"], escreveNoFinanceiro: false,
     fazer: ({ ctx, mova, b }) => mova.aprovador.rejeitar(ctx, { propostaId: b.propostaId, motivo: b.motivo }) },
   // Reversão funcional (ou religar) EM TEMPO REAL: sem deploy, sem reiniciar o Gateway, sem tocar no WhatsApp.

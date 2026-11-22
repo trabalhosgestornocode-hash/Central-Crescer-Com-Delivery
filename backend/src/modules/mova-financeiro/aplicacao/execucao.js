@@ -1,0 +1,144 @@
+// EXECUÇÃO das operações do MOVA (Agente 2 — Frente C): comprovante → obrigação → EXTRATO → POLÍTICA → liquidação → conciliação.
+//
+// Fluxo (cada passo testado):
+//   1. a proposta de BAIXA já identificou a conta a pagar (motor, tratarPagamento);
+//   2. conferência com o EXTRATO (leitura, previaDoVinculoDoExtrato): valor exato, data ±2 dias, ID da transação desempata;
+//      ambíguo nunca escolhe; a proposta é ANOTADA com o resultado (CONFERIDA / AMBIGUA / AGUARDANDO_EXTRATO);
+//   3. política de autonomia (empresa, unidade, operação, valor): sem política ⇒ só propõe;
+//   4. liquidação SÓ pelo serviço oficial vincularPagamentoDoExtrato (a saída JÁ existe no extrato: nenhuma saída nova, a DRE
+//      não muda, o banco não muda), com o comprovante anexado ao cofre do Financeiro (enviarEvidencia) — nunca pagamento bancário;
+//   5. idempotência em duas camadas: chave da operação no MOVA + chave do vínculo no Financeiro; trava condicional da proposta;
+//   6. pagamento parcial: permitido (valor ≤ saldo); a conta continua com o saldo restante;
+//   7. divergência (prévia com bloqueio, pagamento antecipado, juros/multa): NÃO executa — volta para revisão humana com o motivo;
+//   8. auditoria de tudo; reversão pelo estorno oficial (aprovacao.reverterOperacao), por responsável autorizado.
+import { ErroTransitorio } from "../gateway/fila.js";
+import { NIVEL, OPERACAO, conferirComExtrato, decidirAutonomia, validarPolitica } from "../dominio/autonomia.js";
+import { ErroDeExecucao } from "./portaOperacional.js";
+
+const curto = (id) => String(id ?? "").slice(0, 8);
+const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
+
+/**
+ * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
+ */
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+  const hoje = () => relogio().toISOString().slice(0, 10);
+  // Leituras do Financeiro SEMPRE com a identidade de leitura do MOVA (o escopo pode vir da Central, sem usuário).
+  const lendo = (escopo) => ({ organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, usuarioId: identidadeLeitura });
+
+  async function politicasDe(organizacaoId) {
+    if (typeof a.politicas?.listar !== "function") return [];
+    const validas = [];
+    for (const p of await a.politicas.listar(organizacaoId)) {
+      try { validas.push(validarPolitica(p)); } catch { registrar({ tipo: "MOVA_POLITICA_INVALIDA_IGNORADA", politica: curto(p.id) }); }
+    }
+    return validas;
+  }
+
+  /** Passo 2: confere a proposta de baixa com as saídas do extrato (só leitura). */
+  async function conferir(proposta, escopo) {
+    const e = proposta.comando?.entrada;
+    if (!e?.obrigacaoId) return { situacao: "AGUARDANDO_EXTRATO", candidatas: 0, movimentacaoId: null };
+    const previa = await porta.ler("previaDoVinculoDoExtrato", lendo(escopo), { obrigacaoId: e.obrigacaoId });
+    const idTransacao = proposta.leitura?.idTransacao ?? null;
+    const saidas = (previa.saidasElegiveis ?? []).filter((s) => s.competenciaAceitaBaixa !== false).map((s) => ({
+      id: s.id, data: s.data, disponivelCentavos: s.disponivelCentavos,
+      idExterno: idTransacao && String(s.descricao ?? "").includes(idTransacao) ? idTransacao : null,
+    }));
+    return conferirComExtrato({ valorCentavos: proposta.valorCentavos, dataPagamento: e.dataEfetiva, idTransacao }, saidas);
+  }
+
+  /**
+   * Passos 4–8: liquida UMA proposta de baixa pela saída do extrato. `executor` = porta operacional (automático) ou a pessoa
+   * que confirmou na Central (executorDaPessoa). Nunca lança erro de regra: devolve { ok:false, motivo } e a proposta volta.
+   */
+  async function liquidar({ proposta, escopo, movimentacaoId, nivel, politicaId = null, executor }) {
+    const e = proposta.comando?.entrada;
+    if (proposta.tipo !== "BAIXA_DE_OBRIGACAO" || !e?.obrigacaoId) return { ok: false, motivo: "PROPOSTA_NAO_E_BAIXA" };
+    if (!movimentacaoId) return { ok: false, motivo: "SEM_SAIDA_CONFERIDA" };
+    // Idempotência (camada 1): a mesma proposta nunca liquida duas vezes; falha anterior libera nova tentativa (nova chave).
+    let reserva = null;
+    for (let tentativa = 1; tentativa <= 5; tentativa++) {
+      const r = await a.operacoes.reservar({ chave: `${OPERACAO.BAIXA_POR_EXTRATO}|${proposta.id}#${tentativa}`, propostaId: proposta.id, organizacaoId: escopo.organizacaoId,
+        unidadeId: escopo.unidadeId, operacao: OPERACAO.BAIXA_POR_EXTRATO, nivel, politicaId, valorCentavos: proposta.valorCentavos, executadaPor: executor.identidade });
+      if (r.nova) { reserva = r.operacao; break; }
+      if (r.operacao.estado !== "FALHOU") return { ok: r.operacao.estado === "EXECUTADA", repetida: true, operacao: r.operacao, motivo: `OPERACAO_${r.operacao.estado}` };
+    }
+    if (!reserva) return { ok: false, motivo: "TENTATIVAS_ESGOTADAS" };
+    const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
+    if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ok: false, motivo: "PROPOSTA_JA_DECIDIDA" }; }
+    try {
+      // Divergência: a prévia oficial (com a saída escolhida) não pode ter bloqueio, antecipação nem sobra de juros/multa.
+      const previa = await porta.ler("previaDoVinculoDoExtrato", lendo(escopo), { obrigacaoId: e.obrigacaoId, movimentacaoId, valorCentavos: proposta.valorCentavos });
+      const esc = previa.escolhida;
+      if (!esc) throw new ErroDeExecucao("SAIDA_NAO_ENCONTRADA");
+      if (esc.bloqueios?.length) throw new ErroDeExecucao("PREVIA_COM_BLOQUEIO", { bloqueios: esc.bloqueios });
+      if (esc.antecipacao) throw new ErroDeExecucao("PAGAMENTO_ANTECIPADO_EXIGE_REVISAO");
+      if (esc.juros) throw new ErroDeExecucao("DIFERENCA_DE_JUROS_EXIGE_REVISAO");
+      // O comprovante recebido vai ao cofre do Financeiro, ligado à conta a pagar (evidência da baixa).
+      const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
+      if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_COMPROVANTE");
+      const mime = proposta.evidencia.mime;
+      const doc = await executor.chamar("enviarEvidencia", escopo, {
+        arquivo: { conteudo: bytes, nome: `comprovante-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime }, tipo: "COMPROVANTE",
+        descricao: `Comprovante recebido pelo MOVA (proposta ${curto(proposta.id)})`, competencia: proposta.datas?.competencia ?? null,
+        vinculo: { registroTipo: "OBRIGACAO", registroId: e.obrigacaoId },
+      });
+      const r = await executor.chamar("vincularPagamentoDoExtrato", escopo, {
+        movimentacaoId, versaoMovimentacao: esc.versao, alocacoes: [{ obrigacaoId: e.obrigacaoId, valorCentavos: proposta.valorCentavos }], documentoId: doc.documento.id,
+        justificativa: `Baixa pelo MOVA: comprovante conferido com a saída do extrato de ${esc.data} (${nivel === NIVEL.APLICAR_AUTOMATICO ? "política de autonomia" : "confirmada por responsável"}).`,
+        confirmar: true,
+      });
+      const resultado = { obrigacaoId: e.obrigacaoId, movimentacaoId, documentoId: doc.documento.id, liquidacaoIds: (r.liquidacoes ?? []).map((l) => l.id), repetidoNoFinanceiro: Boolean(r.repetido),
+        parcial: proposta.parcial === true, dataSaida: esc.data, saldoDepoisCentavos: esc.efeito?.obrigacao?.saldoDepoisCentavos ?? null };
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
+      const operacao = await a.operacoes.concluir(reserva.id, resultado);
+      await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: nivel === NIVEL.APLICAR_AUTOMATICO ? "SISTEMA" : "USUARIO", atorRef: executor.identidade, alvo: proposta.id,
+        dados: { operacao: OPERACAO.BAIXA_POR_EXTRATO, nivel, politicaId, valorCentavos: proposta.valorCentavos, movimentacaoId, liquidacoes: resultado.liquidacaoIds.length } });
+      return { ok: true, operacao, resultado };
+    } catch (erro) {
+      const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "AGUARDANDO_REVISAO");
+      await a.operacoes.falhar(reserva.id, codigo);
+      await a.auditoria.registrar({ acao: "OPERACAO_FALHOU", atorTipo: nivel === NIVEL.APLICAR_AUTOMATICO ? "SISTEMA" : "USUARIO", atorRef: executor.identidade, alvo: proposta.id, dados: { codigo, detalhes: erro?.detalhes ?? null } });
+      registrar({ tipo: "MOVA_OPERACAO_FALHOU", codigo });
+      return { ok: false, motivo: codigo, detalhes: erro?.detalhes ?? null };
+    }
+  }
+
+  /**
+   * Depois de criar a proposta de baixa (motor) ou numa reconferência (rotina): confere o extrato, decide pela política e,
+   * se a política autorizar e houver identidade operacional com concessão, liquida. Falha de leitura NÃO derruba a mensagem:
+   * a proposta fica aguardando extrato e é reconferida depois.
+   * @returns {Promise<{situacao:"EXECUTADA"|"CONFERIDA"|"AMBIGUA"|"AGUARDANDO_EXTRATO", nivel:string, motivos:string[], resultado?:object, motivo?:string}>}
+   */
+  async function aposBaixa(proposta, escopo) {
+    let conciliacao;
+    try { conciliacao = await conferir(proposta, escopo); } catch (e) {
+      registrar({ tipo: "MOVA_CONFERENCIA_ADIADA", codigo: e?.codigo ?? "LEITURA_FALHOU" });
+      return { situacao: "AGUARDANDO_EXTRATO", nivel: NIVEL.SOMENTE_PROPOR, motivos: ["CONFERENCIA_ADIADA"] };
+    }
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.BAIXA_POR_EXTRATO, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje(), conciliacao });
+    const anotada = await a.propostas.anotar(escopo, proposta.id, {
+      conciliacao: { situacao: conciliacao.situacao, movimentacaoId: conciliacao.movimentacaoId, candidatas: conciliacao.candidatas, idTransacao: proposta.leitura?.idTransacao ?? null, conferidaEm: relogio().toISOString() },
+      autonomia: decisao,
+    });
+    const base = { situacao: conciliacao.situacao, nivel: decisao.nivel, motivos: decisao.motivos, movimentacaoId: conciliacao.movimentacaoId };
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return base;
+    if (!operacional) return { ...base, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode("vincularPagamentoDoExtrato", escopo)) || !(await operacional.pode("enviarEvidencia", escopo))) return { ...base, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await liquidar({ proposta: anotada ?? proposta, escopo, movimentacaoId: conciliacao.movimentacaoId, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, executor: operacional });
+    return r.ok ? { ...base, situacao: "EXECUTADA", resultado: r.resultado } : { ...base, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /** Reconferência: propostas de baixa ainda sem extrato conferido (o extrato pode ter chegado depois do comprovante). */
+  async function reconferirPendentes(escopo) {
+    const pendentes = (await a.propostas.listar(escopo)).filter((p) => p.estado === "AGUARDANDO_REVISAO" && p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao !== "CONFERIDA");
+    const resultados = [];
+    for (const p of pendentes) resultados.push({ propostaId: p.id, ...(await aposBaixa(p, escopo)) });
+    return resultados;
+  }
+
+  return Object.freeze({ conferir, liquidar, aposBaixa, reconferirPendentes, operacional });
+}

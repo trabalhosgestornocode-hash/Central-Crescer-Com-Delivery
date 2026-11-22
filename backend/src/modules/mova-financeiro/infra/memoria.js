@@ -20,6 +20,8 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const auditoria = [];
   const conversas = new Map();
   const retratos = new Map();
+  const politicas = [];
+  const operacoes = new Map();
 
   return Object.freeze({
     eventos: Object.freeze({
@@ -47,6 +49,13 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       },
       async listar(escopo) { return [...propostas.values()].filter((p) => chave(p) === chave(escopo)); },
       async obter(escopo, id) { const p = propostas.get(id); return p && chave(p) === chave(escopo) ? p : null; },
+      async anotar(escopo, id, alteracoes) {
+        const p = propostas.get(id);
+        if (!p || chave(p) !== chave(escopo) || p.estado !== "AGUARDANDO_REVISAO") return null;
+        const nova = Object.freeze({ ...p, ...alteracoes, versao: p.versao + 1 });
+        propostas.set(id, nova);
+        return nova;
+      },
       async transicionar(escopo, id, de, para, resultado = null) {
         const p = propostas.get(id);
         if (!p || chave(p) !== chave(escopo) || p.estado !== de || !TRANSICOES[de]?.includes(para)) return null;
@@ -95,6 +104,35 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         return c && c.ate > relogio().getTime() ? { unidadeId: c.unidadeId, consulta: c.consulta } : null;
       },
       async encerrar({ grupoId, participanteId }) { conversas.delete(`${grupoId}|${participanteId}`); },
+    }),
+    politicas: Object.freeze({
+      async listar(organizacaoId) { return politicas.filter((p) => p.organizacaoId === organizacaoId); },
+      async criar(p, { criadaPor }) {
+        if (politicas.some((x) => !x.revogadaEm && x.operacao === p.operacao && x.organizacaoId === p.organizacaoId && (x.unidadeId ?? null) === (p.unidadeId ?? null))) throw Object.assign(new Error("política ativa já existe"), { codigo: "POLITICA_ATIVA_EXISTE" });
+        const id = gerarId(); politicas.push({ ...p, unidadeId: p.unidadeId ?? null, vigenteAte: p.vigenteAte ?? null, id, criadaPor, revogadaEm: null }); return id;
+      },
+      async revogar({ id, organizacaoId, por }) {
+        const i = politicas.findIndex((x) => x.id === id && x.organizacaoId === organizacaoId && !x.revogadaEm);
+        if (i < 0) return false; politicas[i] = { ...politicas[i], revogadaEm: relogio().toISOString(), revogadaPor: por }; return true;
+      },
+    }),
+    operacoes: Object.freeze({
+      async reservar(o) {
+        const ex = [...operacoes.values()].find((x) => x.chave === o.chave);
+        if (ex) return { operacao: ex, nova: false };
+        const op = Object.freeze({ ...o, id: gerarId(), estado: "EXECUTANDO", resultado: null, motivo: null, criadaEm: relogio().toISOString(), revertidaPor: null, revertidaEm: null, justificativaReversao: null });
+        operacoes.set(op.id, op); return { operacao: op, nova: true };
+      },
+      async concluir(id, resultado) { const o = operacoes.get(id); if (o?.estado !== "EXECUTANDO") return null; const n = Object.freeze({ ...o, estado: "EXECUTADA", resultado }); operacoes.set(id, n); return n; },
+      async falhar(id, motivo) { const o = operacoes.get(id); if (o?.estado !== "EXECUTANDO") return null; const n = Object.freeze({ ...o, estado: "FALHOU", motivo }); operacoes.set(id, n); return n; },
+      async reverter(id, escopo, { por, justificativa, resultado }) {
+        const o = operacoes.get(id);
+        if (!o || o.estado !== "EXECUTADA" || o.organizacaoId !== escopo.organizacaoId || o.unidadeId !== escopo.unidadeId) return null;
+        const n = Object.freeze({ ...o, estado: "REVERTIDA", revertidaPor: por, revertidaEm: relogio().toISOString(), justificativaReversao: justificativa, resultado: { ...o.resultado, reversao: resultado ?? {} } });
+        operacoes.set(id, n); return n;
+      },
+      async obter(id, escopo) { const o = operacoes.get(id); return o && o.organizacaoId === escopo.organizacaoId && o.unidadeId === escopo.unidadeId ? o : null; },
+      async listar(escopo) { return [...operacoes.values()].filter((o) => o.organizacaoId === escopo.organizacaoId && o.unidadeId === escopo.unidadeId).reverse(); },
     }),
     membros: Object.freeze({
       async registrar({ grupoId, membros, verificadoEm = null }) { retratos.set(grupoId, { membros: [...membros], verificadoEm: verificadoEm ?? relogio().toISOString() }); },

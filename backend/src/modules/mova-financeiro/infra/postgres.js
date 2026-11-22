@@ -46,6 +46,11 @@ const linhaProposta = (r) => r && Object.freeze({
 /**
  * @param {{pool:object, gerarId?:() => string}} deps
  */
+const dia = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+const linhaOperacao = (x) => (x ? Object.freeze({ id: x.id, chave: x.chave, propostaId: x.proposta_id, organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, operacao: x.operacao, nivel: x.nivel,
+  politicaId: x.politica_id, estado: x.estado, valorCentavos: Number(x.valor_centavos), executadaPor: x.executada_por, resultado: x.resultado, motivo: x.motivo,
+  criadaEm: x.criada_em.toISOString(), revertidaPor: x.revertida_por, revertidaEm: x.revertida_em ? x.revertida_em.toISOString() : null, justificativaReversao: x.justificativa_reversao }) : null);
+
 export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
   const q = consultar(pool);
   return Object.freeze({
@@ -102,6 +107,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return linhaProposta(r.rows[0]) ?? null;
       },
       async quantidade() { return Number((await q("select count(*)::int as n from mova.proposta")).rows[0].n); },
+      /** Agente 2: anotação INTERNA (conciliação, autonomia) enquanto AGUARDANDO_REVISAO; não muda tipo, valor nem estado. */
+      async anotar(escopo, id, alteracoes) {
+        const r = await q("update mova.proposta set dados = dados || $4::jsonb where id = $1 and organizacao_id = $2 and unidade_id = $3 and estado = 'AGUARDANDO_REVISAO' returning *",
+        [id, escopo.organizacaoId, escopo.unidadeId, JSON.stringify(alteracoes)]);
+        return linhaProposta(r.rows[0]) ?? null;
+      },
       /** Revisão (Nível 2) enquanto AGUARDANDO_REVISAO; só mescla `alteracoes` em dados; exige a versão lida (senão null). */
       async revisar(escopo, id, versao, alteracoes) {
         const r = await q(`update mova.proposta set dados = dados || $5::jsonb
@@ -192,6 +203,45 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async encerrar({ grupoId, participanteId }) {
         await q("delete from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2", [grupoId, participanteId]);
+      },
+    }),
+    /** Agente 2 — Frente C: políticas de AUTONOMIA (cadastradas por administrador na Central; o motor só lê). */
+    politicas: Object.freeze({
+      async listar(organizacaoId) {
+        const r = await q("select * from mova.politica_autonomia where organizacao_id = $1 order by criada_em", [organizacaoId]);
+        return r.rows.map((x) => ({ id: x.id, operacao: x.operacao, organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, nivel: x.nivel, limiteCentavos: Number(x.limite_centavos),
+          responsavel: x.responsavel, motivo: x.motivo, vigenteDe: dia(x.vigente_de), vigenteAte: x.vigente_ate ? dia(x.vigente_ate) : null, revogadaEm: x.revogada_em ? x.revogada_em.toISOString() : null }));
+      },
+      async criar(p, { criadaPor }) {
+        const r = await q(`insert into mova.politica_autonomia (operacao, organizacao_id, unidade_id, nivel, limite_centavos, responsavel, motivo, vigente_de, vigente_ate, criada_por)
+                           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+        [p.operacao, p.organizacaoId, p.unidadeId ?? null, p.nivel, p.limiteCentavos, p.responsavel, p.motivo, p.vigenteDe, p.vigenteAte ?? null, criadaPor]);
+        return r.rows[0].id;
+      },
+      async revogar({ id, organizacaoId, por }) {
+        return (await q("update mova.politica_autonomia set revogada_em = now(), revogada_por = $3 where id = $1 and organizacao_id = $2 and revogada_em is null", [id, organizacaoId, por])).rowCount === 1;
+      },
+    }),
+    /** Agente 2 — Frente C: operações executadas (chave única = idempotência; reversão registrada, nunca apagada). */
+    operacoes: Object.freeze({
+      async reservar(o) {
+        const r = await q(`insert into mova.operacao_executada (chave, proposta_id, organizacao_id, unidade_id, operacao, nivel, politica_id, estado, valor_centavos, executada_por)
+                           values ($1,$2,$3,$4,$5,$6,$7,'EXECUTANDO',$8,$9) on conflict (chave) do nothing returning *`,
+        [o.chave, o.propostaId, o.organizacaoId, o.unidadeId, o.operacao, o.nivel, o.politicaId ?? null, o.valorCentavos, o.executadaPor]);
+        if (r.rowCount === 1) return { operacao: linhaOperacao(r.rows[0]), nova: true };
+        return { operacao: linhaOperacao((await q("select * from mova.operacao_executada where chave = $1", [o.chave])).rows[0]), nova: false };
+      },
+      async concluir(id, resultado) { return linhaOperacao((await q("update mova.operacao_executada set estado = 'EXECUTADA', resultado = $2 where id = $1 and estado = 'EXECUTANDO' returning *", [id, JSON.stringify(resultado)])).rows[0]); },
+      async falhar(id, motivo) { return linhaOperacao((await q("update mova.operacao_executada set estado = 'FALHOU', motivo = $2 where id = $1 and estado = 'EXECUTANDO' returning *", [id, String(motivo).slice(0, 200)])).rows[0]); },
+      async reverter(id, escopo, { por, justificativa, resultado }) {
+        return linhaOperacao((await q(`update mova.operacao_executada set estado = 'REVERTIDA', revertida_por = $4, revertida_em = now(), justificativa_reversao = $5,
+                                          resultado = resultado || jsonb_build_object('reversao', $6::jsonb)
+                                        where id = $1 and organizacao_id = $2 and unidade_id = $3 and estado = 'EXECUTADA' returning *`,
+        [id, escopo.organizacaoId, escopo.unidadeId, por, justificativa, JSON.stringify(resultado ?? {})])).rows[0]);
+      },
+      async obter(id, escopo) { return linhaOperacao((await q("select * from mova.operacao_executada where id = $1 and organizacao_id = $2 and unidade_id = $3", [id, escopo.organizacaoId, escopo.unidadeId])).rows[0]); },
+      async listar(escopo, limite = 200) {
+        return (await q("select * from mova.operacao_executada where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit $3", [escopo.organizacaoId, escopo.unidadeId, limite])).rows.map(linhaOperacao);
       },
     }),
     /**

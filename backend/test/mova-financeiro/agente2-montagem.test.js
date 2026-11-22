@@ -46,3 +46,16 @@ test("A2-M3 escopo da OPERACAO: unidade fora da lista, conversa avulsa ou grupo 
   const avulsa = { ...cfg, gruposAutorizados: [...cfg.gruposAutorizados, { grupoId: "5500000000999@s.whatsapp.net", unidades: [U1], acesso: "LISTA", derivada: false }] };
   assert.throws(() => exigirEscopoDaOperacao(avulsa, [U1]), (e) => e.motivos.includes("OPERACAO_COM_CONVERSA_AVULSA"));
 });
+
+test("A2-M4 autonomia e escrita: desligadas por padrão; escrita exige autonomia e identidade OPERACIONAL própria", () => {
+  const c = lerConfiguracaoMova(BASE);
+  assert.deepEqual([c.autonomia, c.escrita, c.identidadeOperacional], [false, false, null]);
+  assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1" }).autonomia, true);
+  const motivo = (env) => lerConfiguracaoMova(env).contradicoes ?? [];
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_AUTONOMIA"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_IDENTIDADE_OPERACIONAL"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: IDENTIDADE_MOVA }).includes("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA"));
+  assert.ok(motivo({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_PILOTO_UNIDADE_ID: U1, MOVA_OPERACAO_UNIDADES: "", MOVA_OPERACAO_AUTONOMIA: "1" }).includes("AUTONOMIA_FORA_DA_OPERACAO"));
+  const ok = lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: "eeeeeeee-0000-4000-8000-0000000000c2" });
+  assert.deepEqual([ok.habilitado, ok.escrita, ok.identidadeOperacional], [true, true, "eeeeeeee-0000-4000-8000-0000000000c2"]);
+});
