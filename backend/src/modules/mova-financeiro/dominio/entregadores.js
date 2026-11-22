@@ -1,6 +1,6 @@
 // MOVA — Agente 2, Frente D: ROTINA SEMANAL DOS ENTREGADORES pelo WhatsApp (ponte com o fechamento oficial do Financeiro).
 //
-// Reaproveita o fechamento semanal de financeiro-v2 (entregadoresProprios.js: semana seg–dom, prazo da nota = início + 8 dias,
+// Reaproveita o fechamento semanal de Financeiro v2 (entregadoresProprios.js: semana seg–dom, prazo da nota = início + 8 dias,
 // conferência de NF, liberação). Este módulo só COMPÕE mensagens e decide o encaminhamento; não escreve no Financeiro:
 //   - o entregador é identificado pelo número CADASTRADO (lista fechada por unidade), nunca pelo nome digitado;
 //   - ele só vê o PRÓPRIO fechamento (nunca o de outro entregador, nem total da unidade);

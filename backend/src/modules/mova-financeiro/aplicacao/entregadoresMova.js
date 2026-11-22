@@ -1,6 +1,6 @@
 // MOVA — Agente 2, Frente D INTEGRADA: o entregador no WhatsApp, ligado ao fechamento OFICIAL do Financeiro.
 //
-// Não é um segundo módulo de entregadores: fechamento, nota, conferência e liberação são de financeiro-v2 (entregadoresProprios).
+// Não é um segundo módulo de entregadores: fechamento, nota, conferência e liberação são de Financeiro v2 (entregadoresProprios).
 // Aqui:
 //   - conversa privada do entregador (lista fechada por unidade; identidade = número/LID cadastrado, nunca o nome digitado);
 //   - ele vê SÓ o próprio fechamento (consulta pela chave cadastrada, nunca pelo que ele digitar);
