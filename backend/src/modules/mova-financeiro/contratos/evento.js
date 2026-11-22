@@ -18,6 +18,8 @@ export const TEXTO_MAX = 4096;
 export const MIDIA_MAX_BYTES = 15 * 1024 * 1024;
 
 const CHAVES = Object.freeze(["contrato", "provedor", "eventoId", "mensagemId", "grupoId", "participanteId", "telefoneE164", "nomeExibicao", "fromMe", "tipo", "texto", "respostaA", "midia", "recebidoEm"]);
+/** Agente 2: arquivo RECUSADO no receptor antes de qualquer gravação (o conteúdo foi descartado; só o motivo segue ao motor). */
+export const MIDIA_RECUSADA = Object.freeze({ PERFIL_SEM_DOCUMENTOS: "PERFIL_SEM_DOCUMENTOS", FORMATO_NAO_ACEITO: "FORMATO_NAO_ACEITO", FORMATO_NAO_ACEITO_SEM_LEITURA: "FORMATO_NAO_ACEITO_SEM_LEITURA", ARQUIVO_GRANDE: "ARQUIVO_GRANDE" });
 const CHAVES_MIDIA = Object.freeze(["mime", "tamanhoBytes", "sha256", "nomeArquivo", "referencia"]);
 const ID = /^[A-Za-z0-9_.:@-]{1,160}$/;
 // Conversa: grupo (@g.us) ou, SÓ na homologação privada, o JID canônico de telefone do contato verificado pelo Gateway.
@@ -32,7 +34,8 @@ const ehObjeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
  */
 export function validarEvento(e) {
   if (!ehObjeto(e)) return { ok: false, erro: "corpo_invalido" };
-  for (const k of Object.keys(e)) if (!CHAVES.includes(k)) return { ok: false, erro: "campo_desconhecido" };
+  for (const k of Object.keys(e)) if (!CHAVES.includes(k) && k !== "midiaRecusada") return { ok: false, erro: "campo_desconhecido" };
+  if (e.midiaRecusada != null && (!Object.values(MIDIA_RECUSADA).includes(e.midiaRecusada) || e.midia !== null || e.tipo !== "OUTRO")) return { ok: false, erro: "midia_recusada" };
   for (const k of CHAVES) if (!(k in e)) return { ok: false, erro: `${k}_ausente` };
   if (e.contrato !== CONTRATO_EVENTO_VERSAO) return { ok: false, erro: "contrato" };
   if (!PROVEDORES.includes(e.provedor)) return { ok: false, erro: "provedor" };

@@ -2,11 +2,12 @@
 // fictícios, nenhum valor real. Nenhuma chamada de IA, nenhuma escrita no Financeiro, nenhuma resposta real.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { ALFA, BETA, CONS, ESTRANHO, FIN, GRUPO, ORG, OPER, cenario, gw, t } from "./helpers/operacao.js";
+import { ALFA, BETA, CONS, ESTRANHO, FIN, GRUPO, LID, ORG, OPER, SO_ALFA, cenario, gw, t } from "./helpers/operacao.js";
 import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 import { ACAO } from "../../src/modules/financeiro-v2/index.js";
+import { RESPOSTA } from "../../src/modules/mova-financeiro/aplicacao/respostas.js";
 import { CONSULTAS_MOVA, ACOES_MOVA, executarAcaoMova } from "../../src/modules/fv2-integracao/movaRotas.js";
-import { conferirArquivo, formatoConfere, legendaDoDocumento, pdfComConteudoAtivo, RESPOSTA_DOCUMENTO } from "../../src/modules/mova-financeiro/aplicacao/recebimentoDocumental.js";
+import { conferirArquivo, formatoConfere, legendaDoDocumento, pdfComConteudoAtivo, protocoloDoDocumento, RESPOSTA_DOCUMENTO } from "../../src/modules/mova-financeiro/aplicacao/recebimentoDocumental.js";
 import { MOTIVO, MOTIVO_SAIDA, classificarSaidas, contasRelacionadas, favorecidoDaSaida, mesmaPessoa, montarConferencia, pendenciaDaConta } from "../../src/modules/mova-financeiro/aplicacao/centralConferencia.js";
 
 const PDF = (s = "comprovante sintético") => Buffer.from(`%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\n% ${s}\n%%EOF\n`, "latin1");
@@ -46,8 +47,10 @@ t("A2-R2 PDF de quem é FINANCEIRO: guardado, registrado AGUARDANDO_CONFERENCIA 
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo, h.unidadeId], ["DOCUMENTO_RECEBIDO", "AGUARDANDO_CONFERENCIA", ALFA]);
   const [r] = await s.saida();
-  assert.equal(r.texto, RESPOSTA_DOCUMENTO.recebido("Loja Alfa"));
-  assert.match(r.texto, /Ainda não foi identificado nem conciliado automaticamente/);
+  assert.equal(r.texto, RESPOSTA_DOCUMENTO.recebido("Loja Alfa", protocoloDoDocumento(sha(bytes))));
+  assert.match(r.texto, /• Unidade: Loja Alfa\n• Situação: aguardando conferência do Financeiro\n• Nenhuma baixa, pagamento ou alteração foi feita/);
+  assert.match(r.texto, new RegExp(`Acompanhamento: DOC-${sha(bytes).slice(0, 8).toUpperCase()}$`));
+  assert.equal((await s.banco.pool.query("select carga->'midia'->>'base64' b from mova.fila")).rows[0].b, null, "terminado, o conteúdo sai da fila");
   assert.doesNotMatch(r.texto, /R\$|\d{2}\/\d{2}/, "a confirmação não tem valor nem data (pode sair no grupo)");
   const [d] = await recebidos(s);
   assert.equal(d.sha256, sha(bytes));
@@ -68,7 +71,7 @@ t("A2-R3 deduplicação: o MESMO arquivo em outra mensagem não é registrado de
   await s.enviar(doc(PDF("r3")));
   await s.enviar(doc(PDF("r3"), { texto: "MOVA, de novo o comprovante da alfa" }));
   assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["DUPLICADO", "DOCUMENTO_JA_RECEBIDO"]);
-  assert.equal((await s.saida()).at(-1).texto, RESPOSTA_DOCUMENTO.jaRecebido());
+  assert.equal((await s.saida()).at(-1).texto, RESPOSTA_DOCUMENTO.jaRecebido(protocoloDoDocumento(sha(PDF("r3")))));
   await s.enviar(doc(PNG, { mime: "image/png", texto: "MOVA, foto do recibo da alfa" }));
   assert.equal((await s.ultima()).decisao, "DOCUMENTO_RECEBIDO");
   assert.equal(await s.contar("documento"), 2);
@@ -85,7 +88,7 @@ t("A2-R4 grupo de duas unidades sem unidade no texto: pergunta a unidade; a resp
   await s.enviar(gw({ texto: "beta", respostaA: p.mensagemId }));
   assert.equal((await recebidos(s, BETA)).length, 1);
   assert.equal((await recebidos(s, ALFA)).length, 0);
-  assert.equal((await s.saida()).at(-1).texto, RESPOSTA_DOCUMENTO.recebido("Loja Beta"));
+  assert.equal((await s.saida()).at(-1).texto, RESPOSTA_DOCUMENTO.recebido("Loja Beta", protocoloDoDocumento(sha(PDF("r4")))));
 });
 
 t("A2-R5 permissões: CONSULTA não envia documento; estranho é descartado antes de guardar qualquer coisa", async () => {
@@ -118,6 +121,114 @@ t("A2-R7 chave desligada: só consultas continua recusando documento (nada guard
   await s.enviar(doc(PDF("r7")));
   assert.equal((await s.ultima()).motivo, "PILOTO_SOMENTE_CONSULTAS");
   assert.equal(await s.contar("documento"), 0);
+});
+
+// ---------------------------------------------------------------------------------------------------------- autorização ANTES de gravar
+// Nada de quem não pode enviar documento chega ao banco: nem a evidência, nem o documento, nem o conteúdo na fila.
+const rastros = async (s, bytes) => ({
+  evidencia: (await s.banco.pool.query("select count(*)::int n from mova.evidencia where sha256 = $1", [sha(bytes)])).rows[0].n,
+  documento: (await s.banco.pool.query("select count(*)::int n from mova.documento where sha256 = $1", [sha(bytes)])).rows[0].n,
+  naFila: (await s.banco.pool.query("select count(*)::int n from mova.fila where carga::text like $1", [`%${Buffer.from(bytes).toString("base64").slice(0, 24)}%`])).rows[0].n,
+  decisaoComArquivo: (await s.banco.pool.query("select count(*)::int n from mova.decisao where documento_sha256 = $1", [sha(bytes)])).rows[0].n,
+});
+const NADA = { evidencia: 0, documento: 0, naFila: 0, decisaoComArquivo: 0 };
+const conteudo = ({ decisaoComArquivo, ...r }) => r;
+const CONTEUDO_NENHUM = { evidencia: 0, documento: 0, naFila: 0 };
+
+t("A2-R15 CONSULTA no grupo e na conversa privada: recusado com resposta, e NADA do arquivo é gravado (fila, evidência, documento)", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  const b1 = PDF("r15-grupo");
+  await s.enviar(doc(b1, { de: CONS }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["ORIENTACAO", "PERFIL_SEM_DOCUMENTOS"]);
+  assert.equal((await s.saida()).at(-1).texto, RESPOSTA.perfilSemDocumentos());
+  assert.deepEqual(await rastros(s, b1), NADA);
+  const b2 = PDF("r15-privado");
+  await s.enviar({ ...doc(b2, { de: CONS, texto: "comprovante da alfa" }), grupoId: CONS });
+  assert.equal((await s.ultima()).motivo, "PERFIL_SEM_DOCUMENTOS");
+  assert.deepEqual(await rastros(s, b2), NADA);
+  assert.equal(await s.contar("evidencia"), 0);
+});
+
+t("A2-R16 desconhecido, encaminhado por estranho e participante REVOGADO no banco (sem reiniciar): nada gravado", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  const b1 = PDF("r16-estranho");
+  const r1 = await s.enviar(doc(b1, { de: ESTRANHO }));
+  assert.equal(r1.motivo, "PARTICIPANTE_NAO_AUTORIZADO");
+  assert.deepEqual(await rastros(s, b1), NADA);
+  // revogação feita no banco depois de o MOVA ter carregado a configuração (que ainda lista a pessoa)
+  await s.banco.pool.query("update mova.participante_autorizado set ativo = false, revogado_em = now() where $1 = any(ids)", [FIN]);
+  const b2 = PDF("r16-revogado");
+  await s.enviar(doc(b2));
+  assert.equal((await s.ultima()).motivo, "PERFIL_SEM_DOCUMENTOS");
+  assert.deepEqual(await rastros(s, b2), NADA);
+  const b3 = PDF("r16-ativo");
+  await s.enviar(doc(b3, { de: LID }));
+  assert.equal((await s.ultima()).decisao, "DOCUMENTO_RECEBIDO", "quem continua ativo segue enviando");
+});
+
+t("A2-R17 FINANCEIRO só da Alfa mandando documento da Beta: bloqueado sem gravar; a pergunta de unidade só oferece unidades permitidas", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  const b1 = PDF("r17-beta");
+  await s.enviar(doc(b1, { de: SO_ALFA, texto: "MOVA, comprovante da beta" }));
+  assert.equal((await s.ultima()).decisao, "BLOQUEADO");
+  assert.deepEqual(conteudo(await rastros(s, b1)), CONTEUDO_NENHUM); // de quem É autorizado fica só o hash na decisão (auditoria), nunca o conteúdo
+  const b2 = PDF("r17-sem-unidade");
+  await s.enviar(doc(b2, { de: SO_ALFA, texto: "MOVA, comprovante" }));
+  assert.equal((await s.ultima()).decisao, "DOCUMENTO_RECEBIDO", "a única unidade permitida é a Alfa");
+  assert.equal((await recebidos(s, ALFA)).length, 1);
+});
+
+t("A2-R18 formato, tamanho e arquivo hostil de quem É autorizado: recusados ANTES de gravar", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  await s.enviar(doc(EXE));
+  assert.equal((await s.ultima()).motivo, "FORMATO_NAO_CONFERE");
+  assert.deepEqual(conteudo(await rastros(s, EXE)), CONTEUDO_NENHUM);
+  const ativo = PDF("/Launch /JavaScript");
+  await s.enviar(doc(ativo));
+  assert.equal((await s.ultima()).motivo, "PDF_COM_CONTEUDO_ATIVO");
+  assert.deepEqual(conteudo(await rastros(s, ativo)), CONTEUDO_NENHUM);
+  const audio = Buffer.from("OggS r18");
+  await s.enviar(doc(audio, { mime: "audio/ogg" }));
+  assert.equal((await s.ultima()).motivo, "FORMATO_NAO_ACEITO_SEM_LEITURA");
+  assert.deepEqual(conteudo(await rastros(s, audio)), CONTEUDO_NENHUM);
+  // acima de 15 MB vindo pelo Gateway: recusado na entrada (nem fila)
+  const grande = Buffer.concat([PDF("r18-grande"), Buffer.alloc(15 * 1024 * 1024 + 10, 32)]);
+  assert.deepEqual(await s.enviar(doc(grande)), { status: "RECUSADO", motivo: "midia_base64" });
+  assert.deepEqual(await rastros(s, grande), NADA);
+  // tamanho declarado acima do limite (arquivo a baixar depois): recusado antes de baixar ou gravar, com resposta
+  const declarado = doc(PDF("r18-declarado"));
+  await s.enviar({ ...declarado, midia: { ...declarado.midia, base64: null, tamanhoBytes: 16 * 1024 * 1024 } });
+  assert.equal((await s.ultima()).motivo, "ARQUIVO_GRANDE");
+  assert.equal((await s.saida()).at(-1).texto, RESPOSTA_DOCUMENTO.arquivoGrande());
+  assert.equal(await s.contar("evidencia"), 0);
+});
+
+t("A2-R19 autorizado na conversa privada derivada e OPERACIONAL: gravam; reenvio do MESMO evento não confirma duas vezes", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  const b1 = PDF("r19-privado");
+  await s.enviar({ ...doc(b1, { texto: "comprovante da alfa" }), grupoId: FIN });
+  assert.equal((await s.ultima()).decisao, "DOCUMENTO_RECEBIDO");
+  assert.equal((await rastros(s, b1)).documento, 1);
+  const p = doc(PDF("r19-oper"), { de: OPER });
+  await s.enviar(p);
+  const antes = (await s.saida()).length;
+  const r = await s.enviar(p);
+  assert.equal(r.status, "DUPLICADO");
+  assert.equal((await s.saida()).length, antes, "uma confirmação só");
+});
+
+t("A2-R20 abrir o original: só com permissão de documentos, só da unidade, e cada abertura fica na auditoria", async () => {
+  const s = await cenario({ extras: SEM_IA });
+  const bytes = PDF("r20");
+  await s.enviar(doc(bytes));
+  const abrir = (c) => CONSULTAS_MOVA["/mova/arquivo"]({ ctx: c, mova: s.mova, params: { sha: sha(bytes) } });
+  await assert.rejects(abrir(ctx(ORG, ALFA, [ACAO.VER])), (e) => e.codigoHttp === 403);
+  await assert.rejects(abrir(ctx(ORG, BETA, TODAS)), (e) => e.codigoHttp === 404);
+  const r = await abrir(ctx(ORG, ALFA, TODAS, "eeeeeeee-0000-4000-8000-000000000020"));
+  assert.equal(Buffer.compare(Buffer.from(r.base64, "base64"), bytes), 0);
+  const a = (await s.mova.armazenamento.auditoria.listar()).filter((x) => x.acao === "DOCUMENTO_ORIGINAL_ABERTO");
+  assert.equal(a.length, 1);
+  assert.deepEqual([a[0].alvo, a[0].dados.usuarioId, a[0].dados.unidadeId], [sha(bytes), "eeeeeeee-0000-4000-8000-000000000020", ALFA]);
 });
 
 // ---------------------------------------------------------------------------------------------------------- revisão humana

@@ -187,6 +187,7 @@ export function criarCentral({ ui, ler, enviar }) {
     const s = v.saidas;
     const saidas = s ? cartao("Saídas do banco sem vínculo com conta a pagar",
       el("p", { classe: "cf-dica", texto: `${s.quantidade} saídas, ${reais(s.totalCentavos)}, de ${dataBr(s.de)} a ${dataBr(s.ate)}. Classificadas só pelo que os registros mostram; não são despesas nem pagamentos confirmados.` }),
+      (() => { const g = s.grupos.find((x) => x.motivo === "SEM_ORIGEM_IDENTIFICADA"); return g ? el("p", { classe: "cf-alerta", texto: `${g.quantidade} lançamentos (${reais(g.totalCentavos)}) aguardam CLASSIFICAÇÃO: sem documento, conta ou descrição que indique a origem. Não presumir pagamento nem despesa; proposta só com evidência (nunca só pelo valor).` }) : null; })(),
       tabela(["Motivo", "Saídas", "Total", ""], s.grupos.map((g) => ({ id: g.motivo, celulas: [g.rotulo, String(g.quantidade), reais(g.totalCentavos),
         filtroBotao(filtro.saida === g.motivo ? "Ocultar" : "Ver", { "data-acao": "central-saidas", "data-motivo": g.motivo }, filtro.saida === g.motivo)] })), "Saídas por motivo"),
       filtro.saida ? tabela(["Data", "Conta", "Descrição no extrato", "Valor livre", "Evidência"], s.itens.filter((x) => x.motivo === filtro.saida).slice(0, LIMITE_LINHAS)
@@ -213,7 +214,7 @@ export function criarCentral({ ui, ler, enviar }) {
       el("p", { classe: "cf-dica", texto: "Arquivos guardados em privado, sem leitura por IA. Revisado ou encaminhado NÃO é pagamento, baixa nem conciliação: o vínculo com a conta continua no fluxo oficial do Financeiro (Contas a Pagar e Conciliação)." }),
       ...d.itens.map((x) => el("article", { classe: "cf-cartao cf-documento" },
         el("h3", { texto: `${TIPO_DOC[x.conferencia.tipo] ?? (x.mime === "application/pdf" ? "PDF" : "Imagem")} · recebido ${x.recebidoEm ? horaBr(x.recebidoEm) : "—"}` }),
-        dl([["Remetente", `${x.remetente.nome ?? "participante"} (${x.remetente.id})`], ["Legenda", texto(x.legenda)], ["Arquivo", `${texto(x.nomeArquivo)} · ${x.mime} · ${Math.ceil((x.tamanhoBytes ?? 0) / 1024)} KB`],
+        dl([["Acompanhamento", texto(x.protocolo)], ["Remetente", `${x.remetente.nome ?? "participante"} (${x.remetente.id})`], ["Legenda", texto(x.legenda)], ["Arquivo", `${texto(x.nomeArquivo)} · ${x.mime} · ${Math.ceil((x.tamanhoBytes ?? 0) / 1024)} KB`],
           ["Situação", selo(ESTADO_DOC[x.conferencia.estado] ?? [x.conferencia.estado, "neutro"])], ["Última conferência", x.conferencia.em ? `${horaBr(x.conferencia.em)}${x.conferencia.observacao ? ` — ${x.conferencia.observacao}` : ""}` : "—"]]),
         el("p", {},
           x.arquivoRemovido ? el("em", { texto: "arquivo removido pela retenção" }) : pode.documentos ? botao("Abrir original", { "data-acao": "arquivo", "data-sha": x.sha256 }) : el("em", { texto: "abrir exige permissão de documentos" }),

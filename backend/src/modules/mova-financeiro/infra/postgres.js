@@ -63,7 +63,8 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       /** @returns {Promise<{novo:boolean}>} */
       async registrar(e) {
         const r = await q(`insert into mova.evento (evento_id, grupo_jid, mensagem_id, participante_jid, provedor, tipo, texto, resposta_a, documento_sha256, recebido_em)
-                           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) on conflict do nothing returning evento_id`,
+                           values ($1,$2,$3,$4,$5,$6,$7,$8,(select sha256 from mova.evidencia where sha256 = $9),$10) on conflict do nothing returning evento_id`,
+        // Agente 2: o evento é registrado ANTES de o arquivo ser autorizado e guardado; o vínculo com o arquivo vem do documento.
         [e.eventoId, e.grupoId, e.mensagemId, e.participanteId, e.provedor, e.tipo, e.texto, e.respostaA, e.midia?.sha256 ?? null, e.recebidoEm]);
         return { novo: r.rowCount === 1 };
       },
@@ -329,6 +330,18 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async marcarExecucao(nome, unidadeId, em) { await q("update mova.automacao set ultima_execucao = $3 where nome = $1 and unidade_id = $2", [nome, unidadeId, em]); },
     }),
+    // Agente 2 — cadastro VIGENTE no banco (não só na configuração carregada no início): revogar um participante passa a valer
+    // para documentos sem reiniciar o backend. Grupo: o próprio grupo ativo. Conversa privada derivada: os grupos ativos da pessoa.
+    autorizacoes: Object.freeze({
+      async vigentes({ grupoId, participanteId, telefoneE164 = null }) {
+        if (!participanteId) return [];
+        const r = await q(`select p.perfil, p.unidades from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid)
+           where p.ativo and g.ativo and g.tipo = 'GRUPO'
+             and (case when $1 like '%@g.us' then p.grupo_jid = $1 else true end)
+             and ($2 = any(p.ids) or p.privado = $2 or ($3::text is not null and $3 = any(p.telefones)))`, [grupoId, participanteId, telefoneE164]);
+        return r.rows.map((x) => ({ perfil: x.perfil, unidades: x.unidades }));
+      },
+    }),
     membros: Object.freeze({
       async registrar({ grupoId, membros, verificadoEm = null, fonte = "GATEWAY" }) {
         await q(`insert into mova.grupo_membros (grupo_jid, membros, verificado_em, fonte) values ($1, $2, coalesce($3::timestamptz, now()), $4)
@@ -475,7 +488,8 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
         for (const item of pegos) {
           try {
             const resultado = await tratar(item.carga, { eventoId: item.evento_id, tentativas: item.tentativas });
-            await q("update mova.fila set estado = 'CONCLUIDO', resultado = $2, ultimo_erro = null, lease_ate = null, atualizado_em = now() where evento_id = $1", [item.evento_id, JSON.stringify(resultado ?? null)]);
+            // Agente 2: terminado, o CONTEÚDO do arquivo sai da fila (o original autorizado fica só em mova.evidencia).
+            await q("update mova.fila set estado = 'CONCLUIDO', resultado = $2, ultimo_erro = null, lease_ate = null, atualizado_em = now(), carga = case when carga->'midia'->>'base64' is null then carga else jsonb_set(carga, '{midia,base64}', 'null'::jsonb) end where evento_id = $1", [item.evento_id, JSON.stringify(resultado ?? null)]);
           } catch (e) {
             const codigo = e instanceof ErroTransitorio ? e.codigo : "ERRO_PERMANENTE";
             const tentarDeNovo = e instanceof ErroTransitorio && item.tentativas < maxTentativas;
@@ -622,8 +636,9 @@ export function criarConsultasPostgres({ pool }) {
               from mova.decisao x where x.evento_id = e.evento_id) as decisoes
       from mova.evento e
       left join mova.participante pa on pa.grupo_jid = e.grupo_jid and pa.participante_jid = e.participante_jid
-      left join mova.evidencia ev on ev.sha256 = e.documento_sha256
-      left join mova.documento d on d.sha256 = e.documento_sha256 and d.evento_id = e.evento_id
+      left join lateral (select coalesce(e.documento_sha256, (select d2.sha256 from mova.documento d2 where d2.evento_id = e.evento_id limit 1)) as sha) ds on true
+      left join mova.evidencia ev on ev.sha256 = ds.sha
+      left join mova.documento d on d.sha256 = ds.sha and d.evento_id = e.evento_id
       left join mova.proposta p on p.evento_id = e.evento_id`;
   // Conversas que atendem a unidade (escopo das falhas sem unidade). Só metadados saem destas consultas — nunca texto ou documento.
   const CONVERSAS = "select gu.grupo_jid from mova.grupo_unidade gu where gu.organizacao_id = $1 and gu.unidade_id = $2";

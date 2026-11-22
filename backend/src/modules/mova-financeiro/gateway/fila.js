@@ -7,6 +7,8 @@
 
 export const ESTADO_ITEM = Object.freeze({ PENDENTE: "PENDENTE", PROCESSANDO: "PROCESSANDO", CONCLUIDO: "CONCLUIDO", FALHOU: "FALHOU" });
 export const METODOS_DA_FILA = Object.freeze(["enfileirar", "processarPendentes", "estado", "listar"]);
+/** Agente 2: o CONTEÚDO do arquivo (base64) só fica na fila enquanto o item pode ser tentado ou reprocessado; CONCLUÍDO, sai da carga — o original, quando autorizado, fica só em mova.evidencia (privado, preso à unidade). */
+export const semConteudo = (carga) => (carga?.midia?.base64 ? { ...carga, midia: { ...carga.midia, base64: null } } : carga);
 
 /** Erro que pede nova tentativa (o item volta para a fila). */
 export class ErroTransitorio extends Error {
@@ -42,6 +44,7 @@ export function criarFilaMemoria({ maxTentativas = 5, esperaBaseMs = 1000, relog
           item.resultado = await tratar(item.carga, { eventoId: item.eventoId, tentativas: item.tentativas });
           item.estado = ESTADO_ITEM.CONCLUIDO;
           item.ultimoErro = null;
+          item.carga = semConteudo(item.carga);
         } catch (e) {
           // Só o CÓDIGO do erro fica registrado (nunca a mensagem, que pode carregar conteúdo).
           item.ultimoErro = e instanceof ErroTransitorio ? e.codigo : "ERRO_PERMANENTE";
@@ -49,7 +52,7 @@ export function criarFilaMemoria({ maxTentativas = 5, esperaBaseMs = 1000, relog
             item.estado = ESTADO_ITEM.PENDENTE;
             item.proximaEm = agora + esperaBaseMs * 2 ** (item.tentativas - 1);
           } else {
-            item.estado = ESTADO_ITEM.FALHOU;
+            item.estado = ESTADO_ITEM.FALHOU; // mantém o conteúdo: o administrador pode reprocessar (remetente já autorizado)
             if (aoDesistir) await aoDesistir({ eventoId: item.eventoId, carga: item.carga, codigo: item.ultimoErro });
           }
         }

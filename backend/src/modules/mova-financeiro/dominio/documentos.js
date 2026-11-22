@@ -56,7 +56,7 @@ export function linhaDoRecebido(sha256, d, conferencias = [], { removida = false
   const ultima = conferencias.at(-1) ?? null;
   const conf = (x) => ({ estado: x.estado, tipo: x.tipo ?? null, obrigacaoId: x.obrigacaoId ?? null, observacao: x.observacao ?? null, por: x.por ?? null, em: x.em instanceof Date ? x.em.toISOString() : x.em ?? null });
   return Object.freeze({
-    sha256, eventoId: d.eventoId, recebidoEm: l.recebidoEm ?? null, mime: l.mime ?? null, tamanhoBytes: l.tamanhoBytes ?? null, nomeArquivo: l.nomeArquivo ?? null,
+    sha256, protocolo: /^[0-9a-f]{64}$/.test(String(sha256)) ? `DOC-${sha256.slice(0, 8).toUpperCase()}` : null, eventoId: d.eventoId, recebidoEm: l.recebidoEm ?? null, mime: l.mime ?? null, tamanhoBytes: l.tamanhoBytes ?? null, nomeArquivo: l.nomeArquivo ?? null,
     participanteId: l.participanteId ?? null, legenda: l.legenda ?? null, evidenciaUnidade: l.evidenciaUnidade ?? null, arquivoRemovido: Boolean(removida),
     conferencia: ultima ? { ...conf(ultima), versao: conferencias.length } : { estado: "AGUARDANDO_CONFERENCIA", tipo: null, obrigacaoId: null, observacao: null, por: null, em: null, versao: 0 },
     historico: conferencias.map(conf),

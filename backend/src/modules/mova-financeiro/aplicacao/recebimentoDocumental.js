@@ -47,11 +47,21 @@ export function legendaDoDocumento(texto) {
   return t ? t.slice(0, LEGENDA_MAX) : null;
 }
 
+/** Protocolo curto de acompanhamento: prefixo do sha256 do arquivo (não revela conteúdo; o mesmo arquivo dá o mesmo protocolo). */
+export const protocoloDoDocumento = (sha256) => (typeof sha256 === "string" && /^[0-9a-f]{64}$/.test(sha256) ? `DOC-${sha256.slice(0, 8).toUpperCase()}` : null);
+
 export const RESPOSTA_DOCUMENTO = Object.freeze({
-  recebido: (unidade) => `Documento recebido e registrado para conferência no Financeiro do ${unidade}. Ainda não foi identificado nem conciliado automaticamente. Nada foi pago, baixado ou alterado.`,
+  recebido: (unidade, protocolo = null) => [
+    "Documento recebido e registrado para conferência.",
+    `• Unidade: ${unidade}`,
+    "• Situação: aguardando conferência do Financeiro",
+    "• Nenhuma baixa, pagamento ou alteração foi feita; o documento ainda não foi identificado nem conciliado automaticamente.",
+    ...(protocolo ? [`• Acompanhamento: ${protocolo}`] : []),
+  ].join("\n"),
+  arquivoGrande: () => "O arquivo passa de 15 MB e não foi aceito. Envie uma foto ou um PDF menor. Nada foi registrado.",
   formatoNaoAceito: () => "Por enquanto recebo só PDF ou foto (JPG, PNG ou WEBP) de comprovantes, boletos, notas e recibos. Nada foi registrado.",
   naoConfere: () => "Não consegui conferir este arquivo (o conteúdo não corresponde ao formato). Envie de novo o PDF ou a foto original. Nada foi registrado.",
   conteudoAtivo: () => "Este PDF tem conteúdo ativo (script ou arquivo embutido) e não foi aceito. Envie o PDF original do banco ou uma foto do documento. Nada foi registrado.",
-  jaRecebido: () => "Este mesmo arquivo já foi recebido antes e está registrado para conferência. Não registrei de novo.",
+  jaRecebido: (protocolo = null) => `Este mesmo arquivo já foi recebido antes e está registrado para conferência${protocolo ? ` (${protocolo})` : ""}. Não registrei de novo.`,
   falhaAoRegistrar: () => "Não consegui registrar o documento agora. Envie de novo em alguns minutos. Nada foi registrado.",
 });

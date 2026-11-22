@@ -61,7 +61,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,
     recebimentoDocumental, obterEvidencia: (r) => evidencias.obter(r) });
-  const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
+  const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle, recebimentoDocumental });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada, execucao });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;
   return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores, recebimentoDocumental });
