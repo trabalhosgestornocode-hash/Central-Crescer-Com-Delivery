@@ -27,6 +27,7 @@ import { criarVerificadorDeContato, lerContatoHomologacao } from "./movaHomologa
 import { criarVerificadorDeContatos, lerPrivadosMova } from "./movaPrivados.js";
 import { criarCanalMova, lerCanalMova } from "./movaCanal.js";
 import { criarSaidaMova, lerSaidaMova } from "./movaSaida.js";
+import { criarRetratoDeMembros } from "./grupoInterno.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -178,6 +179,8 @@ const canalMova = lerCanalMova({ url: config.movaBackendUrl, segredo: config.mov
 const canal = canalMova.ativo ? criarCanalMova({ url: canalMova.url, segredo: canalMova.segredo, log: (nivel, evento, dados) => log(nivel, evento, dados) }) : null;
 const encaminhador = !canal || (gruposMova.length === 0 && !contatoHomologacao) ? null : criarEncaminhadorMova({
   grupos: gruposMova, contatoHomologacao,
+  // Retrato dos membros (somente leitura, cache de 60 s): o backend só mostra valores no grupo se TODOS estiverem autorizados.
+  retratarMembros: criarRetratoDeMembros(),
   notificar: (payload) => canal.notificar(payload),
   baixarMidia: (m, sock) => downloadMediaMessage(m, "buffer", {}, { reuploadRequest: sock?.updateMediaMessage }),
   log: (nivel, evento, dados) => log(nivel, evento, dados),
