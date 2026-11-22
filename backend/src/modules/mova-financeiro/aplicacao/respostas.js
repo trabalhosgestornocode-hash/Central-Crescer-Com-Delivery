@@ -12,6 +12,10 @@ export const RESPOSTA = Object.freeze({
   /** Pergunta padrão definida pelo proprietário (Execução 02). Responder a esta mensagem retoma o documento. */
   unidadeNaoIdentificada: (nomes) => `Esse lançamento pertence à ${nomes.length > 1 ? `${nomes.slice(0, -1).join(", ")} ou ${nomes.at(-1)}` : nomes[0]}?`,
   /** Execução 13B: conversa sem pedido financeiro (saudação etc.) — não pergunta unidade nem cria nada. */
+  // 16A — piloto de consultas: o MOVA só lê; lançamentos e documentos continuam no Centro Financeiro.
+  conversaPiloto: () => "Olá! Sou o MOVA, assistente financeiro. Neste piloto eu respondo consultas: faturamento (total e por canal), despesas e custos da competência, contas a pagar e a receber, vencimentos, fluxo de caixa e pendências de conferência. Os números vêm do Financeiro, com a fonte e a situação de cada um. Nada é registrado por aqui.",
+  iaPausada: () => "As consultas pelo WhatsApp estão pausadas neste momento. Não precisa reenviar: os números continuam no Centro Financeiro. Nada foi registrado.",
+  pilotoSomenteConsultas: () => "Neste piloto eu só respondo consultas (faturamento, contas, vencimentos, fluxo de caixa e pendências). Lançamentos, comprovantes e documentos continuam pelo Centro Financeiro. Nada foi registrado.",
   conversaSemPedido: () => "Olá! Sou o MOVA, assistente financeiro. Envie um comprovante, boleto ou nota (ou descreva o pagamento com valor e unidade) que eu preparo a proposta para revisão, ou pergunte sobre contas e faturamento. Nada foi registrado.",
   aprovacaoSoNoDashboard: () => "Aprovar, corrigir ou aplicar lançamentos é feito por um administrador financeiro no Centro Financeiro (com login). Pelo grupo eu só registro propostas.",
   foraDoEscopo: () => "Só trato dados das unidades atendidas por esta conversa. Não compartilho informações de outras empresas ou unidades. Nada foi consultado.",
