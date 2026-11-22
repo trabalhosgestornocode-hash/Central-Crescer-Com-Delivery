@@ -545,7 +545,7 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   // Agente 2: OPERACAO lê só GRUPOS; as conversas privadas dos participantes são DERIVADAS da lista (validarConfiguracao).
   // A conversa privada de homologação (PRIVADO_HOMOLOGACAO) nunca entra na OPERACAO, e a derivada nunca entra fora dela.
   const filtro = "g.ativo and g.tipo not in ('PRIVADO_PARTICIPANTE','PRIVADO_ENTREGADOR') and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
-  const grupos = (await q(`select g.grupo_jid, g.acesso, g.consultas_no_grupo from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
+  const grupos = (await q(`select g.grupo_jid, g.acesso, g.consultas_no_grupo, g.politica_resposta from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
   const participantes = (await q(`select p.* from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid) where p.ativo and ${filtro} order by p.criado_em`, [modo])).rows;
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
