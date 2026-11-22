@@ -1811,7 +1811,9 @@ export function criarSessaoBaileys({
         // aparelho que não descriptografou a 1ª entrega pede reenvio, o getMessage não acha nada e a conversa fica em
         // "Aguardando mensagem" (visto na 15I: 4 retry.received ⇒ 4 retry.message_missing). O destino é o contato
         // VERIFICADO (checado acima); o LID dele vem da mesma verificação. O cache nunca interfere no envio.
-        const ident = await mova.contatoHomologacao.identidade(sockEnvio).catch(() => null);
+        const ident = typeof mova.contatoHomologacao.identidadeDoDestino === "function"
+          ? await mova.contatoHomologacao.identidadeDoDestino(grupoJid, sockEnvio).catch(() => null) // vários contatos: o do DESTINO
+          : await mova.contatoHomologacao.identidade(sockEnvio).catch(() => null);
         // 17B (P7): o WhatsApp do contato trata a conversa no espaço LID (todos os pedidos de reenvio chegaram por LID, ~1 s
         // depois do envio, dos DOIS aparelhos: celular e Web). Enviar ao número (`@s.whatsapp.net`) endereça os dispositivos e
         // as sessões de criptografia por número, e o aparelho não decifra ("Aguardando mensagem"). Com o LID do MESMO contato

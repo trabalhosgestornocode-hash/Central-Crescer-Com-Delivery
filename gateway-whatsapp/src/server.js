@@ -24,6 +24,7 @@ import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
 import { criarCacheRetry } from "./retryCache.js";
 import { criarEncaminhadorMova, lerGruposMova } from "./movaGrupo.js";
 import { criarVerificadorDeContato, lerContatoHomologacao } from "./movaHomologacao.js";
+import { criarVerificadorDeContatos, lerPrivadosMova } from "./movaPrivados.js";
 import { criarCanalMova, lerCanalMova } from "./movaCanal.js";
 import { criarSaidaMova, lerSaidaMova } from "./movaSaida.js";
 
@@ -165,7 +166,13 @@ retryCache.iniciarMetricasPeriodicas();
 const gruposMova = lerGruposMova(config.movaGruposJid);
 config.movaGrupos = gruposMova; // lista validada, usada pelo envio (enviarGrupoMova)
 const homologacao = lerContatoHomologacao({ contato: config.movaHomologacaoContato, confirmacao: config.movaHomologacaoConfirmacao });
-const contatoHomologacao = homologacao.ativo ? criarVerificadorDeContato({ telefoneE164: homologacao.telefoneE164 }) : null;
+// Operação: privados autorizados (lista fechada). Com eles, a homologação (se ligada) entra no MESMO conjunto verificado.
+const privadosMova = lerPrivadosMova({ lista: config.movaPrivados, confirmacao: config.movaPrivadosConfirmacao });
+const telefonesPrivados = [...(homologacao.ativo ? [homologacao.telefoneE164] : []), ...(privadosMova.ativo ? privadosMova.telefones : [])];
+const contatoHomologacao = privadosMova.ativo
+  ? criarVerificadorDeContatos({ telefonesE164: telefonesPrivados })
+  : homologacao.ativo ? criarVerificadorDeContato({ telefoneE164: homologacao.telefoneE164 }) : null;
+log("info", "mova.privados_config", { ativo: privadosMova.ativo, motivo: privadosMova.ativo ? null : privadosMova.motivo, total: privadosMova.ativo ? telefonesPrivados.length : 0 });
 // Canal isolado obrigatório: sem ele o MOVA não liga (nenhum evento MOVA vai ao backend de produção).
 const canalMova = lerCanalMova({ url: config.movaBackendUrl, segredo: config.movaBackendSecret, segredoPrincipal: config.segredoHmac });
 const canal = canalMova.ativo ? criarCanalMova({ url: canalMova.url, segredo: canalMova.segredo, log: (nivel, evento, dados) => log(nivel, evento, dados) }) : null;

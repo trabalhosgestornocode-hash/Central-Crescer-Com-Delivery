@@ -9,6 +9,7 @@
 
 import { RETRY_TTL_MIN_HORAS, RETRY_TTL_MAX_HORAS, RETRY_MAX_REENVIOS_TETO } from "./retryLimites.js";
 import { lerGruposMova } from "./movaGrupo.js";
+import { lerPrivadosMova } from "./movaPrivados.js";
 
 // Checkpoint G.2.0 — parse NÃO permissivo (nunca `Number(env) || default`) para os caps do motor de
 // OFFLINE_RECOVERY abaixo. Ausente ou vazio (após trim) ⇒ `undefined` — mesmo tratamento que os outros flags deste
@@ -148,6 +149,9 @@ export const config = {
   movaBackendUrl: String(process.env.WHATSAPP_MOVA_BACKEND_URL ?? "").trim(),
   movaBackendSecret: process.env.WHATSAPP_MOVA_BACKEND_SECRET ?? "",
   movaHomologacaoConfirmacao: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONFIRMACAO ?? "").trim(),
+  // Operação (src/movaPrivados.js): lista FECHADA de privados autorizados + confirmação exata. Ausente ⇒ desligada.
+  movaPrivados: String(process.env.WHATSAPP_MOVA_PRIVADOS ?? "").trim(),
+  movaPrivadosConfirmacao: String(process.env.WHATSAPP_MOVA_PRIVADOS_CONFIRMACAO ?? "").trim(),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
@@ -254,6 +258,7 @@ export function validarConfig() {
     throw new Error("WHATSAPP_GRUPO_INTERNO_JID precisa ser um JID de grupo (formato <numeros>@g.us)");
   }
   lerGruposMova(config.movaGruposJid); // lança se algum JID estiver fora do formato
+  lerPrivadosMova({ lista: config.movaPrivados, confirmacao: config.movaPrivadosConfirmacao }); // idem para os privados
 
   // Checkpoint G.3.3 — mesma regra fail-closed dos caps de recovery acima: ausente = ok (fica no default de 1 MiB
   // de authHeadroom.js); um valor EXPLICITAMENTE fornecido e inválido (zero, negativo, decimal, texto) FALHA NO
