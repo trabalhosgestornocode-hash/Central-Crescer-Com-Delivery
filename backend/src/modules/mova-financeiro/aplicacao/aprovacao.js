@@ -92,6 +92,9 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
       if (p.tipo === "SOLICITACAO_DE_REVISAO" || !p.comando) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
       if (p.competenciaPendente && !p.competenciaRevisada) throw new ErroDeAprovacao("COMPETENCIA_PENDENTE");
+      // Agente 2 — Frente C: baixa JÁ conferida com uma saída do extrato só por confirmarBaixaPorExtrato (vincula a saída que
+      // existe). Aplicar pelo caminho antigo criaria uma SEGUNDA saída (pagarContaAPagar) para o mesmo pagamento.
+      if (p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA") throw new ErroDeAprovacao("BAIXA_CONFERIDA_COM_EXTRATO");
       if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");

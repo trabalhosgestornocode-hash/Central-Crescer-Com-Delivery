@@ -22,6 +22,9 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const retratos = new Map();
   const politicas = [];
   const operacoes = new Map();
+  const notas = new Map();
+  const envios = new Map();
+  const automacoes = new Map();
 
   return Object.freeze({
     eventos: Object.freeze({
@@ -78,6 +81,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     documentos: Object.freeze({
       async visto(sha256) { return documentos.get(sha256) ?? null; },
       async marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
+      async porChave({ organizacaoId, chave }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.chaveDocumento === chave) ?? null; },
       async porTransacao({ organizacaoId, idTransacao }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.idTransacao === idTransacao) ?? null; },
     }),
     mensagens: Object.freeze({
@@ -133,6 +137,36 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       },
       async obter(id, escopo) { const o = operacoes.get(id); return o && o.organizacaoId === escopo.organizacaoId && o.unidadeId === escopo.unidadeId ? o : null; },
       async listar(escopo) { return [...operacoes.values()].filter((o) => o.organizacaoId === escopo.organizacaoId && o.unidadeId === escopo.unidadeId).reverse(); },
+    }),
+    // Agente 2 — Frente D: notas recebidas dos entregadores, envios da rotina (chave única) e automações com pausa.
+    notasEntregador: Object.freeze({
+      async registrar(n) {
+        const k = `${n.unidadeId}|${n.entregador}|${n.semanaInicio}|${n.sha256}`;
+        if (notas.has(k)) return { nota: notas.get(k), nova: false };
+        const nota = { id: randomUUID(), ...n, estado: "PENDENTE_ANEXO", motivo: null, documentoId: null, situacaoDocumental: null, criadaEm: relogio().toISOString() };
+        notas.set(k, nota); return { nota: Object.freeze({ ...nota }), nova: true };
+      },
+      async concluir(id, { estado, motivo = null, documentoId = null, situacaoDocumental = null }) {
+        const n = [...notas.values()].find((x) => x.id === id); if (!n || n.estado !== "PENDENTE_ANEXO") return false;
+        Object.assign(n, { estado, motivo, documentoId, situacaoDocumental }); return true;
+      },
+      async listar(escopo) { return [...notas.values()].filter((n) => n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId).map((n) => Object.freeze({ ...n })).reverse(); },
+    }),
+    enviosEntregador: Object.freeze({
+      async registrar(e) { if (envios.has(e.chave)) return false; envios.set(e.chave, Object.freeze({ ...e, criadoEm: relogio().toISOString() })); return true; },
+      async listar(escopo) { return [...envios.values()].filter((e) => e.organizacaoId === escopo.organizacaoId && e.unidadeId === escopo.unidadeId).reverse(); },
+    }),
+    automacoes: Object.freeze({
+      async obter(nome, unidadeId) { const x = automacoes.get(`${nome}|${unidadeId}`); return x ? Object.freeze({ ...x }) : null; },
+      async listar(escopo) { return [...automacoes.values()].filter((x) => x.organizacaoId === escopo.organizacaoId && x.unidadeId === escopo.unidadeId).map((x) => Object.freeze({ ...x })); },
+      async definir({ nome, organizacaoId, unidadeId, ativa, horario = "09:00" }) {
+        const k = `${nome}|${unidadeId}`; const atual = automacoes.get(k);
+        automacoes.set(k, { nome, organizacaoId, unidadeId, ativa, horario, pausadaEm: atual?.pausadaEm ?? null, pausadaPor: atual?.pausadaPor ?? null, motivo: atual?.motivo ?? null, ultimaExecucao: atual?.ultimaExecucao ?? null });
+        return Object.freeze({ ...automacoes.get(k) });
+      },
+      async pausar({ nome, unidadeId, por, motivo = null }) { const x = automacoes.get(`${nome}|${unidadeId}`); if (!x) return null; Object.assign(x, { pausadaEm: relogio().toISOString(), pausadaPor: por, motivo }); return Object.freeze({ ...x }); },
+      async retomar({ nome, unidadeId }) { const x = automacoes.get(`${nome}|${unidadeId}`); if (!x) return null; Object.assign(x, { pausadaEm: null, pausadaPor: null, motivo: null }); return Object.freeze({ ...x }); },
+      async marcarExecucao(nome, unidadeId, em) { const x = automacoes.get(`${nome}|${unidadeId}`); if (x) x.ultimaExecucao = em; },
     }),
     membros: Object.freeze({
       async registrar({ grupoId, membros, verificadoEm = null }) { retratos.set(grupoId, { membros: [...membros], verificadoEm: verificadoEm ?? relogio().toISOString() }); },

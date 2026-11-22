@@ -13,6 +13,7 @@
 //   → unidade → revisão | transferência | receita | pagamento | conta → competência → obrigações → PROPOSTA.
 // Nunca: grava no Financeiro, paga, exclui, classifica em definitivo, age em competência que não esteja ABERTA, presume a
 // unidade pelo histórico do participante. Comprovante de obrigação existente = proposta de BAIXA (nunca despesa nova).
+import { chaveDoDocumento } from "../dominio/documentos.js";
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
@@ -58,7 +59,7 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -142,6 +143,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (novo) {
         const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
         if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
+      }
+      // Agente 2 — Frente D: conversa privada de ENTREGADOR ⇒ fluxo próprio, determinístico e SEM IA (só o fechamento dele).
+      if (grupo.entregador) {
+        if (!entregadores) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "ENTREGADORES_DESLIGADO" });
+        const r = await entregadores.atender(evento, grupo);
+        return concluir(evento, { decisao: r.decisao, motivo: r.motivo, escopo: r.escopo, resposta: r.resposta, extra: { entregador: true } });
       }
 
       // 5. Mensagem relacionada: texto respondendo a um documento que aguarda esclarecimento (atômico; sobrevive a reinício).
@@ -253,6 +260,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "TRANSACAO_JA_RECEBIDA", escopo, propostaId: mesma.propostaId ?? null, resposta: RESPOSTA.duplicado(mesma.propostaId), injecao });
       }
     }
+    // Agente 2 — o MESMO boleto (linha digitável × código de barras) ou a MESMA nota (chave de acesso) em outro formato:
+    // chave canônica só com dígitos verificadores válidos; sem ela, vale só o sha256 (nunca um palpite).
+    const chaveDoc = evento.midia ? chaveDoDocumento(saida) : null;
+    if (chaveDoc && typeof a.documentos.porChave === "function") {
+      const mesmo = await a.documentos.porChave({ organizacaoId: escopo.organizacaoId, chave: chaveDoc });
+      if (mesmo && mesmo.eventoId !== evento.eventoId) {
+        await marcarDocumento(evento, escopo, null, saida);
+        return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo, propostaId: mesmo.propostaId ?? null, resposta: RESPOSTA.duplicado(mesmo.propostaId), injecao });
+      }
+    }
     const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento, grupo, participante, interpretacao };
 
     if (consulta) {
@@ -303,7 +320,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   }
 
   async function marcarDocumento(evento, escopo, propostaId, leitura) {
-    if (evento.midia) await a.documentos.marcar(evento.midia.sha256, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, propostaId, eventoId: evento.eventoId, leitura });
+    if (evento.midia) await a.documentos.marcar(evento.midia.sha256, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, propostaId, eventoId: evento.eventoId,
+      leitura: leitura ? { ...leitura, chaveDocumento: chaveDoDocumento(leitura) } : leitura });
   }
 
   async function competenciaAberta({ evento, escopo, injecao }, competencia) {
