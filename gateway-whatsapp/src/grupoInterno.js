@@ -86,6 +86,47 @@ export async function listarGruposDaConta({ socket, timeoutMs = TIMEOUT_CONSULTA
     .sort((a, b) => String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR"));
 }
 
+const ehPn = (j) => typeof j === "string" && /^[0-9]{5,20}(:[0-9]+)?@s\.whatsapp\.net$/.test(j);
+const ehLid = (j) => typeof j === "string" && /^[0-9]{5,24}(:[0-9]+)?@lid$/.test(j);
+/** Só os 4 últimos dígitos do número (nunca o número inteiro); sem número (só LID) ⇒ "somente-LID". */
+const finais4 = (p) => { const j = ehPn(p?.jid) ? p.jid : ehPn(p?.id) ? p.id : null; return j ? `••${j.split("@")[0].split(":")[0].slice(-4)}` : "somente-LID"; };
+
+/**
+ * 17B — DIAGNÓSTICO SOMENTE LEITURA dos grupos da conta, para o proprietário escolher o grupo do MOVA. Não envia nada, não cadastra
+ * nada e não decide autorização (estar num grupo NÃO é autorização financeira). Por grupo: id, nome, tamanho, modo de
+ * endereçamento, se só admins enviam, se a conta é admin, e — dos participantes — apenas CONTAGENS (administradores, com número
+ * disponível, com LID, somente-LID) e os 4 ÚLTIMOS dígitos dos administradores. Números completos nunca saem daqui.
+ * Exceção deliberada à regra "nunca loga nomes" (listarGrupos): quem emite este diagnóstico (flag WHATSAPP_DIAGNOSTICO_GRUPOS=1,
+ * desligada por padrão) é o proprietário, para reconhecer o grupo pelo nome.
+ * @returns {Promise<Array<object>>}
+ */
+export async function diagnosticarGruposDaConta({ socket, timeoutMs = TIMEOUT_CONSULTA_GRUPO_MS, max = 100 }) {
+  if (typeof socket?.groupFetchAllParticipating !== "function") throw falha(CODIGOS.CONSULTA_GRUPO_FALHOU, "socket sem groupFetchAllParticipating");
+  let resposta;
+  try { resposta = await comTimeout(socket.groupFetchAllParticipating(), timeoutMs); }
+  catch (e) { throw falha(CODIGOS.CONSULTA_GRUPO_FALHOU, e?.message === "timeout" ? "timeout" : (e?.name ?? "erro")); }
+  if (!resposta || typeof resposta !== "object") throw falha(CODIGOS.CONSULTA_GRUPO_FALHOU, "resposta ilegível");
+  const minhas = identidadesDaConta(socket);
+  return Object.values(resposta)
+    .filter((g) => g && typeof g.id === "string" && REGEX_JID_GRUPO.test(g.id))
+    .slice(0, max)
+    .map((g) => {
+      const partes = Array.isArray(g.participants) ? g.participants : [];
+      const admins = partes.filter((p) => p?.admin === "admin" || p?.admin === "superadmin");
+      const souAdmin = partes.some((p) => (p?.admin === "admin" || p?.admin === "superadmin")
+        && [p?.id, p?.jid, p?.lid].some((x) => { try { return typeof x === "string" && minhas.has(jidNormalizedUser(x)); } catch { return false; } }));
+      return {
+        jid: g.id, nome: nomeSeguro(g.subject), participantes: Number.isInteger(g.size) ? g.size : partes.length,
+        enderecamento: g.addressingMode === "lid" ? "lid" : g.addressingMode === "pn" ? "pn" : "desconhecido",
+        somenteAdminsEnviam: g.announce === true, comunidade: g.isCommunity === true || g.isCommunityAnnounce === true, contaEhAdmin: souAdmin,
+        administradores: admins.length, adminsFinais: admins.map(finais4),
+        comNumero: partes.filter((p) => ehPn(p?.jid) || ehPn(p?.id)).length, comLid: partes.filter((p) => ehLid(p?.lid) || ehLid(p?.id)).length,
+        somenteLid: partes.filter((p) => !(ehPn(p?.jid) || ehPn(p?.id)) && (ehLid(p?.lid) || ehLid(p?.id))).length,
+      };
+    })
+    .sort((a, b) => String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR"));
+}
+
 /**
  * Consulta o grupo no PRÓPRIO WhatsApp (`groupMetadata`) e diz se a conta participa e pode enviar. Não lança por "não participa" /
  * "sem permissão" — devolve os fatos; quem decide bloquear é `exigirGrupoEnviavel`.
