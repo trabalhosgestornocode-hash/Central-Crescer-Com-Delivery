@@ -31,6 +31,8 @@ export const CONSULTAS = Object.freeze([
   "FATURAMENTO", "DRE_RESUMO", "FLUXO_DE_CAIXA", "CONTAS_A_RECEBER", "PENDENCIAS", "DESPESAS_POR_CATEGORIA", "SITUACAO_DE_CONTA", "CATEGORIAS", "DOCUMENTOS",
   // Agente 2 — grupos reais: contas vencidas e fechamento semanal dos entregadores (agregado da unidade, nunca de uma pessoa).
   "CONTAS_VENCIDAS", "FECHAMENTO_ENTREGADORES",
+  // Agente 2 — conferência de contas a pagar (custo zero; detalhe só com leitores FINANCEIRO).
+  "CONTAS_SEM_COMPROVANTE", "PAGAMENTOS_A_CONCILIAR", "MAIORES_CONTAS_ABERTAS", "CONTAS_PARCIAIS", "FORNECEDORES_COM_PENDENCIAS",
 ]);
 /** Catálogo FECHADO de ferramentas que o MOTOR aciona (a IA só escolhe a consulta). Nenhuma escreve, executa SQL ou paga. */
 export const FERRAMENTAS = Object.freeze([

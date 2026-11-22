@@ -503,18 +503,21 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const detalhe = rota?.noGrupo ? rota.detalhe === true
       : rota?.destino ? podeVerDetalhe(participante, unidade.unidadeId)
       : !rota && grupo?.derivada === true && !evento.grupoId.endsWith("@g.us") ? podeVerDetalhe(participante, unidade.unidadeId) : false;
-    const c = { ...contextoDaConsulta(saida), detalhe };
+    // palavrasDaUnidade: o nome/apelidos da unidade citados na pergunta ("…da Alfa") não entram na busca da conta.
+    const c = { ...contextoDaConsulta(saida), detalhe, pergunta: evento.texto ?? "", palavrasDaUnidade: unidade.apelidos ?? [] };
     const r = await ferramenta(escopo, c);
     if (r.dadosInsuficientes) {
-      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta });
+      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${r.rotulo ?? c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta });
     }
     // 16A: rastreabilidade — quando o Financeiro foi lido (os números podem mudar com novas importações).
     const lidoEm = relogio().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), `Posição do Financeiro em ${lidoEm}. Detalhes no Centro Financeiro.`];
+    // Agente 2: consulta de posição (vencidas, maiores, sem comprovante…) diz a data da posição, não uma competência que não usou.
+    const rotulo = r.rotulo ?? c.periodo.rotulo;
+    const linhas = [`${unidade.nome} — ${rotulo}:`, ...r.linhas.map((l) => `• ${l}`), `Posição do Financeiro em ${lidoEm}. Detalhes no Centro Financeiro.`];
     // 15A (desligado por padrão): resposta natural redigida SÓ a partir das linhas calculadas aqui; o redator valida e, em
     // qualquer dúvida, devolve o texto determinístico.
     const padrao = RESPOSTA.consulta(linhas);
-    const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${c.periodo.rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
+    const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
     return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: { ...marca, ...(redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {}) }, privado, consulta });
   }
 

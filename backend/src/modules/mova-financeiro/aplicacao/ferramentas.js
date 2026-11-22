@@ -10,6 +10,7 @@
 //   - sem registros = `dadosInsuficientes` (o motor responde que não há dados, nunca estima);
 //   - só agregados (política em dominio/privacidade.js): nada de conta bancária, pessoa ou linha a linha de fornecedor.
 import { reais, dataBr } from "./respostas.js";
+import { contasParciais, contasSemComprovante, contasVencidas, explicarConta, fornecedoresComPendencias, maioresContas, pagamentosAConciliar } from "./conferenciaContas.js";
 
 const SITUACOES_COM_VALOR = new Set(["CONFIRMADO", "CALCULADO_AGUARDANDO_CONFERENCIA", "PRELIMINAR", "PARCIAL"]);
 const ROTULO_SITUACAO = { CONFIRMADO: "confirmado", CALCULADO_AGUARDANDO_CONFERENCIA: "calculado, aguardando conferência", PRELIMINAR: "preliminar", PARCIAL: "parcial", PENDENTE_DE_CLASSIFICACAO: "pendente de classificação", BLOQUEADO_POR_EVIDENCIA_INSUFICIENTE: "sem evidência suficiente" };
@@ -63,9 +64,10 @@ export function detalharContas({ todas, lista, de, ate }) {
   const validas = lista.filter(centavosValidos).sort((a, b) => a.vencimento.localeCompare(b.vencimento) || curto(a.fornecedor?.nome).localeCompare(curto(b.fornecedor?.nome)));
   const incompletas = lista.length - validas.length;
   const total = validas.reduce((s, t) => s + t.saldoCentavos, 0);
+  const quando = de === ate ? `em ${dataBr(de)}` : `de ${dataBr(de)} a ${dataBr(ate)}`;
   const linhas = [validas.length
-    ? `vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${validas.length} conta${validas.length === 1 ? "" : "s"}, total ${reais(total)}`
-    : `nenhuma conta a pagar vencendo de ${dataBr(de)} a ${dataBr(ate)}`];
+    ? `vencendo ${quando}: ${validas.length} conta${validas.length === 1 ? "" : "s"}, total ${reais(total)}`
+    : `nenhuma conta a pagar vencendo ${quando}`];
   let usados = 0; let mostradas = 0;
   for (const t of validas) {
     const fornecedor = t.fornecedor?.nome ? curto(t.fornecedor.nome) : "fornecedor não informado";
@@ -100,6 +102,20 @@ export function detalharContas({ todas, lista, de, ate }) {
  */
 export function criarFerramentas({ porta, armazenamento }) {
   const contasTodas = async (escopo) => porta.contasAPagarTodas(escopo);
+  /**
+   * Agente 2 — saídas do extrato ainda sem vínculo (a MESMA prévia oficial da tela de baixa; só leitura, nada pré-selecionado).
+   * A lista não depende da conta escolhida; a prévia só exige uma conta da unidade. Falha de regra ⇒ a resposta diz que não conferiu.
+   */
+  async function saidasDoExtrato(escopo, todas) {
+    const alguma = todas.find((t) => t.id);
+    if (!alguma) return { saidas: [], falhou: false };
+    try {
+      const p = await porta.ler("previaDoVinculoDoExtrato", escopo, { obrigacaoId: alguma.id });
+      return { saidas: Array.isArray(p?.saidasElegiveis) ? p.saidasElegiveis : [], falhou: false };
+    } catch (e) { if (porta.ehErroDeRegra?.(e)) return { saidas: null, falhou: true }; throw e; }
+  }
+  const posicao = (hoje) => ({ rotulo: `posição de ${dataBr(hoje)}` });
+  const termosDaBusca = (s) => [...new Set(String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3))].slice(0, 6);
   /** Cobertura de dias do canal no mês (calendário do Financeiro). Erro de REGRA (canal fora da unidade) ⇒ sem cobertura. */
   async function coberturaDoCanal(escopo, canal, competencia) {
     let cal;
@@ -198,10 +214,14 @@ export function criarFerramentas({ porta, armazenamento }) {
       if (!detalhe) return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
       return ok(detalharContas({ todas, lista, de, ate }));
     },
-    /** Agente 2: contas VENCIDAS e não pagas (até hoje), com a mais antiga. */
-    async CONTAS_VENCIDAS(escopo, { hoje }) {
+    /** Agente 2: contas VENCIDAS e não pagas (até hoje), com a mais antiga. Detalhe (só FINANCEIRO): a lista com as marcas. */
+    async CONTAS_VENCIDAS(escopo, { hoje, detalhe = false }) {
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      if (detalhe) {
+        const x = await saidasDoExtrato(escopo, todas);
+        return ok(contasVencidas({ todas, hoje, saidas: x.saidas, extratoFalhou: x.falhou }), posicao(hoje));
+      }
       const vencidas = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.saldoCentavos > 0 && t.vencimento < hoje).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
       if (vencidas.length === 0) return ok([`nenhuma conta a pagar vencida até ${dataBr(hoje)}`], { valorCentavos: 0 });
       const total = vencidas.reduce((s, t) => s + t.saldoCentavos, 0);
@@ -240,8 +260,46 @@ export function criarFerramentas({ porta, armazenamento }) {
       // Escopo honesto: contas a pagar REGISTRADAS na competência (despesa por competência), não pagamentos do mês.
       return ok([`contas registradas na categoria ${doMes[0].categoria.nome} na competência ${periodo.competencia}: ${doMes.length}, ${reais(doMes.reduce((s, t) => s + t.valorOriginalCentavos, 0))} (por competência; o pagamento pode cair em outro mês)`]);
     },
-    async SITUACAO_DE_CONTA(escopo, { saida }) {
+    // Agente 2 — conferência de contas (custo zero, só leitura). Sem detalhe: só agregados.
+    async CONTAS_SEM_COMPROVANTE(escopo, { hoje, detalhe = false }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      return ok(contasSemComprovante({ todas, detalhe }), posicao(hoje));
+    },
+    async PAGAMENTOS_A_CONCILIAR(escopo, { hoje, detalhe = false }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      const x = await saidasDoExtrato(escopo, todas);
+      if (x.falhou) return insuficiente("EXTRATO_INDISPONIVEL");
+      return ok(pagamentosAConciliar({ todas, saidas: x.saidas, detalhe }), posicao(hoje));
+    },
+    async MAIORES_CONTAS_ABERTAS(escopo, { hoje, detalhe = false }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      const x = detalhe ? await saidasDoExtrato(escopo, todas) : { saidas: null };
+      return ok(maioresContas({ todas, detalhe, saidas: x.saidas }), posicao(hoje));
+    },
+    async CONTAS_PARCIAIS(escopo, { hoje, detalhe = false }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      return ok(contasParciais({ todas, detalhe }), posicao(hoje));
+    },
+    async FORNECEDORES_COM_PENDENCIAS(escopo, { hoje, detalhe = false }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      return ok(fornecedoresComPendencias({ todas, hoje, detalhe }), posicao(hoje));
+    },
+    async SITUACAO_DE_CONTA(escopo, { saida, hoje, detalhe = false, pergunta = "", palavrasDaUnidade = [] }) {
       if (!saida.valorCentavos && !saida.favorecido) return insuficiente("CONTA_NAO_IDENTIFICADA");
+      // Agente 2 — explicação de UMA conta (só FINANCEIRO): fatos, limites e, se houver várias, as alternativas (nunca escolhe).
+      if (detalhe) {
+        const todas = await contasTodas(escopo);
+        if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+        const daUnidade = new Set(palavrasDaUnidade.flatMap((a) => termosDaBusca(a)));
+        const busca = { termos: termosDaBusca(saida.favorecido).filter((w) => !daUnidade.has(w)), valorCentavos: saida.valorCentavos ?? null, competencia: saida.competencia ?? null };
+        const x = await saidasDoExtrato(escopo, todas);
+        return ok(explicarConta({ todas, busca, hoje, saidas: x.saidas, extratoFalhou: x.falhou, pergunta }), posicao(hoje));
+      }
       const nome = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
       const c = (await contasTodas(escopo)).filter((t) => (!saida.valorCentavos || t.valorOriginalCentavos === saida.valorCentavos)
         && (!saida.favorecido || nome(t.fornecedor?.nome).includes(nome(saida.favorecido)) || nome(saida.favorecido).includes(nome(t.fornecedor?.nome)))
