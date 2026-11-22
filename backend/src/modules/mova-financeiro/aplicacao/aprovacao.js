@@ -16,6 +16,8 @@
 //   8. nunca executa pagamento bancário; falha devolve a proposta para revisão e fica registrada (aprovacao FALHOU + auditoria).
 import { requisitosCompletos, unidadePorId } from "../dominio/configuracao.js";
 import { exigirContratoFinanceiro } from "./portaFinanceira.js";
+import { executorDaPessoa } from "./portaOperacional.js";
+import { NIVEL, validarPolitica } from "../dominio/autonomia.js";
 
 export class ErroDeAprovacao extends Error {
   constructor(codigo, detalhes = {}) { super(codigo); this.name = "ErroDeAprovacao"; this.codigo = codigo; this.detalhes = detalhes; }
@@ -26,7 +28,7 @@ const mes = (d) => d.slice(0, 7);
 /**
  * @param {{cfg:object, armazenamento:object, nucleo:object, financeiro:object}} deps  `nucleo` = núcleo do Financeiro v2 (injetado)
  */
-export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, financeiro, fila = null }) {
+export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, financeiro, fila = null, execucao = null }) {
   const { ACAO, ErroFinanceiro } = exigirContratoFinanceiro(financeiro);
   const escopo = (ctx) => ({ organizacaoId: String(ctx?.organizacaoId ?? "").toLowerCase(), unidadeId: String(ctx?.unidadeId ?? "").toLowerCase() });
 
@@ -90,6 +92,9 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
       if (p.tipo === "SOLICITACAO_DE_REVISAO" || !p.comando) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
       if (p.competenciaPendente && !p.competenciaRevisada) throw new ErroDeAprovacao("COMPETENCIA_PENDENTE");
+      // Agente 2 — Frente C: baixa JÁ conferida com uma saída do extrato só por confirmarBaixaPorExtrato (vincula a saída que
+      // existe). Aplicar pelo caminho antigo criaria uma SEGUNDA saída (pagarContaAPagar) para o mesmo pagamento.
+      if (p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA") throw new ErroDeAprovacao("BAIXA_CONFERIDA_COM_EXTRATO");
       if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
@@ -139,6 +144,64 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       const ok = await fila.reprocessar(String(eventoId ?? ""));
       if (!ok) throw new ErroDeAprovacao("EVENTO_NAO_ESTA_EM_FALHA");
       await a.auditoria.registrar({ acao: "EVENTO_REPROCESSADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: String(eventoId) });
+      return { ok: true };
+    },
+    /**
+     * Agente 2 — Frente C: um RESPONSÁVEL confirma a baixa pelo extrato já conferida (nível APLICAR_COM_CONFIRMACAO, ou revisão).
+     * Usa o contexto VERIFICADO da pessoa (as permissões dela) e o mesmo caminho da execução automática (idempotente, auditado).
+     */
+    async confirmarBaixaPorExtrato(ctx, { propostaId } = {}, { nucleo = nucleoPadrao } = {}) {
+      await exigir(ctx, [ACAO.APROVAR, ACAO.VINCULAR_PAGAMENTO, ACAO.ENVIAR_DOCUMENTO]);
+      if (!execucao) throw new ErroDeAprovacao("EXECUCAO_DESLIGADA");
+      const esc = escopo(ctx);
+      const p = UUID.test(propostaId ?? "") ? await a.propostas.obter(esc, propostaId) : null;
+      if (!p) throw new ErroDeAprovacao("PROPOSTA_NAO_ENCONTRADA");
+      if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
+      if (p.conciliacao?.situacao !== "CONFERIDA" || !p.conciliacao.movimentacaoId) throw new ErroDeAprovacao("EXTRATO_NAO_CONFERIDO");
+      if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
+      const r = await execucao.liquidar({ proposta: p, escopo: esc, movimentacaoId: p.conciliacao.movimentacaoId, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
+        politicaId: p.autonomia?.politicaId ?? null, executor: executorDaPessoa({ nucleo, ctx }) });
+      await a.aprovacoes.registrar({ propostaId: p.id, acao: r.ok ? "APLICADA" : "FALHOU", usuarioId: ctx.usuarioId, motivo: r.ok ? null : r.motivo, resultado: r.resultado ?? null });
+      if (!r.ok) throw new ErroDeAprovacao(r.motivo ?? "FALHA_NA_EXECUCAO", r.detalhes ?? {});
+      return r;
+    },
+    /**
+     * Agente 2 — Frente C: REVERSÃO de uma operação executada, pelo ESTORNO oficial de cada liquidação, por responsável com
+     * financeiro_v2.cancelar (as permissões dessa pessoa). Fica registrada (operação REVERTIDA + auditoria); nada é apagado.
+     */
+    async reverterOperacao(ctx, { operacaoId, justificativa } = {}, { nucleo = nucleoPadrao } = {}) {
+      await exigir(ctx, [ACAO.CANCELAR]);
+      if (typeof justificativa !== "string" || justificativa.trim().length < 10) throw new ErroDeAprovacao("JUSTIFICATIVA_OBRIGATORIA");
+      const esc = escopo(ctx);
+      const op = UUID.test(operacaoId ?? "") ? await a.operacoes.obter(operacaoId, esc) : null;
+      if (!op) throw new ErroDeAprovacao("OPERACAO_NAO_ENCONTRADA");
+      if (op.estado !== "EXECUTADA") throw new ErroDeAprovacao("OPERACAO_NAO_REVERSIVEL", { estado: op.estado });
+      const estornos = [];
+      for (const liquidacaoId of op.resultado?.liquidacaoIds ?? []) {
+        const e = await nucleo.estornarLiquidacao(ctx, { liquidacaoId, justificativa: `Reversão de operação do MOVA: ${justificativa.trim()}`.slice(0, 500) });
+        estornos.push(e.estorno?.id ?? null);
+      }
+      const revertida = await a.operacoes.reverter(op.id, esc, { por: ctx.usuarioId, justificativa: justificativa.trim().slice(0, 500), resultado: { estornos } });
+      if (!revertida) throw new ErroDeAprovacao("OPERACAO_NAO_REVERSIVEL");
+      await a.auditoria.registrar({ acao: "OPERACAO_REVERTIDA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: op.propostaId, dados: { operacaoId: op.id, estornos: estornos.length } });
+      return revertida;
+    },
+    /** Agente 2 — Frente C: cadastro de POLÍTICA DE AUTONOMIA (financeiro_v2.configurar). Só na empresa da sessão. */
+    async criarPolitica(ctx, entrada = {}) {
+      await exigir(ctx, [ACAO.CONFIGURAR]);
+      let p;
+      try { p = validarPolitica({ ...entrada, organizacaoId: escopo(ctx).organizacaoId }); } catch (e) { throw new ErroDeAprovacao("POLITICA_INVALIDA", { campo: e.campo ?? null }); }
+      if (p.unidadeId && !cfg.unidades.some((u) => u.unidadeId === p.unidadeId && u.organizacaoId === p.organizacaoId)) throw new ErroDeAprovacao("UNIDADE_FORA_DO_MOVA");
+      let id;
+      try { id = await a.politicas.criar(p, { criadaPor: ctx.usuarioId }); } catch (e) { throw new ErroDeAprovacao(e?.codigo === "POLITICA_ATIVA_EXISTE" || e?.code === "23505" ? "POLITICA_ATIVA_EXISTE" : "POLITICA_NAO_GRAVADA"); }
+      await a.auditoria.registrar({ acao: "POLITICA_CRIADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: id, dados: { operacao: p.operacao, nivel: p.nivel, unidadeId: p.unidadeId, limiteCentavos: p.limiteCentavos } });
+      return { id };
+    },
+    async revogarPolitica(ctx, { politicaId } = {}) {
+      await exigir(ctx, [ACAO.CONFIGURAR]);
+      const ok = UUID.test(politicaId ?? "") && await a.politicas.revogar({ id: politicaId, organizacaoId: escopo(ctx).organizacaoId, por: ctx.usuarioId });
+      if (!ok) throw new ErroDeAprovacao("POLITICA_NAO_ENCONTRADA");
+      await a.auditoria.registrar({ acao: "POLITICA_REVOGADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: politicaId });
       return { ok: true };
     },
     async rejeitar(ctx, { propostaId, motivo }) {

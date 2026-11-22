@@ -49,17 +49,29 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false }) {
   const cfg = validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
-  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos });
+  // Agente 2 — Frente C: conferência com o extrato + política de autonomia (só com `autonomia`); escrita só com a porta OPERACIONAL.
+  const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
+  // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
+  const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
+  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
-  const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada });
+  const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada, execucao });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;
-  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta });
+  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores });
 }
 /** Nome mantido da Execução 01. */
 export const criarMovaSimulado = criarMova;
+import { criarExecucao } from "./aplicacao/execucao.js";
+import { criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";
+export { AUTOMACAO, RESPOSTA_ENTREGADOR, criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";
+export { criarPortaOperacional, executorDaPessoa, ErroDeExecucao, OPERACOES_DE_ESCRITA } from "./aplicacao/portaOperacional.js";
+export { criarExecucao };
+// Agente 2 — Frente C (autonomia configurável, só decisão) e Frente D (rotina dos entregadores, só composição).
+export { NIVEL as NIVEL_AUTONOMIA, OPERACAO as OPERACAO_AUTONOMA, conferirComExtrato, decidirAutonomia, validarPolitica, validarPoliticas } from "./dominio/autonomia.js";
+export { identificarEntregador, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, precisaCobrarNota, validarEntregadores } from "./dominio/entregadores.js";

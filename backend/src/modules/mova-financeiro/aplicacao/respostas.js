@@ -50,6 +50,14 @@ export const RESPOSTA = Object.freeze({
   respondidoNoPrivado: () => "Te respondi no privado (essa consulta tem valores e não aparece no grupo).",
   semConversaPrivada: () => "Essa consulta tem valores e não aparece no grupo. Peça ao administrador para cadastrar seu número para respostas no privado.",
   perfilSemDocumentos: () => "Seu acesso ao MOVA é só de consultas: documentos e lançamentos são enviados por quem cuida do financeiro da unidade. Nada foi registrado.",
+  documentoNoPrivado: () => "Recebi o documento. Os detalhes, com valores, foram para o seu privado.",
+  documentoSemPrivado: () => "Recebi o documento e preparei para revisão no Centro Financeiro. Os valores não aparecem no grupo.",
+  // Agente 2 — Frente C: baixa pelo extrato (nunca pagamento bancário; a saída já estava no extrato).
+  baixaExecutada: (p, r) => `Baixa registrada no Financeiro: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar, conferida com a saída do extrato de ${dataBr(r?.dataSaida)}. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  baixaConferida: (p) => `Proposta ${curto(p.id)}: baixa de ${reais(p.valorCentavos)} conferida com a saída do extrato. Falta a confirmação de um responsável no Centro Financeiro. Nada foi lançado ainda.`,
+  extratoAmbiguo: () => "Há mais de uma saída no extrato com esse valor e data; a escolha fica com o financeiro.",
+  aguardandoExtrato: () => "Ainda não achei a saída correspondente no extrato; confiro de novo quando o extrato for importado.",
+  grupoOperacional: () => "Este grupo é operacional: aqui eu trato documentos e pendências, sem valores financeiros. Para valores, use a conversa privada com o MOVA ou o Centro Financeiro. Nada foi consultado.",
   perfilSemConsulta: () => "Seu acesso ao MOVA não inclui consultas com valores. Fale com o administrador financeiro. Nada foi consultado.",
 });
 
