@@ -13,14 +13,27 @@
 //   POST /acoes/mova/aplicar             aprovar e aplicar pelo Financeiro (aprovar + aplicar + registrar; unidade com escrita liberada)
 //   POST /acoes/mova/rejeitar            rejeitar (aprovar)
 //   POST /acoes/mova/reprocessar         devolver evento com falha à fila (aprovar)
+//   Agente 2 — Frente C (operações com autonomia):
+//   GET  /api/mova/operacoes             operações executadas pelo MOVA na unidade (ver)
+//   GET  /api/mova/politicas             políticas de autonomia da empresa (ver)
+//   POST /acoes/mova/confirmar-baixa-extrato  responsável confirma a baixa já conferida com o extrato (aprovar + vincular + documentos)
+//   POST /acoes/mova/reverter-operacao   estorno oficial de uma operação executada (cancelar)
+//   POST /acoes/mova/politica            cadastrar política de autonomia (configurar)
+//   POST /acoes/mova/politica-revogar    revogar política (configurar)
+//   Agente 2 — Frente D (entregadores) e automações:
+//   GET  /api/mova/entregadores          entregadores autorizados, notas recebidas e envios da rotina (ver)
+//   GET  /api/mova/automacoes            automações da unidade (ver)
+//   POST /acoes/mova/automacao           ligar/desligar e horário (configurar)
+//   POST /acoes/mova/automacao-pausa     pausar/retomar uma automação (configurar)
 import { ACAO } from "../financeiro-v2/index.js";
-import { ErroDeAprovacao } from "../mova-financeiro/index.js";
+import { AUTOMACAO, ErroDeAprovacao } from "../mova-financeiro/index.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
-const STATUS = { PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
+const STATUS = { BAIXA_CONFERIDA_COM_EXTRATO: 409, EXTRATO_NAO_CONFERIDO: 409, OPERACAO_NAO_REVERSIVEL: 409, OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const escopo = (ctx) => ({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
 
+const exigirConfigurar = (ctx) => { if (!ctx?.permissoes?.includes(ACAO.CONFIGURAR)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Alterar automações exige permissão de configuração."); };
 function exigirVer(ctx) {
   if (!ctx?.permissoes?.includes(ACAO.VER)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Permissão financeira insuficiente.");
 }
@@ -44,6 +57,50 @@ export const CONSULTAS_MOVA = Object.freeze({
     if (!d) throw recusa(404, "DOCUMENTO_NAO_ENCONTRADO", "Mensagem não encontrada nesta unidade.");
     return d;
   },
+  "/mova/operacoes": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.armazenamento.operacoes ? await mova.armazenamento.operacoes.listar(escopo(ctx)) : [] }; },
+  "/mova/politicas": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const todas = mova.armazenamento.politicas ? await mova.armazenamento.politicas.listar(ctx.organizacaoId) : [];
+    return { autonomiaLigada: Boolean(mova.execucao), identidadeOperacional: Boolean(mova.execucao?.operacional), itens: todas.filter((p) => !p.unidadeId || p.unidadeId === ctx.unidadeId) };
+  },
+  "/mova/entregadores": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const a = mova.armazenamento;
+    const lista = (mova.cfg.entregadores ?? []).filter((e) => e.unidadeId === ctx.unidadeId && e.organizacaoId === ctx.organizacaoId);
+    const comConversa = new Set(mova.cfg.gruposAutorizados.filter((g) => g.entregador).map((g) => g.grupoId));
+    return {
+      ligado: Boolean(mova.entregadores),
+      itens: lista.map((e) => ({ chave: e.chave, nome: e.nome, telefone: `…${e.telefoneE164.slice(-4)}`, conversa: comConversa.has(e.privado) ? "ATIVA" : "NUMERO_DA_EQUIPE" })),
+      notas: a.notasEntregador ? await a.notasEntregador.listar(escopo(ctx)) : [],
+      envios: a.enviosEntregador ? await a.enviosEntregador.listar(escopo(ctx)) : [],
+    };
+  },
+  // Agente 2 — Frente E: Central de Operações (contagens reais; IA = consumo registrado no orçamento).
+  "/mova/visao-geral": async ({ ctx, mova, orcamento, controle, params }) => {
+    exigirVer(ctx);
+    if (!mova.consultas) throw recusa(404, "MOVA_SEM_CONSULTAS", "Visão geral indisponível.");
+    const dias = /^[0-9]{1,2}$/.test(String(params?.dias ?? "")) ? Number(params.dias) : 7;
+    return { ...(await mova.consultas.visaoGeral({ ...escopo(ctx), dias })), modo: mova.cfg.modo, autonomiaLigada: Boolean(mova.execucao), identidadeOperacional: Boolean(mova.execucao?.operacional),
+      entregadoresLigado: Boolean(mova.entregadores), controle: controle ? await controle.estado() : null, orcamentoIa: orcamento ? await orcamento.resumo().catch(() => null) : null };
+  },
+  // Grupos e participantes da unidade: identificadores MASCARADOS; retrato dos membros com quem NÃO está autorizado.
+  "/mova/grupos": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const mascarar = (j) => { const d = String(j ?? "").split("@")[0].replace(/\D/g, ""); return d ? `…${d.slice(-4)}` : "—"; };
+    const grupos = mova.cfg.gruposAutorizados.filter((g) => g.unidades.includes(ctx.unidadeId));
+    const itens = [];
+    for (const g of grupos) {
+      const retrato = !g.privada && mova.armazenamento.membros ? await mova.armazenamento.membros.obter(g.grupoId) : null;
+      const autorizados = new Set(g.participantes?.flatMap((p) => p.ids) ?? []);
+      const fora = retrato ? retrato.membros.filter((m) => !autorizados.has(m)) : [];
+      itens.push({ grupo: mascarar(g.grupoId), tipo: g.entregador ? "ENTREGADOR" : g.privada ? (g.derivada ? "PRIVADO_DERIVADO" : "PRIVADO") : "GRUPO", acesso: g.acesso ?? "ABERTO",
+        politicaResposta: g.politicaResposta ?? (g.privada ? null : "PRIVADO_RESTRITO"), unidades: g.unidades.length,
+        participantes: (g.participantes ?? []).map((p) => ({ id: mascarar(p.ids[0]), perfil: p.perfil ?? (p.perfilPorUnidade?.[ctx.unidadeId] ?? null), nome: p.nome ?? null, privado: Boolean(p.privado) })),
+        membros: retrato ? { total: retrato.membros.length, verificadoEm: retrato.verificadoEm instanceof Date ? retrato.verificadoEm.toISOString() : retrato.verificadoEm, naoAutorizados: fora.map(mascarar) } : null });
+    }
+    return { itens };
+  },
+  "/mova/automacoes": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.armazenamento.automacoes ? await mova.armazenamento.automacoes.listar(escopo(ctx)) : [] }; },
   "/mova/historico": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: await mova.consultas.historico(escopo(ctx)) }; },
   "/mova/estado": async ({ ctx, mova, worker, enviador, chaves, controle, orcamento }) => {
     exigirVer(ctx);
@@ -76,6 +133,33 @@ export const ACOES_MOVA = Object.freeze({
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarClassificacao(ctx, { propostaId: b.propostaId, versao: b.versao, categoria: b.categoria }) },
   "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria"], escreveNoFinanceiro: true,
     fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.aplicar(ctx, { propostaId: b.propostaId, contaId: b.contaId ?? null, categoria: b.categoria ?? null }, { nucleo }) },
+  "/mova/confirmar-baixa-extrato": { campos: ["propostaId"], escreveNoFinanceiro: true,
+    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.confirmarBaixaPorExtrato(ctx, { propostaId: b.propostaId }, { nucleo }) },
+  "/mova/reverter-operacao": { campos: ["operacaoId", "justificativa"], escreveNoFinanceiro: true,
+    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.reverterOperacao(ctx, { operacaoId: b.operacaoId, justificativa: b.justificativa }, { nucleo }) },
+  "/mova/politica": { campos: ["operacao", "unidadeId", "nivel", "limiteCentavos", "responsavel", "motivo", "vigenteDe", "vigenteAte"], escreveNoFinanceiro: false,
+    fazer: ({ ctx, mova, b }) => mova.aprovador.criarPolitica(ctx, b) },
+  "/mova/politica-revogar": { campos: ["politicaId"], escreveNoFinanceiro: false,
+    fazer: ({ ctx, mova, b }) => mova.aprovador.revogarPolitica(ctx, { politicaId: b.politicaId }) },
+  "/mova/automacao": { campos: ["nome", "ativa", "horario"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!Object.values(AUTOMACAO).includes(b.nome) || typeof b.ativa !== "boolean" || (b.horario !== undefined && !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(b.horario))) throw recusa(400, "PARAMETRO_INVALIDO", "Automação, liga/desliga ou horário inválidos.");
+      const r = await mova.armazenamento.automacoes.definir({ nome: b.nome, ...escopo(ctx), ativa: b.ativa, horario: b.horario ?? "09:00" });
+      if (!r) throw recusa(404, "AUTOMACAO_NAO_ENCONTRADA", "Automação de outra empresa.");
+      await mova.armazenamento.auditoria.registrar({ acao: "AUTOMACAO_DEFINIDA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: b.nome, dados: { unidadeId: ctx.unidadeId, ativa: b.ativa, horario: r.horario } });
+      return r;
+    } },
+  "/mova/automacao-pausa": { campos: ["nome", "pausar", "motivo"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!Object.values(AUTOMACAO).includes(b.nome) || typeof b.pausar !== "boolean") throw recusa(400, "PARAMETRO_INVALIDO", "Informe a automação e se é para pausar.");
+      const a = mova.armazenamento.automacoes;
+      const r = b.pausar ? await a.pausar({ nome: b.nome, unidadeId: ctx.unidadeId, por: ctx.usuarioId, motivo: typeof b.motivo === "string" ? b.motivo.slice(0, 300) : null }) : await a.retomar({ nome: b.nome, unidadeId: ctx.unidadeId });
+      if (!r || r.organizacaoId !== ctx.organizacaoId) throw recusa(404, "AUTOMACAO_NAO_ENCONTRADA", "Automação não cadastrada nesta unidade.");
+      await mova.armazenamento.auditoria.registrar({ acao: b.pausar ? "AUTOMACAO_PAUSADA" : "AUTOMACAO_RETOMADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: b.nome, dados: { unidadeId: ctx.unidadeId } });
+      return r;
+    } },
   "/mova/rejeitar": { campos: ["propostaId", "motivo"], escreveNoFinanceiro: false,
     fazer: ({ ctx, mova, b }) => mova.aprovador.rejeitar(ctx, { propostaId: b.propostaId, motivo: b.motivo }) },
   // Reversão funcional (ou religar) EM TEMPO REAL: sem deploy, sem reiniciar o Gateway, sem tocar no WhatsApp.

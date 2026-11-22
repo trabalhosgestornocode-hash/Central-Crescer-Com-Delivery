@@ -85,7 +85,7 @@ export async function cenario({ responder = () => base({}), comandosDeterministi
   const nucleo = Object.fromEntries(Object.entries(m.nucleo).map(([nome, op]) => [nome, async (cx, ...a) => { chamadas.push({ nome, organizacaoId: cx?.organizacaoId, unidadeId: cx?.unidadeId, permissoes: cx?.permissoes }); return op(cx, ...a); }]));
   const ref = {};
   const extrator = criarExtratorAnthropic({ cliente, obterEvidencia: (r) => ref.mova.evidencias.obter(r), relogio: () => AGORA });
-  ref.mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos, ...extras });
+  ref.mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos, ...(typeof extras === "function" ? extras({ nucleo, m, c }) : extras) });
   const mova = ref.mova;
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;

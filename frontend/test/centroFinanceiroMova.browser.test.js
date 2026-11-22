@@ -42,6 +42,17 @@ before(async () => {
         controle: { suspenso: false, recebimento: true, processamento: true, ia: true, envio: false }, orcamentoIa: { chamadas: 12, limiteChamadas: 200, custoUsd: 0.31, limiteUsd: 10, tokensEntrada: 50000, tokensSaida: 6000 } });
       if (caminho === "/api/fv2/mova/falhas-gerais") return jsonRes(res, 200, { total: 1, porTipo: { FALHA_LEITURA: 1 }, pendentes: 2, itens: [{ eventoId: "bly:GERAL1", tipo: "FALHA_LEITURA", motivo: "EXTRATOR_FALHOU:IA_DESLIGADA", em: "2026-11-20T15:00:00Z", estado: "CONCLUIDO", tentativas: 1, reprocessavel: true }] });
       if (caminho === "/api/fv2/mova/erros") return jsonRes(res, 200, { itens: api.modo === "homolog" ? [{ eventoId: "bly:FALHA1", tentativas: 5, ultimoErro: "IA_INDISPONIVEL" }] : [] });
+      // Agente 2 — Central de Operações (formato EXATO das rotas /api/mova/{visao-geral,grupos,operacoes,politicas,entregadores,automacoes}).
+      if (caminho === "/api/fv2/mova/visao-geral") return jsonRes(res, 200, { periodoDias: 7, geradoEm: "2026-11-22T12:00:00Z", modo: "OPERACAO", autonomiaLigada: true, identidadeOperacional: false, entregadoresLigado: true,
+        mensagens: { recebidas: 42, consultas: 17, documentos: 9, ignoradas: 3, bloqueadas: 1, porDecisao: {} }, respostas: { ENVIADA: 30, PENDENTE: 2 },
+        propostas: { AGUARDANDO_REVISAO: { quantidade: 4, valorCentavos: 123400 } }, operacoes: {}, notasEntregadores: { PENDENTE_ANEXO: 1 }, automacoes: { ativas: 1, pausadas: 0 },
+        controle: { suspenso: false }, orcamentoIa: { chamadas: 12, limiteChamadas: 200, custoUsd: 0.31, limiteUsd: 10 } });
+      if (caminho === "/api/fv2/mova/grupos") return jsonRes(res, 200, { itens: [{ grupo: "…0201", tipo: "GRUPO", acesso: "LISTA", politicaResposta: "PRIVADO_RESTRITO", unidades: 2,
+        participantes: [{ id: "…0201", perfil: "FINANCEIRO", nome: "Financeiro", privado: true }], membros: { total: 3, verificadoEm: "2026-11-22T11:58:00Z", naoAutorizados: ["…0777"] } }] });
+      if (caminho === "/api/fv2/mova/operacoes") return jsonRes(res, 200, { itens: [] });
+      if (caminho === "/api/fv2/mova/politicas") return jsonRes(res, 200, { autonomiaLigada: true, identidadeOperacional: false, itens: [] });
+      if (caminho === "/api/fv2/mova/entregadores") return jsonRes(res, 200, { ligado: true, itens: [{ chave: "mauricio", nome: "Mauricio", telefone: "…0301", conversa: "ATIVA" }], notas: [], envios: [] });
+      if (caminho === "/api/fv2/mova/automacoes") return jsonRes(res, 200, { itens: [] });
       if (caminho === "/api/fv2/caixa-e-bancos") return jsonRes(res, 200, { contas: [{ id: "c-1", nome: "Banco Sintético", tipo: "BANCARIA", ativa: true }] });
       return jsonRes(res, 404, { codigo: "NAO_ENCONTRADO" });
     }
@@ -184,6 +195,45 @@ test("HOMOLOGAÇÃO: faixa inconfundível; aba Processamento com orçamento, int
       ["/api/fv2/acoes/mova/reprocessar", { eventoId: "bly:FALHA1" }],
     ]);
     await capturar(pagina, "mova-homologacao");
+    assert.deepEqual(erros, []);
+  } finally { await ctx.close(); api.modo = null; }
+});
+
+test("Central de Operações: só números da API (simulação não inventa); grupos com membros sem autorização; automação e política vão à API", { skip: PULAR }, async () => {
+  const sim = await abrir();
+  try {
+    await sim.pagina.click("#cf-aba-central");
+    assert.match(await sim.pagina.textContent("#cf-conteudo"), /Disponível só com a API real/);
+  } finally { await sim.ctx.close(); }
+  api.modo = "homolog"; api.posts.length = 0;
+  const { ctx, pagina, erros } = await abrir();
+  try {
+    await pagina.click("#cf-aba-central");
+    await pagina.waitForSelector("text=Mensagens recebidas");
+    const v = await pagina.textContent("#cf-conteudo");
+    assert.match(v, /42/); assert.match(v, /Nenhum número aqui é estimado/); assert.match(v, /Não implantada/);
+    await pagina.click("#cf-aba-grupos");
+    await pagina.waitForSelector("text=Membros sem autorização:");
+    assert.match(await pagina.textContent("#cf-conteudo"), /…0777/);
+    await pagina.click("#cf-aba-automacoes");
+    await pagina.click("button[data-acao=central-automacao][data-nome=ENTREGADORES_SEMANAL]");
+    await pagina.waitForSelector("text=Feito.");
+    await pagina.click("#cf-aba-seguranca");
+    await pagina.waitForSelector("form[data-form=politica]");
+    await pagina.fill("input[name=limite]", "500,00");
+    await pagina.fill("input[name=responsavel]", "Responsável Sintético");
+    await pagina.fill("input[name=motivo]", "Baixas pequenas conferidas com o extrato");
+    await pagina.fill("input[name=vigenteDe]", "2026-11-22");
+    await pagina.click("button[data-acao=central-politica]");
+    await pagina.waitForSelector("text=Feito.");
+    assert.deepEqual(api.posts, [
+      { caminho: "/api/fv2/acoes/mova/automacao", corpo: { nome: "ENTREGADORES_SEMANAL", ativa: true, horario: "09:00" } },
+      { caminho: "/api/fv2/acoes/mova/politica", corpo: { operacao: "BAIXA_POR_EXTRATO", unidadeId: "u-1", nivel: "SOMENTE_PROPOR", limiteCentavos: 50000, responsavel: "Responsável Sintético", motivo: "Baixas pequenas conferidas com o extrato", vigenteDe: "2026-11-22" } },
+    ]);
+    await pagina.setViewportSize({ width: 375, height: 800 });
+    await pagina.click("#cf-aba-central");
+    assert.equal(await pagina.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "sem rolagem horizontal no celular");
+    await capturar(pagina, "mova-central");
     assert.deepEqual(erros, []);
   } finally { await ctx.close(); api.modo = null; }
 });

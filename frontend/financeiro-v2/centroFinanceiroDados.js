@@ -16,6 +16,9 @@ async function ler(url) {
   return { status: r.status, ok: r.ok, dados };
 }
 
+/** Leitura da API real (sessão da plataforma). Usada pela Central de Operações (centralMova.js). */
+export const lerApi = (url) => ler(url);
+
 export function simulacao() {
   return { fonte: "SIMULACAO", unidades: UNIDADES, caixaPorUnidade: CAIXA, configuracao: CONFIGURACAO, estadoMova: null, permissoes: [], contas: [], podeDecidir: false };
 }

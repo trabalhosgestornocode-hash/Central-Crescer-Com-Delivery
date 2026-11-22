@@ -1,7 +1,7 @@
 // MOVA — Agente 2: montagem do modo OPERACAO (grupos reais). Só a leitura do ambiente e as recusas — sem rede, sem banco.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { exigirEscopoDaOperacao, lerConfiguracaoMova } from "../../src/modules/fv2-integracao/mova.js";
+import { criarRotinaPeriodica, exigirEscopoDaOperacao, lerConfiguracaoMova } from "../../src/modules/fv2-integracao/mova.js";
 import { IDENTIDADE_MOVA } from "../../src/modules/fv2-integracao/leitorMova.js";
 import { validarConfiguracao } from "../../src/modules/mova-financeiro/index.js";
 
@@ -45,4 +45,37 @@ test("A2-M3 escopo da OPERACAO: unidade fora da lista, conversa avulsa ou grupo 
   assert.throws(() => exigirEscopoDaOperacao(semGrupo, [U1]), (e) => e.motivos.includes("OPERACAO_SEM_GRUPO"));
   const avulsa = { ...cfg, gruposAutorizados: [...cfg.gruposAutorizados, { grupoId: "5500000000999@s.whatsapp.net", unidades: [U1], acesso: "LISTA", derivada: false }] };
   assert.throws(() => exigirEscopoDaOperacao(avulsa, [U1]), (e) => e.motivos.includes("OPERACAO_COM_CONVERSA_AVULSA"));
+});
+
+test("A2-M4 autonomia e escrita: desligadas por padrão; escrita exige autonomia e identidade OPERACIONAL própria", () => {
+  const c = lerConfiguracaoMova(BASE);
+  assert.deepEqual([c.autonomia, c.escrita, c.identidadeOperacional], [false, false, null]);
+  assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1" }).autonomia, true);
+  const motivo = (env) => lerConfiguracaoMova(env).contradicoes ?? [];
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_AUTONOMIA"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_IDENTIDADE_OPERACIONAL"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: IDENTIDADE_MOVA }).includes("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA"));
+  assert.ok(motivo({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_PILOTO_UNIDADE_ID: U1, MOVA_OPERACAO_UNIDADES: "", MOVA_OPERACAO_AUTONOMIA: "1" }).includes("AUTONOMIA_FORA_DA_OPERACAO"));
+  const ok = lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: "eeeeeeee-0000-4000-8000-0000000000c2" });
+  assert.deepEqual([ok.habilitado, ok.escrita, ok.identidadeOperacional], [true, true, "eeeeeeee-0000-4000-8000-0000000000c2"]);
+});
+
+test("A2-M5 entregadores e rotina: desligados por padrão; só na OPERACAO; rotina exige os entregadores; passo sem sobreposição", async () => {
+  const c = lerConfiguracaoMova(BASE);
+  assert.deepEqual([c.entregadores, c.rotinaEntregadores], [false, false]);
+  const motivo = (env) => lerConfiguracaoMova(env).contradicoes ?? [];
+  assert.ok(motivo({ ...BASE, MOVA_ENTREGADORES_ROTINA: "1" }).includes("ROTINA_SEM_ENTREGADORES"));
+  assert.ok(motivo({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_PILOTO_UNIDADE_ID: U1, MOVA_OPERACAO_UNIDADES: "", MOVA_ENTREGADORES: "1" }).includes("ENTREGADORES_FORA_DA_OPERACAO"));
+  assert.deepEqual((({ entregadores, rotinaEntregadores }) => [entregadores, rotinaEntregadores])(lerConfiguracaoMova({ ...BASE, MOVA_ENTREGADORES: "1", MOVA_ENTREGADORES_ROTINA: "1" })), [true, true]);
+  let n = 0, solta;
+  const r = criarRotinaPeriodica(() => new Promise((ok) => { n += 1; solta = ok; }), { intervaloMs: 3600000 });
+  const p1 = r.tick();
+  assert.equal(await r.tick(), null, "um passo de cada vez");
+  solta({ semanais: 0 });
+  assert.deepEqual(await p1, { semanais: 0 });
+  assert.equal(n, 1);
+  const falha = criarRotinaPeriodica(async () => { throw Object.assign(new Error("x"), { codigo: "Y" }); }, { intervaloMs: 3600000, registrar: (e) => { n = e.codigo; } });
+  assert.equal(await falha.tick(), null);
+  assert.equal(n, "Y");
+  r.parar(); falha.parar();
 });

@@ -33,6 +33,10 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   "consultarCalendarioDeFaturamento",
   // Agente 2 — fechamento semanal dos entregadores próprios (painel agregado; só leitura, b.consultar no núcleo).
   "consultarEntregadoresProprios",
+  // Agente 2 — Frente C: prévia OFICIAL da baixa pelo extrato (saídas elegíveis, bloqueios, efeito) — só leitura (b.consultar).
+  "previaDoVinculoDoExtrato",
+  // Agente 2 — Frente D: o fechamento do PRÓPRIO entregador (histórico e detalhe da semana) — só leitura.
+  "consultarEntregador", "detalharFechamentoDoEntregador",
 ]);
 const SITUACOES_ABERTAS = Object.freeze(["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"]);
 const MAX_PAGINAS = 20;

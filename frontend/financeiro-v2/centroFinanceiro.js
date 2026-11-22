@@ -6,9 +6,12 @@
 // que serviria esses dados ainda NÃO existe (Execução 03): por isso a faixa "Simulação" é permanente e Aprovar/Rejeitar ficam
 // desligados com o motivo exposto. Contas a Pagar/Receber e Conciliação levam às telas existentes (nada duplicado).
 // Todo texto vindo de dados entra por textContent (nunca innerHTML): a mensagem original é entrada não confiável.
-import { acoes, carregarDados } from "./centroFinanceiroDados.js";
+import { acoes, carregarDados, lerApi } from "./centroFinanceiroDados.js";
+import { enviar } from "./consulta.js";
+import { ABAS_CENTRAL, criarCentral } from "./centralMova.js";
 
 const ABAS = [
+  ABAS_CENTRAL[0],
   { id: "processamento", rotulo: "Processamento" },
   { id: "visao", rotulo: "Visão Operacional" },
   { id: "entrada", rotulo: "Caixa de Entrada MOVA" },
@@ -16,6 +19,7 @@ const ABAS = [
   { id: "pagar", rotulo: "Contas a Pagar", ligacao: "index.html#/contas-a-pagar" },
   { id: "receber", rotulo: "Contas a Receber", ligacao: "index.html#/contas-a-receber" },
   { id: "conciliacao", rotulo: "Conciliação", ligacao: "index.html#/conferencias" },
+  ...ABAS_CENTRAL.slice(1),
   { id: "historico", rotulo: "Histórico do Agente" },
   { id: "config", rotulo: "Configurações MOVA" },
 ];
@@ -185,6 +189,9 @@ function propostas() {
         competenciaAConfirmar(p) && dados.podeDecidir && dados.fonte === "API"
           ? el("button", { classe: "botao botao--pequeno", type: "button", "data-acao": "competencia", "data-proposta": p.id, texto: "Informar competência" }) : null,
         precisaConta ? el("select", { classe: "cf-conta", "data-conta": p.id, "aria-label": "Conta de onde saiu o pagamento" }, el("option", { value: "", texto: "Conta do pagamento…" }), dados.contas.map((c) => el("option", { value: c.id, texto: c.nome }))) : null,
+        // Frente C: baixa conferida com o extrato ⇒ confirma a saída que JÁ existe (nunca "Aprovar", que criaria outra saída).
+        p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA" && p.estado === "AGUARDANDO_REVISAO"
+          ? el("button", { classe: "botao botao--pequeno botao--primario", type: "button", disabled: dados.fonte !== "API" || !dados.podeDecidir, title: "Vincular o pagamento à saída do extrato já conferida", "data-acao": "central-confirmar-baixa", "data-proposta": p.id, texto: "Confirmar baixa pelo extrato" }) :
         el("button", { classe: "botao botao--pequeno botao--primario", type: "button", disabled: Boolean(motivo), title: motivo ?? "Aprovar e aplicar no Financeiro", "data-acao": "aplicar", "data-proposta": p.id, "aria-label": motivo ? `Aprovar (indisponível: ${motivo})` : "Aprovar e aplicar", texto: "Aprovar" }),
         el("button", { classe: "botao botao--pequeno", type: "button", disabled: Boolean(motivo && p.estado !== "AGUARDANDO_REVISAO") || dados.fonte !== "API" || !dados.podeDecidir, title: "Rejeitar a proposta", "data-acao": "rejeitar", "data-proposta": p.id, texto: "Rejeitar" })),
     ] };
@@ -255,6 +262,8 @@ function processamento() {
 }
 
 const DESENHOS = { visao, entrada, propostas, historico, config, processamento };
+const ui = { el: (...a) => el(...a), cartao: (...a) => cartao(...a), tabela: (...a) => tabela(...a), selo: (x) => selo(x), reais: (c) => reais(c), horaBr: (d) => horaBr(d), dataBr: (d) => dataBr(d), vazio: (t) => vazio(t), dl: (p) => dl(p) };
+const central = criarCentral({ ui, ler: (u) => lerApi(u), enviar });
 
 function desenharIndisponivel(alvo) {
   const texto = dados.fonte === "MOVA_DESLIGADO" ? "O MOVA está desligado neste ambiente. Nenhuma mensagem do WhatsApp é lida e nenhuma proposta é criada." : dados.mensagem ?? "Não foi possível carregar o Centro Financeiro.";
@@ -266,7 +275,11 @@ function desenhar() {
   if (!["API", "SIMULACAO"].includes(dados.fonte)) return desenharIndisponivel(alvo);
   const aba = ABAS.find((a) => a.id === estado.aba);
   for (const b of document.querySelectorAll("[role=tab]")) b.setAttribute("aria-selected", String(b.dataset.aba === estado.aba));
-  alvo.replaceChildren(el("h2", { classe: "cf-oculto", texto: aba.rotulo }), ...(aba.ligacao ? ligacao(aba) : DESENHOS[aba.id]()).filter(Boolean));
+  const corpo = aba.ligacao ? ligacao(aba)
+    : ABAS_CENTRAL.some((x) => x.id === aba.id) ? [estado.aviso ? el("p", { classe: `cf-aviso${estado.aviso.ok ? "" : " cf-aviso--alerta"}`, role: "status", texto: estado.aviso.texto }) : null,
+      ...central.desenhar(aba.id, { fonte: dados.fonte, permissoes: dados.permissoes ?? [], unidadeId: estado.unidadeId, redesenhar: () => { if (estado.aba === aba.id) desenhar(); } })]
+    : DESENHOS[aba.id]();
+  alvo.replaceChildren(el("h2", { classe: "cf-oculto", texto: aba.rotulo }), ...corpo.filter(Boolean));
   alvo.setAttribute("aria-labelledby", `cf-aba-${aba.id}`);
 }
 
@@ -275,6 +288,15 @@ function selecionar(id) { estado.selecionado = id; desenhar(); document.querySel
 async function decidir(botao) {
   const id = botao.dataset.proposta;
   let r;
+  if (botao.dataset.acao?.startsWith("central-")) {
+    botao.disabled = true;
+    const a = await central.agir(botao);
+    botao.disabled = false;
+    if (!a) return;
+    estado.aviso = a;
+    if (botao.dataset.acao === "central-confirmar-baixa") dados = await carregarDados();
+    return desenhar();
+  }
   if (botao.dataset.acao === "arquivo") {
     const a = await acoes.arquivo(botao.dataset.sha);
     if (!a.ok) { estado.aviso = { ok: false, texto: a.mensagem }; return desenhar(); }
