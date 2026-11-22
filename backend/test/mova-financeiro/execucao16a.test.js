@@ -266,6 +266,8 @@ test("16B zero sem cobertura conhecida (calendário do canal recusado por regra)
     ehErroDeRegra: (e) => e === regra,
     ler: async (op) => {
       if (op === "consultarCalendarioDeFaturamento") throw regra;
+      // 16C: a competência inteira responde pela DRE (apurarCompetencia); a lista de vendas fica para período parcial.
+      if (op === "apurarCompetencia") return { indicadores: { FATURAMENTO_BRUTO_PROPRIO: { situacao: "PRELIMINAR", valorCentavos: 50000, porCanal: [{ canal: "BALCAO", valorCentavos: 50000, comprovado: false }, { canal: "IFOOD", valorCentavos: 0, comprovado: true }] } } };
       return { resumo: { operacoes: 3, brutoProprioCentavos: 50000, recebidoComprovadoCentavos: null, conferenciaComDre: null,
         dre: { situacao: "PRELIMINAR", porCanal: [{ canal: "BALCAO", valorCentavos: 50000, comprovado: false }, { canal: "IFOOD", valorCentavos: 0, comprovado: true }] } } };
     },
