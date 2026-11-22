@@ -153,6 +153,21 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1 and resolvida_em is null returning leitura, grupo_jid", [mensagemId]);
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
+      /**
+       * 15A — memória curta: a pendência MAIS RECENTE da MESMA conversa e do MESMO participante, dentro da validade. O prazo
+       * usa o relógio do BANCO (o mesmo de criada_em) — nunca compara dois relógios.
+       * Atômica (FOR UPDATE SKIP LOCKED + resolvida_em): nunca retomada duas vezes. Nada de outra conversa ou participante.
+       */
+      async tomarPendenteRecente({ grupoId, participanteId, validadeMs }) {
+        const r = await q(`update mova.mensagem_pendente set resolvida_em = now()
+                            where mensagem_id = (select mensagem_id from mova.mensagem_pendente
+                                                  where grupo_jid = $1 and resolvida_em is null and criada_em >= now() - make_interval(secs => $3::double precision / 1000)
+                                                    and leitura->'evento'->>'participanteId' = $2
+                                                  order by criada_em desc limit 1 for update skip locked)
+                              and resolvida_em is null
+                          returning leitura, grupo_jid`, [grupoId, participanteId, validadeMs]);
+        return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
+      },
     }),
     saida: Object.freeze({
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
@@ -160,6 +175,13 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async listar() {
         return (await q("select grupo_jid as \"grupoId\", resposta_a as \"respostaA\", texto, estado from mova.resposta order by seq")).rows;
+      },
+      /** 15B: publicada no relé — fica ENVIANDO com lease longo (o resultado vem por sincronização, não por nova reserva). */
+      async marcarNoRele(id) {
+        await q("update mova.resposta set estado = 'ENVIANDO', ultimo_erro = 'AGUARDANDO_RELE', lease_ate = now() + interval '1 day' where id = $1", [id]);
+      },
+      async aguardandoRele() {
+        return (await q("select id from mova.resposta where estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE' order by seq limit 100")).rows.map((r) => r.id);
       },
       /** Eco de uma resposta do próprio agente (id do provedor registrado no envio) ⇒ nunca reprocessar. */
       async ehRespostaPropria(mensagemId) {
@@ -169,13 +191,36 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2, enviada_em = now(), lease_ate = null where id = $1", [id, providerMessageId]);
       },
       /** Pega até `limite` respostas PENDENTES (ou ENVIANDO com lease vencido) para envio — dois enviadores nunca pegam a mesma. */
-      async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date() } = {}) {
+      // 15A: `naoAntesDe` (marco de ativação do envio) e `destinos` (conversas autorizadas) filtram NO BANCO — resposta antiga ou
+      // para destino fora da lista nunca é sequer reservada (proteção contra envio retroativo, independente do descarte).
+      async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date(), naoAntesDe = null, destinos = null } = {}) {
         return emTransacao(pool, async (tx) => (await tx(`
           update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
-           where id in (select id from mova.resposta where estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1)
+           where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
+                           and ($4::timestamptz is null or criada_em >= $4::timestamptz)
+                           and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
-          returning id, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas`,
-        [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite])).rows);
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    -- 15H: o JID com que o WhatsApp entregou a mensagem respondida (o endereço que o Gateway reconhece)
+                    (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
+        [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
+          // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
+          .sort((a, b) => Number(a.seq) - Number(b.seq)));
+      },
+      /**
+       * 15A: DESCARTE auditável de respostas PENDENTES (nunca DELETE): estado SUPRIMIDA + motivo; uma linha de auditoria com
+       * quem, por quê, quantas e quais ids (sem texto nem número). Só PENDENTE criada até `criadasAte` (e, se dado, só os `ids`).
+       */
+      async suprimir({ criadasAte, motivo, ator, ids = null }) {
+        if (!criadasAte || !/^[A-Z0-9_]{3,40}$/.test(motivo ?? "") || !ator) throw new TypeError("suprimir exige criadasAte, motivo (CÓDIGO) e ator");
+        return emTransacao(pool, async (tx) => {
+          const r = (await tx(`update mova.resposta set estado = 'SUPRIMIDA', ultimo_erro = $2, lease_ate = null
+                                where estado = 'PENDENTE' and criada_em <= $1::timestamptz and ($3::uuid[] is null or id = any($3::uuid[]))
+                              returning id`, [criadasAte, `SUPRIMIDA:${motivo}`, ids])).rows.map((x) => x.id);
+          await tx(`insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('RESPOSTAS_SUPRIMIDAS', 'USUARIO', $1, 'resposta', $2)`,
+            [String(ator).slice(0, 80), JSON.stringify({ motivo, criadasAte, quantidade: r.length, ids: r })]);
+          return { suprimidas: r.length, ids: r };
+        });
       },
       async marcarFalhaDeEnvio(id, codigo, { final }) {
         await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo]);
@@ -331,9 +376,11 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
 /** Lê do banco a configuração BRUTA (para validarConfiguracao): só grupos ATIVOS. */
 export async function carregarConfiguracao(pool, { identidadeServico, modo = "SIMULACAO" }) {
   const q = consultar(pool);
-  // Conversas privadas de homologação só entram no modo HOMOLOGACAO; fora dele são ignoradas mesmo que ativas no banco.
-  const grupos = (await q("select grupo_jid from mova.grupo_autorizado where ativo and (tipo = 'GRUPO' or $1 = 'HOMOLOGACAO')", [modo])).rows;
-  const unidades = (await q("select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where g.ativo and (g.tipo = 'GRUPO' or $1 = 'HOMOLOGACAO') order by gu.nome", [modo])).rows;
+  // Conversas privadas só entram nos modos HOMOLOGACAO e PILOTO; fora deles são ignoradas mesmo que ativas no banco.
+  // 16A: no PILOTO entram SÓ as conversas privadas — nenhum grupo, mesmo ativo.
+  const filtro = "g.ativo and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
+  const grupos = (await q(`select g.grupo_jid from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
+  const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
   return {
@@ -354,15 +401,17 @@ export function criarConsultasPostgres({ pool }) {
     eventoId: r.evento_id, recebidoEm: r.recebido_em.toISOString(), tipo: r.tipo, texto: r.texto,
     participante: { referencia: mascararJid(r.participante_jid), nomeExibicao: r.nome_exibicao, nomeNaoEProvaDeIdentidade: true },
     documento: r.sha256 ? { sha256: r.sha256, mime: r.mime, nomeArquivo: r.nome_arquivo } : null,
-    dadosExtraidos: r.leitura ?? null,
+    // 15A (V-1): texto puro não tem documento — a leitura da IA vem da proposta (marcada como tal).
+    dadosExtraidos: r.leitura ?? (r.dados?.leitura ? { ...r.dados.leitura, fonte: "PROPOSTA" } : null),
     proposta: r.proposta_id ? { id: r.proposta_id, tipo: r.proposta_tipo, estado: r.proposta_estado, valorCentavos: r.valor_centavos === null ? null : Number(r.valor_centavos),
-      categoriaSugerida: r.dados?.categoriaSugerida ?? null, datas: r.dados?.datas ?? null, bloqueioDeAplicacao: r.dados?.bloqueioDeAplicacao ?? null, sinaisDeInjecao: r.dados?.sinaisDeInjecao ?? false } : null,
+      categoriaSugerida: r.dados?.categoriaSugerida ?? null, datas: r.dados?.datas ?? null, bloqueioDeAplicacao: r.dados?.bloqueioDeAplicacao ?? null, sinaisDeInjecao: r.dados?.sinaisDeInjecao ?? false,
+      competenciaPendente: r.dados?.competenciaPendente === true, competenciaRevisada: r.dados?.competenciaRevisada ?? null } : null,
     decisoes: r.decisoes,
   });
   const SQL = `
     select e.evento_id, e.recebido_em, e.tipo, e.texto, e.participante_jid, pa.nome_exibicao, ev.sha256, ev.mime, ev.nome_arquivo, d.leitura,
            p.id as proposta_id, p.tipo as proposta_tipo, p.estado as proposta_estado, p.valor_centavos, p.dados,
-           (select coalesce(jsonb_agg(jsonb_build_object('decisao', x.decisao, 'motivo', x.motivo, 'em', x.em) order by x.seq), '[]'::jsonb)
+           (select coalesce(jsonb_agg(jsonb_build_object('decisao', x.decisao, 'motivo', x.motivo, 'em', x.em, 'propostaId', x.proposta_id) order by x.seq), '[]'::jsonb)
               from mova.decisao x where x.evento_id = e.evento_id) as decisoes
       from mova.evento e
       left join mova.participante pa on pa.grupo_jid = e.grupo_jid and pa.participante_jid = e.participante_jid
@@ -376,7 +425,7 @@ export function criarConsultasPostgres({ pool }) {
     async falhasGerais({ organizacaoId, unidadeId, limite = 100 }) {
       const itens = (await q(`select d.evento_id as "eventoId", d.decisao as tipo, d.motivo, d.em, f.estado, f.tentativas
           from mova.decisao d join mova.fila f on f.evento_id = d.evento_id
-         where d.unidade_id is null and d.decisao not in ('IGNORADO','REPROCESSAR')
+         where d.unidade_id is null and d.decisao in ('FALHA_LEITURA','FALHOU') -- só FALHAS (pergunta pendente, ignorado etc. não são falha)
            and d.seq = (select max(x.seq) from mova.decisao x where x.evento_id = d.evento_id)
            and f.carga->>'grupoId' in (${CONVERSAS})
          order by d.seq desc limit $3`, [organizacaoId, unidadeId, limite])).rows;

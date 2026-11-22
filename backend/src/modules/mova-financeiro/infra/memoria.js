@@ -69,8 +69,17 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
     }),
     mensagens: Object.freeze({
-      async lembrar(mensagemId, { grupoId, pendente }) { if (pendente) pendentes.set(mensagemId, { grupoId, pendente }); else pendentes.delete(mensagemId); },
+      async lembrar(mensagemId, { grupoId, pendente }) { if (pendente) pendentes.set(mensagemId, { grupoId, pendente, criadaEm: relogio() }); else pendentes.delete(mensagemId); },
       async tomarPendente(mensagemId) { const p = pendentes.get(mensagemId) ?? null; pendentes.delete(mensagemId); return p; },
+      /** 15A — memória curta (mesma regra do Postgres): mais recente da mesma conversa e participante, depois de `desde`. */
+      async tomarPendenteRecente({ grupoId, participanteId, validadeMs }) {
+        const desde = new Date(relogio().getTime() - validadeMs);
+        const [id, p] = [...pendentes.entries()].filter(([, x]) => x.grupoId === grupoId && x.pendente?.evento?.participanteId === participanteId && x.criadaEm >= desde)
+          .sort((a, b) => b[1].criadaEm - a[1].criadaEm)[0] ?? [];
+        if (!id) return null;
+        pendentes.delete(id);
+        return p;
+      },
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */

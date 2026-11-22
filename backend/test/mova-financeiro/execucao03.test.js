@@ -166,13 +166,13 @@ t("05 comprovante Pix com legenda (imagem): IA real recebe a imagem + legenda de
   const s = await cenario({ responder: () => comprovante({}) });
   await s.enviar(gw({ doc, mime: "image/jpeg", texto: "pix pago, gama" }));
   const req = s.cliente.pedidos[0];
-  assert.equal(req.model, "claude-opus-5-5");
+  assert.equal(req.model, "claude-haiku-5-5");
   assert.equal(temBloco(req, "image"), true);
   assert.equal(req.messages[0].content[0].source.media_type, "image/jpeg");
   assert.equal(req.output_config.format.type, "json_schema");
   assert.deepEqual(req.output_config.format.schema, esquemaDaSaida());
   assert.equal(req.tools, undefined, "o modelo não recebe ferramentas");
-  assert.equal(req.fallbacks, "default");
+  assert.equal(req.fallbacks, undefined, "Haiku exclusivo: sem fallback para outro modelo");
   assert.equal((await s.propostas(GAMA))[0].tipo, TIPO_PROPOSTA.DESPESA_PAGA);
 });
 
@@ -358,7 +358,7 @@ t("23 falha no provedor de IA: transitória volta à fila; recusa/erro permanent
   await s.enviar(gw({ id: "E3IA0001", doc: bytes("ia-1"), mime: "image/jpeg", texto: "limite, alfa" }));
   assert.equal((await s.mova.fila.estado("bly:E3IA0001")).estado, "PENDENTE");
   await s.enviar(gw({ doc: bytes("ia-2"), mime: "image/jpeg", texto: "recusa, alfa" }));
-  assert.equal((await s.ultima()).motivo, "EXTRATOR_FALHOU:IA_RECUSOU");
+  assert.equal((await s.ultima()).motivo, "IA_RECUSOU"); // 13C: recusa vira BLOQUEADO, não falha de leitura
   await s.enviar(gw({ doc: bytes("ia-3"), mime: "image/jpeg", texto: "alfa" }));
   assert.equal((await s.ultima()).motivo, "IA_SAIDA_INVALIDA:campo_nao_permitido");
   assert.equal(await s.mova.armazenamento.propostas.quantidade(), 0);
@@ -369,8 +369,8 @@ t("24 falha no Gateway: resposta volta para PENDENTE e, no teto, FALHOU; envio b
   await s.enviar(gw({ texto: "situação das propostas?" }));
   let gatewayFora = true;
   const enviados = [];
-  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, maxTentativas: 2,
-    enviar: async (r) => { if (gatewayFora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r); return { providerMessageId: "PROVMOVA0001" }; } });
+  const enviador = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [G], maxTentativas: 2,
+    enviar: async (r) => { if (gatewayFora) throw Object.assign(new Error("fora"), { codigo: "WHATSAPP_GATEWAY_NOT_CONNECTED" }); enviados.push(r); return { providerMessageId: "PROVMOVA0001" }; } });
   await enviador.enviarPendentes();
   assert.deepEqual(await s.mova.armazenamento.saida.contagem(), { PENDENTE: 1 });
   gatewayFora = false;
@@ -383,7 +383,7 @@ t("24 falha no Gateway: resposta volta para PENDENTE e, no teto, FALHOU; envio b
   assert.deepEqual(await desligado.enviarPendentes(), { enviadas: 0, desligado: true });
   const s2 = await cenario({ responder: () => consulta("SITUACAO_PROPOSTAS") });
   await s2.enviar(gw({ texto: "situação?" }));
-  const sempreFora = criarEnviadorDeRespostas({ armazenamento: s2.mova.armazenamento, habilitado: true, maxTentativas: 2, enviar: async () => { throw new Error("x"); } });
+  const sempreFora = criarEnviadorDeRespostas({ armazenamento: s2.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [G], maxTentativas: 2, enviar: async () => { throw new Error("x"); } });
   await sempreFora.enviarPendentes(); await sempreFora.enviarPendentes();
   assert.deepEqual(await s2.mova.armazenamento.saida.contagem(), { FALHOU: 1 });
 });

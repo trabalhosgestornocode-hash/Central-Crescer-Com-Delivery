@@ -16,7 +16,7 @@
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
-import { mascararDadosSensiveis, pedidoRestrito } from "../dominio/privacidade.js";
+import { ehSaudacaoOuAjuda, mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
@@ -31,6 +31,16 @@ const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
 const CONTAS = ["BOLETO", "NOTA_FISCAL"];
 const CONSULTAS_DO_GRUPO = ["COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS"];
 const PEDIDO_DE_APROVACAO = /^\s*(aprov[ao]r?|aprovad[oa]|aplic[ao]r?|pode\s+aprovar|autoriz[ao]r?)\b/i;
+// Execução 14 (achado real: o Haiku leu "faça o pagamento" como REGISTRAR_CONTA): pedido para EXECUTAR pagamento/transferência
+// é barrado pelo backend antes da IA. "paguei" (relato) não casa: só imperativo/pedido.
+/** 15A: validade da memória curta (esclarecimento sem citação). */
+export const MEMORIA_CURTA_MS = 10 * 60 * 1000;
+const PALAVRAS_DE_LIGACAO = new Set(["e", "eh", "a", "o", "da", "do", "de", "na", "no", "em", "foi", "unidade", "loja", "mova", "pra", "para", "sim", "ok", "hml"]);
+const PEDIDO_DE_EXECUCAO = [
+  /\b(fa[çc]a|faz|efetue|realize|execute|agende|programe|mande)\s+(o|a|os|as|um|uma)?\s*(pagamento|pix|transfer[eê]ncia|ted|doc)s?\b/i,
+  /\b(pague|transfira|deposite)\s+(o|a|os|as|um|uma|r\$|\d)/i,
+  /\b(pode|consegue|voc[eê]\s+pode)\s+(pagar|transferir|fazer\s+(o|um)\s+pix)\b/i,
+];
 const mes = (d) => (d ? d.slice(0, 7) : null);
 
 /** Fornecedor da conta compatível com o favorecido do documento (contém um no outro, sem acento/caixa). */
@@ -43,7 +53,9 @@ function fornecedorCompativel(favorecido, titulo) {
  * @param {{cfg:object, porta:object, extrator:{extrair:Function}, armazenamento:object, relogio?:() => Date, registrar?:(e:object)=>void}} deps
  *   `registrar` recebe só códigos e ids mascarados (log operacional) — nunca texto, valor ou documento.
  */
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {} }) {
+/** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
+const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -79,6 +91,21 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return v;
   }
 
+  /**
+   * 15A: o texto é SÓ a resposta a "de qual unidade?" — curto, sem números, uma única unidade da conversa e, tirando o
+   * nome/apelido dela e palavras de ligação, NADA sobra. ("paguei a luz da alfa" é pedido NOVO, não esclarecimento:
+   * achado do conjunto de avaliação, caso C14.)
+   */
+  function ehEsclarecimentoDeUnidade(texto, grupo) {
+    const t = String(texto ?? "").trim();
+    if (!t || t.length > 60 || /\d/.test(t)) return false;
+    const u = resolverUnidade({ cfg, grupo, textos: [t] });
+    if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) return false;
+    let resto = ` ${normalizar(t)} `;
+    for (const ap of [...u.unidade.apelidos].sort((a, b) => b.length - a.length)) resto = resto.split(` ${ap} `).join(" ");
+    return resto.split(" ").filter(Boolean).every((p) => PALAVRAS_DE_LIGACAO.has(p));
+  }
+
   async function processar(evento, { esclarecimento = null } = {}) {
     // 1. Grupo autorizado. Fora da lista: nada é lido, guardado nem respondido.
     const grupo = grupoAutorizado(cfg, evento.grupoId);
@@ -106,6 +133,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
+      // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
+      // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
+      // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
+      if (!evento.respostaA && evento.tipo === "TEXTO" && typeof a.mensagens.tomarPendenteRecente === "function" && ehEsclarecimentoDeUnidade(evento.texto, grupo)) {
+        const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
+        if (pend?.pendente) {
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
+        }
+      }
     }
 
     // 6. Idempotência por DOCUMENTO (mesmo arquivo reenviado em outra mensagem).
@@ -117,13 +154,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 7. Guardas determinísticas ANTES da IA (nada restrito vai ao modelo): dado restrito e pedido de aprovação pelo grupo.
     const injecao = sinaisDeInjecao(evento.texto) || sinaisDeInjecao(esclarecimento?.texto);
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoRestrito(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "DADO_RESTRITO", resposta: RESPOSTA.dadoRestrito(), injecao });
+    if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_EXECUCAO.some((r) => r.test(evento.texto ?? ""))) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", resposta: RESPOSTA.operacaoBloqueada(), injecao });
+    if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
+    // 15H (H-1): saudação/pergunta sobre o MOVA, sem número nem palavra financeira ⇒ orientação determinística, SEM IA.
+    if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
+    // 16A (piloto): documento/áudio não é lido (nada vai à IA, nada é criado) — o piloto só responde consultas.
+    if (somenteConsultas && evento.midia) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.
     let saida = esclarecimento?.saida ?? null;
     if (!saida) {
       const lida = await lerDocumento(evento, grupo);
-      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : RESPOSTA.falhaLeitura(), injecao });
+      // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
+      if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
+      // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
+      if (!lida.ok && IA_PAUSADA.includes(lida.codigo)) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.iaPausada(), injecao });
+      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : evento.midia ? RESPOSTA.falhaLeitura() : RESPOSTA.falhaInterpretacao(), injecao });
       saida = lida.saida;
     }
 
@@ -135,6 +182,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 10. Consultas do GRUPO (não dependem de uma unidade).
     const consulta = (saida.intencao === "CONSULTAR" && saida.consulta) || null;
     if (consulta && (CONSULTAS_DO_GRUPO.includes(consulta) || saida.todasUnidades)) return responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao);
+
+    // 10b. Execução 13B (achado com IA real + WhatsApp real): texto puro sem pedido financeiro (saudação, conversa) não é
+    // lançamento — antes caía na pergunta "Esse lançamento pertence à…?". Sem documento, sem valor e sem esclarecimento pendente.
+    // 15H (H-1): CONSULTAR sem assunto definido (ex.: "você está funcionando?") também é conversa — nunca pergunta de unidade.
+    if (!evento.midia && !esclarecimento && !saida.valorCentavos && (["OUTRA", "DESCONHECIDA"].includes(saida.intencao) || (saida.intencao === "CONSULTAR" && !saida.consulta && !saida.todasUnidades))) {
+      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
+    }
+    // 16A (piloto): qualquer coisa que não seja consulta (pagamento, conta, correção, transferência) NÃO vira proposta.
+    if (somenteConsultas && !consulta) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
 
     // 11. Unidade (determinística; IA só confirma; nunca pelo histórico do participante).
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
@@ -177,7 +233,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "RECEITA_SO_PELA_FONTE_OFICIAL", escopo, resposta: RESPOSTA.fonteOficial(canais), injecao });
     }
 
-    if (![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
+    // Execução 14: relato só por TEXTO (sem documento) — a INTENÇÃO decide (pagamento feito × conta a vencer), não um "tipo de
+    // documento" que não existe. Com documento, segue valendo o tipo lido.
+    const textoPuro = !evento.midia;
+    const relatoPagamento = textoPuro && saida.intencao === "INFORMAR_PAGAMENTO";
+    const relatoConta = textoPuro && saida.intencao === "REGISTRAR_CONTA";
+    if (!relatoPagamento && !relatoConta && ![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
     if (!saida.valorCentavos && saida.camposAusentes.includes("valorCentavos") && saida.incertezas.length > 0) {
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AMBIGUO", escopo, resposta: RESPOSTA.faltaInformacao(["qual é o valor correto (o documento tem mais de um valor possível)"]), injecao });
     }
@@ -186,6 +247,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Execução 04B (achado com a IA real): cupom/nota fiscal JÁ PAGO ("paguei…") é pagamento, não conta a vencer. Sem data de
     // pagamento, tratarPagamento pergunta — nunca presume a data pela emissão.
     const notaJaPaga = saida.tipoDocumento === "NOTA_FISCAL" && saida.intencao === "INFORMAR_PAGAMENTO" && !saida.vencimento;
+    if (relatoPagamento) return tratarPagamento(ctx);
+    if (relatoConta) return tratarConta(ctx);
     return PAGAMENTOS.includes(saida.tipoDocumento) || notaJaPaga ? tratarPagamento(ctx) : tratarConta(ctx);
   }
 
@@ -200,12 +263,22 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   }
 
   async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento }, dados, textoResposta) {
+    // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
+    // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
+    if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
+      const mesma = (await a.propostas.listar(escopo)).find((p) => p.estado === "AGUARDANDO_REVISAO" && p.eventoId !== evento.eventoId && !p.evidencia
+        && p.tipo === dados.tipo && p.valorCentavos === dados.valorCentavos
+        && (p.datas?.caixa ?? null) === (dados.datas?.caixa ?? null) && (p.datas?.vencimento ?? null) === (dados.datas?.vencimento ?? null));
+      if (mesma) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "PROPOSTA_SEMELHANTE_PENDENTE", escopo, propostaId: mesma.id, resposta: RESPOSTA.relatoRepetido(mesma.id), injecao });
+    }
     const incompleta = !requisitosCompletos(unidade);
     const { proposta } = await a.propostas.criar(escopo, {
       chaveIdempotencia: `${evento.eventoId}|${dados.tipo}`, origem: "MOVA", eventoId: evento.eventoId, mensagemId: evento.mensagemId,
       participanteId: evento.participanteId, esclarecidoPor: esclarecimento ? esclarecimento.participanteId : null,
       evidencia: evento.midia ? { sha256: evento.midia.sha256, referencia: evento.midia.referencia, mime: evento.midia.mime } : null,
-      leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca },
+      // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
+      leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
+        justificativa: saida.justificativa ? mascararDadosSensiveis(String(saida.justificativa).slice(0, 300)) : null, camposAusentes: saida.camposAusentes ?? [] },
       categoriaSugerida: saida.categoriaSugerida, naturezaSugerida: saida.natureza, sinaisDeInjecao: injecao,
       // Unidade com requisitos financeiros incompletos: a proposta é guardada, mas a APLICAÇÃO fica bloqueada até completar.
       bloqueioDeAplicacao: incompleta ? "REQUISITOS_FINANCEIROS_INCOMPLETOS" : null,
@@ -243,23 +316,25 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: t.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
       }, RESPOSTA.propostaBaixa);
     }
-    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? mes(saida.dataPagamento);
-    const bloqueioEconomico = await competenciaAberta(ctx, competencia);
+    // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
+    // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
+    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;
+    const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
     const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
-      datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento },
+      datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento }, competenciaPendente: !competencia,
       comando: { operacao: "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
-    }, RESPOSTA.propostaDespesaPaga);
+    }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia));
   }
 
   async function tratarConta(ctx) {
     const { evento, escopo, saida, injecao } = ctx;
     if (!saida.vencimento) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VENCIMENTO_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["vencimento"]), injecao });
-    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? mes(saida.vencimento);
-    const bloqueio = await competenciaAberta(ctx, competencia);
+    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null; // 15A: nunca o mês do vencimento
+    const bloqueio = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueio) return bloqueio;
     const todas = await porta.contasAPagarTodas(escopo);
     const igual = todas.find((t) => t.situacao !== "CANCELADO" && t.valorOriginalCentavos === saida.valorCentavos && t.vencimento === saida.vencimento && (!saida.favorecido || fornecedorCompativel(saida.favorecido, t)));
@@ -271,13 +346,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.NOVA_OBRIGACAO, valorCentavos: saida.valorCentavos, parcial: false,
-      datas: { competencia, caixa: null, vencimento: saida.vencimento },
+      datas: { competencia, caixa: null, vencimento: saida.vencimento }, competenciaPendente: !competencia,
       comando: { operacao: "registrarObrigacao", entrada: comando.valor },
-    }, RESPOSTA.propostaObrigacao);
+    }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia));
   }
+
+  const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
 
   /** Comando no contrato REAL do Financeiro v2; categoria PROVISÓRIA (a sugestão da IA fica ao lado, para quem aprova). */
   function comandoDeObrigacao(saida, { competencia, vencimento }) {
+    // 15A: competência pendente — os DEMAIS campos são validados (com um mês provisório só para a validação) e o comando é
+    // guardado SEM competência; quem revisa informa a competência e a aplicação recusa enquanto ela faltar.
+    if (!competencia) {
+      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento });
+      if (!r.ok) return r;
+      const { competencia: _provisoria, ...semCompetencia } = r.valor;
+      return { ok: true, valor: semCompetencia };
+    }
     const emissao = saida.dataEmissao && saida.dataEmissao <= vencimento ? saida.dataEmissao : (hoje() <= vencimento ? hoje() : vencimento);
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: saida.favorecido ?? "Favorecido a identificar" },
@@ -309,8 +394,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (r.dadosInsuficientes) {
       return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo } });
     }
-    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), "Detalhes no Centro Financeiro."];
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: RESPOSTA.consulta(linhas), injecao });
+    // 16A: rastreabilidade — quando o Financeiro foi lido (os números podem mudar com novas importações).
+    const lidoEm = relogio().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    const linhas = [`${unidade.nome} — ${c.periodo.rotulo}:`, ...r.linhas.map((l) => `• ${l}`), `Posição do Financeiro em ${lidoEm}. Detalhes no Centro Financeiro.`];
+    // 15A (desligado por padrão): resposta natural redigida SÓ a partir das linhas calculadas aqui; o redator valida e, em
+    // qualquer dúvida, devolve o texto determinístico.
+    const padrao = RESPOSTA.consulta(linhas);
+    const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${c.periodo.rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {} });
   }
 
   /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */

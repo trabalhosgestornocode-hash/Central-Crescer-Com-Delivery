@@ -12,7 +12,15 @@
 import { ErroTransitorio } from "../gateway/fila.js";
 import { PROMPT_DO_EXTRATOR, esquemaDaSaida, montarEntradaDoModelo } from "./contratos.js";
 
-export const MODELO_PADRAO = "claude-opus-5-5";
+// DECISÃO DE ARQUITETURA (proprietário, 21/11/2026): o MOVA usa EXCLUSIVAMENTE o Claude Haiku 5.5. A IA só interpreta;
+// cálculos, validações, permissões e regras financeiras são do backend. Sem fallback automático para outro modelo.
+export const MODELO_PADRAO = "claude-haiku-5-5";
+export const MODELOS_PERMITIDOS = Object.freeze(["claude-haiku-5-5"]);
+/** Modelos em que `thinking: {type: "disabled"}` é aceito (até esforço high). */
+export const MODELOS_SEM_RACIOCINIO = Object.freeze(["claude-haiku-5-5"]);
+/** Teto padrão de saída: o JSON do contrato ocupa ~240 tokens; sem raciocínio, 600 dá folga sem expor custo. */
+export const SAIDA_MAXIMA_PADRAO = 600;
+const ehModeloPermitido = (m) => MODELOS_PERMITIDOS.includes(String(m ?? "").replace(/-\d{8}$/, ""));
 const MIDIA_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export class ErroDeIa extends Error {
@@ -32,6 +40,7 @@ export function ehFalhaTransitoriaDeIa(e) {
  */
 export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = null, modelo = MODELO_PADRAO, esforco = "medium", relogio = () => new Date() }) {
   if (!cliente?.beta?.messages?.create) throw new TypeError("cliente Anthropic ausente");
+  if (!ehModeloPermitido(modelo)) throw new TypeError(`modelo de IA não permitido no MOVA: ${modelo}`);
   const esquema = esquemaDaSaida();
 
   async function conteudoDaMidia(midia) {
@@ -68,9 +77,10 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
       let resposta;
       try {
         resposta = await cliente.beta.messages.create({
-          model: modelo, max_tokens: 16000,
-          betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
+          model: modelo, max_tokens: SAIDA_MAXIMA_PADRAO,
           output_config: { effort: esforco, format: { type: "json_schema", schema: esquema } },
+          // Execução 13C: extração estruturada não precisa de raciocínio; só os modelos que ACEITAM desligá-lo (Opus 5.5 recusa: 400).
+          ...(MODELOS_SEM_RACIOCINIO.includes(modelo) && ["low", "medium", "high"].includes(esforco) ? { thinking: { type: "disabled" } } : {}),
           system,
           messages: [{ role: "user", content: [...blocos, { type: "text", text: entrada.conteudo }] }],
         });
@@ -79,6 +89,8 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
         if (ehFalhaTransitoriaDeIa(e)) throw new ErroTransitorio("IA_INDISPONIVEL");
         throw new ErroDeIa(Number(e?.status) === 400 ? "IA_REQUISICAO_INVALIDA" : Number(e?.status) === 401 || Number(e?.status) === 403 ? "IA_SEM_AUTORIZACAO" : "IA_ERRO_PERMANENTE");
       }
+      // Sem fallback: se outro modelo respondeu (roteamento inesperado), a saída é descartada (o custo já foi registrado).
+      if (resposta?.model && !ehModeloPermitido(resposta.model)) throw new ErroDeIa("IA_MODELO_INESPERADO");
       if (resposta?.stop_reason === "refusal") throw new ErroDeIa("IA_RECUSOU");
       if (resposta?.stop_reason === "max_tokens") throw new ErroDeIa("IA_RESPOSTA_TRUNCADA");
       const textoJson = (resposta?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("");

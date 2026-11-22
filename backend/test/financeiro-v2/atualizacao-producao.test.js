@@ -14,9 +14,9 @@ import { abrirPool, ambiente, motivoParaPular } from "./helpers/postgres.js";
 
 const PULAR = motivoParaPular();
 const raiz = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
-const BASE = "0026"; // última migração já aplicada em produção (conferida por nome e hash contra o Git)
+const BASE = "0027"; // última migração já aplicada em produção (conferida por nome e hash contra o Git; 0027 em 18/11)
 
-test("atualizar.sql: de 0026 para 0027 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
+test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
   const a = ambiente();
   const controle = await abrirPool(a.urlAdmin, { max: 1 });
   const banco = `fv2_teste_ensaio_${randomBytes(4).toString("hex")}`;
@@ -28,7 +28,7 @@ test("atualizar.sql: de 0026 para 0027 sem mexer em dado, sem perder restrição
     // 1) Banco no estado de produção: só as migrações até a BASE.
     for (const m of listarMigracoes().filter((x) => x.nome.slice(0, 4) <= BASE)) copyFileSync(join(raiz, "database", "financeiro-v2", "migracoes", m.nome), join(temp, m.nome));
     const aplicadas = await aplicarMigracoes(pool, { pasta: temp, papel: "fv2_teste_migrador" });
-    assert.equal(aplicadas.length, 26);
+    assert.equal(aplicadas.length, 27);
 
     // 2) Dados sintéticos "de produção" (sem gatilhos de histórico; as restrições CHECK continuam valendo).
     const ORG = randomUUID(); const UNI = randomUUID(); const AUTOR = randomUUID();
@@ -60,7 +60,7 @@ test("atualizar.sql: de 0026 para 0027 sem mexer em dado, sem perder restrição
         (select count(*) from financeiro_v2.fv2_lancamento)::int lancamentos, (select count(*) from financeiro_v2.fv2_pagamento_venda)::int pagamentos,
         (select count(*) from financeiro_v2.fv2_migracao)::int migracoes`)).rows[0];
     const antes = await fotografia();
-    assert.deepEqual([antes.vendas, antes.bruto, antes.migracoes], [4, 40000, 26]);
+    assert.deepEqual([antes.vendas, antes.bruto, antes.migracoes], [4, 40000, 27]);
     const checksAntes = (await pool.query("select conname from pg_constraint where conrelid = 'financeiro_v2.fv2_venda'::regclass and contype = 'c' and conname !~ '^fv2_venda_canal' order by 1")).rows.map((r) => r.conname);
     assert.ok(checksAntes.includes("fv2_venda_fonte_sistema_check"));
 
@@ -75,7 +75,7 @@ test("atualizar.sql: de 0026 para 0027 sem mexer em dado, sem perder restrição
     // 4) Nenhum dado mudou; nenhuma restrição que não devia mudar sumiu.
     const depois = await fotografia();
     assert.deepEqual({ ...depois, migracoes: antes.migracoes }, antes, "vendas, valores, lançamentos e pagamentos idênticos");
-    assert.equal(depois.migracoes, 27);
+    assert.equal(depois.migracoes, 28);
     const checksDepois = (await pool.query("select conname from pg_constraint where conrelid = 'financeiro_v2.fv2_venda'::regclass and contype = 'c' and conname !~ '^fv2_venda_canal' order by 1")).rows.map((r) => r.conname);
     assert.deepEqual(checksDepois, checksAntes, "a CHECK de origem da venda (fonte_sistema) continua");
 
@@ -95,10 +95,20 @@ test("atualizar.sql: de 0026 para 0027 sem mexer em dado, sem perder restrição
     const semPublic = (await pool.query(`select count(*)::int n from pg_class c, lateral aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) x
       where c.oid = 'financeiro_v2.fv2_fechamento_entregador'::regclass and x.grantee = 0`)).rows[0].n;
     assert.equal(semPublic, 0, "nenhum privilégio para PUBLIC na tabela nova");
+    // 0028 (leitor do MOVA): papel só de leitura, sessão própria fora do alcance da aplicação e de PUBLIC.
+    const leitor = (await pool.query(`select
+        (select count(*) from pg_roles where rolname = 'fv2_leitor_mova' and not rolcanlogin)::int papel,
+        has_function_privilege('fv2_leitor_mova', 'financeiro_v2.fv2_abrir_sessao_mova(uuid, uuid)', 'execute') sessao_mova,
+        has_function_privilege('fv2_app', 'financeiro_v2.fv2_abrir_sessao_mova(uuid, uuid)', 'execute') app_abre,
+        has_function_privilege('fv2_leitor_mova', 'financeiro_v2.fv2_abrir_sessao(uuid, uuid, uuid, integer, text)', 'execute') leitor_abre_alheia,
+        (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'financeiro_v2' and c.relkind = 'r'
+          and (has_table_privilege('fv2_leitor_mova', c.oid, 'insert') or has_table_privilege('fv2_leitor_mova', c.oid, 'update')
+            or has_table_privilege('fv2_leitor_mova', c.oid, 'delete') or has_table_privilege('fv2_leitor_mova', c.oid, 'truncate')))::int escrita`)).rows[0];
+    assert.deepEqual(leitor, { papel: 1, sessao_mova: true, app_abre: false, leitor_abre_alheia: false, escrita: 0 });
 
     // 6) Repetir o pacote é recusado antes de mudar qualquer coisa.
     const antesDeRepetir = await fotografia();
-    await assert.rejects(aplicar(), /esperado 26/);
+    await assert.rejects(aplicar(), /esperado 27/);
     assert.deepEqual(await fotografia(), antesDeRepetir, "repetir o pacote não altera nada");
   } finally {
     await pool.end().catch(() => {});

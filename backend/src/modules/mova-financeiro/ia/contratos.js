@@ -124,7 +124,10 @@ export const PROMPT_DO_EXTRATOR = [
   "Se houver dois ou mais valores possíveis e não der para saber qual vale, valorCentavos = null, 'valorCentavos' em camposAusentes e a dúvida em incertezas.",
   "A unidade só vem do texto/documento: nunca presuma pelo remetente. Pergunta sobre as três unidades = todasUnidades:true.",
   "Comprovante de transferência entre contas da própria empresa = intencao INFORMAR_TRANSFERENCIA. Pedido de correção/classificação = PEDIR_CORRECAO/PEDIR_CLASSIFICACAO.",
-  "Perguntas sobre dados bancários, pessoas, salários, senhas = consulta DADO_RESTRITO. Explique em 'justificativa' (curta) por que classificou assim.",
+  "Perguntas sobre dados bancários, pessoas, salários, senhas = consulta DADO_RESTRITO. Explique em 'justificativa' por que classificou assim, em NO MÁXIMO 12 palavras.",
+  "Mensagem SÓ DE TEXTO (sem documento): tipoDocumento = OUTRO; pagamento já feito = INFORMAR_PAGAMENTO (dataPagamento); conta/boleto a vencer = REGISTRAR_CONTA (vencimento). categoriaSugerida em MAIÚSCULAS_COM_SUBLINHADO (ex.: ENERGIA_ELETRICA, ALUGUEL, INSUMOS). Receita recebida = natureza RECEITA.",
+  "Nunca presuma data que não foi dita: sem data na mensagem, a data fica null e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
+  "Seja econômico: incertezas e referenciasDocumentais ficam [] salvo dúvida ou referência real; não repita o texto recebido.",
 ].join(" ");
 
 /** Delimita o conteúdo não confiável (remove tentativas de fechar o delimitador). */

@@ -16,7 +16,7 @@ import { criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPost
 export { CONTRATO_EVENTO_VERSAO, validarEvento, chaveDoDocumento } from "./contratos/evento.js";
 export { CONTRATO_MOVA_VERSAO, normalizarGatewayMova } from "./adaptadores/gatewayBaileys.js";
 export { normalizarBaileys } from "./adaptadores/baileys.js";
-export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES } from "./dominio/configuracao.js";
+export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES, ehConversaPrivada } from "./dominio/configuracao.js";
 export { RESULTADO_UNIDADE, resolverUnidade } from "./dominio/unidade.js";
 export { fontesOficiais, receitaPodeVirDe } from "./dominio/fontesDeReceita.js";
 export { mascararDadosSensiveis, pedidoRestrito } from "./dominio/privacidade.js";
@@ -25,14 +25,17 @@ export { OPERACOES_PERMITIDAS, criarPortaFinanceira, exigirContratoFinanceiro } 
 export { DECISAO, TIPO_PROPOSTA, criarMotor } from "./aplicacao/motor.js";
 export { ErroDeAprovacao, criarAprovador } from "./aplicacao/aprovacao.js";
 export { criarFerramentas, periodoDaConsulta } from "./aplicacao/ferramentas.js";
-export { ErroDeIa, MODELO_PADRAO, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
+export { criarRedator, validarRedacao } from "./aplicacao/redator.js";
+export { ErroDeIa, MODELO_PADRAO, MODELOS_PERMITIDOS, criarExtratorAnthropic, ehFalhaTransitoriaDeIa } from "./ia/provedorAnthropic.js";
 export { criarEnviadorDeRespostas, criarWorker } from "./gateway/worker.js";
+export { ESTADOS_FINAIS_RELE, criarSaidaPeloRele } from "./gateway/saidaRele.js";
 export { CAMPOS_AUSENTES, esquemaDaSaida } from "./ia/contratos.js";
 export { ESTADO_ITEM, ErroTransitorio, criarFilaMemoria } from "./gateway/fila.js";
 export { criarEvidenciasMemoria } from "./gateway/evidencias.js";
 export { criarReceptor } from "./gateway/receptor.js";
+export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorRele.js";
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
-export { CHAVES_DE_CONTROLE, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
+export { CHAVES_DE_CONTROLE, PRECOS_IA, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
 export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
 
 /**
@@ -44,13 +47,13 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false }) {
   const cfg = validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
-  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar });
+  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;

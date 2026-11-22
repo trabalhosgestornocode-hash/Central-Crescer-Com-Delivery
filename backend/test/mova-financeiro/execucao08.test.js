@@ -173,9 +173,9 @@ t("PRIV — fluxo completo como mova_app (papel da aplicação, não dono): orç
     const { criarOrcamentoIa, clienteComOrcamento, criarExtratorAnthropic } = await import("../../src/modules/mova-financeiro/index.js");
     const orcamento = criarOrcamentoIa({ pool: comoApp });
     const id = await orcamento.reservar();
-    await orcamento.concluir(id, { modelo: "claude-opus-5-5", entrada: 100, saida: 10 });
+    await orcamento.concluir(id, { modelo: "claude-haiku-5-5", entrada: 100, saida: 10 });
     const leitura = { legivel: true, tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", unidadeSugerida: null, documentoDestinatario: null, valorCentavos: 1200, dataPagamento: "2026-10-12", dataEmissao: null, vencimento: null, competencia: null, favorecido: "Mercado Teste", identificadorDocumento: null, categoriaSugerida: null, natureza: "DESPESA", consulta: null, confianca: "ALTA" };
-    const cliente = { beta: { messages: { create: async () => ({ model: "claude-opus-5-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: "text", text: JSON.stringify(leitura) }] }) } } };
+    const cliente = { beta: { messages: { create: async () => ({ model: "claude-haiku-5-5", stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 5 }, content: [{ type: "text", text: JSON.stringify(leitura) }] }) } } };
     const m = montar({ escopos: [ALFA, GAMA].map((unidadeId) => ({ organizacaoId: ORG, unidadeId })) });
     const controle = criarControle({ pool: comoApp, cacheMs: 0 });
     const ref = {};
@@ -208,4 +208,12 @@ t("AUTO — leituras do worker passam pelo contexto de automação (sessão da i
   await r.mova.porta.contasAPagarAbertas({ organizacaoId: ORG, unidadeId: ALFA, usuarioId: SERVICO }).catch(() => {});
   assert.ok(dentro.length > 0, "o repositório foi usado");
   assert.ok(dentro.every(Boolean), "toda leitura dentro do contexto de automação");
+});
+
+t("H1-7 (12A) falhas gerais listam só FALHAS: pergunta pendente sem unidade (PEDIR_INFORMACAO) não aparece", async () => {
+  const s = await cenario();
+  await s.enviar(msg(CONVERSA_ALFA));
+  await s.pool.query("insert into mova.decisao (evento_id, decisao, motivo) select evento_id, 'PEDIR_INFORMACAO', 'UNIDADE_AMBIGUA' from mova.fila");
+  const r = await CONSULTAS_MOVA["/mova/falhas-gerais"]({ ctx: ver(ALFA, [ACAO.CONFIGURAR]), mova: s.mova });
+  assert.equal(r.total, 0, JSON.stringify(r.porTipo));
 });

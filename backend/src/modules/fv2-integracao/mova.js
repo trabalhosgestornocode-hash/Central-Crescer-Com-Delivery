@@ -16,17 +16,25 @@
 //   MOVA_IA_HABILITADA=1              Claude (ANTHROPIC_API_KEY) — exige processamento; orçamento persistente obrigatório
 //   MOVA_ENVIO_HABILITADO=1           respostas (exige processamento e MOVA_GATEWAY_URL)
 //   MOVA_SUSPENSO=1                   desliga TUDO (vence qualquer outra)
+//   MOVA_RELE_DATABASE_URL            (homologação) fila durável do relé (papel mova_rele_consumidor); com recebimento ligado,
+//                                     o backend CONSOME o relé em vez de receber direto do Gateway (Execução 11)
 //   MOVA_PG_CA                        CA do provedor do banco (PEM); na falta, usa FV2_PG_CA. TLS nunca deixa de ser verificado
+//   16A — PILOTO de consultas com dados REAIS (MOVA_MODO=PILOTO + MOVA_AMBIENTE=piloto + MOVA_HOMOLOGACAO_MARCADOR):
+//   MOVA_FINANCEIRO_LEITURA_URL       credencial PRÓPRIA de leitura do Financeiro (membro só de fv2_leitor_mova, migração 0028);
+//                                     conferida no banco antes de montar (não escreve, não é administrativa)
+//   MOVA_PILOTO_UNIDADE_ID            a ÚNICA unidade do piloto. O banco do MOVA continua o de homologação (marcador);
+//                                     só conversas privadas, só consultas (nenhuma proposta), identidade = IDENTIDADE_MOVA
 // Além das variáveis, a tabela mova.controle desliga cada etapa NA HORA (sem reiniciar nada) — reversão funcional.
 import { Router } from "express";
 import express from "express";
 import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import {
-  carregarConfiguracao, clienteComOrcamento, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
+import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
 
 export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -45,23 +53,65 @@ export function lerConfiguracaoMova(env) {
   const envio = sim(env.MOVA_ENVIO_HABILITADO);
   const contradicoes = [];
   // Modo: HOMOLOGACAO precisa das três confirmações; qualquer sinal parcial é contradição (nunca cai em outro modo em silêncio).
+  const piloto = env.MOVA_MODO === "PILOTO";
   const sinaisHomolog = [env.MOVA_MODO === "HOMOLOGACAO", env.MOVA_AMBIENTE === "homologacao", Boolean(env.MOVA_HOMOLOGACAO_MARCADOR)];
-  const homologacao = sinaisHomolog.every(Boolean);
-  if (sinaisHomolog.some(Boolean) && !homologacao) contradicoes.push("HOMOLOGACAO_INCOMPLETA");
-  if (env.MOVA_MODO && !["HOMOLOGACAO", "SIMULACAO"].includes(env.MOVA_MODO)) contradicoes.push("MODO_DESCONHECIDO");
-  if (homologacao && !/^[A-Za-z0-9_-]{12,64}$/.test(env.MOVA_HOMOLOGACAO_MARCADOR)) contradicoes.push("MARCADOR_INVALIDO");
+  const homologacao = !piloto && sinaisHomolog.every(Boolean);
+  if (!piloto && sinaisHomolog.some(Boolean) && !homologacao) contradicoes.push("HOMOLOGACAO_INCOMPLETA");
+  if (env.MOVA_MODO && !["HOMOLOGACAO", "SIMULACAO", "PILOTO"].includes(env.MOVA_MODO)) contradicoes.push("MODO_DESCONHECIDO");
+  if ((homologacao || piloto) && !/^[A-Za-z0-9_-]{12,64}$/.test(env.MOVA_HOMOLOGACAO_MARCADOR ?? "")) contradicoes.push("MARCADOR_INVALIDO");
+  // 16A: o piloto lê o Financeiro REAL só pela credencial de leitura; o estado do MOVA continua no banco de homologação.
+  if (piloto) {
+    if (env.MOVA_AMBIENTE !== "piloto") contradicoes.push("PILOTO_INCOMPLETO");
+    const leitura = env.MOVA_FINANCEIRO_LEITURA_URL;
+    if (!leitura) contradicoes.push("PILOTO_SEM_LEITOR");
+    // Nunca a mesma credencial de NENHUM outro banco configurado (aplicação, autoridade, MOVA, relé ou qualquer outro).
+    else if (Object.entries(env).some(([k, v]) => k !== "MOVA_FINANCEIRO_LEITURA_URL" && /_DATABASE_URL$/.test(k) && v === leitura)) contradicoes.push("PILOTO_LEITOR_COM_OUTRA_CREDENCIAL");
+    if (!UUID.test(env.MOVA_PILOTO_UNIDADE_ID ?? "")) contradicoes.push("PILOTO_SEM_UNIDADE");
+    if (String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase() !== IDENTIDADE_MOVA) contradicoes.push("PILOTO_IDENTIDADE_DIFERENTE_DO_LEITOR");
+  }
   if (processamento && !recebimento) contradicoes.push("PROCESSAMENTO_SEM_RECEBIMENTO");
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
   if (envio && !processamento) contradicoes.push("ENVIO_SEM_PROCESSAMENTO");
-  if (envio && !env.MOVA_GATEWAY_URL) contradicoes.push("ENVIO_SEM_GATEWAY");
+  // 15B: o Gateway é serviço PRIVADO — em homologação o envio vai pela fila de saída do relé (MOVA_RELE_DATABASE_URL);
+  // MOVA_GATEWAY_URL (chamada direta) só serve para um backend dentro da rede privada do Render.
+  if (envio && !env.MOVA_GATEWAY_URL && !env.MOVA_RELE_DATABASE_URL) contradicoes.push("ENVIO_SEM_TRANSPORTE");
+  // 15A: envio exige o MARCO de ativação (ISO UTC): respostas criadas antes dele nunca são enviadas (nada retroativo).
+  const envioNaoAntesDe = env.MOVA_ENVIO_NAO_ANTES_DE || null;
+  if (envio && !(envioNaoAntesDe && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(envioNaoAntesDe))) contradicoes.push("ENVIO_SEM_MARCO");
   if ((recebimento || envio) && !(String(env.MOVA_GATEWAY_SECRET ?? "").length >= 32)) contradicoes.push("CANAL_SEM_SEGREDO");
   if (env.MOVA_GATEWAY_SECRET && env.MOVA_GATEWAY_SECRET === env.WHATSAPP_GATEWAY_SECRET) contradicoes.push("SEGREDO_IGUAL_AO_PRINCIPAL");
   if (env.MOVA_DATABASE_URL && env.FV2_APP_DATABASE_URL && env.MOVA_DATABASE_URL === env.FV2_APP_DATABASE_URL && !homologacao) contradicoes.push("BANCO_COMPARTILHADO_FORA_DA_HOMOLOGACAO");
+  // Teto estrito por chamada (Execução 13B): as duas chaves juntas, inteiras e positivas; esforço opcional e de lista fechada.
+  const tetoSaida = env.MOVA_IA_TETO_SAIDA, tetoEntrada = env.MOVA_IA_TETO_ENTRADA, tetoEsforco = env.MOVA_IA_TETO_ESFORCO || null;
+  let teto = null;
+  if (tetoSaida || tetoEntrada || tetoEsforco) {
+    if (!/^[1-9][0-9]{1,5}$/.test(tetoSaida ?? "") || !/^[1-9][0-9]{1,6}$/.test(tetoEntrada ?? "") || (tetoEsforco && !["low", "medium", "high"].includes(tetoEsforco))) contradicoes.push("TETO_IA_INVALIDO");
+    else teto = Object.freeze({ maxSaida: Number(tetoSaida), maxEntrada: Number(tetoEntrada), esforco: tetoEsforco });
+  }
+  // Modelo da IA: lista FECHADA (hoje só Claude Haiku 5.5, decisão do proprietário em 21/11/2026); vazio = o padrão (Haiku).
+  const modeloIa = env.MOVA_IA_MODELO || null;
+  if (modeloIa && !MODELOS_PERMITIDOS.includes(modeloIa)) contradicoes.push("MODELO_IA_NAO_PERMITIDO"); // só Haiku 5.5 (decisão 21/11)
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
+    recebimento, processamento, ia, envio, modo: piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
+    ...(piloto ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
+    // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
+    envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
   };
+}
+
+/**
+ * 16A: o piloto opera UMA unidade, por conversas PRIVADAS (sem grupo). Qualquer outra configuração ativa no banco do MOVA
+ * (segunda unidade, grupo, unidade diferente da declarada) ⇒ recusa a montagem.
+ */
+export function exigirEscopoDoPiloto(configuracao, unidadeId) {
+  const motivos = [];
+  if (configuracao.unidades.length !== 1) motivos.push("PILOTO_EXIGE_UMA_UNIDADE");
+  else if (configuracao.unidades[0].unidadeId !== unidadeId) motivos.push("PILOTO_UNIDADE_DIFERENTE");
+  if (configuracao.gruposAutorizados.length === 0) motivos.push("PILOTO_SEM_CONVERSA");
+  if (configuracao.gruposAutorizados.some((g) => !ehConversaPrivada(g.grupoId))) motivos.push("PILOTO_COM_GRUPO");
+  if (motivos.length) throw Object.assign(new Error("Configuração fora do escopo do piloto."), { codigo: "PILOTO_FORA_DO_ESCOPO", motivos });
 }
 
 /** Recusa (lança) se o banco não for o de HOMOLOGAÇÃO marcado. Banco de produção não tem o comentário ⇒ recusa. */
@@ -78,13 +128,15 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
-  if (cfg.modo === "HOMOLOGACAO") {
-    await exigirBancoDeHomologacao(pool, cfg.marcador);
+export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null }) {
+  if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO") {
+    await exigirBancoDeHomologacao(pool, cfg.marcador); // o estado do MOVA fica SEMPRE no banco de homologação
     if (!verificarBancoFinanceiro) throw Object.assign(new Error("Sem verificação do banco do Financeiro."), { codigo: "BANCO_FINANCEIRO_NAO_VERIFICADO" });
-    await verificarBancoFinanceiro(); // o Financeiro consultado também tem de ser o de homologação
+    // HOMOLOGACAO: o Financeiro também é o de homologação. PILOTO: a credencial do Financeiro é de leitura pura (0028).
+    await verificarBancoFinanceiro();
   }
   const configuracao = validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
+  if (cfg.modo === "PILOTO") exigirEscopoDoPiloto(configuracao, cfg.pilotoUnidadeId);
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));
   if (escopos.length === 0) throw Object.assign(new Error("Nenhuma conversa/unidade configurada."), { codigo: "SEM_CONFIGURACAO" });
   const nucleoBase = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, relogio });
@@ -98,13 +150,19 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   let mova = null;
   const obterEvidencia = (ref) => mova.evidencias.obter(ref);
   const extrator = cfg.ia && criarClienteIa
-    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle }), obterEvidencia, relogio })
+    ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio, ...(cfg.modeloIa ? { modelo: cfg.modeloIa } : {}) })
     : EXTRATOR_DESLIGADO;
-  mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle });
+  // 15A: respostas naturais — desligadas por padrão; exigem IA ligada e passam pelo MESMO orçamento/teto do extrator.
+  const redator = cfg.ia && cfg.respostasNaturais && criarClienteIa
+    ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
+    : null;
+  mova = criarMova({ configuracao, nucleo: nucleoServico, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
-    habilitado: Boolean(cfg.envio && enviarAoGateway) });
+    habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
+    // Só conversas PRIVADAS autorizadas (homologação); grupo nunca recebe resposta nesta fase.
+    destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter(ehConversaPrivada) });
   return { mova, worker, enviador, configuracao, controle, orcamento };
 }
 
@@ -116,12 +174,19 @@ export function criarEnvioPeloCanal({ gatewayUrl, segredo, fetchFn = (...a) => f
     const headers = { ...assinarRequisicao({ segredo, metodo: "POST", caminho, corpo }), "Content-Type": "application/json" };
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
     let r;
+    // 15A (achado G-1): o Gateway gera id de mensagem aleatório e NÃO deduplica pela chave de idempotência. Então só é
+    // seguro repetir o que comprovadamente NÃO chegou a ser enviado; o resto é ENVIO_INCERTO (sem nova tentativa automática).
     try { r = await fetchFn(`${gatewayUrl.replace(/\/$/, "")}${caminho}`, { method: "POST", headers, body: corpo, signal: ctrl.signal }); }
-    catch { throw Object.assign(new Error("gateway inalcançável"), { codigo: "GATEWAY_INALCANCAVEL" }); }
+    catch (e) {
+      // Tempo esgotado: o Gateway pode ter enviado e a resposta se perdido. Falha de conexão (antes de qualquer byte): seguro repetir.
+      if (e?.name === "AbortError") throw Object.assign(new Error("resposta do gateway incerta"), { codigo: "ENVIO_INCERTO" });
+      throw Object.assign(new Error("gateway inalcançável"), { codigo: "GATEWAY_INALCANCAVEL" });
+    }
     finally { clearTimeout(t); }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.providerMessageId) throw Object.assign(new Error("gateway recusou"), { codigo: j.error ?? `GATEWAY_${r.status}` });
-    return { providerMessageId: j.providerMessageId };
+    if (r.ok && j.providerMessageId) return { providerMessageId: j.providerMessageId };
+    if (r.ok) throw Object.assign(new Error("gateway sem id"), { codigo: "ENVIO_INCERTO" }); // 2xx sem id: pode ter saído
+    throw Object.assign(new Error("gateway recusou"), { codigo: j.error ?? (r.status >= 500 ? "ENVIO_INCERTO" : `GATEWAY_${r.status}`) });
   };
 }
 
@@ -134,7 +199,7 @@ export function registrarDependenciasFv2(fn) { obterDependenciasFv2 = fn; }
 /** MOVA da plataforma, ou null (desligado/incompleto/recusado). Nunca derruba o backend. */
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
-  if (!cfg.habilitado || !obterDependenciasFv2) return null;
+  if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO")) return null;
   if (instancia) return instancia;
   instancia = (async () => {
     // TLS SEMPRE verificado; a CA do provedor (ex.: raiz do Supabase) vem de MOVA_PG_CA ou, na falta, de FV2_PG_CA.
@@ -149,9 +214,17 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     };
     let criarClienteIa = null;
     if (cfg.ia) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 1 }); }
-    const enviarAoGateway = cfg.envio ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
+    const enviarAoGateway = cfg.envio && cfg.transporteEnvio === "DIRETO" ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
+    const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
+    if (cfg.modo === "PILOTO") {
+      // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).
+      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: 2, idleTimeoutMillis: 30000, ssl, statement_timeout: 15000, application_name: "mova-piloto-leitor" });
+      poolLeitor.on("error", () => {});
+      const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });
+      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar });
+    }
     const dep = obterDependenciasFv2();
-    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, registrar });
+    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });
   })().catch((e) => { instancia = null; registrar({ tipo: "MOVA_MONTAGEM_FALHOU", codigo: e?.codigo ?? e?.code ?? "ERRO" }); return null; });
   return instancia;
 }
@@ -179,18 +252,34 @@ export function movaParaGateway(env) {
 }
 
 let laco = null;
+let consumidorRele = null;
+let poolReleUnico = null;
+/** Pool ÚNICO do relé (papel mova_rele_consumidor): entrada (consumidor) e saída (fila de respostas) usam a mesma conexão. */
+function obterPoolRele(env) {
+  if (poolReleUnico) return poolReleUnico;
+  const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
+  poolReleUnico = new pg.Pool({ connectionString: env.MOVA_RELE_DATABASE_URL, max: 2, idleTimeoutMillis: 30000, ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+  poolReleUnico.on("error", () => {});
+  return poolReleUnico;
+}
 /** Worker + enviador em laço (server.js, depois do listen). Desligado por padrão; nunca derruba o backend. */
 export async function iniciarMovaEmbutido({ env, log = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado) return { habilitado: false, motivo: cfg.motivo };
-  if (!cfg.processamento) return { habilitado: false, motivo: "PROCESSAMENTO_DESLIGADO" };
+  // Fase B: só recebimento pelo relé (sem processamento) também inicia — o consumidor enfileira no MOVA, o worker fica parado.
+  if (!cfg.processamento && !(env.MOVA_RELE_DATABASE_URL && cfg.recebimento)) return { habilitado: false, motivo: "PROCESSAMENTO_DESLIGADO" };
   const m = await movaDaPlataforma({ env, registrar: (e) => log("warn", "mova.evento", e) });
   if (!m) return { habilitado: false, motivo: "MOVA_NAO_MONTADO" };
   m.worker?.iniciar();
+  if (env.MOVA_RELE_DATABASE_URL && cfg.recebimento && !consumidorRele) {
+    consumidorRele = criarConsumidorRele({ pool: obterPoolRele(env), receptor: m.mova.receptor, segredo: env.MOVA_GATEWAY_SECRET, controle: m.controle, registrar: (e) => log("warn", "mova.rele", e) });
+    consumidorRele.iniciar();
+  }
   if (m.enviador.habilitado && !laco) laco = setInterval(() => { m.enviador.enviarPendentes().catch(() => {}); }, 5000);
-  return { habilitado: true, envio: m.enviador.habilitado };
+  return { habilitado: true, envio: m.enviador.habilitado, rele: Boolean(consumidorRele) };
 }
 export async function pararMovaEmbutido({ env }) {
+  consumidorRele?.parar(); consumidorRele = null;
   if (laco) { clearInterval(laco); laco = null; }
   const m = instancia ? await instancia : null;
   m?.worker?.parar();

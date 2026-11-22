@@ -29,6 +29,8 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   // Execução 03 — leituras das ferramentas financeiras (aplicacao/ferramentas.js). Todas passam por b.consultar no núcleo.
   "consultarVendas", "apurarCompetencia", "consultarFluxoDeCaixa", "consultarContasAReceber", "consultarPendencias", "consultarPlanoDeContas",
   "consultarDocumentos", "detalharContaAPagar",
+  // 16A — cobertura por canal (dias com dado, pendências, até quando há registro) para o faturamento por canal.
+  "consultarCalendarioDeFaturamento",
 ]);
 const SITUACOES_ABERTAS = Object.freeze(["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"]);
 const MAX_PAGINAS = 20;

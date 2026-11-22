@@ -43,8 +43,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     if (c.estado !== "ABERTA") throw new ErroDeAprovacao("COMPETENCIA_FECHADA", { competencia, estado: c.estado });
   }
 
-  async function semDuplicata(nucleo, ctx, p) {
-    const e = p.comando.entrada;
+  async function semDuplicata(nucleo, ctx, p, e = p.comando.entrada) {
     for (let pagina = 1; pagina <= 20; pagina++) {
       const r = await nucleo.consultarContasAPagar(ctx, { competencia: e.competencia, pagina, tamanho: 100 });
       const igual = (r.itens ?? []).find((t) => t.situacao !== "CANCELADO" && t.valorOriginalCentavos === e.valorOriginalCentavos && t.vencimento === e.vencimento && t.descricao !== undefined
@@ -65,9 +64,10 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       const r = await nucleo.pagarContaAPagar(ctx, { obrigacaoId: e.obrigacaoId, contaId, dataEfetiva: e.dataEfetiva, valorCentavos: e.valorCentavos });
       return { obrigacaoId: e.obrigacaoId, movimentacaoId: r.movimentacao?.id ?? null };
     }
-    const entrada = { ...p.comando.entrada, ...(categoria ? { categoria } : {}), fonte };
+    // 15A: competência confirmada na revisão prevalece (e é obrigatória quando a proposta nasceu sem ela).
+    const entrada = { ...p.comando.entrada, ...(p.competenciaRevisada ? { competencia: p.competenciaRevisada } : {}), ...(categoria ? { categoria } : {}), fonte };
     await competenciaAberta(nucleo, ctx, entrada.competencia);
-    await semDuplicata(nucleo, ctx, p);
+    await semDuplicata(nucleo, ctx, p, entrada);
     const ob = await nucleo.registrarObrigacao(ctx, entrada);
     const obrigacaoId = ob.obrigacoes[0].id;
     if (p.tipo === "NOVA_OBRIGACAO") return { obrigacaoId, movimentacaoId: null };
@@ -89,6 +89,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       if (!p) throw new ErroDeAprovacao("PROPOSTA_NAO_ENCONTRADA");
       if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
       if (p.tipo === "SOLICITACAO_DE_REVISAO" || !p.comando) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
+      if (p.competenciaPendente && !p.competenciaRevisada) throw new ErroDeAprovacao("COMPETENCIA_PENDENTE");
       if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
@@ -108,6 +109,17 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "FALHOU", usuarioId: ctx.usuarioId, motivo: codigo });
         throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao(codigo);
       }
+    },
+    /** 15A: revisão da COMPETÊNCIA (Nível 2) — informada por quem revisa; nunca presumida. A aplicação revalida se está aberta. */
+    async revisarCompetencia(ctx, { propostaId, versao, competencia }) {
+      await exigir(ctx, [ACAO.APROVAR]);
+      if (typeof competencia !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new ErroDeAprovacao("COMPETENCIA_INVALIDA");
+      if (!Number.isInteger(versao)) throw new ErroDeAprovacao("VERSAO_OBRIGATORIA");
+      if (typeof a.propostas.revisar !== "function") throw new ErroDeAprovacao("REVISAO_INDISPONIVEL");
+      const r = UUID.test(propostaId ?? "") ? await a.propostas.revisar(escopo(ctx), propostaId, versao, { competenciaRevisada: competencia, competenciaRevisadaPor: ctx.usuarioId }) : null;
+      if (!r) throw new ErroDeAprovacao("PROPOSTA_ALTERADA_OU_INEXISTENTE");
+      await a.auditoria.registrar({ acao: "COMPETENCIA_REVISADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: propostaId, dados: { competencia } });
+      return r;
     },
     /** Revisão de classificação (Nível 2): grava a categoria escolhida na proposta; a aplicação valida no Financeiro. */
     async revisarClassificacao(ctx, { propostaId, versao, categoria }) {

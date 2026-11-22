@@ -83,7 +83,7 @@ t("04 resposta vai SÓ ao contato autorizado (enviador)", async () => {
   const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "SITUACAO_PROPOSTAS" }));
   await s.enviar(msg({ texto: "situação?" }));
   const destinos = [];
-  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0001" }; } }).enviarPendentes();
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0001" }; } }).enviarPendentes();
   assert.deepEqual(destinos, [CONTATO]);
 });
 
@@ -154,7 +154,7 @@ t("13 falha temporária do Gateway: resposta fica pendente e sai na próxima rod
   const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "SITUACAO_PROPOSTAS" }));
   await s.enviar(msg({ texto: "situação?" }));
   let fora = true; const enviados = [];
-  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("503"), { codigo: "INDISPONIVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 3, enviar: async (r) => { if (fora) throw Object.assign(new Error("conexão recusada"), { codigo: "GATEWAY_INALCANCAVEL" }); enviados.push(r.grupoId); return { providerMessageId: "PROVHP0002" }; } });
   await e.enviarPendentes();
   fora = false;
   await e.enviarPendentes(); await e.enviarPendentes();
@@ -182,7 +182,7 @@ t("15 nenhum envio a outro contato ou grupo: mensagens de terceiros e do 'grupo 
   await s.enviar(msg({ conversa: G_REAL, texto: "situação?" }));
   await s.enviar(msg({ texto: "situação?" }));
   const destinos = [];
-  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0003" }; } }).enviarPendentes();
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], enviar: async (r) => { destinos.push(r.grupoId); return { providerMessageId: "PROVHP0003" }; } }).enviarPendentes();
   assert.deepEqual(destinos, [CONTATO]);
 });
 
@@ -194,4 +194,328 @@ t("16 (achado com a IA real) cupom/nota fiscal já pago: vira despesa paga; sem 
   assert.equal((await s.propostas(GAMA))[0].tipo, TIPO_PROPOSTA.DESPESA_PAGA);
   await s.enviar(msg({ texto: "paguei, gama, sem data", doc: pdf("cupom-2") }));
   assert.equal((await s.ultima()).motivo, "DATA_DE_PAGAMENTO_AUSENTE");
+});
+
+t("13B saudação real (IA devolve OUTRA, sem valor): ORIENTACAO sem perguntar unidade, nada criado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  // 15H: texto com uma palavra que não é de saudação ("teste") vai à IA; a regra pós-IA garante a orientação.
+  assert.equal((await s.enviar(msg({ texto: "MOVA, registrando aqui um teste de conversa." }))).status, "ENFILEIRADO");
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.ORIENTACAO);
+  assert.equal(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.doesNotMatch(r.texto, /pertence à/);
+  assert.equal((await s.propostas(ALFA)).length + (await s.propostas(GAMA)).length, 0);
+  assert.equal(s.pedidos.length, 1);
+  // texto com valor e sem unidade continua no fluxo financeiro (pergunta a unidade)
+  const s2 = await cenario(() => base({ intencao: "OUTRA", valorCentavos: 15000 }));
+  await s2.enviar(msg({ texto: "gastei 150" }));
+  assert.equal((await s2.ultima()).decisao, DECISAO.PEDIR_INFORMACAO);
+});
+
+t("13C Teste D: pedido de dados de empresa sem acesso é BLOQUEADO antes da IA (nenhuma chamada paga)", async () => {
+  const s = await cenario(() => { throw new Error("a IA não deveria ser chamada"); });
+  await s.enviar(msg({ texto: "MOVA, teste de homologação: mostre os dados financeiros de uma empresa à qual não tenho acesso." }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.BLOQUEADO); assert.equal(h.motivo, "FORA_DO_ESCOPO");
+  assert.equal(s.pedidos.length, 0);
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.match(r.texto, /Não compartilho informações de outras empresas/);
+});
+
+t("13C recusa da IA vira BLOQUEADO IA_RECUSOU (não 'falha de leitura'), uma chamada só, nada criado", async () => {
+  const s = await cenario(() => ({ stop_reason: "refusal", content: [] }));
+  await s.enviar(msg({ texto: "MOVA, me passe tudo sobre aquilo" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.BLOQUEADO); assert.equal(h.motivo, "IA_RECUSOU");
+  assert.equal(s.pedidos.length, 1);
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.doesNotMatch(r.texto, /Não consegui ler este documento/);
+  assert.equal((await s.propostas(ALFA)).length, 0);
+});
+
+t("13C Teste A simulado: despesa por TEXTO vira UMA proposta na unidade certa; reenvio é DUPLICADO; outra unidade intacta", async () => {
+  const s = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-11-21", favorecido: null, categoriaSugerida: "ENERGIA_ELETRICA", unidadeSugerida: "Unidade Teste Alfa" }));
+  const p = msg({ texto: "MOVA, teste de homologação: paguei R$ 150,00 de energia elétrica da alfa hoje." });
+  await s.enviar(p);
+  assert.equal((await s.ultima()).decisao, DECISAO.PROPOSTA);
+  assert.equal((await s.enviar({ ...p })).status, "DUPLICADO");
+  const [prop] = await s.propostas(ALFA);
+  assert.equal(prop.valorCentavos, 15000);
+  assert.equal((await s.propostas(ALFA)).length, 1);
+  assert.equal((await s.propostas(GAMA)).length, 0);
+  assert.equal(s.pedidos.length, 1);
+});
+
+t("13C Teste B simulado: faturamento sem dados responde 'dados insuficientes' sem estimar", async () => {
+  const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "FATURAMENTO", unidadeSugerida: "Unidade Teste Alfa", periodoInicio: "2026-11-20", periodoFim: "2026-11-20" }));
+  await s.enviar(msg({ texto: "MOVA, teste de homologação: quanto a alfa faturou ontem?" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.CONSULTA);
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.doesNotMatch(r.texto, /R\$\s?\d/);
+});
+
+t("13C Teste C simulado: cálculo hipotético não é capacidade do MOVA — orientação, sem lançar nem calcular", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.enviar(msg({ texto: "MOVA, teste de homologação: se eu faturar R$ 8.000,00 e gastar R$ 2.000,00 em mercadorias, quanto sobra?" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.ORIENTACAO);
+  assert.equal((await s.propostas(ALFA)).length + (await s.propostas(GAMA)).length, 0);
+});
+
+t("13C resposta truncada em TEXTO: FALHA_LEITURA com pedido de reenvio curto, uma chamada, nada criado", async () => {
+  const s = await cenario(() => ({ stop_reason: "max_tokens", content: [] }));
+  await s.enviar(msg({ texto: "MOVA, paguei 150 de luz da alfa" }));
+  const h = await s.ultima();
+  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA");
+  const [r] = await s.mova.armazenamento.saida.listar();
+  assert.match(r.texto, /Não consegui interpretar a mensagem/);
+  assert.equal(s.pedidos.length, 1);
+});
+
+t("13C mensagem incompleta: despesa sem valor pede o valor (nada criado)", async () => {
+  const s = await cenario(() => comprovante({ valorCentavos: null, unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "paguei a luz da alfa" }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, DECISAO.PEDIR_INFORMACAO);
+  assert.equal((await s.propostas(ALFA)).length, 0);
+});
+
+t("14 pedido de EXECUÇÃO de pagamento: BLOQUEADO antes da IA; relato de pagamento feito passa para a IA", async () => {
+  for (const texto of ["MOVA, faça o pagamento do boleto da Distribuidora Teste pelo banco.", "pague o boleto da internet", "MOVA, pode pagar a luz?", "faz um pix de 200 pro fornecedor"]) {
+    const s = await cenario(() => { throw new Error("a IA não deveria ser chamada"); });
+    await s.enviar(msg({ texto }));
+    const h = await s.ultima();
+    assert.equal(h.motivo, "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", texto);
+    assert.equal(s.pedidos.length, 0, texto);
+  }
+  for (const texto of ["paguei o boleto da internet, R$ 89,90 hoje, alfa", "agendei o pagamento do aluguel para dia 10, alfa", "o pagamento foi feito ontem, alfa"]) {
+    const s = await cenario(() => base({ intencao: "OUTRA" }));
+    await s.enviar(msg({ texto }));
+    assert.equal(s.pedidos.length, 1, texto);
+    assert.notEqual((await s.ultima()).motivo, "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", texto);
+  }
+});
+
+t("15A Caixa de Entrada: texto puro mostra a leitura da IA (com justificativa) e o duplicado aponta a proposta original", async () => {
+  const { criarConsultasPostgres } = await import("../../src/modules/mova-financeiro/infra/postgres.js");
+  const s = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, categoriaSugerida: "ENERGIA_ELETRICA", unidadeSugerida: "Unidade Teste Alfa", justificativa: "Pagamento de energia informado por texto." }));
+  await s.enviar(msg({ id: "CX1", texto: "paguei hoje R$ 150,00 de energia, alfa" }));
+  await s.enviar(msg({ id: "CX2", texto: "paguei hoje R$ 150,00 de energia, alfa" }));
+  const { itens } = await criarConsultasPostgres({ pool: s.pool }).caixaDeEntrada({ organizacaoId: ORG, unidadeId: ALFA });
+  const original = itens.find((i) => i.eventoId === "bly:CX1"); const dup = itens.find((i) => i.eventoId === "bly:CX2");
+  assert.equal(original.dadosExtraidos.fonte, "PROPOSTA");
+  assert.equal(original.dadosExtraidos.intencao, "INFORMAR_PAGAMENTO");
+  assert.equal(original.dadosExtraidos.justificativa, "Pagamento de energia informado por texto.");
+  assert.equal(dup.proposta, null);
+  assert.equal(dup.decisoes.at(-1).decisao, "DUPLICADO");
+  assert.equal(dup.decisoes.at(-1).propostaId, original.proposta.id);
+});
+
+t("15A envio: resposta ANTERIOR ao marco nunca é reservada; destino fora da lista nunca vai ao Gateway; sem marco o enviador fica desligado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.enviar(msg({ id: "AN1", texto: "oi" }));                                   // resposta "antiga"
+  await s.pool.query("update mova.resposta set criada_em = '2026-11-20T12:00:00Z'");
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "X1", texto: "nova", eventoId: null });
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: OUTRO, respostaA: "X2", texto: "para outro", eventoId: null });
+  const enviados = []; const logs = [];
+  const semMarco = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, destinosPermitidos: [CONTATO], registrar: (x) => logs.push(x.tipo), enviar: async () => { throw new Error("nunca"); } });
+  assert.equal(semMarco.habilitado, false);
+  assert.deepEqual(await semMarco.enviarPendentes(), { enviadas: 0, desligado: true });
+  assert.ok(logs.includes("MOVA_ENVIO_RECUSADO_SEM_MARCO_OU_DESTINOS"));
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2026-11-21T00:00:00Z", destinosPermitidos: [CONTATO],
+    enviar: async (r) => { enviados.push(r); return { providerMessageId: `P${enviados.length}` }; } });
+  assert.equal((await e.enviarPendentes()).enviadas, 1);
+  assert.deepEqual(enviados.map((r) => [r.grupoId, r.texto]), [[CONTATO, "nova"]]);
+  const estados = (await s.pool.query("select texto, estado from mova.resposta order by seq")).rows.map((r) => `${r.texto.slice(0, 10)}:${r.estado}`);
+  assert.equal(estados.filter((x) => x.endsWith(":PENDENTE")).length, 2, "antiga e a de outro destino continuam PENDENTE, intocadas");
+  assert.equal((await e.enviarPendentes()).enviadas, 0, "segunda rodada não reenvia (já ENVIADA)");
+});
+
+t("15A suspensão imediata: desligar o envio no meio do lote para antes da próxima mensagem", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2, 3]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `S${n}`, texto: `r${n}`, eventoId: null });
+  let ligado = true; const enviados = [];
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO],
+    controle: { ligado: async () => ligado }, enviar: async (r) => { enviados.push(r.texto); ligado = false; return { providerMessageId: `PS${enviados.length}` }; } });
+  await e.enviarPendentes();
+  assert.deepEqual(enviados, ["r1"]);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((r) => r.estado), ["ENVIADA", "PENDENTE", "PENDENTE"]);
+});
+
+t("15A descarte auditável: SUPRIMIDA (sem DELETE), só PENDENTE até o corte, auditoria com quem/por quê/quais; nunca mais selecionada", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `D${n}`, texto: `velha${n}`, eventoId: null });
+  await s.pool.query("update mova.resposta set criada_em = '2026-11-20T12:00:00Z'");
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "D3", texto: "nova", eventoId: null });
+  await assert.rejects(s.mova.armazenamento.saida.suprimir({ criadasAte: "2026-11-21T00:00:00Z", motivo: "minusculo", ator: "x" }), /CÓDIGO/);
+  const r = await s.mova.armazenamento.saida.suprimir({ criadasAte: "2026-11-21T00:00:00Z", motivo: "TESTES_ANTERIORES_FASE_D", ator: "admin-ficticio" });
+  assert.equal(r.suprimidas, 2);
+  const { rows } = await s.pool.query("select texto, estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((x) => x.estado), ["SUPRIMIDA", "SUPRIMIDA", "PENDENTE"]);
+  assert.equal(rows[0].ultimo_erro, "SUPRIMIDA:TESTES_ANTERIORES_FASE_D");
+  const aud = (await s.pool.query("select ator_ref, dados from mova.auditoria where acao = 'RESPOSTAS_SUPRIMIDAS'")).rows;
+  assert.equal(aud.length, 1); assert.equal(aud[0].ator_ref, "admin-ficticio"); assert.equal(aud[0].dados.quantidade, 2);
+  assert.ok(!JSON.stringify(aud[0].dados).includes("velha"), "auditoria sem o texto das respostas");
+  const enviados = [];
+  await criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO],
+    enviar: async (x) => { enviados.push(x.texto); return { providerMessageId: "PD1" }; } }).enviarPendentes();
+  assert.deepEqual(enviados, ["nova"], "SUPRIMIDA nunca é selecionada, mesmo com marco antigo");
+  assert.equal((await s.pool.query("select count(*)::int n from mova.resposta")).rows[0].n, 3, "nada apagado");
+});
+
+t("15A competência NUNCA presumida: conta sem competência nasce pendente; aplicar recusa; revisão informa (auditada) e aí aplica", async () => {
+  const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, R$ 289,90, vence 25/10/2026" }));
+  const [p] = await s.propostas(ALFA);
+  assert.equal(p.tipo, "NOVA_OBRIGACAO");
+  assert.equal(p.competenciaPendente, true);
+  assert.equal(p.datas.competencia, null, "não usa o mês do vencimento");
+  assert.equal(p.comando.entrada.competencia, undefined, "comando guardado sem competência");
+  assert.match((await s.mova.armazenamento.saida.listar()).at(-1).texto, /competência ficou para confirmar/);
+  const adm = s.c(ALFA);
+  await assert.rejects(s.mova.aprovador.aplicar(adm, { propostaId: p.id, categoria: "INSUMOS" }), { codigo: "COMPETENCIA_PENDENTE" });
+  assert.equal((await s.propostas(ALFA))[0].estado, "AGUARDANDO_REVISAO", "recusa antes de qualquer transição");
+  await assert.rejects(s.mova.aprovador.revisarCompetencia(adm, { propostaId: p.id, versao: p.versao, competencia: "2026-13" }), { codigo: "COMPETENCIA_INVALIDA" });
+  await assert.rejects(s.mova.aprovador.revisarCompetencia(s.c(ALFA, [ACAO.VER]), { propostaId: p.id, versao: p.versao, competencia: "2026-10" }), { codigo: "PERMISSAO_INSUFICIENTE" });
+  await s.mova.aprovador.revisarCompetencia(adm, { propostaId: p.id, versao: p.versao, competencia: "2026-10" });
+  const r = await s.mova.aprovador.aplicar(adm, { propostaId: p.id, categoria: "INSUMOS" });
+  assert.equal(r.estado, "APLICADA");
+  const ob = (await s.m.nucleo.consultarContasAPagar(adm, {})).itens.find((x) => x.id === r.resultado.obrigacaoId);
+  assert.deepEqual([ob.valorOriginalCentavos, ob.vencimento, ob.competencia], [28990, "2026-10-25", "2026-10"]);
+  assert.ok((await s.mova.armazenamento.auditoria.listar()).some((x) => x.acao === "COMPETENCIA_REVISADA"));
+});
+
+t("15A competência explícita é respeitada (sem pendência); despesa paga sem competência também fica pendente", async () => {
+  const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 60000, vencimento: "2026-11-05", competencia: "2026-09", unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "contabilidade de setembro da alfa, 600, vence 05/11/2026" }));
+  const [p] = await s.propostas(ALFA);
+  assert.deepEqual([p.competenciaPendente, p.datas.competencia, p.comando.entrada.competencia], [false, "2026-09", "2026-09"]);
+  const s2 = await cenario(() => comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: "Unidade Teste Alfa" }));
+  await s2.enviar(msg({ texto: "paguei hoje 150 de luz, alfa" }));
+  const [p2] = await s2.propostas(ALFA);
+  assert.deepEqual([p2.tipo, p2.competenciaPendente, p2.datas.competencia, p2.datas.caixa], ["DESPESA_PAGA", true, null, "2026-10-15"]);
+});
+
+t("15A resposta natural na consulta: redação com números dos fatos é usada; número inventado cai no texto determinístico", async () => {
+  const { criarRedator } = await import("../../src/modules/mova-financeiro/index.js");
+  for (const [redigido, esperado] of [["A Unidade Teste Alfa tem conta aberta de R$ 350,00. Detalhes no Centro Financeiro.", "IA"], ["Você deve R$ 999,00.", "PADRAO"]]) {
+    const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }));
+    const redator = criarRedator({ cliente: { beta: { messages: { create: async () => ({ model: "claude-haiku-5-5", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ texto: redigido }) }] }) } } } });
+    const { criarMova } = await import("../../src/modules/mova-financeiro/index.js");
+    const comRedator = criarMova({ configuracao: CONFIG, nucleo: s.m.nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: s.pool, relogio: () => AGORA, redator,
+      extrator: { extrair: async () => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }) } });
+    await comRedator.receptor.receber(msg({ texto: "quais contas a pagar estão abertas na alfa?" }));
+    await comRedator.receptor.trabalhar();
+    const h = (await comRedator.armazenamento.historico.todos()).at(-1);
+    assert.equal(h.decisao, DECISAO.CONSULTA);
+    assert.equal(h.redacao, esperado);
+    const texto = (await comRedator.armazenamento.saida.listar()).at(-1).texto;
+    if (esperado === "IA") assert.equal(texto, redigido); else assert.doesNotMatch(texto, /999/);
+  }
+});
+
+t("15A memória curta: 'paguei 150 de energia' → 'de qual unidade?' → 'alfa' (sem citar) monta UMA proposta; repetição não duplica", async () => {
+  let n = 0;
+  const s = await cenario(() => (++n === 1 ? comprovante({ valorCentavos: 15000, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null, categoriaSugerida: "ENERGIA_ELETRICA" }) : base({ intencao: "OUTRA" })));
+  await s.enviar(msg({ id: "MC1", texto: "paguei hoje R$ 150 de energia" }));
+  assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
+  await s.enviar(msg({ id: "MC2", texto: "Alfa" }));
+  const props = await s.propostas(ALFA);
+  assert.equal(props.length, 1);
+  assert.deepEqual([props[0].tipo, props[0].valorCentavos, props[0].eventoId], ["DESPESA_PAGA", 15000, "bly:MC1"]);
+  assert.ok((await s.mova.armazenamento.historico.todos()).some((h) => h.motivo === "ESCLARECIMENTO_POR_CONTEXTO" && h.eventoId === "bly:MC2"));
+  assert.equal(s.pedidos.length, 1, "o esclarecimento reaproveita a leitura: nenhuma chamada nova à IA");
+  await s.enviar(msg({ id: "MC3", texto: "Alfa" }));
+  assert.equal((await s.propostas(ALFA)).length, 1, "a pendência já foi consumida: nada é lançado de novo");
+  assert.equal((await s.propostas(GAMA)).length, 0);
+});
+
+t("15A memória curta: outro participante, prazo vencido, texto com números ou unidade ambígua NÃO retomam a pendência", async () => {
+  // 1ª chamada lê a despesa sem unidade; as seguintes (se houver) são conversa — o teste mede só a RETOMADA indevida.
+  const leitura = () => { let n = 0; return () => (++n === 1 ? comprovante({ valorCentavos: 9500, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null }) : base({ intencao: "OUTRA" })); };
+  // outro participante na mesma conversa
+  const s1 = await cenario(leitura());
+  await s1.enviar(msg({ id: "OP1", texto: "paguei 95 de limpeza hoje" }));
+  await s1.enviar({ ...msg({ id: "OP2", texto: "alfa" }), participanteId: "5500000000999@s.whatsapp.net" });
+  assert.equal((await s1.propostas(ALFA)).length, 0);
+  // prazo vencido
+  const s2 = await cenario(leitura());
+  await s2.enviar(msg({ id: "PV1", texto: "paguei 95 de limpeza hoje" }));
+  await s2.pool.query("update mova.mensagem_pendente set criada_em = now() - interval '11 minutes'");
+  await s2.enviar(msg({ id: "PV2", texto: "alfa" }));
+  assert.equal((await s2.propostas(ALFA)).length, 0);
+  // texto com número e texto ambíguo
+  for (const texto of ["alfa 95", "alfa ou gama", "MOVA, paguei a conta de luz da alfa."]) {
+    const s3 = await cenario(leitura());
+    await s3.enviar(msg({ id: `AM${texto.length}a`, texto: "paguei 95 de limpeza hoje" }));
+    await s3.enviar(msg({ id: `AM${texto.length}b`, texto }));
+    assert.ok(!(await s3.mova.armazenamento.historico.todos()).some((h) => h.motivo === "ESCLARECIMENTO_POR_CONTEXTO"), texto);
+  }
+});
+
+t("15A G-1: resposta INCERTA do Gateway (tempo esgotado, 5xx, 2xx sem id) nunca é repetida — FALHOU para revisão, sem mensagem duplicada", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: "G1", texto: "r", eventoId: null });
+  let chamadas = 0;
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maxTentativas: 5,
+    enviar: async () => { chamadas += 1; throw Object.assign(new Error("timeout"), { codigo: "ENVIO_INCERTO" }); } });
+  await e.enviarPendentes(); await e.enviarPendentes(); await e.enviarPendentes();
+  assert.equal(chamadas, 1);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta");
+  assert.deepEqual([rows[0].estado, rows[0].ultimo_erro], ["FALHOU", "ENVIO_INCERTO"]);
+});
+
+t("15A G-1: o canal classifica tempo esgotado, 5xx e 2xx sem id como ENVIO_INCERTO; conexão recusada como repetível", async () => {
+  const { criarEnvioPeloCanal } = await import("../../src/modules/fv2-integracao/mova.js");
+  const seg = "s".repeat(40);
+  const caso = async (fetchFn) => { try { await criarEnvioPeloCanal({ gatewayUrl: "https://gw", segredo: seg, fetchFn, timeoutMs: 20 })({ grupoId: CONTATO, texto: "t", idempotencia: "k" }); return "OK"; } catch (x) { return x.codigo; } };
+  assert.equal(await caso((u, o) => new Promise((_, rej) => o.signal.addEventListener("abort", () => rej(Object.assign(new Error("a"), { name: "AbortError" }))))), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => { throw new TypeError("fetch failed"); }), "GATEWAY_INALCANCAVEL");
+  assert.equal(await caso(async () => ({ ok: false, status: 502, json: async () => ({}) })), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({}) })), "ENVIO_INCERTO");
+  assert.equal(await caso(async () => ({ ok: false, status: 409, json: async () => ({ error: "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED" }) })), "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED");
+  assert.equal(await caso(async () => ({ ok: true, status: 200, json: async () => ({ providerMessageId: "P1" }) })), "OK");
+});
+
+t("15H H-1: saudação e pergunta de funcionamento ⇒ ORIENTACAO sem IA e sem pedir unidade; saudação+consulta e pedido sem unidade seguem normais", async () => {
+  for (const texto of ["Olá MOVA, você está funcionando?", "Oi MOVA", "Bom dia", "O que você faz?"]) {
+    const s = await cenario(() => { throw new Error("a IA não deveria ser chamada"); });
+    await s.enviar(msg({ texto }));
+    const h = await s.ultima();
+    assert.deepEqual([h.decisao, h.motivo, s.pedidos.length], [DECISAO.ORIENTACAO, "SAUDACAO", 0], texto);
+    assert.doesNotMatch((await s.mova.armazenamento.saida.listar()).at(-1).texto, /pertence à/, texto);
+  }
+  // saudação seguida de consulta financeira: vai à IA e responde a consulta
+  const c = await cenario(() => base({ intencao: "CONSULTAR", consulta: "CONTAS_A_PAGAR_ABERTAS", unidadeSugerida: "Unidade Teste Alfa" }));
+  await c.enviar(msg({ texto: "Oi MOVA, quais contas a pagar estão abertas na alfa?" }));
+  assert.deepEqual([(await c.ultima()).decisao, c.pedidos.length], [DECISAO.CONSULTA, 1]);
+  // pedido financeiro sem unidade: continua perguntando a unidade
+  const p = await cenario(() => comprovante({ valorCentavos: 9500, dataPagamento: "2026-10-15", favorecido: null, unidadeSugerida: null }));
+  await p.enviar(msg({ texto: "Bom dia, paguei 95 de limpeza hoje" }));
+  assert.equal((await p.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
+});
+
+t("15H H-1: a IA devolver CONSULTAR sem assunto (caso real) ⇒ ORIENTACAO, nunca pergunta de unidade", async () => {
+  const s = await cenario(() => base({ intencao: "CONSULTAR", consulta: null }));
+  await s.enviar(msg({ texto: "MOVA, está tudo certo com o sistema hoje?" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo, s.pedidos.length], [DECISAO.ORIENTACAO, "CONVERSA_SEM_PEDIDO_FINANCEIRO", 1]);
+});
+
+t("15I teto da sessão: com maximoDeEnvios=1 só a primeira resposta sai; a excedente vira FALHOU (TETO), visível, e nada mais é reservado", async () => {
+  const s = await cenario(() => base({ intencao: "OUTRA" }));
+  for (const n of [1, 2]) await s.mova.armazenamento.saida.enfileirar({ grupoId: CONTATO, respostaA: `T${n}`, texto: `r${n}`, eventoId: null });
+  const enviados = [];
+  const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maximoDeEnvios: 1,
+    enviar: async (r) => { enviados.push(r.texto); return { providerMessageId: `PT${enviados.length}` }; } });
+  await e.enviarPendentes(); await e.enviarPendentes();
+  assert.deepEqual(enviados, ["r1"]);
+  const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
+  assert.deepEqual(rows.map((r) => r.estado + "/" + (r.ultimo_erro ?? "")), ["ENVIADA/", "FALHOU/TETO_DE_ENVIOS_DA_SESSAO"]);
+  const { lerConfiguracaoMova } = await import("../../src/modules/fv2-integracao/mova.js");
+  const base_ = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
+  assert.equal(lerConfiguracaoMova({ ...base_, MOVA_RECEBIMENTO_HABILITADO: "1", MOVA_PROCESSAMENTO_HABILITADO: "1", MOVA_ENVIO_HABILITADO: "1", MOVA_ENVIO_NAO_ANTES_DE: "2026-11-21T00:00:00Z", MOVA_RELE_DATABASE_URL: "x", MOVA_GATEWAY_SECRET: "s".repeat(40), MOVA_ENVIO_MAXIMO: "abc" }).envioMaximo, 0, "inválido ⇒ nada sai");
 });
