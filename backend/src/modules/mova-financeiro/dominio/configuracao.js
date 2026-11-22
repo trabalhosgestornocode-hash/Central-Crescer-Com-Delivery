@@ -28,8 +28,9 @@ const SISTEMAS_DE_LOJA = ["SAIPOS", "SWF"];
 const PLATAFORMAS = ["IFOOD", "NOVENTA_E_NOVE_FOOD"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
-import { ACESSO, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
+import { ACESSO, POLITICA_RESPOSTA, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
 import { CONSULTAS } from "../ia/contratos.js";
+import { conversasDosEntregadores, validarEntregadores } from "./entregadores.js";
 
 export class ErroDeConfiguracao extends Error {
   constructor(campo) { super(`Configuração do MOVA inválida: ${campo}`); this.name = "ErroDeConfiguracao"; this.campo = campo; }
@@ -94,7 +95,9 @@ export function validarConfiguracao(c) {
     exigir(acesso !== ACESSO.LISTA || participantes.length > 0, `${campo}.participantes`);
     const consultasNoGrupo = Array.isArray(g.consultasNoGrupo) ? g.consultasNoGrupo : [];
     exigir(consultasNoGrupo.every((x) => CONSULTAS.includes(x) && x !== "DADO_RESTRITO"), `${campo}.consultasNoGrupo`);
-    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), privada: !g.grupoId.endsWith("@g.us"), derivada: false });
+    const politicaResposta = g.politicaResposta ?? POLITICA_RESPOSTA.PRIVADO_RESTRITO;
+    exigir(Object.values(POLITICA_RESPOSTA).includes(politicaResposta) && (politicaResposta === POLITICA_RESPOSTA.PRIVADO_RESTRITO || acesso === ACESSO.LISTA), `${campo}.politicaResposta`);
+    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
   exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
   // OPERACAO: as conversas privadas nascem da lista de participantes (nunca cadastradas à parte).
@@ -102,7 +105,15 @@ export function validarConfiguracao(c) {
   // (a resposta com valores não sai no grupo e ela é orientada a falar com o administrador). Isolamento antes de conveniência.
   const orgDe = new Map(unidades.map((u) => [u.unidadeId, u.organizacaoId]));
   const derivadas = operacao ? conversasPrivadasDerivadas(grupos).filter((g) => new Set(g.unidades.map((u) => orgDe.get(u))).size === 1 && !grupos.some((x) => x.grupoId === g.grupoId)) : [];
-  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades), gruposAutorizados: Object.freeze([...grupos, ...derivadas]) });
+  // Agente 2 — Frente D: entregadores (só na OPERACAO), cada um numa unidade do MOVA e na organização dela.
+  let entregadores = [];
+  try { entregadores = operacao ? validarEntregadores(c.entregadores ?? []) : []; } catch (e) { exigir(false, `entregadores.${e.message}`); }
+  for (const [i, e] of entregadores.entries()) exigir(orgDe.has(e.unidadeId) && (!e.organizacaoId || orgDe.get(e.unidadeId) === e.organizacaoId), `entregadores[${i}].unidade`);
+  entregadores = Object.freeze(entregadores.map((e) => Object.freeze({ ...e, organizacaoId: orgDe.get(e.unidadeId) })));
+  const ocupados = new Set([...grupos, ...derivadas].map((g) => g.grupoId));
+  const dosEntregadores = conversasDosEntregadores(entregadores, { ocupados });
+  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
+    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores });
 }
 
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;
