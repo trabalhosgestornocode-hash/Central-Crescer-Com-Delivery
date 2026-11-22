@@ -48,9 +48,9 @@ const backendFalso = () => ({
 const leaseFalso = () => ({ souLeader: () => true, contexto: () => ({ gatewayProcessId: "proc", leaseEpoch: 12 }), notificarPerdaExterna: mock.fn(async () => {}) });
 
 
-async function montar({ falharEnvio = false, retryCache = null, autorizado = true } = {}) {
+async function montar({ falharEnvio = false, retryCache = null, autorizado = true, lid = DEST_LID } = {}) {
   const fabricaSocket = fabricaFalsa();
-  const contato = { identidade: async () => ({ jid: DEST, lid: DEST_LID }), jidAutorizadoParaEnvio: async (j) => autorizado && j === DEST };
+  const contato = { identidade: async () => ({ jid: DEST, lid }), jidAutorizadoParaEnvio: async (j) => autorizado && j === DEST };
   const s = criarSessaoBaileys({
     authAdapter: authFalso(), backendClient: backendFalso(),
     config: { reconnect: { baseMs: 10, tetoMs: 40 }, heartbeatMs: 1_000_000, providerInstanceId: "t", gatewayVersion: "0", movaEnvioHabilitado: true },
@@ -71,6 +71,7 @@ test("15J envio privado do MOVA: marca antes e REGISTRA o conteúdo cifrado com 
   const rc = espiao(); const { s, socket } = await montar({ retryCache: rc });
   const r = await s.enviarGrupoMova({ grupoJid: DEST, texto: "Olá!", correlationId: "mova-saida:x" });
   assert.equal(socket.sendMessage.mock.callCount(), 1);
+  assert.equal(socket.sendMessage.mock.calls[0].arguments[0], DEST_LID, "17B: com LID verificado, o envio é endereçado por LID");
   assert.deepEqual(rc.ch.map((c) => c[0]), ["marcar", "registrar"]);
   const reg = rc.ch[1][1];
   assert.deepEqual([reg.providerMessageId, reg.destinoJid, reg.destinoLid, reg.mensagem.conversation], [r.providerMessageId, DEST, DEST_LID, "Olá!"]);
@@ -126,4 +127,18 @@ test("15J com o CACHE REAL: depois do envio privado do MOVA, o getMessage do ret
   const porLid = await criados[0].opcoes.getMessage({ remoteJid: `${DEST_LID.split("@")[0]}:0@lid`, id: providerMessageId, fromMe: true, participant: `${DEST_LID.split("@")[0]}:0@lid` });
   assert.ok(porLid, "o retry da 15I chegou endereçado ao LID");
   await s.desconectar();
+});
+
+test("17B endereço do envio privado: LID do contato verificado quando existe; número quando não há LID ou ele é malformado; destino não verificado continua recusado ANTES de enviar", async () => {
+  const comLid = await montar();
+  await comLid.s.enviarGrupoMova({ grupoJid: DEST, texto: "x" });
+  assert.equal(comLid.socket.sendMessage.mock.calls[0].arguments[0], DEST_LID);
+  for (const lid of [null, "", "abc@lid", "123@s.whatsapp.net", "987654321098765@lid; drop", "987654321098765:3@lid"]) {
+    const m = await montar({ lid });
+    await m.s.enviarGrupoMova({ grupoJid: DEST, texto: "x" });
+    assert.equal(m.socket.sendMessage.mock.calls[0].arguments[0], DEST, `lid=${String(lid)} ⇒ mantém o número`);
+  }
+  const naoVerificado = await montar({ autorizado: false });
+  await assert.rejects(naoVerificado.s.enviarGrupoMova({ grupoJid: DEST, texto: "x" }), (e) => e.codigo === CODIGOS.GRUPO_NAO_AUTORIZADO && e.preEnvio === true);
+  assert.equal(naoVerificado.socket.sendMessage.mock.callCount(), 0);
 });
