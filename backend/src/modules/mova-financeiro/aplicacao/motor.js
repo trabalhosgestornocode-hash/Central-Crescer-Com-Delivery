@@ -242,6 +242,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     const unidade = u.unidade;
     const escopo = escopoDe(unidade);
+    // Agente 2 — Frente B: a MESMA transação (ID/E2E) já recebida nesta empresa, em outro arquivo (foto × PDF, print × encaminhado):
+    // não cria segunda proposta. O sha256 só pega o mesmo arquivo; o identificador da transação pega o mesmo pagamento.
+    if (evento.midia && saida.idTransacao && typeof a.documentos.porTransacao === "function") {
+      const mesma = await a.documentos.porTransacao({ organizacaoId: escopo.organizacaoId, idTransacao: saida.idTransacao });
+      if (mesma && mesma.eventoId !== evento.eventoId) {
+        await marcarDocumento(evento, escopo, null, saida);
+        return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "TRANSACAO_JA_RECEBIDA", escopo, propostaId: mesma.propostaId ?? null, resposta: RESPOSTA.duplicado(mesma.propostaId), injecao });
+      }
+    }
     const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento, grupo, participante, interpretacao };
 
     if (consulta) {
@@ -317,10 +326,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       evidencia: evento.midia ? { sha256: evento.midia.sha256, referencia: evento.midia.referencia, mime: evento.midia.mime } : null,
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
+        pagador: saida.pagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
         justificativa: saida.justificativa ? mascararDadosSensiveis(String(saida.justificativa).slice(0, 300)) : null, camposAusentes: saida.camposAusentes ?? [] },
       categoriaSugerida: saida.categoriaSugerida, naturezaSugerida: saida.natureza, sinaisDeInjecao: injecao,
       // Unidade com requisitos financeiros incompletos: a proposta é guardada, mas a APLICAÇÃO fica bloqueada até completar.
       bloqueioDeAplicacao: incompleta ? "REQUISITOS_FINANCEIROS_INCOMPLETOS" : null,
+      // Agente 2 — Frente B/C: imagem/PDF de comprovante NÃO é prova definitiva. A liquidação só vale com a evidência bancária
+      // (extrato) conferida; até lá a proposta fica marcada como aguardando extrato.
+      conciliacao: [TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, TIPO_PROPOSTA.DESPESA_PAGA].includes(dados.tipo) ? { situacao: "AGUARDANDO_EXTRATO", idTransacao: saida.idTransacao ?? null } : null,
       // Quem aplica: uma pessoa com financeiro_v2.aprovar + financeiro_v2.aplicar (+ registrar), pelo Centro Financeiro.
       exigeParaAplicar: [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR],
       ...dados,
