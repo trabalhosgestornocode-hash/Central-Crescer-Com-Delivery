@@ -30,6 +30,15 @@ export async function criarBancoMova() {
   return { pool, banco };
 }
 
+/**
+ * Agente 2: apaga UM banco criado por criarBancoMova NESTA execução (nunca um banco existente). Só nomes do padrão de teste.
+ */
+export async function descartarBancoMova({ pool, banco }) {
+  if (!/^fv2_teste_mova_[0-9a-f]{12}$/.test(banco ?? "")) throw new Error("descartarBancoMova: nome fora do padrão de teste");
+  await pool.end().catch(() => {});
+  await admin.query(`drop database if exists ${banco} with (force)`);
+}
+
 /** Pool que falha como banco fora do ar enquanto `fora` for verdadeiro (interrupção simulada). */
 export function poolInterrompivel(pool) {
   const estado = { fora: false };

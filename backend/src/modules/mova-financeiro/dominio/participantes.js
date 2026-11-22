@@ -77,7 +77,40 @@ export function perfilPodeConsultar(perfil, consulta) {
 
 /** A resposta desta consulta pode sair NO GRUPO? (o grupo pode liberar mais consultas, explicitamente) */
 export function consultaPodeSairNoGrupo(grupo, consulta) {
-  return CONSULTAS_SEM_VALORES.includes(consulta) || (grupo.consultasNoGrupo ?? []).includes(consulta);
+  return CONSULTAS_SEM_VALORES.includes(consulta);
+}
+
+/**
+ * Agente 2 — POLÍTICA DE RESPOSTA do grupo (padrão PRIVADO_RESTRITO):
+ *   PRIVADO_RESTRITO  valores só no privado autorizado (no grupo, o aviso sem valores);
+ *   GRUPO_FINANCEIRO  valores no próprio grupo SÓ quando o retrato dos membros atuais é recente e TODOS estão autorizados a
+ *                     ver aquela consulta naquelas unidades; qualquer dúvida ⇒ volta para o privado (nunca expõe);
+ *   OPERACIONAL       grupo de rotina: só informações operacionais (contagens, documentos); consulta com valores não é atendida.
+ */
+export const POLITICA_RESPOSTA = Object.freeze({ PRIVADO_RESTRITO: "PRIVADO_RESTRITO", GRUPO_FINANCEIRO: "GRUPO_FINANCEIRO", OPERACIONAL: "OPERACIONAL" });
+/** Retrato dos membros mais velho que isto não comprova nada (o grupo pode ter ganhado um membro). */
+export const RETRATO_VALIDADE_MS = 15 * 60 * 1000;
+const telefoneDoJid = (jid) => (/^[1-9]\d{7,14}@s\.whatsapp\.net$/.test(jid ?? "") ? `+${jid.split("@")[0]}` : null);
+
+/**
+ * Para onde vai a resposta de uma consulta pedida NUM GRUPO por LISTA.
+ * @param {{grupo:object, consulta:string, unidades:string[], retrato:{membros:string[], verificadoEm:string|Date}|null, agora:Date}} p
+ * @returns {{saida:"GRUPO"|"PRIVADO"|"RECUSAR", motivo:string}}
+ */
+export function decidirSaidaNoGrupo({ grupo, consulta, unidades, retrato, agora }) {
+  if (CONSULTAS_SEM_VALORES.includes(consulta)) return { saida: "GRUPO", motivo: "SEM_VALORES" };
+  const politica = grupo.politicaResposta ?? POLITICA_RESPOSTA.PRIVADO_RESTRITO;
+  if (politica === POLITICA_RESPOSTA.OPERACIONAL) return { saida: "RECUSAR", motivo: "GRUPO_OPERACIONAL" };
+  if (politica !== POLITICA_RESPOSTA.GRUPO_FINANCEIRO) return { saida: "PRIVADO", motivo: "PRIVADO_RESTRITO" };
+  if ((grupo.consultasNoGrupo ?? []).length && !grupo.consultasNoGrupo.includes(consulta)) return { saida: "PRIVADO", motivo: "CONSULTA_FORA_DO_GRUPO" };
+  if (!retrato || !Array.isArray(retrato.membros) || !retrato.membros.length || !retrato.verificadoEm) return { saida: "PRIVADO", motivo: "MEMBROS_NAO_COMPROVADOS" };
+  const idade = agora.getTime() - new Date(retrato.verificadoEm).getTime();
+  if (!(idade >= 0 && idade <= RETRATO_VALIDADE_MS)) return { saida: "PRIVADO", motivo: "RETRATO_DESATUALIZADO" };
+  for (const m of retrato.membros) {
+    const p = participanteAutorizado(grupo, { participanteId: m, telefoneE164: telefoneDoJid(m) });
+    if (!p || !unidades.every((u) => p.unidades.includes(u) && perfilPodeConsultar(perfilNa(p, u), consulta))) return { saida: "PRIVADO", motivo: "MEMBRO_SEM_AUTORIZACAO" };
+  }
+  return { saida: "GRUPO", motivo: "TODOS_OS_MEMBROS_AUTORIZADOS" };
 }
 
 /** Perfil do participante NA unidade (na conversa privada derivada, cada unidade guarda o perfil do grupo de origem). */

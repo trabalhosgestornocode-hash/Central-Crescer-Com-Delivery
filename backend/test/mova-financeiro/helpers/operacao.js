@@ -1,12 +1,15 @@
 // Cenário SINTÉTICO do modo OPERACAO (Agente 2): Financeiro v2 real em memória, banco do MOVA no PostgreSQL local isolado, IA
 // SIMULADA. Nenhum identificador, nome ou valor aqui é real (DDD 00 não existe; grupos 120363000000000xxx são fictícios).
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { ACAO, ErroFinanceiro, comandos, criarConcessoesMemoria, planoDeContas } from "../../../src/modules/financeiro-v2/index.js";
 import { AGORA, TODAS, ctx, montar } from "../../financeiro-v2/helpers/cenario.js";
 import { criarExtratorAnthropic, criarMova, instalarConfiguracao, validarConfiguracao } from "../../../src/modules/mova-financeiro/index.js";
-import { criarBancoMova, motivoParaPularMova } from "./banco.js";
+import { criarBancoMova, descartarBancoMova, motivoParaPularMova } from "./banco.js";
 
 export const PULAR = motivoParaPularMova();
+// Disco reduzido: os bancos criados por ESTE arquivo de teste são apagados ao final (só eles; nunca bancos existentes).
+const criados = [];
+after(async () => { for (const b of criados.splice(0)) await descartarBancoMova(b).catch(() => {}); });
 export const t = (nome, fn) => test(nome, { skip: PULAR }, fn);
 
 export const ORG = "dddddddd-0000-4000-8000-0000000000a2";
@@ -68,20 +71,21 @@ export function clienteSimulado(responder) {
   return { pedidos, beta: { messages: { async create(req) { pedidos.push(req); const r = await responder(req, pedidos.length); return { model: "claude-haiku-5-5", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(r) }] }; } } } };
 }
 
-export async function cenario({ responder = () => base({}), comandosDeterministicos = true } = {}) {
+export async function cenario({ responder = () => base({}), comandosDeterministicos = true, config = CONFIG, extras = {} } = {}) {
   const m = montar({ escopos: ESCOPOS });
   const c = (org, u) => ctx(org, u, TODAS, "eeeeeeee-0000-4000-8000-000000000001");
   const forn = await m.nucleo.registrarContraparte(c(ORG, ALFA), { tipo: "FORNECEDOR", nome: "Fornecedor Sintético" });
   const conta = async (vencimento, valor = 12345, u = ALFA, f = forn) => m.nucleo.registrarObrigacao(c(ORG, u), { contraparteId: f.id, valorOriginalCentavos: valor, categoria: "INSUMOS", descricao: "Compra sintética", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento });
   const banco = await criarBancoMova();
-  const cfg = validarConfiguracao(CONFIG);
+  criados.push(banco);
+  const cfg = validarConfiguracao(config);
   await instalarConfiguracao(banco.pool, cfg);
   const cliente = clienteSimulado(responder);
   const chamadas = [];
   const nucleo = Object.fromEntries(Object.entries(m.nucleo).map(([nome, op]) => [nome, async (cx, ...a) => { chamadas.push({ nome, organizacaoId: cx?.organizacaoId, unidadeId: cx?.unidadeId, permissoes: cx?.permissoes }); return op(cx, ...a); }]));
   const ref = {};
   const extrator = criarExtratorAnthropic({ cliente, obterEvidencia: (r) => ref.mova.evidencias.obter(r), relogio: () => AGORA });
-  ref.mova = criarMova({ configuracao: CONFIG, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos });
+  ref.mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos, ...(typeof extras === "function" ? extras({ nucleo, m, c }) : extras) });
   const mova = ref.mova;
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;

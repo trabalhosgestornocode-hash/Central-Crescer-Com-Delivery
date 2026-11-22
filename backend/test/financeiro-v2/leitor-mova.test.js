@@ -118,6 +118,21 @@ test("16A leitor do MOVA: TODAS as leituras das ferramentas do MOVA funcionam s�
   assert.deepEqual(falhas, []);
 });
 
+test("Agente 2 leitor do MOVA: prévia da baixa pelo extrato e fechamento do entregador são só leitura (inexistente = não encontrado, nunca permissão/escrita)", pular, async () => {
+  const { nucleoMova } = await cenario();
+  const c = mova(A);
+  const chamadas = {
+    previaDoVinculoDoExtrato: { obrigacaoId: "99999999-0000-4000-8000-000000000001" },
+    consultarEntregador: { entregador: "entregador-sintetico-inexistente" },
+    detalharFechamentoDoEntregador: { inicio: "2026-09-07", entregador: "entregador-sintetico-inexistente" },
+  };
+  const falhas = [];
+  for (const [op, entrada] of Object.entries(chamadas)) {
+    try { await nucleoMova[op](c, entrada); } catch (e) { if (e.codigo !== "FV2_NAO_ENCONTRADO") falhas.push(`${op}: ${e.codigo ?? e.code ?? ""} ${e.message}`); }
+  }
+  assert.deepEqual(falhas, []);
+});
+
 test("16B leitor do MOVA: sem sessão não vê nada; com sessão de A vê só A (SQL direto, sem o núcleo)", pular, async () => {
   const { poolLeitor } = await cenario();
   const cl = await poolLeitor.connect();
