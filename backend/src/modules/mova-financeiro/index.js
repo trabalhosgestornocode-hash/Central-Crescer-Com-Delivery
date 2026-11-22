@@ -18,6 +18,8 @@ export { CONTRATO_MOVA_VERSAO, normalizarGatewayMova } from "./adaptadores/gatew
 export { normalizarBaileys } from "./adaptadores/baileys.js";
 export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES, ehConversaPrivada } from "./dominio/configuracao.js";
 export { RESULTADO_UNIDADE, resolverUnidade } from "./dominio/unidade.js";
+export { ACESSO, CAPACIDADES, CONSULTAS_SEM_VALORES, JANELA_CONTINUIDADE_MS, PERFIL, chamaPeloNome, participanteAutorizado } from "./dominio/participantes.js";
+export { interpretarComando } from "./aplicacao/comandos.js";
 export { fontesOficiais, receitaPodeVirDe } from "./dominio/fontesDeReceita.js";
 export { mascararDadosSensiveis, pedidoRestrito } from "./dominio/privacidade.js";
 export { CONSULTAS, FERRAMENTAS, INTENCAO, TIPO_DOCUMENTO, criarExtratorSimulado, montarEntradaDoModelo, sinaisDeInjecao, validarSaidaDaIa } from "./ia/contratos.js";
@@ -47,13 +49,13 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false }) {
   const cfg = validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
-  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas });
+  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;

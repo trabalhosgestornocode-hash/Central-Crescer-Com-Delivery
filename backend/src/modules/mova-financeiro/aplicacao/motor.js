@@ -21,6 +21,8 @@ import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjeca
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, algumaUnidadePermite, consultaPodeSairNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar } from "../dominio/participantes.js";
+import { interpretarComando } from "./comandos.js";
 
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
@@ -55,21 +57,30 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
 
-  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {} }) {
+  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {}, privado = null, consulta = null }) {
+    if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
     await a.historico.registrar({
       organizacaoId: escopo?.organizacaoId ?? null, unidadeId: escopo?.unidadeId ?? null, eventoId: evento.eventoId, mensagemId: evento.mensagemId,
       participanteId: evento.participanteId, provedor: evento.provedor, tipoMensagem: evento.tipo, decisao, motivo, propostaId, sinaisDeInjecao: injecao,
       documentoSha256: evento.midia?.sha256 ?? null, ...extra,
     });
     registrar({ tipo: "MOVA_DECISAO", decisao, motivo, grupo: mascarar(evento.grupoId) });
-    if (resposta) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
+    if (resposta && privado) {
+      // Agente 2 — confidencialidade: o valor vai SÓ para a conversa privada do participante; no grupo fica o aviso (sem valores).
+      if (privado.destino) await a.saida.enfileirar({ grupoId: privado.destino, respostaA: null, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
+      await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: privado.destino ? RESPOSTA.respondidoNoPrivado() : RESPOSTA.semConversaPrivada(), simulada: true });
+    } else if (resposta) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
+    // Continuidade: depois de responder, escuta a próxima mensagem DESTE participante nesta conversa (e lembra unidade/consulta).
+    if (resposta && evento.participanteId && typeof a.conversas?.registrar === "function") {
+      await a.conversas.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, unidadeId: escopo?.unidadeId ?? null, consulta, validadeMs: JANELA_CONTINUIDADE_MS });
+    }
     return { decisao, motivo, propostaId, resposta };
   }
 
@@ -113,6 +124,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 2. Mensagens do próprio agente (fromMe, ou eco de uma resposta registrada): ignora, sem histórico — evita laço.
     if (evento.fromMe || await a.saida.ehRespostaPropria(evento.mensagemId)) return { decisao: DECISAO.IGNORADO, motivo: "MENSAGEM_PROPRIA" };
     if (!evento.participanteId) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "SEM_PARTICIPANTE" });
+    // Agente 2 — grupo por LISTA: só participante autorizado (segunda barreira; o receptor já descarta antes de guardar).
+    // Sem resposta: quem não está na lista não recebe nada do MOVA.
+    const participante = participanteAutorizado(grupo, evento);
+    if (!participante) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "PARTICIPANTE_NAO_AUTORIZADO" });
+    const daPessoa = participante.aberto ? grupo : { ...grupo, unidades: participante.unidades }; // unidades que ESTA pessoa pode tratar
+    const conversa = typeof a.conversas?.obter === "function" ? await a.conversas.obter({ grupoId: evento.grupoId, participanteId: evento.participanteId }) : null;
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -136,7 +153,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
       // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
-      if (!evento.respostaA && evento.tipo === "TEXTO" && typeof a.mensagens.tomarPendenteRecente === "function" && ehEsclarecimentoDeUnidade(evento.texto, grupo)) {
+      if (!evento.respostaA && evento.tipo === "TEXTO" && typeof a.mensagens.tomarPendenteRecente === "function" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa)) {
         const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
@@ -160,12 +177,22 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
     // 16A (piloto): documento/áudio não é lido (nada vai à IA, nada é criado) — o piloto só responde consultas.
     if (somenteConsultas && evento.midia) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
+    // Agente 2: perfil sem envio de documentos (ex.: só consultas) — o documento nem vai à IA.
+    if (evento.midia && !algumaUnidadePermite(participante, (c) => c.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", resposta: RESPOSTA.perfilSemDocumentos(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.
     let saida = esclarecimento?.saida ?? null;
+    let interpretacao = "IA";
+    // Agente 2 — comando simples (sem IA, sem custo): "MOVA, contas a pagar da semana". Só período ("e a semana que vem?") =
+    // continuação da consulta anterior DESTA pessoa nesta conversa; sem consulta anterior, segue para a IA.
+    if (!saida && comandosDeterministicos && evento.tipo === "TEXTO" && !evento.midia) {
+      const cmd = interpretarComando(evento.texto, hoje());
+      if (cmd && !cmd.soPeriodo) { saida = cmd.saida; interpretacao = "COMANDO"; }
+      else if (cmd?.soPeriodo && conversa?.consulta) { saida = Object.freeze({ ...cmd.saida, consulta: conversa.consulta }); interpretacao = "CONTINUIDADE"; }
+    }
     if (!saida) {
-      const lida = await lerDocumento(evento, grupo);
+      const lida = await lerDocumento(evento, daPessoa);
       // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
       // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
@@ -181,7 +208,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
     // 10. Consultas do GRUPO (não dependem de uma unidade).
     const consulta = (saida.intencao === "CONSULTAR" && saida.consulta) || null;
-    if (consulta && (CONSULTAS_DO_GRUPO.includes(consulta) || saida.todasUnidades)) return responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao);
+    if (consulta && !perfilPodeConsultarAlguma(participante, consulta)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "PERFIL_SEM_CONSULTA", resposta: RESPOSTA.perfilSemConsulta(), injecao });
+    if (consulta && (CONSULTAS_DO_GRUPO.includes(consulta) || saida.todasUnidades)) return responderConsultaDoGrupo(evento, daPessoa, consulta, saida, injecao, { grupo, participante, interpretacao });
 
     // 10b. Execução 13B (achado com IA real + WhatsApp real): texto puro sem pedido financeiro (saudação, conversa) não é
     // lançamento — antes caía na pergunta "Esse lançamento pertence à…?". Sem documento, sem valor e sem esclarecimento pendente.
@@ -196,9 +224,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
     // Áudio: a TRANSCRIÇÃO conta como texto da mensagem (a unidade pode ter sido dita no áudio).
     const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto, saida.transcricao]).filter(Boolean);
-    const u = resolverUnidade({ cfg, grupo, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida });
+    let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida });
+    // Agente 2 — CONSULTA (só leitura) sem unidade no texto: a unidade da conversa em andamento DESTA pessoa (janela curta).
+    // Documento/lançamento continua exigindo evidência própria (nunca pelo histórico do participante).
+    if (consulta && u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA && conversa?.unidadeId && daPessoa.unidades.includes(conversa.unidadeId)) {
+      const daConversa = cfg.unidades.find((x) => x.unidadeId === conversa.unidadeId);
+      if (daConversa) u = { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: daConversa, evidencia: "CONVERSA_EM_ANDAMENTO" };
+    }
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
-      const nomes = cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId)).map((x) => x.nome);
+      const nomes = cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId)).map((x) => x.nome);
       if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
@@ -208,9 +242,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     const unidade = u.unidade;
     const escopo = escopoDe(unidade);
-    const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento };
+    const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento, grupo, participante, interpretacao };
 
-    if (consulta) return responderConsulta(ctx, consulta);
+    if (consulta) {
+      if (!perfilPodeConsultar(perfilNa(participante, unidade.unidadeId), consulta)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "PERFIL_SEM_CONSULTA", escopo, resposta: RESPOSTA.perfilSemConsulta(), injecao });
+      return responderConsulta(ctx, consulta);
+    }
+    // Agente 2: lançamento/documento exige perfil com documentos NA unidade identificada.
+    if (!(CAPACIDADES[perfilNa(participante, unidade.unidadeId)]?.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", escopo, resposta: RESPOSTA.perfilSemDocumentos(), injecao });
 
     // 12. Pedido de correção/classificação: vira SOLICITAÇÃO para o administrador (sem comando financeiro).
     if (INTENCOES_DE_REVISAO.includes(saida.intencao)) {
@@ -386,13 +425,24 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   }
 
   /** Consulta de UMA unidade, pela ferramenta do catálogo. Sem dados = diz que não há (nunca estima). */
-  async function responderConsulta({ evento, escopo, unidade, saida, injecao }, consulta) {
+  /** Agente 2: a resposta desta consulta sai no grupo ou no privado do participante? (conversa privada = sai nela mesma) */
+  function roteamento(grupo, participante, evento, consulta) {
+    if (!grupo || !evento.grupoId.endsWith("@g.us") || (grupo.acesso ?? ACESSO.ABERTO) !== ACESSO.LISTA || consultaPodeSairNoGrupo(grupo, consulta)) return null;
+    const jid = destinoPrivado(participante, evento.participanteId);
+    // Só endereça uma conversa privada que a configuração conhece (derivada da lista): nunca um JID qualquer.
+    return { destino: jid && cfg.gruposAutorizados.some((g) => g.derivada && g.grupoId === jid) ? jid : null };
+  }
+  const perfilPodeConsultarAlguma = (participante, consulta) => participante.aberto || participante.unidades.some((u) => perfilPodeConsultar(perfilNa(participante, u), consulta));
+
+  async function responderConsulta({ evento, escopo, unidade, saida, injecao, grupo = null, participante = null, interpretacao = "IA" }, consulta) {
+    const privado = roteamento(grupo, participante, evento, consulta);
+    const marca = { interpretacao };
     const ferramenta = ferramentas[consulta];
     if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, escopo, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
     const c = contextoDaConsulta(saida);
     const r = await ferramenta(escopo, c);
     if (r.dadosInsuficientes) {
-      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo } });
+      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta });
     }
     // 16A: rastreabilidade — quando o Financeiro foi lido (os números podem mudar com novas importações).
     const lidoEm = relogio().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -401,11 +451,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // qualquer dúvida, devolve o texto determinístico.
     const padrao = RESPOSTA.consulta(linhas);
     const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${c.periodo.rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {} });
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: { ...marca, ...(redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {}) }, privado, consulta });
   }
 
   /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */
-  async function responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao) {
+  async function responderConsultaDoGrupo(evento, grupo, consulta, saida, injecao, { grupo: original = null, participante = null, interpretacao = "IA" } = {}) {
+    const privado = roteamento(original, participante, evento, consulta);
     const unidades = cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId));
     const ferramenta = ferramentas[consulta];
     if (!ferramenta) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONSULTA_SEM_FERRAMENTA:${consulta}`, resposta: RESPOSTA.faltaInformacao(["o que você quer consultar"]), injecao });
@@ -418,7 +469,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       valores.push(r.dadosInsuficientes ? null : r.valorCentavos ?? null);
     }
     if (consulta === "FATURAMENTO") linhas.push(valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao });
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, extra: { interpretacao } });
   }
 
   return Object.freeze({ processar });

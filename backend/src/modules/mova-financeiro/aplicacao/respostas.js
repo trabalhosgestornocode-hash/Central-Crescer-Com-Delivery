@@ -46,6 +46,11 @@ export const RESPOSTA = Object.freeze({
   financeiroIndisponivel: () => "O Financeiro não respondeu agora. Tente novamente mais tarde; nada foi registrado.",
   bancoIndisponivel: () => "Estou com instabilidade para registrar agora. Reenvie a mensagem em alguns minutos; nada foi registrado.",
   consulta: (linhas) => linhas.join("\n"),
+  // Agente 2 — grupos reais (confidencialidade e perfil).
+  respondidoNoPrivado: () => "Te respondi no privado (essa consulta tem valores e não aparece no grupo).",
+  semConversaPrivada: () => "Essa consulta tem valores e não aparece no grupo. Peça ao administrador para cadastrar seu número para respostas no privado.",
+  perfilSemDocumentos: () => "Seu acesso ao MOVA é só de consultas: documentos e lançamentos são enviados por quem cuida do financeiro da unidade. Nada foi registrado.",
+  perfilSemConsulta: () => "Seu acesso ao MOVA não inclui consultas com valores. Fale com o administrador financeiro. Nada foi consultado.",
 });
 
 export { reais, dataBr };

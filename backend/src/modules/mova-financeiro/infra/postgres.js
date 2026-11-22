@@ -169,6 +169,24 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
     }),
+    /**
+     * Agente 2 — CONTINUIDADE por participante e conversa: depois de uma resposta do MOVA, a próxima mensagem da MESMA pessoa na
+     * MESMA conversa é escutada sem exigir o nome, até `ate` (relógio do banco). Guarda só a unidade e a consulta (nunca texto).
+     */
+    conversas: Object.freeze({
+      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, validadeMs }) {
+        await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5)
+                 on conflict (grupo_jid, participante_jid) do update set ate = excluded.ate, unidade_id = coalesce(excluded.unidade_id, mova.conversa_ativa.unidade_id),
+                   consulta = coalesce(excluded.consulta, mova.conversa_ativa.consulta), atualizado_em = now()`, [grupoId, participanteId, validadeMs, unidadeId, consulta]);
+      },
+      async obter({ grupoId, participanteId }) {
+        const r = await q("select unidade_id, consulta from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
+        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta } : null;
+      },
+      async encerrar({ grupoId, participanteId }) {
+        await q("delete from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2", [grupoId, participanteId]);
+      },
+    }),
     saida: Object.freeze({
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
         await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4)", [grupoId, respostaA, eventoId, texto]);
@@ -356,18 +374,32 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
   });
 }
 
-/** Grava a configuração (instância, grupos, unidades) — uso administrativo/teste. Grupo nasce desligado salvo `ativo: true`. */
+/**
+ * Grava a configuração (instância, grupos, unidades, participantes) — uso administrativo/teste. Grupo nasce desligado salvo
+ * `ativo: true`. Participantes: a lista ATIVA do grupo passa a ser exatamente a informada (quem saiu é REVOGADO, nunca apagado).
+ */
 export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal" } = {}) {
+  const tipoDe = (g) => (g.grupoId.endsWith("@g.us") ? "GRUPO" : g.derivada ? "PRIVADO_PARTICIPANTE" : "PRIVADO_HOMOLOGACAO");
+  const mesmo = (r, p) => JSON.stringify([[...r.ids].sort(), [...r.telefones].sort(), r.perfil, [...r.unidades].sort(), r.privado ?? null, r.nome ?? null])
+    === JSON.stringify([[...p.ids].sort(), [...p.telefones].sort(), p.perfil, [...p.unidades].sort(), p.privado ?? null, p.nome ?? null]);
   await emTransacao(pool, async (tx) => {
     await tx("insert into mova.instancia_gateway (id) values ($1) on conflict do nothing", [instanciaId]);
     for (const g of cfg.gruposAutorizados) {
       const unidades = cfg.unidades.filter((u) => g.unidades.includes(u.unidadeId));
-      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo, tipo) values ($1,$2,$3,true,$4)
-                on conflict (grupo_jid) do update set ativo = true`, [g.grupoId, unidades[0].organizacaoId, instanciaId, g.grupoId.endsWith("@g.us") ? "GRUPO" : "PRIVADO_HOMOLOGACAO"]);
+      await tx(`insert into mova.grupo_autorizado (grupo_jid, organizacao_id, instancia_id, ativo, tipo, acesso, consultas_no_grupo) values ($1,$2,$3,true,$4,$5,$6)
+                on conflict (grupo_jid) do update set ativo = true, acesso = excluded.acesso, consultas_no_grupo = excluded.consultas_no_grupo`,
+      [g.grupoId, unidades[0].organizacaoId, instanciaId, tipoDe(g), g.acesso ?? "ABERTO", g.consultasNoGrupo ?? []]);
       for (const u of unidades) {
         await tx(`insert into mova.grupo_unidade (grupo_jid, organizacao_id, unidade_id, nome, apelidos, documentos, fontes) values ($1,$2,$3,$4,$5,$6,$7)
                   on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes`,
         [g.grupoId, u.organizacaoId, u.unidadeId, u.nome, u.apelidosOriginais ?? u.apelidos, u.documentos, JSON.stringify(u.fontesOriginais ?? u.fontes)]);
+      }
+      if (g.derivada || (g.acesso ?? "ABERTO") !== "LISTA") continue; // a privada derivada vem da lista dos grupos
+      const ativos = (await tx("select id, ids, telefones, perfil, unidades, privado, nome from mova.participante_autorizado where grupo_jid = $1 and ativo for update", [g.grupoId])).rows;
+      const lista = g.participantes.map((p) => ({ ...p, unidades: p.unidades.length === g.unidades.length && g.unidades.every((u) => p.unidades.includes(u)) ? [] : p.unidades }));
+      for (const r of ativos) if (!lista.some((p) => mesmo(r, p))) await tx("update mova.participante_autorizado set ativo = false, revogado_em = now() where id = $1", [r.id]);
+      for (const p of lista) if (!ativos.some((r) => mesmo(r, p))) {
+        await tx("insert into mova.participante_autorizado (grupo_jid, ids, telefones, perfil, unidades, privado, nome) values ($1,$2,$3,$4,$5,$6,$7)", [g.grupoId, p.ids, p.telefones, p.perfil, p.unidades, p.privado, p.nome]);
       }
     }
   });
@@ -378,15 +410,21 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   const q = consultar(pool);
   // Conversas privadas só entram nos modos HOMOLOGACAO e PILOTO; fora deles são ignoradas mesmo que ativas no banco.
   // 16A: no PILOTO entram SÓ as conversas privadas — nenhum grupo, mesmo ativo.
-  const filtro = "g.ativo and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
-  const grupos = (await q(`select g.grupo_jid from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
+  // Agente 2: OPERACAO lê só GRUPOS; as conversas privadas dos participantes são DERIVADAS da lista (validarConfiguracao).
+  // A conversa privada de homologação (PRIVADO_HOMOLOGACAO) nunca entra na OPERACAO, e a derivada nunca entra fora dela.
+  const filtro = "g.ativo and g.tipo <> 'PRIVADO_PARTICIPANTE' and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
+  const grupos = (await q(`select g.grupo_jid, g.acesso, g.consultas_no_grupo from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
+  const participantes = (await q(`select p.* from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid) where p.ativo and ${filtro} order by p.criado_em`, [modo])).rows;
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
   return {
     modo, identidadeServico,
     unidades: [...porId.values()],
-    gruposAutorizados: grupos.map((g) => ({ grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id) })),
+    gruposAutorizados: grupos.map((g) => ({
+      grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id), acesso: g.acesso, consultasNoGrupo: g.consultas_no_grupo,
+      ...(g.acesso === "LISTA" ? { participantes: participantes.filter((p) => p.grupo_jid === g.grupo_jid).map((p) => ({ ids: p.ids, telefones: p.telefones, perfil: p.perfil, unidades: p.unidades.length ? p.unidades : undefined, privado: p.privado, nome: p.nome })) } : {}),
+    })),
   };
 }
 

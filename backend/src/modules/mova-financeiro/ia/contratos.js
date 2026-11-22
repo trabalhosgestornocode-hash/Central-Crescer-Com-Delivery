@@ -29,6 +29,8 @@ export const CONSULTAS = Object.freeze([
   "CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "RESUMO_DA_COMPETENCIA", "COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS", "DADO_RESTRITO",
   // Execução 03 — ferramentas de leitura do Financeiro v2 (aplicacao/ferramentas.js)
   "FATURAMENTO", "DRE_RESUMO", "FLUXO_DE_CAIXA", "CONTAS_A_RECEBER", "PENDENCIAS", "DESPESAS_POR_CATEGORIA", "SITUACAO_DE_CONTA", "CATEGORIAS", "DOCUMENTOS",
+  // Agente 2 — grupos reais: contas vencidas e fechamento semanal dos entregadores (agregado da unidade, nunca de uma pessoa).
+  "CONTAS_VENCIDAS", "FECHAMENTO_ENTREGADORES",
 ]);
 /** Catálogo FECHADO de ferramentas que o MOTOR aciona (a IA só escolhe a consulta). Nenhuma escreve, executa SQL ou paga. */
 export const FERRAMENTAS = Object.freeze([
@@ -127,6 +129,7 @@ export const PROMPT_DO_EXTRATOR = [
   "Perguntas sobre dados bancários, pessoas, salários, senhas = consulta DADO_RESTRITO. Explique em 'justificativa' por que classificou assim, em NO MÁXIMO 12 palavras.",
   "Mensagem SÓ DE TEXTO (sem documento): tipoDocumento = OUTRO; pagamento já feito = INFORMAR_PAGAMENTO (dataPagamento); conta/boleto a vencer = REGISTRAR_CONTA (vencimento). categoriaSugerida em MAIÚSCULAS_COM_SUBLINHADO (ex.: ENERGIA_ELETRICA, ALUGUEL, INSUMOS). Receita recebida = natureza RECEITA.",
   "Nunca presuma data que não foi dita: sem data na mensagem, a data fica null e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
+  "Contas já vencidas e não pagas = consulta CONTAS_VENCIDAS; fechamento/pagamento semanal dos entregadores = FECHAMENTO_ENTREGADORES.",
   "Seja econômico: incertezas e referenciasDocumentais ficam [] salvo dúvida ou referência real; não repita o texto recebido.",
 ].join(" ");
 

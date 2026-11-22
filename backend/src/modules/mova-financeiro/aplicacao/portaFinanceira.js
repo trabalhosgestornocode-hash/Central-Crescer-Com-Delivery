@@ -31,6 +31,8 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   "consultarDocumentos", "detalharContaAPagar",
   // 16A — cobertura por canal (dias com dado, pendências, até quando há registro) para o faturamento por canal.
   "consultarCalendarioDeFaturamento",
+  // Agente 2 — fechamento semanal dos entregadores próprios (painel agregado; só leitura, b.consultar no núcleo).
+  "consultarEntregadoresProprios",
 ]);
 const SITUACOES_ABERTAS = Object.freeze(["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"]);
 const MAX_PAGINAS = 20;

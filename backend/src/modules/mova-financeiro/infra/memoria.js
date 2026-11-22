@@ -18,6 +18,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const saida = [];
   const aprovacoes = [];
   const auditoria = [];
+  const conversas = new Map();
 
   return Object.freeze({
     eventos: Object.freeze({
@@ -80,6 +81,18 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         pendentes.delete(id);
         return p;
       },
+    }),
+    /** Agente 2 — continuidade (mesma regra do Postgres). */
+    conversas: Object.freeze({
+      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, validadeMs }) {
+        const k = `${grupoId}|${participanteId}`; const atual = conversas.get(k);
+        conversas.set(k, { ate: relogio().getTime() + validadeMs, unidadeId: unidadeId ?? atual?.unidadeId ?? null, consulta: consulta ?? atual?.consulta ?? null });
+      },
+      async obter({ grupoId, participanteId }) {
+        const c = conversas.get(`${grupoId}|${participanteId}`);
+        return c && c.ate > relogio().getTime() ? { unidadeId: c.unidadeId, consulta: c.consulta } : null;
+      },
+      async encerrar({ grupoId, participanteId }) { conversas.delete(`${grupoId}|${participanteId}`); },
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */

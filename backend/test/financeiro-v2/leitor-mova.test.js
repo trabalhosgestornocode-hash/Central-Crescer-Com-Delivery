@@ -108,6 +108,8 @@ test("16A leitor do MOVA: TODAS as leituras das ferramentas do MOVA funcionam s√
     consultarFluxoDeCaixa: { inicio: "2026-09-01", fim: "2026-09-30", granularidade: "MES" }, consultarPendencias: { competencia: "2026-09" },
     consultarPlanoDeContas: undefined, consultarDocumentos: { competencia: "2026-09", tamanho: 1 },
     consultarCalendarioDeFaturamento: { canal: "BALCAO", mes: "2026-09" }, consultarContasAReceber: { pagina: 1, tamanho: 100 },
+    // Agente 2: fechamento semanal dos entregadores (ferramenta FECHAMENTO_ENTREGADORES).
+    consultarEntregadoresProprios: { semana: "2026-09-07" },
   };
   const falhas = [];
   for (const [op, entrada] of Object.entries(chamadas)) {
