@@ -29,6 +29,8 @@ export const CONSULTAS = Object.freeze([
   "CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "RESUMO_DA_COMPETENCIA", "COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS", "DADO_RESTRITO",
   // Execução 03 — ferramentas de leitura do Financeiro v2 (aplicacao/ferramentas.js)
   "FATURAMENTO", "DRE_RESUMO", "FLUXO_DE_CAIXA", "CONTAS_A_RECEBER", "PENDENCIAS", "DESPESAS_POR_CATEGORIA", "SITUACAO_DE_CONTA", "CATEGORIAS", "DOCUMENTOS",
+  // Agente 2 — grupos reais: contas vencidas e fechamento semanal dos entregadores (agregado da unidade, nunca de uma pessoa).
+  "CONTAS_VENCIDAS", "FECHAMENTO_ENTREGADORES",
 ]);
 /** Catálogo FECHADO de ferramentas que o MOTOR aciona (a IA só escolhe a consulta). Nenhuma escreve, executa SQL ou paga. */
 export const FERRAMENTAS = Object.freeze([
@@ -46,8 +48,13 @@ const CHAVES = Object.freeze([
 /** Execução 03 — chaves OPCIONAIS (ausentes = valor padrão): explicabilidade e consultas. Qualquer outra chave continua proibida. */
 const OPCIONAIS = Object.freeze({
   camposAusentes: [], incertezas: [], justificativa: null, referenciasDocumentais: [], periodoInicio: null, periodoFim: null, todasUnidades: false, transcricao: null,
+  // Agente 2 — Frente B: campos de COMPROVANTE (quem pagou, banco, identificador da transação). Só leitura do documento: nunca
+  // decidem nada sozinhos; servem à duplicidade (a mesma transação em foto e em PDF) e à conferência humana/extrato.
+  pagador: null, instituicao: null, idTransacao: null,
 });
 const DATA = /^\d{4}-\d{2}-\d{2}$/;
+/** Identificador da transação (E2E do Pix, autenticação, NSU): só letras, dígitos e separadores simples. */
+const ID_TRANSACAO = /^[A-Za-z0-9][A-Za-z0-9._\/-]{3,79}$/;
 const COMPETENCIA = /^\d{4}-(0[1-9]|1[0-2])$/;
 const CATEGORIA = /^[A-Z][A-Z0-9_]{1,79}$/;
 const textoCurto = (v, max) => v === null || (typeof v === "string" && v.trim() !== "" && v.length <= max && !v.includes("\u0000"));
@@ -85,6 +92,9 @@ export function validarSaidaDaIa(s) {
   for (const k of ["periodoInicio", "periodoFim"]) if (!dataValida(o[k])) return { ok: false, erro: k };
   if (o.periodoInicio && o.periodoFim && o.periodoFim < o.periodoInicio) return { ok: false, erro: "periodo" };
   if (typeof o.todasUnidades !== "boolean") return { ok: false, erro: "todasUnidades" };
+  if (!textoCurto(o.pagador, 120)) return { ok: false, erro: "pagador" };
+  if (!textoCurto(o.instituicao, 60)) return { ok: false, erro: "instituicao" };
+  if (o.idTransacao !== null && (typeof o.idTransacao !== "string" || !ID_TRANSACAO.test(o.idTransacao))) return { ok: false, erro: "idTransacao" };
   return { ok: true, saida: Object.freeze({ ...s, ...o }) };
 }
 
@@ -111,6 +121,7 @@ export function esquemaDaSaida() {
     camposAusentes: { type: "array", items: e(CAMPOS_AUSENTES) }, incertezas: { type: "array", items: { type: "string" } },
     justificativa: t(500), referenciasDocumentais: { type: "array", items: { type: "string" } }, periodoInicio: d, periodoFim: d,
     todasUnidades: { type: "boolean" }, transcricao: t(4096),
+    pagador: t(120), instituicao: t(60), idTransacao: nulo({ type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{3,79}$" }),
   };
   return { type: "object", properties: props, required: Object.keys(props), additionalProperties: false };
 }
@@ -127,6 +138,8 @@ export const PROMPT_DO_EXTRATOR = [
   "Perguntas sobre dados bancários, pessoas, salários, senhas = consulta DADO_RESTRITO. Explique em 'justificativa' por que classificou assim, em NO MÁXIMO 12 palavras.",
   "Mensagem SÓ DE TEXTO (sem documento): tipoDocumento = OUTRO; pagamento já feito = INFORMAR_PAGAMENTO (dataPagamento); conta/boleto a vencer = REGISTRAR_CONTA (vencimento). categoriaSugerida em MAIÚSCULAS_COM_SUBLINHADO (ex.: ENERGIA_ELETRICA, ALUGUEL, INSUMOS). Receita recebida = natureza RECEITA.",
   "Nunca presuma data que não foi dita: sem data na mensagem, a data fica null e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
+  "Comprovante (Pix, TED, boleto pago): pagador = quem pagou; favorecido = quem recebeu; instituicao = banco; idTransacao = ID/E2E/autenticação exatamente como impresso (sem espaços).",
+  "Contas já vencidas e não pagas = consulta CONTAS_VENCIDAS; fechamento/pagamento semanal dos entregadores = FECHAMENTO_ENTREGADORES.",
   "Seja econômico: incertezas e referenciasDocumentais ficam [] salvo dúvida ou referência real; não repita o texto recebido.",
 ].join(" ");
 

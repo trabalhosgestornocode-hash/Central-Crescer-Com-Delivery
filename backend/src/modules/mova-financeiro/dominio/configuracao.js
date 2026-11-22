@@ -11,10 +11,16 @@
 //     fica "A_CONFIRMAR" e nada de receita é proposto para ela.
 //   - Modo: só "SIMULACAO" nesta execução (nenhuma escrita real, nenhuma resposta enviada ao WhatsApp).
 
-/** SIMULACAO (padrão) ou HOMOLOGACAO (Execução 04B: admite UMA conversa privada de teste, além dos grupos). */
-export const MODOS = Object.freeze(["SIMULACAO", "HOMOLOGACAO", "PILOTO"]);
+/**
+ * SIMULACAO (padrão) ou HOMOLOGACAO (Execução 04B: admite UMA conversa privada de teste, além dos grupos), PILOTO (16A) e
+ * OPERACAO (Agente 2 — grupos reais): todo grupo com acesso por LISTA de participantes; conversas privadas só as DERIVADAS
+ * dessa lista (a pessoa autorizada no grupo, com as unidades dela); nunca uma conversa privada avulsa.
+ */
+export const MODOS = Object.freeze(["SIMULACAO", "HOMOLOGACAO", "PILOTO", "OPERACAO"]);
 /** 16A: conversa PRIVADA (1 pessoa) só na homologação e no piloto de consultas; nos demais modos, só grupos. */
 export const aceitaConversaPrivada = (modo) => modo === "HOMOLOGACAO" || modo === "PILOTO";
+/** Conversa privada pode ser ENDEREÇADA (resposta) neste modo? OPERACAO: só as derivadas dos participantes. */
+export const aceitaConversaPrivadaDerivada = (modo) => modo === "OPERACAO";
 const JID_PRIVADO = /^[1-9][0-9]{7,14}@s\.whatsapp\.net$/;
 export const ehConversaPrivada = (jid) => JID_PRIVADO.test(String(jid ?? ""));
 export const SITUACAO_FONTES = Object.freeze({ CONFIRMADA: "CONFIRMADA", A_CONFIRMAR: "A_CONFIRMAR" });
@@ -22,6 +28,9 @@ const SISTEMAS_DE_LOJA = ["SAIPOS", "SWF"];
 const PLATAFORMAS = ["IFOOD", "NOVENTA_E_NOVE_FOOD"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
+import { ACESSO, POLITICA_RESPOSTA, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
+import { CONSULTAS } from "../ia/contratos.js";
+import { conversasDosEntregadores, validarEntregadores } from "./entregadores.js";
 
 export class ErroDeConfiguracao extends Error {
   constructor(campo) { super(`Configuração do MOVA inválida: ${campo}`); this.name = "ErroDeConfiguracao"; this.campo = campo; }
@@ -73,12 +82,38 @@ export function validarConfiguracao(c) {
   }
   const ids = new Set(unidades.map((u) => u.unidadeId));
   exigir(Array.isArray(c.gruposAutorizados), "gruposAutorizados");
-  const grupos = c.gruposAutorizados.map((g, i) => {
-    exigir(GRUPO.test(g?.grupoId ?? "") || (aceitaConversaPrivada(c.modo) && JID_PRIVADO.test(g?.grupoId ?? "")), `gruposAutorizados[${i}].grupoId`);
-    exigir(Array.isArray(g.unidades) && g.unidades.length > 0 && g.unidades.every((x) => ids.has(String(x).toLowerCase())), `gruposAutorizados[${i}].unidades`);
-    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(g.unidades.map((x) => String(x).toLowerCase())) });
+  const operacao = c.modo === "OPERACAO";
+  const grupos = c.gruposAutorizados.filter((g) => !g?.derivada).map((g, i) => {
+    const campo = `gruposAutorizados[${i}]`;
+    exigir(GRUPO.test(g?.grupoId ?? "") || (aceitaConversaPrivada(c.modo) && JID_PRIVADO.test(g?.grupoId ?? "")), `${campo}.grupoId`);
+    exigir(Array.isArray(g.unidades) && g.unidades.length > 0 && g.unidades.every((x) => ids.has(String(x).toLowerCase())), `${campo}.unidades`);
+    const doGrupo = g.unidades.map((x) => String(x).toLowerCase());
+    // Agente 2: acesso por LISTA (obrigatório na OPERACAO); ABERTO = Nível 1 da Execução 02 (só fora da operação real).
+    const acesso = g.acesso ?? (operacao ? ACESSO.LISTA : ACESSO.ABERTO);
+    exigir(Object.values(ACESSO).includes(acesso) && (!operacao || acesso === ACESSO.LISTA), `${campo}.acesso`);
+    const participantes = acesso === ACESSO.LISTA ? validarParticipantes(g.participantes ?? [], { unidadesDoGrupo: doGrupo, campo, exigir }) : Object.freeze([]);
+    exigir(acesso !== ACESSO.LISTA || participantes.length > 0, `${campo}.participantes`);
+    const consultasNoGrupo = Array.isArray(g.consultasNoGrupo) ? g.consultasNoGrupo : [];
+    exigir(consultasNoGrupo.every((x) => CONSULTAS.includes(x) && x !== "DADO_RESTRITO"), `${campo}.consultasNoGrupo`);
+    const politicaResposta = g.politicaResposta ?? POLITICA_RESPOSTA.PRIVADO_RESTRITO;
+    exigir(Object.values(POLITICA_RESPOSTA).includes(politicaResposta) && (politicaResposta === POLITICA_RESPOSTA.PRIVADO_RESTRITO || acesso === ACESSO.LISTA), `${campo}.politicaResposta`);
+    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
-  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades), gruposAutorizados: Object.freeze(grupos) });
+  exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
+  // OPERACAO: as conversas privadas nascem da lista de participantes (nunca cadastradas à parte).
+  // Uma conversa privada nunca mistura ORGANIZAÇÕES: a pessoa em grupos de duas empresas fica sem conversa privada derivada
+  // (a resposta com valores não sai no grupo e ela é orientada a falar com o administrador). Isolamento antes de conveniência.
+  const orgDe = new Map(unidades.map((u) => [u.unidadeId, u.organizacaoId]));
+  const derivadas = operacao ? conversasPrivadasDerivadas(grupos).filter((g) => new Set(g.unidades.map((u) => orgDe.get(u))).size === 1 && !grupos.some((x) => x.grupoId === g.grupoId)) : [];
+  // Agente 2 — Frente D: entregadores (só na OPERACAO), cada um numa unidade do MOVA e na organização dela.
+  let entregadores = [];
+  try { entregadores = operacao ? validarEntregadores(c.entregadores ?? []) : []; } catch (e) { exigir(false, `entregadores.${e.message}`); }
+  for (const [i, e] of entregadores.entries()) exigir(orgDe.has(e.unidadeId) && (!e.organizacaoId || orgDe.get(e.unidadeId) === e.organizacaoId), `entregadores[${i}].unidade`);
+  entregadores = Object.freeze(entregadores.map((e) => Object.freeze({ ...e, organizacaoId: orgDe.get(e.unidadeId) })));
+  const ocupados = new Set([...grupos, ...derivadas].map((g) => g.grupoId));
+  const dosEntregadores = conversasDosEntregadores(entregadores, { ocupados });
+  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
+    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores });
 }
 
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;
@@ -96,7 +131,7 @@ export const mesmoCelularBr = (a, b) => typeof a === "string" && typeof b === "s
  */
 export function conversaAutorizada(cfg, jid) {
   const exata = grupoAutorizado(cfg, jid);
-  if (exata || !aceitaConversaPrivada(cfg.modo) || !ehConversaPrivada(jid)) return exata;
+  if (exata || !(aceitaConversaPrivada(cfg.modo) || aceitaConversaPrivadaDerivada(cfg.modo)) || !ehConversaPrivada(jid)) return exata;
   const vs = variantesBr(jid);
   const achadas = cfg.gruposAutorizados.filter((g) => vs.includes(g.grupoId));
   return achadas.length === 1 ? achadas[0] : null; // ambíguo (as duas formas cadastradas) ⇒ nenhuma

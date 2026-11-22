@@ -139,6 +139,34 @@ export function criarFerramentas({ porta, armazenamento }) {
       const lista = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.vencimento >= de && t.vencimento <= ate);
       return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
     },
+    /** Agente 2: contas VENCIDAS e não pagas (até hoje), com a mais antiga. */
+    async CONTAS_VENCIDAS(escopo, { hoje }) {
+      const todas = await contasTodas(escopo);
+      if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      const vencidas = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.saldoCentavos > 0 && t.vencimento < hoje).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
+      if (vencidas.length === 0) return ok([`nenhuma conta a pagar vencida até ${dataBr(hoje)}`], { valorCentavos: 0 });
+      const total = vencidas.reduce((s, t) => s + t.saldoCentavos, 0);
+      return ok([`vencidas e não pagas: ${vencidas.length} contas, ${reais(total)} (a mais antiga venceu em ${dataBr(vencidas[0].vencimento)})`], { valorCentavos: total });
+    },
+    /**
+     * Agente 2: fechamento semanal dos entregadores próprios — AGREGADO da unidade (nunca o valor de uma pessoa no grupo).
+     * Semana anterior por padrão; período informado ⇒ a semana que contém o início. Fonte e situação sempre explícitas.
+     */
+    async FECHAMENTO_ENTREGADORES(escopo, { periodo, hoje }) {
+      const referencia = periodo.explicito ? periodo.inicio : somarDias(hoje, -7);
+      let r;
+      try { r = await porta.ler("consultarEntregadoresProprios", escopo, { semana: referencia }); }
+      catch (e) { if (porta.ehErroDeRegra?.(e)) return insuficiente("ENTREGADORES_INDISPONIVEL"); throw e; }
+      const sem = r?.semana; const ind = r?.indicadores;
+      if (!sem || !ind || (ind.entregadoresAtivos === 0 && !(r.fechamentos ?? []).length)) return insuficiente("SEM_FECHAMENTO_DE_ENTREGADORES");
+      const situacao = { CONSOLIDADA: "fechada", PENDENTE: "com pendências para fechar", AGUARDANDO_FECHAMENTO: "aguardando fechamento", EM_ANDAMENTO: "em andamento (valores provisórios)" }[sem.situacao] ?? String(sem.situacao).toLowerCase();
+      const l = [`semana ${dataBr(sem.inicio)} a ${dataBr(sem.fim)} (${situacao}): ${ind.entregadoresAtivos} entregadores, ${ind.entregas} entregas, ${reais(ind.acumuladoSemanaCentavos)}`];
+      if (sem.pendencias?.length) l.push(`${sem.pendencias.length} pendência(s) de apuração na semana`);
+      l.push(`em aberto (todas as semanas): aguardando nota fiscal ${reais(ind.aguardandoNotaCentavos)}; liberado para pagamento ${reais(ind.liberadoCentavos)}; vencido ${reais(ind.vencidoCentavos)}`);
+      if (ind.proximaQuarta?.quantidade) l.push(`a pagar na quarta ${dataBr(ind.proximaQuarta.data)}: ${ind.proximaQuarta.quantidade} conta(s), ${reais(ind.proximaQuarta.valorCentavos)}`);
+      if (sem.fonteDisponivel === false) l.push("fonte das entregas indisponível agora: valores da semana podem estar incompletos");
+      return ok(l, { valorCentavos: ind.acumuladoSemanaCentavos });
+    },
     async PENDENCIAS(escopo, { periodo }) {
       const comp = periodo.competencia ?? mes(periodo.fim);
       const p = await porta.ler("consultarPendencias", escopo, { competencia: comp });

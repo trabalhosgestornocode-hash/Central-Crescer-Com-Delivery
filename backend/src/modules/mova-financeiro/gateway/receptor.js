@@ -13,6 +13,7 @@ import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIMES_ACEITOS, validarEvento }
 import { conversaAutorizada, grupoAutorizado, mascarar } from "../dominio/configuracao.js";
 import { ErroTransitorio } from "./fila.js";
 import { RESPOSTA } from "../aplicacao/respostas.js";
+import { ACESSO, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
 
 /** GATEWAY = payload do Gateway próprio (produção futura); WAMESSAGE = item cru do Baileys (fixtures/simulação). */
 const ADAPTADORES = Object.freeze({ GATEWAY: normalizarGatewayMova, WAMESSAGE: normalizarBaileys });
@@ -47,6 +48,15 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
         return { status: "IGNORADO", motivo: "GRUPO_NAO_AUTORIZADO" };
       }
       if (bruto.fromMe) return { status: "IGNORADO", motivo: "MENSAGEM_PROPRIA" };
+      // Agente 2 — grupo por LISTA: quem não está na lista e mensagem que não chama o MOVA são descartados ANTES de guardar
+      // qualquer coisa (texto e documento de terceiro não ficam no banco); só um código no log operacional.
+      const grupo = grupoAutorizado(cfg, bruto.grupoId);
+      if ((grupo.acesso ?? ACESSO.ABERTO) === ACESSO.LISTA) {
+        if (!participanteAutorizado(grupo, bruto)) { registrar({ tipo: "MOVA_PARTICIPANTE_NAO_AUTORIZADO", grupo: mascarar(bruto.grupoId) }); return { status: "IGNORADO", motivo: "PARTICIPANTE_NAO_AUTORIZADO" }; }
+        const a = await foiAcionado({ grupo, bruto, armazenamento });
+        if (!a.acionado) return { status: "IGNORADO", motivo: "NAO_ACIONADO" };
+        bruto.acionadoPor = a.por;
+      }
       const r = await fila.enfileirar(bruto.eventoId, bruto);
       return r.duplicado ? { status: "DUPLICADO", motivo: "EVENTO_JA_RECEBIDO" } : { status: "ENFILEIRADO" };
     } catch (e) {
