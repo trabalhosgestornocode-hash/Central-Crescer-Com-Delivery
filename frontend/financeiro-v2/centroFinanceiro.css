@@ -59,3 +59,9 @@ code { font-size: var(--t-micro); }
 /* Execução 05 — faixa de homologação (inconfundível com produção) */
 .cf-simulacao.cf-homologacao { background: var(--erro-bg); color: var(--erro); border-bottom: 2px solid var(--erro); font-size: var(--t-base); }
 .cf-categoria { font: inherit; font-size: var(--t-micro); width: 14em; max-width: 100%; padding: 2px var(--e1); margin-right: var(--e1); border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); }
+/* Agente 2 — Conferência financeira e documentos recebidos pelo WhatsApp */
+.cf-filtros { display: flex; flex-wrap: wrap; gap: var(--e1); margin: var(--e3) 0; }
+.cf-documento { margin-top: var(--e3); }
+.cf-documento h3 { margin: 0 0 var(--e2); font-size: var(--t-base); }
+.cf-documento .botao { margin-right: var(--e1); }
+.cf-relacionadas select { max-width: 100%; }

@@ -24,11 +24,13 @@ import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
 import { interpretarComando } from "./comandos.js";
+import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento } from "./recebimentoDocumental.js";
 
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
   CONSULTA: "CONSULTA", ORIENTACAO: "ORIENTACAO", PROPOSTA: "PROPOSTA", FALHA_LEITURA: "FALHA_LEITURA",
   EXECUTADO: "EXECUTADO", // Agente 2 — Frente C: operação aplicada pelo serviço oficial conforme a política de autonomia
+  DOCUMENTO_RECEBIDO: "DOCUMENTO_RECEBIDO", // Agente 2 — documento guardado para conferência humana, sem leitura e sem proposta
 });
 export const TIPO_PROPOSTA = Object.freeze({ BAIXA_DE_OBRIGACAO: "BAIXA_DE_OBRIGACAO", DESPESA_PAGA: "DESPESA_PAGA", NOVA_OBRIGACAO: "NOVA_OBRIGACAO", SOLICITACAO_DE_REVISAO: "SOLICITACAO_DE_REVISAO" });
 const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
@@ -59,7 +61,7 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null, recebimentoDocumental = false, obterEvidencia = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -103,6 +105,46 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (!v.ok) return { ok: false, motivo: `IA_SAIDA_INVALIDA:${v.erro}` };
     if (!v.saida.legivel) return { ok: false, motivo: "DOCUMENTO_ILEGIVEL" };
     return v;
+  }
+
+  /**
+   * Agente 2 — documento SEM leitura: formato aceito, perfil que envia documentos NA unidade, unidade determinística (texto/legenda,
+   * esclarecimento ou grupo de uma unidade), arquivo GUARDADO conferido (sha256, assinatura, PDF sem conteúdo ativo) e registro
+   * efetivo antes de confirmar. A confirmação não tem valor nem conteúdo do arquivo (pode sair no grupo).
+   */
+  async function receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao }) {
+    const m = evento.midia;
+    if (!MIMES_SEM_LEITURA.includes(m.mime)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "FORMATO_NAO_ACEITO_SEM_LEITURA", resposta: RESPOSTA_DOCUMENTO.formatoNaoAceito(), injecao });
+    if (!algumaUnidadePermite(participante, (c) => c.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", resposta: RESPOSTA.perfilSemDocumentos(), injecao });
+    const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto]).filter(Boolean);
+    const u = resolverUnidade({ cfg, grupo: daPessoa, textos });
+    if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
+      const nomes = cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId)).map((x) => x.nome);
+      if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
+        await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } } });
+        return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
+      }
+      const resposta = u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: u.resultado, resposta, injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
+    }
+    const unidade = u.unidade;
+    const escopo = escopoDe(unidade);
+    if (!(CAPACIDADES[perfilNa(participante, unidade.unidadeId)]?.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", escopo, resposta: RESPOSTA.perfilSemDocumentos(), injecao });
+    const bytes = obterEvidencia ? await obterEvidencia(m.referencia) : null;
+    const c = conferirArquivo({ bytes, sha256: m.sha256, mime: m.mime });
+    if (!c.ok) {
+      const resposta = c.motivo === "PDF_COM_CONTEUDO_ATIVO" ? RESPOSTA_DOCUMENTO.conteudoAtivo() : c.motivo === "ARQUIVO_NAO_GUARDADO" ? RESPOSTA_DOCUMENTO.falhaAoRegistrar() : RESPOSTA_DOCUMENTO.naoConfere();
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: c.motivo, escopo, resposta, injecao, extra: { semLeitura: true } });
+    }
+    await a.documentos.marcar(m.sha256, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, eventoId: evento.eventoId, propostaId: null,
+      leitura: { modo: MODO_SEM_LEITURA, mime: m.mime, tamanhoBytes: m.tamanhoBytes, nomeArquivo: m.nomeArquivo ?? null, participanteId: evento.participanteId,
+        recebidoEm: evento.recebidoEm, legenda: legendaDoDocumento(esclarecimento ? `${evento.texto ?? ""} ${esclarecimento.texto}` : evento.texto), evidenciaUnidade: u.evidencia } });
+    // Confirmação SÓ depois do registro efetivo (lido de volta): mesmo arquivo, mesma mensagem, mesma unidade.
+    const gravado = await a.documentos.visto(m.sha256);
+    if (gravado && gravado.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: gravado, resposta: RESPOSTA_DOCUMENTO.jaRecebido(), injecao });
+    if (!gravado || gravado.unidadeId !== escopo.unidadeId) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: "DOCUMENTO_NAO_REGISTRADO", escopo, resposta: RESPOSTA_DOCUMENTO.falhaAoRegistrar(), injecao });
+    await a.auditoria.registrar({ acao: "DOCUMENTO_RECEBIDO_SEM_LEITURA", atorTipo: "SISTEMA", alvo: m.sha256, dados: { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, eventoId: evento.eventoId, mime: m.mime, tamanhoBytes: m.tamanhoBytes } });
+    return concluir(evento, { decisao: DECISAO.DOCUMENTO_RECEBIDO, motivo: "AGUARDANDO_CONFERENCIA", escopo, resposta: RESPOSTA_DOCUMENTO.recebido(unidade.nome), injecao, extra: { semLeitura: true } });
   }
 
   /**
@@ -174,7 +216,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 6. Idempotência por DOCUMENTO (mesmo arquivo reenviado em outra mensagem).
     if (evento.midia) {
       const visto = await a.documentos.visto(evento.midia.sha256);
-      if (visto && visto.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: visto, propostaId: visto.propostaId ?? null, resposta: RESPOSTA.duplicado(visto.propostaId) });
+      if (visto && visto.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: visto, propostaId: visto.propostaId ?? null, resposta: recebimentoDocumental && !visto.propostaId ? RESPOSTA_DOCUMENTO.jaRecebido() : RESPOSTA.duplicado(visto.propostaId) });
     }
 
     // 7. Guardas determinísticas ANTES da IA (nada restrito vai ao modelo): dado restrito e pedido de aprovação pelo grupo.
@@ -184,6 +226,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
     // 15H (H-1): saudação/pergunta sobre o MOVA, sem número nem palavra financeira ⇒ orientação determinística, SEM IA.
     if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
+    // Agente 2 — recebimento SEM IA: o documento é conferido, guardado e fica para a revisão humana (nada vai à IA, nada é criado
+    // no Financeiro). Vem antes do "só consultas": com o recebimento ligado, documento deixa de ser recusado.
+    if (recebimentoDocumental && evento.midia) return receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao });
     // 16A (piloto): documento/áudio não é lido (nada vai à IA, nada é criado) — o piloto só responde consultas.
     if (somenteConsultas && evento.midia) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
     // Agente 2: perfil sem envio de documentos (ex.: só consultas) — o documento nem vai à IA.

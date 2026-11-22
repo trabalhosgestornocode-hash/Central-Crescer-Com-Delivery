@@ -119,7 +119,7 @@ t("01 texto financeiro simples: 'quais contas vencem amanhã?' → contas do dia
   await s.obrigacao(ALFA, { valorOriginalCentavos: 999, vencimento: "2026-10-20" });
   await s.enviar(gw({ texto: "MOVA, quais contas vencem amanhã na alfa?" }));
   assert.equal((await s.ultima()).motivo, "CONTAS_VENCENDO");
-  assert.match(await s.resposta(), /Unidade Alfa — 16\/10\/2026:\n• vencendo de 16\/10\/2026 a 16\/10\/2026: 1 contas, R\$ 123,45/);
+  assert.match(await s.resposta(), /Unidade Alfa — 16\/10\/2026:\n• vencendo em 16\/10\/2026: 1 conta, R\$ 123,45/);
   assert.match(textoDoPedido(s.cliente.pedidos[0]), /<<<DADOS[\s\S]*quais contas vencem amanhã[\s\S]*DADOS>>>/);
   assert.match(s.cliente.pedidos[0].system, /DATA DE REFERÊNCIA \(hoje\): 2026-10-15/);
 });

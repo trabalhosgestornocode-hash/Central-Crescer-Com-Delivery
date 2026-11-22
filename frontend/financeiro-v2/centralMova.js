@@ -5,17 +5,32 @@
 
 export const ABAS_CENTRAL = Object.freeze([
   { id: "central", rotulo: "Visão Geral MOVA" },
+  { id: "conferencia", rotulo: "Conferência Financeira" },
+  { id: "documentos", rotulo: "Documentos Recebidos" },
   { id: "grupos", rotulo: "Grupos e Participantes" },
   { id: "operacoes", rotulo: "Operações Financeiras" },
   { id: "entregadores", rotulo: "Entregadores" },
   { id: "automacoes", rotulo: "Automações" },
   { id: "seguranca", rotulo: "Segurança e Autonomia" },
 ]);
-const ROTAS = { central: ["visao-geral"], grupos: ["grupos"], operacoes: ["operacoes", "politicas"], entregadores: ["entregadores"], automacoes: ["automacoes"], seguranca: ["politicas"] };
+const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas"], entregadores: ["entregadores"], automacoes: ["automacoes"], seguranca: ["politicas"] };
 const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Cobrança da nota fiscal" };
 const NIVEL = { SOMENTE_PROPOR: ["Só propor", "neutro"], APLICAR_COM_CONFIRMACAO: ["Com confirmação", "alerta"], APLICAR_AUTOMATICO: ["Automático", "info"] };
 const ESTADO_OP = { EXECUTANDO: ["Executando", "info"], EXECUTADA: ["Executada", "ok"], FALHOU: ["Falhou", "erro"], REVERTIDA: ["Revertida", "neutro"] };
 const POLITICA = { PRIVADO_RESTRITO: "Privado restrito", GRUPO_FINANCEIRO: "Grupo financeiro", OPERACIONAL: "Operacional (sem valores)" };
+// Conferência financeira: rótulos fixos (o servidor manda os códigos). "Possível" é sempre aviso para conferir, nunca confirmação.
+const MOTIVOS = { POSSIVEL_DUPLICIDADE: ["Possível duplicidade", "erro"], POSSIVEL_PAGAMENTO_NO_EXTRATO: ["Possível pagamento no extrato (não confirmado)", "alerta"],
+  SAIDAS_COMPATIVEIS_AMBIGUAS: ["Várias saídas compatíveis", "alerta"], AJUSTE_MANUAL: ["Ajuste manual", "alerta"], VENCIDA: ["Vencida", "erro"],
+  FORNECEDOR_NAO_IDENTIFICADO: ["Sem fornecedor", "alerta"], PARCIAL: ["Parcial", "info"], PAGAMENTO_SEM_EXTRATO: ["Pagamento sem extrato", "info"],
+  PAGA_SEM_COMPROVANTE: ["Paga sem comprovante", "neutro"], SEM_DOCUMENTO: ["Sem documento", "neutro"] };
+const CONCILIACAO = { SEM_PAGAMENTO_REGISTRADO: "Sem pagamento registrado", POSSIVEL_PAGAMENTO_NO_EXTRATO_NAO_CONFIRMADO: "Possível pagamento no extrato (NÃO confirmado)",
+  SAIDAS_COMPATIVEIS_AMBIGUAS: "Várias saídas compatíveis", EXTRATO_INDISPONIVEL: "Extrato indisponível", PAGAMENTO_REGISTRADO_SEM_EXTRATO: "Pagamento sem vínculo com o extrato",
+  PAGAMENTO_CONCILIADO: "Pagamento vinculado ao extrato" };
+const DOCUMENTAL = { COM_DOCUMENTO: "Com documento", SEM_DOCUMENTO: "Sem documento", PAGA_SEM_COMPROVANTE: "Paga sem comprovante" };
+const ORIGEM = { MANUAL: "Lançamento manual", IMPORTACAO: "Importação", PLANILHA: "Planilha" };
+const ESTADO_DOC = { AGUARDANDO_CONFERENCIA: ["Aguardando conferência", "alerta"], REVISADO: ["Revisado", "ok"], ENCAMINHADO: ["Encaminhado ao Financeiro", "info"] };
+const TIPO_DOC = { COMPROVANTE: "Comprovante", BOLETO: "Boleto", NOTA_FISCAL: "Nota fiscal", RECIBO: "Recibo", OUTRO: "Outro" };
+const LIMITE_LINHAS = 80;
 
 /**
  * @param {{ui:object, ler:(url:string)=>Promise<{ok:boolean,status:number,dados:any}>, enviar:(url:string, corpo:object)=>Promise<object>}} deps
@@ -23,6 +38,8 @@ const POLITICA = { PRIVADO_RESTRITO: "Privado restrito", GRUPO_FINANCEIRO: "Grup
 export function criarCentral({ ui, ler, enviar }) {
   const { el, cartao, tabela, selo, reais, horaBr, dataBr, vazio, dl } = ui;
   const cache = new Map(); // aba → { carregando, dados, erro }
+  const filtro = { motivo: null, saida: null, aberta: null }; // conferência: motivo escolhido, grupo de saídas, pendência aberta
+  const relacionadas = new Map(); // sha256 → { busca, itens } (sugestões pela legenda/busca; não é vínculo)
 
   async function carregar(aba) {
     const rotas = ROTAS[aba] ?? [];
@@ -131,7 +148,84 @@ export function criarCentral({ ui, ler, enviar }) {
     ];
   }
 
-  const DESENHOS = { central: visaoGeral, grupos, operacoes, entregadores, automacoes, seguranca };
+  const filtroBotao = (texto, attrs, ativo) => el("button", { classe: `botao botao--pequeno${ativo ? " botao--primario" : ""}`, type: "button", "aria-pressed": String(Boolean(ativo)), ...attrs, texto });
+  const texto = (v) => (v === null || v === undefined || v === "" ? "—" : String(v));
+
+  function conferencia({ conferencia: v }) {
+    const i = v.indicadores;
+    const ext = v.extratoDisponivel;
+    const kpis = el("div", { classe: "cf-kpis" },
+      kpi("Contas vencidas", i.contasVencidas, `saldo vencido ${reais(i.saldoVencidoCentavos)}`),
+      kpi("Parcialmente pagas", i.contasParciais, `faltam ${reais(i.faltaParciaisCentavos)}`),
+      kpi("Documentos faltantes", i.documentosFaltantes, `${i.abertasSemDocumento} em aberto · ${i.pagasSemComprovante} pagas sem comprovante`),
+      kpi("Pagamentos aguardando conciliação", i.pagamentosAguardandoConciliacao, `${reais(i.pagamentosSemExtratoCentavos)} sem vínculo com o extrato`),
+      kpi("Possível pagamento no extrato", ext ? i.possiveisPagamentosNoExtrato : "—", ext ? `${reais(i.possiveisPagamentosCentavos)} · NÃO confirmado` : "extrato indisponível"),
+      kpi("Saídas do banco sem vínculo", ext ? i.saidasSemVinculo : "—", ext ? reais(i.saidasSemVinculoCentavos) : "extrato indisponível"),
+      kpi("Sem fornecedor identificado", i.fornecedoresNaoIdentificados, reais(i.semFornecedorCentavos)),
+      kpi("Possíveis duplicidades", i.possiveisDuplicidades, "conferir antes de qualquer ajuste"),
+      kpi("Documentos recebidos pelo MOVA", i.documentosRecebidosMova, `${i.documentosAguardandoConferencia} aguardando conferência`));
+    const contagem = {};
+    for (const p of v.pendencias) for (const m of p.motivos) contagem[m] = (contagem[m] ?? 0) + 1;
+    const lista = filtro.motivo ? v.pendencias.filter((p) => p.motivos.includes(filtro.motivo)) : v.pendencias;
+    const filtros = el("div", { classe: "cf-filtros", role: "group", "aria-label": "Filtrar pendências por motivo" },
+      filtroBotao(`Todas (${v.pendencias.length})`, { "data-acao": "central-filtro", "data-motivo": "" }, !filtro.motivo),
+      Object.entries(MOTIVOS).filter(([m]) => contagem[m]).map(([m, [r]]) => filtroBotao(`${r} (${contagem[m]})`, { "data-acao": "central-filtro", "data-motivo": m }, filtro.motivo === m)));
+    const linhas = lista.slice(0, LIMITE_LINHAS).map((p) => ({ id: p.id, celulas: [
+      texto([v.empresa, p.unidade].filter(Boolean).join(" · ")), dataBr(p.vencimento), p.fornecedor ?? el("em", { texto: "não identificado" }), texto(p.descricao),
+      reais(p.valorCentavos), reais(p.saldoCentavos), ORIGEM[p.origem] ?? texto(p.origem), DOCUMENTAL[p.documental] ?? p.documental, CONCILIACAO[p.conciliacao] ?? p.conciliacao,
+      el("span", {}, p.motivos.map((m) => selo(MOTIVOS[m] ?? [m, "neutro"]))), p.proximaAcao,
+      botao(filtro.aberta === p.id ? "Fechar" : "Detalhes", { "data-acao": "central-detalhe", "data-id": p.id, "aria-expanded": String(filtro.aberta === p.id) })] }));
+    const aberta = v.pendencias.find((p) => p.id === filtro.aberta);
+    const detalhe = aberta ? cartao(`Detalhes: ${aberta.fornecedor ?? "fornecedor não identificado"} · ${dataBr(aberta.vencimento)}`, dl([
+      ["Descrição", texto(aberta.descricao)], ["Categoria", texto(aberta.categoria)], ["Competência", texto(aberta.competencia)], ["Situação no Financeiro", aberta.situacao],
+      ["Valor original", reais(aberta.valorCentavos)], ["Pago registrado", reais(aberta.pagoCentavos)], ["Saldo", reais(aberta.saldoCentavos)],
+      ["Ajuste manual", aberta.ajustesCentavos ? reais(aberta.ajustesCentavos) : "nenhum"], ["Dias vencida", aberta.diasVencida ? String(aberta.diasVencida) : "—"],
+      ["Motivos", aberta.rotulos.join("; ")], ["Próxima ação recomendada", aberta.proximaAcao]]),
+      aberta.candidatas.length ? tabela(["Saída do extrato", "Conta", "Valor", "Livre"], aberta.candidatas.map((s) => ({ id: s.id, celulas: [dataBr(s.data), texto(s.conta), reais(s.valorCentavos), reais(s.livreCentavos)] })), "Saídas compatíveis") : null,
+      aberta.duplicadas.length ? tabela(["Conta parecida", "Vencimento", "Valor", "Situação"], aberta.duplicadas.map((d) => ({ id: d.id, celulas: [texto(d.fornecedor), dataBr(d.vencimento), reais(d.valorCentavos), d.situacao] })), "Contas parecidas") : null,
+      el("p", { classe: "cf-dica", texto: "Saída compatível e conta parecida são avisos para conferir com o documento. Nada foi baixado, vinculado ou cancelado." })) : null;
+    const s = v.saidas;
+    const saidas = s ? cartao("Saídas do banco sem vínculo com conta a pagar",
+      el("p", { classe: "cf-dica", texto: `${s.quantidade} saídas, ${reais(s.totalCentavos)}, de ${dataBr(s.de)} a ${dataBr(s.ate)}. Classificadas só pelo que os registros mostram; não são despesas nem pagamentos confirmados.` }),
+      tabela(["Motivo", "Saídas", "Total", ""], s.grupos.map((g) => ({ id: g.motivo, celulas: [g.rotulo, String(g.quantidade), reais(g.totalCentavos),
+        filtroBotao(filtro.saida === g.motivo ? "Ocultar" : "Ver", { "data-acao": "central-saidas", "data-motivo": g.motivo }, filtro.saida === g.motivo)] })), "Saídas por motivo"),
+      filtro.saida ? tabela(["Data", "Conta", "Descrição no extrato", "Valor livre", "Evidência"], s.itens.filter((x) => x.motivo === filtro.saida).slice(0, LIMITE_LINHAS)
+        .map((x) => ({ id: x.id, celulas: [dataBr(x.data), texto(x.conta), texto(x.descricao), reais(x.livreCentavos), x.evidencia] })), "Saídas do motivo") : null)
+      : cartao("Saídas do banco sem vínculo", el("p", { texto: "Extrato indisponível agora: nenhuma marca de pagamento no extrato foi calculada." }));
+    return [kpis,
+      cartao("Pendências financeiras", el("p", { classe: "cf-dica", texto: `Posição de ${dataBr(v.posicao)} (Financeiro v2, leitura). Ordem: o que pede decisão humana primeiro, depois vencidas e maiores. Nada aqui baixa, cancela ou altera contas.` }),
+        filtros, tabela(["Empresa · unidade", "Vencimento", "Fornecedor", "Descrição", "Valor", "Saldo", "Origem", "Documento", "Conciliação", "Motivo", "Próxima ação", ""], linhas, "Pendências"),
+        lista.length > LIMITE_LINHAS ? el("p", { classe: "cf-dica", texto: `Mostrando ${LIMITE_LINHAS} de ${lista.length}. Use os filtros.` }) : null),
+      detalhe, saidas];
+  }
+
+  function documentos({ "documentos-recebidos": d }, pode) {
+    if (!d.itens.length) return [cartao("Documentos recebidos pelo WhatsApp", vazio(d.recebimentoDocumental ? "Nenhum documento recebido nesta unidade." : "Recebimento de documentos desligado: nenhum documento é guardado."))];
+    const relLinhas = (x) => {
+      const r = relacionadas.get(x.sha256);
+      if (!r) return null;
+      return el("div", { classe: "cf-relacionadas" },
+        el("p", { classe: "cf-dica", texto: r.itens.length ? `Contas que podem se relacionar (busca: "${r.busca || "legenda"}"). É só sugestão: nada é vinculado.` : `Nenhuma conta encontrada para "${r.busca || "a legenda"}".` }),
+        r.itens.length ? el("label", {}, "Conta citada na conferência (opcional) ", el("select", { "data-conta-doc": x.sha256 }, el("option", { value: "", texto: "nenhuma" }),
+          r.itens.map((c) => el("option", { value: c.id, texto: `${dataBr(c.vencimento)} · ${c.fornecedor ?? "sem fornecedor"} · ${reais(c.saldoCentavos || c.valorCentavos)} · ${c.situacao}` })))) : null);
+    };
+    return [cartao("Documentos recebidos pelo WhatsApp",
+      el("p", { classe: "cf-dica", texto: "Arquivos guardados em privado, sem leitura por IA. Revisado ou encaminhado NÃO é pagamento, baixa nem conciliação: o vínculo com a conta continua no fluxo oficial do Financeiro (Contas a Pagar e Conciliação)." }),
+      ...d.itens.map((x) => el("article", { classe: "cf-cartao cf-documento" },
+        el("h3", { texto: `${TIPO_DOC[x.conferencia.tipo] ?? (x.mime === "application/pdf" ? "PDF" : "Imagem")} · recebido ${x.recebidoEm ? horaBr(x.recebidoEm) : "—"}` }),
+        dl([["Remetente", `${x.remetente.nome ?? "participante"} (${x.remetente.id})`], ["Legenda", texto(x.legenda)], ["Arquivo", `${texto(x.nomeArquivo)} · ${x.mime} · ${Math.ceil((x.tamanhoBytes ?? 0) / 1024)} KB`],
+          ["Situação", selo(ESTADO_DOC[x.conferencia.estado] ?? [x.conferencia.estado, "neutro"])], ["Última conferência", x.conferencia.em ? `${horaBr(x.conferencia.em)}${x.conferencia.observacao ? ` — ${x.conferencia.observacao}` : ""}` : "—"]]),
+        el("p", {},
+          x.arquivoRemovido ? el("em", { texto: "arquivo removido pela retenção" }) : pode.documentos ? botao("Abrir original", { "data-acao": "arquivo", "data-sha": x.sha256 }) : el("em", { texto: "abrir exige permissão de documentos" }),
+          botao("Contas relacionadas", { "data-acao": "central-doc-relacionadas", "data-sha": x.sha256 })),
+        relLinhas(x),
+        d.podeConferir ? el("p", {},
+          el("label", {}, "Tipo ", el("select", { "data-tipo-doc": x.sha256 }, el("option", { value: "", texto: "não informado" }), Object.entries(TIPO_DOC).map(([k, r]) => el("option", { value: k, texto: r, selected: x.conferencia.tipo === k }))), " "),
+          botao("Marcar revisado", { "data-acao": "central-doc-conferir", "data-sha": x.sha256, "data-versao": String(x.conferencia.versao), "data-estado": "REVISADO" }),
+          botao("Encaminhar ao Financeiro", { "data-acao": "central-doc-conferir", "data-sha": x.sha256, "data-versao": String(x.conferencia.versao), "data-estado": "ENCAMINHADO" })) : el("p", { classe: "cf-dica", texto: "Conferir exige permissão de documentos." }))))];
+  }
+
+  const DESENHOS = { central: visaoGeral, conferencia, documentos, grupos, operacoes, entregadores, automacoes, seguranca };
 
   /** Desenho da aba: sem API real ⇒ diz isso (nada simulado); carregando ⇒ aviso; erro ⇒ mensagem do servidor. */
   function desenhar(aba, { fonte, permissoes, unidadeId, redesenhar }) {
@@ -140,7 +234,7 @@ export function criarCentral({ ui, ler, enviar }) {
     if (!c) { carregar(aba).then(redesenhar); return [vazio("Carregando…")]; }
     if (c.carregando) return [vazio("Carregando…")];
     if (c.erro) return [cartao("Indisponível", el("p", { texto: c.erro }))];
-    const pode = { configurar: permissoes.includes("financeiro_v2.configurar"), cancelar: permissoes.includes("financeiro_v2.cancelar"), unidadeId };
+    const pode = { configurar: permissoes.includes("financeiro_v2.configurar"), cancelar: permissoes.includes("financeiro_v2.cancelar"), documentos: permissoes.includes("financeiro_v2.documentos"), unidadeId };
     return DESENHOS[aba](c.dados, pode);
   }
 
@@ -148,6 +242,28 @@ export function criarCentral({ ui, ler, enviar }) {
   async function agir(b) {
     const acao = b.dataset.acao;
     let r;
+    // Filtros e detalhes da conferência: só redesenham (nada vai ao servidor).
+    if (acao === "central-filtro") { filtro.motivo = b.dataset.motivo || null; return { ok: true, texto: filtro.motivo ? `Filtro: ${MOTIVOS[filtro.motivo]?.[0] ?? filtro.motivo}.` : "Todas as pendências." }; }
+    if (acao === "central-saidas") { filtro.saida = filtro.saida === b.dataset.motivo ? null : b.dataset.motivo; return { ok: true, texto: filtro.saida ? "Saídas do motivo abertas abaixo." : "Lista de saídas fechada." }; }
+    if (acao === "central-detalhe") { filtro.aberta = filtro.aberta === b.dataset.id ? null : b.dataset.id; return { ok: true, texto: filtro.aberta ? "Detalhes abertos abaixo da lista." : "Detalhes fechados." }; }
+    if (acao === "central-doc-relacionadas") {
+      const busca = globalThis.prompt?.("Buscar conta por fornecedor ou valor (vazio = usar a legenda do documento):")?.trim();
+      if (busca === undefined) return null;
+      const x = await ler(`/api/fv2/mova/documento-relacionadas?sha=${encodeURIComponent(b.dataset.sha)}${busca ? `&busca=${encodeURIComponent(busca)}` : ""}`);
+      if (!x.ok) return { ok: false, texto: `Não foi possível: ${x.dados?.mensagem ?? "busca indisponível"}` };
+      relacionadas.set(b.dataset.sha, x.dados);
+      return { ok: true, texto: `${x.dados.itens.length} conta(s) que podem se relacionar. Sugestão, não vínculo.` };
+    }
+    if (acao === "central-doc-conferir") {
+      const sha = b.dataset.sha;
+      const observacao = globalThis.prompt?.(b.dataset.estado === "ENCAMINHADO" ? "Observação para o Financeiro (opcional):" : "Observação da revisão (opcional):");
+      if (observacao === null || observacao === undefined) return null;
+      const tipo = globalThis.document?.querySelector(`[data-tipo-doc="${sha}"]`)?.value || null;
+      const obrigacaoId = globalThis.document?.querySelector(`[data-conta-doc="${sha}"]`)?.value || null;
+      r = await enviar("/api/fv2/acoes/mova/documento-conferir", { sha256: sha, versao: Number(b.dataset.versao), estado: b.dataset.estado, ...(tipo ? { tipo } : {}), ...(obrigacaoId ? { obrigacaoId } : {}), ...(observacao.trim() ? { observacao: observacao.trim().slice(0, 500) } : {}) });
+      invalidar();
+      return r.ok ? { ok: true, texto: b.dataset.estado === "ENCAMINHADO" ? "Encaminhado ao Financeiro (não é baixa nem conciliação)." : "Marcado como revisado (não é baixa nem conciliação)." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    }
     if (acao === "central-reverter") {
       const justificativa = globalThis.prompt?.("Justificativa da reversão (mínimo 10 caracteres; fica na auditoria):")?.trim() ?? "";
       if (!justificativa) return null;

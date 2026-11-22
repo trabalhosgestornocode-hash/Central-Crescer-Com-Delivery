@@ -200,8 +200,8 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
       try {
         const m = await exigirMova();
         const corpo = await comIdentidade(req, async (sessao) => {
-          const { c } = await preparar(sessao);
-          return consulta({ ctx: c.contexto, mova: m.mova, worker: m.worker, enviador: m.enviador, chaves: m.chaves ?? null, controle: m.controle ?? null, orcamento: m.orcamento ?? null, params: req.query });
+          const { c, nucleo } = await preparar(sessao);
+          return consulta({ ctx: c.contexto, nucleo, nomes: { empresa: req.acesso?.empresa?.nome ?? null, unidade: req.acesso?.unidade?.nome ?? null }, mova: m.mova, worker: m.worker, enviador: m.enviador, chaves: m.chaves ?? null, controle: m.controle ?? null, orcamento: m.orcamento ?? null, params: req.query });
         });
         res.set("cache-control", "no-store");
         return res.json(corpo);

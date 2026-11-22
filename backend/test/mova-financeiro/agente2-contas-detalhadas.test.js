@@ -51,7 +51,7 @@ t("A2-D3 membro CONSULTA no grupo (autorizado a ver totais) ⇒ resposta no grup
   await retrato(s, [FIN, SOCIO, CONS]);
   await s.enviar(gw({ texto: PERGUNTA }));
   const [r] = await doGrupo(s);
-  assert.match(r.texto, /vencendo de 15\/10\/2026 a 21\/10\/2026: 1 contas, R\$ 300,00/);
+  assert.match(r.texto, /vencendo de 15\/10\/2026 a 21\/10\/2026: 1 conta, R\$ 300,00/);
   assert.doesNotMatch(r.texto, /Fornecedor Sintético/);
 });
 

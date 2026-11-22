@@ -114,7 +114,7 @@ t("16A-04 valores não conciliados: conta a pagar aberta aparece como aberta (pa
   await s.m.nucleo.registrarObrigacao(c, { contraparteId: f.id, valorOriginalCentavos: 48000, categoria: "INSUMOS", descricao: "Compra sintética", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento: "2026-10-30" });
   await s.enviar(gw({ texto: "quanto tenho a pagar?" }));
   const [txt] = await s.respostas();
-  assert.match(txt, /a pagar em aberto: 1 contas, R\$\s?480,00/);
+  assert.match(txt, /a pagar em aberto: 1 conta, R\$\s?480,00/);
 });
 
 t("16A-05 unidade/empresa erradas: todas as leituras usam SÓ a unidade do piloto, identidade do MOVA e só 'ver'; dado da outra empresa nunca aparece", async () => {
