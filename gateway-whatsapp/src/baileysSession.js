@@ -37,7 +37,7 @@ import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./in
 import { criarFilaConcorrenciaLimitada } from "./filaConcorrenciaLimitada.js";
 import { criarObservadorEntrega } from "./entregaProvider.js";
 import { resolverJidCanonico } from "./destinatario.js";
-import { listarGruposDaConta, consultarGrupo, exigirGrupoAutorizado, exigirGrupoEnviavel, mascararJidGrupo } from "./grupoInterno.js";
+import { listarGruposDaConta, diagnosticarGruposDaConta, consultarGrupo, exigirGrupoAutorizado, exigirGrupoEnviavel, mascararJidGrupo } from "./grupoInterno.js";
 import { hashId } from "./retryCache.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
@@ -238,6 +238,8 @@ export function criarSessaoBaileys({
   // Nenhum dos dois, isolado, pode marcar CONNECTED. Ambos resetados a cada
   // novo socket, em `abrirSocketEEscutarEventos()` e no fechamento
   // (`connection:"close"`).
+  // 17B: o diagnóstico de grupos (WHATSAPP_DIAGNOSTICO_GRUPOS=1) roda UMA vez por processo depois de conectar.
+  let diagnosticoGruposAgendado = false;
   let socketOpen = false;
   let authConfirmado = false;
   // Checkpoint C3.5-B (reforço) — Promise em voo da persistência de
@@ -384,6 +386,12 @@ export function criarSessaoBaileys({
       falhasInesperadasReconexao = 0;
       socketOpen = true;
       telefone = socket?.user?.id ? deJid(socket.user.id) : telefone;
+      if (config?.diagnosticoGrupos === true && !diagnosticoGruposAgendado) {
+        diagnosticoGruposAgendado = true;
+        const sockDiag = socket;
+        const t = setTimeout(() => { void emitirDiagnosticoDeGrupos(sockDiag); }, Number.isInteger(config?.diagnosticoGruposAtrasoMs) ? config.diagnosticoGruposAtrasoMs : 45_000);
+        t.unref?.();
+      }
       log("info", "conexao.socket_aberto", {
         telefone: mascararTelefone(telefone),
         // Diagnóstico apenas (Checkpoint C3.5-C.1) — NUNCA decide fluxo.
@@ -1608,13 +1616,18 @@ export function criarSessaoBaileys({
       const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
       observadorEntrega.rastrear({ providerMessageId: providerIdGerado, correlationId, jidMascarado });
       // `idHash` = o MESMO hash dos eventos whatsapp.retry.* (src/retryCache.js#hashId): correlaciona envio ↔ retry.
-      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, idHash: hashId(providerIdGerado), jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, destinoLidConhecido: Boolean(destino.lid), retryResend: guardarParaRetry, lookupMs });
+      // 17B: com WHATSAPP_ENVIO_VIA_LID=1 e o LID do MESMO destinatário verificado (devolvido pelo `onWhatsApp`, junto com o número
+      // confirmado acima), o envio é endereçado por LID — como no MOVA (PR #160), onde a entrega passou a funcionar. Sem a flag, ou
+      // sem LID válido, nada muda: continua o número. Conteúdo, destinatário, horário e idempotência não mudam.
+      const viaLid = config?.envioViaLid === true && typeof destino.lid === "string" && /^[0-9]{1,24}@lid$/.test(destino.lid);
+      const alvoEnvio = viaLid ? destino.lid : destino.jid;
+      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, idHash: hashId(providerIdGerado), jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, destinoLidConhecido: Boolean(destino.lid), via: viaLid ? "LID" : "PN", retryResend: guardarParaRetry, lookupMs });
       // Um retry receipt pode chegar ~0,5 s depois do envio: o getMessage espera (com teto) até o conteúdo ser registrado.
       if (guardarParaRetry) { try { retryCache?.marcarEnvioIniciado?.(providerIdGerado); } catch { /* cache nunca interfere no envio */ } }
       const t1 = Date.now();
       let resultado;
       try {
-        resultado = await sockEnvio.sendMessage(destino.jid, conteudo, { messageId: providerIdGerado });
+        resultado = await sockEnvio.sendMessage(alvoEnvio, conteudo, { messageId: providerIdGerado });
       } catch (e) {
         try { retryCache?.cancelarEnvio?.(providerIdGerado); } catch { /* idem */ }
         log("error", "send_falhou", { ...contextoLog(), providerMessageId: providerIdGerado, jid: jidMascarado, durationMs: Date.now() - t1, erro: e?.name ?? "erro" });
@@ -1822,6 +1835,20 @@ export function criarSessaoBaileys({
       return enviarTextoAGrupo({ grupoJid, texto, correlationId });
     },
   };
+
+  /**
+   * 17B — emite UM evento por grupo (`gateway.diagnostico_grupo`) com o resumo SOMENTE LEITURA de diagnosticarGruposDaConta. Não envia
+   * nada. Só roda se o socket ainda é o mesmo e está conectado. Falha ⇒ um evento de aviso com o código, nunca derruba a sessão.
+   */
+  async function emitirDiagnosticoDeGrupos(sockDiag) {
+    try {
+      if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockDiag) { log("warn", "gateway.diagnostico_grupos_pulado", { motivo: "socket_mudou_ou_desconectado" }); return; }
+      const grupos = await diagnosticarGruposDaConta({ socket: sockDiag, timeoutMs: config?.grupoTimeoutMs });
+      log("info", "gateway.diagnostico_grupos_inicio", { total: grupos.length });
+      for (const g of grupos) log("info", "gateway.diagnostico_grupo", g);
+      log("info", "gateway.diagnostico_grupos_fim", { total: grupos.length });
+    } catch (e) { log("warn", "gateway.diagnostico_grupos_falhou", { codigo: e?.codigo ?? e?.name ?? "erro" }); }
+  }
 
   /** Miolo comum do envio de texto a grupo (grupo interno e MOVA). Quem chama já autorizou o JID. */
   async function enviarTextoAGrupo({ grupoJid, texto, correlationId }) {

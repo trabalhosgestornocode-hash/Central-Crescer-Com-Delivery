@@ -134,6 +134,14 @@ export const config = {
   movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
   // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
   movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
+  // 17B: envio EMPRESARIAL (alertas/relatórios) endereçado pelo LID do destinatário verificado, quando o servidor o informa.
+  // Evidência (logs de 21–22/11): 100% dos envios a destinatários fora da allowlist de retry geraram pedido de reenvio por LID
+  // segundos depois do envio e terminaram em retry.message_missing (a primeira entrega não era decifrada). O MOVA já envia por
+  // LID (PR #160) e a entrega passou a funcionar. Ausente ⇒ DESLIGADO (o comportamento atual: número).
+  envioViaLid: /^(1|true)$/i.test(String(process.env.WHATSAPP_ENVIO_VIA_LID ?? "").trim()),
+  // 17B: diagnóstico SOMENTE LEITURA de grupos (nome, id, tamanho, administradores e disponibilidade de PN/LID, sem números
+  // completos), emitido UMA vez por processo depois de conectar. Não envia nada. Ausente ⇒ desligado.
+  diagnosticoGrupos: /^(1|true)$/i.test(String(process.env.WHATSAPP_DIAGNOSTICO_GRUPOS ?? "").trim()),
   // Homologação privada (src/movaHomologacao.js): contato + confirmação explícita de modo. Ausente ⇒ desligada.
   movaHomologacaoContato: String(process.env.WHATSAPP_MOVA_HOMOLOGACAO_CONTATO ?? "").trim(),
   // Canal ISOLADO do MOVA (src/movaCanal.js): backend MOVA de homologação com URL e segredo próprios. Sem ele, MOVA desligado.
