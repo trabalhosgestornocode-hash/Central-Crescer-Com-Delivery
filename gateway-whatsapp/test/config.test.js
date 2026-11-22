@@ -312,3 +312,12 @@ describe("config — reenvio sob retry (WHATSAPP_RETRY_*)", () => {
     assert.deepEqual([config.retryCacheTtlHoras, config.retryMaxReenvios], [48, 10]);
   });
 });
+
+describe("config — WHATSAPP_MOVA_SAIDA_MODO (Agente 2)", () => {
+  test("ausente = RELE; DIRETO aceito (maiúsculas/minúsculas); valor desconhecido derruba o boot", async () => {
+    assert.equal((await carregarConfigCom({})).config.movaSaidaModo, "RELE");
+    const d = await carregarConfigCom({ WHATSAPP_MOVA_SAIDA_MODO: "direto" });
+    assert.equal(d.config.movaSaidaModo, "DIRETO"); assert.equal(d.erro, null);
+    assert.match(String((await carregarConfigCom({ WHATSAPP_MOVA_SAIDA_MODO: "OUTRO" })).erro?.message), /WHATSAPP_MOVA_SAIDA_MODO/);
+  });
+});

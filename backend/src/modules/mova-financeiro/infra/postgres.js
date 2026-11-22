@@ -327,6 +327,10 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async ehRespostaPropria(mensagemId) {
         return (await q("select 1 from mova.resposta where provider_message_id = $1", [mensagemId])).rowCount > 0;
       },
+      /** Respostas efetivamente entregues ao transporte desde o marco de ativação (base PERSISTENTE do teto de envios). */
+      async contarEnviadasDesde(naoAntesDe) {
+        return Number((await q("select count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and (estado = 'ENVIADA' or (estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE'))", [naoAntesDe])).rows[0].n);
+      },
       async marcarEnviada(id, providerMessageId) {
         await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2, enviada_em = now(), lease_ate = null where id = $1", [id, providerMessageId]);
       },

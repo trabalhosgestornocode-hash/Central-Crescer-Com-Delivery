@@ -135,6 +135,9 @@ export const config = {
   movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
   // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
   movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
+  // Agente 2: transporte de SAÍDA das respostas do MOVA. RELE (padrão, homologação): o Gateway busca no relé. DIRETO (produção):
+  // o backend entrega direto em /internal/mova/messages e a consulta ao relé fica desligada.
+  movaSaidaModo: String(process.env.WHATSAPP_MOVA_SAIDA_MODO ?? "").trim().toUpperCase() || "RELE",
   // 17B: envio EMPRESARIAL (alertas/relatórios) endereçado pelo LID do destinatário verificado, quando o servidor o informa.
   // Evidência (logs de 21–22/11): 100% dos envios a destinatários fora da allowlist de retry geraram pedido de reenvio por LID
   // segundos depois do envio e terminaram em retry.message_missing (a primeira entrega não era decifrada). O MOVA já envia por
@@ -257,6 +260,7 @@ export function validarConfig() {
   if (config.grupoInternoJid !== null && !REGEX_JID_GRUPO.test(config.grupoInternoJid)) {
     throw new Error("WHATSAPP_GRUPO_INTERNO_JID precisa ser um JID de grupo (formato <numeros>@g.us)");
   }
+  if (!["RELE", "DIRETO"].includes(config.movaSaidaModo)) throw new Error("WHATSAPP_MOVA_SAIDA_MODO precisa ser RELE ou DIRETO");
   lerGruposMova(config.movaGruposJid); // lança se algum JID estiver fora do formato
   lerPrivadosMova({ lista: config.movaPrivados, confirmacao: config.movaPrivadosConfirmacao }); // idem para os privados
 

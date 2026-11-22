@@ -512,7 +512,9 @@ t("15I teto da sessão: com maximoDeEnvios=1 só a primeira resposta sai; a exce
   const e = criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [CONTATO], maximoDeEnvios: 1,
     enviar: async (r) => { enviados.push(r.texto); return { providerMessageId: `PT${enviados.length}` }; } });
   await e.enviarPendentes(); await e.enviarPendentes();
-  assert.deepEqual(enviados, ["r1"]);
+  // Agente 2: a única resposta permitida sai COM o aviso de que o limite foi atingido (nunca interrupção silenciosa).
+  assert.equal(enviados.length, 1);
+  assert.match(enviados[0], /^r1\n\n⚠️ Limite de respostas do MOVA atingido \(1 de 1\)/);
   const { rows } = await s.pool.query("select estado, ultimo_erro from mova.resposta order by seq");
   assert.deepEqual(rows.map((r) => r.estado + "/" + (r.ultimo_erro ?? "")), ["ENVIADA/", "FALHOU/TETO_DE_ENVIOS_DA_SESSAO"]);
   const { lerConfiguracaoMova } = await import("../../src/modules/fv2-integracao/mova.js");

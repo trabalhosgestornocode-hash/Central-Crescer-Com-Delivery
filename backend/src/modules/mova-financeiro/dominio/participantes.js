@@ -106,12 +106,18 @@ export function decidirSaidaNoGrupo({ grupo, consulta, unidades, retrato, agora 
   if (!retrato || !Array.isArray(retrato.membros) || !retrato.membros.length || !retrato.verificadoEm) return { saida: "PRIVADO", motivo: "MEMBROS_NAO_COMPROVADOS" };
   const idade = agora.getTime() - new Date(retrato.verificadoEm).getTime();
   if (!(idade >= 0 && idade <= RETRATO_VALIDADE_MS)) return { saida: "PRIVADO", motivo: "RETRATO_DESATUALIZADO" };
+  let todosFinanceiro = true;
   for (const m of retrato.membros) {
     const p = participanteAutorizado(grupo, { participanteId: m, telefoneE164: telefoneDoJid(m) });
     if (!p || !unidades.every((u) => p.unidades.includes(u) && perfilPodeConsultar(perfilNa(p, u), consulta))) return { saida: "PRIVADO", motivo: "MEMBRO_SEM_AUTORIZACAO" };
+    if (!unidades.every((u) => perfilNa(p, u) === PERFIL.FINANCEIRO)) todosFinanceiro = false;
   }
-  return { saida: "GRUPO", motivo: "TODOS_OS_MEMBROS_AUTORIZADOS" };
+  // Detalhe por conta e fornecedor no grupo só quando TODOS os membros são FINANCEIRO na unidade (CONSULTA vê só agregados).
+  return { saida: "GRUPO", motivo: "TODOS_OS_MEMBROS_AUTORIZADOS", detalhe: todosFinanceiro };
 }
+
+/** O participante pode ver o detalhe por conta e fornecedor na unidade? (só FINANCEIRO; aberto/CONSULTA/OPERACIONAL: não) */
+export const podeVerDetalhe = (participante, unidadeId) => Boolean(participante) && !participante.aberto && perfilNa(participante, unidadeId) === PERFIL.FINANCEIRO;
 
 /** Perfil do participante NA unidade (na conversa privada derivada, cada unidade guarda o perfil do grupo de origem). */
 export const perfilNa = (participante, unidadeId) => participante?.perfilPorUnidade?.[unidadeId] ?? participante?.perfil ?? null;

@@ -204,7 +204,7 @@ const sessao = criarSessaoBaileys({
 
 // MOVA (15B) — fila de SAÍDA pelo relé: INERTE salvo canal ativo + WHATSAPP_MOVA_ENVIO_HABILITADO=1 + contato verificado.
 // Só age na instância LÍDER do lease. Não toca nos envios empresariais, relatórios, lease nem heartbeat.
-const decisaoSaidaMova = lerSaidaMova({ canalAtivo: canalMova.ativo, envioHabilitado: config.movaEnvioHabilitado === true, contatoHomologacao });
+const decisaoSaidaMova = lerSaidaMova({ canalAtivo: canalMova.ativo, envioHabilitado: config.movaEnvioHabilitado === true, contatoHomologacao, modo: config.movaSaidaModo });
 const saidaMova = decisaoSaidaMova.ativo
   ? criarSaidaMova({ url: canalMova.url, segredo: canalMova.segredo, sessao, gatewayId: `gw-${gatewayProcessId.slice(0, 8)}`, souLider: () => leaseManager.souLeader(), log: (nivel, evento, dados) => log(nivel, evento, dados) })
   : null;
