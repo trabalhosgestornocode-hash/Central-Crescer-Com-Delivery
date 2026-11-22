@@ -9,7 +9,7 @@ const U1 = "dddddddd-0000-4000-8000-0000000a2a01";
 const U2 = "dddddddd-0000-4000-8000-0000000a2b01";
 const BASE = {
   MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "postgres://mova@local/sintetico", MOVA_SERVICO_USUARIO_ID: IDENTIDADE_MOVA,
-  MOVA_MODO: "OPERACAO", MOVA_AMBIENTE: "operacao", MOVA_HOMOLOGACAO_MARCADOR: "marcador-sintetico-01",
+  MOVA_MODO: "OPERACAO", MOVA_AMBIENTE: "operacao", MOVA_OPERACAO_MARCADOR: "marcador-sintetico-01",
   MOVA_FINANCEIRO_LEITURA_URL: "postgres://leitor@local/sintetico", MOVA_OPERACAO_UNIDADES: `${U1},${U2}`,
 };
 
@@ -29,9 +29,10 @@ test("A2-M2 OPERACAO incompleta ou contraditória não sobe", () => {
   assert.ok(motivo({ ...BASE, MOVA_FINANCEIRO_LEITURA_URL: BASE.MOVA_DATABASE_URL }).includes("PILOTO_LEITOR_COM_OUTRA_CREDENCIAL"));
   assert.ok(motivo({ ...BASE, MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-000000000001" }).includes("PILOTO_IDENTIDADE_DIFERENTE_DO_LEITOR"));
   assert.ok(motivo({ ...BASE, MOVA_PILOTO_UNIDADE_ID: U1 }).includes("OPERACAO_COM_UNIDADE_DO_PILOTO"));
-  assert.ok(motivo({ ...BASE, MOVA_HOMOLOGACAO_MARCADOR: "" }).includes("MARCADOR_INVALIDO"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_MARCADOR: "" }).includes("MARCADOR_INVALIDO"));
+  assert.ok(motivo({ ...BASE, MOVA_HOMOLOGACAO_MARCADOR: "marcador-sintetico-02" }).includes("OPERACAO_COM_MARCADOR_DE_HOMOLOGACAO"));
   // O piloto da 16A continua exatamente como era.
-  const p = lerConfiguracaoMova({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_OPERACAO_UNIDADES: undefined, MOVA_PILOTO_UNIDADE_ID: U1 });
+  const p = lerConfiguracaoMova({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_OPERACAO_UNIDADES: undefined, MOVA_OPERACAO_MARCADOR: undefined, MOVA_HOMOLOGACAO_MARCADOR: "marcador-sintetico-01", MOVA_PILOTO_UNIDADE_ID: U1 });
   assert.deepEqual([p.habilitado, p.modo, p.pilotoUnidadeId, p.somenteConsultas, p.comandosDeterministicos], [true, "PILOTO", U1, true, undefined]);
 });
 

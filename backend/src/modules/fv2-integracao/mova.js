@@ -24,7 +24,10 @@
 //                                     conferida no banco antes de montar (não escreve, não é administrativa)
 //   MOVA_PILOTO_UNIDADE_ID            a ÚNICA unidade do piloto. O banco do MOVA continua o de homologação (marcador);
 //                                     só conversas privadas, só consultas (nenhuma proposta), identidade = IDENTIDADE_MOVA
-//   Agente 2 — OPERACAO em GRUPOS REAIS (MOVA_MODO=OPERACAO + MOVA_AMBIENTE=operacao + MOVA_HOMOLOGACAO_MARCADOR):
+//   Agente 2 — OPERACAO em GRUPOS REAIS (MOVA_MODO=OPERACAO + MOVA_AMBIENTE=operacao + MOVA_OPERACAO_MARCADOR):
+//     o estado do MOVA fica num schema `mova` PRÓPRIO no banco de produção, marcado `comment on schema mova is
+//     'MOVA_OPERACAO:<marcador>'` (database/mova-financeiro/producao/instalar.sql). O banco de HOMOLOGAÇÃO é recusado
+//     (dados reais nunca se misturam aos de teste) e o marcador de homologação na OPERACAO é contradição.
 //   mesmas barreiras do PILOTO (credencial só-leitura do Financeiro, identidade do MOVA, banco do MOVA marcado) e mais:
 //   MOVA_OPERACAO_UNIDADES            lista FECHADA de unidades (uuid,uuid): qualquer unidade ativa fora dela recusa a montagem
 //   grupos só por LISTA de participantes; conversas privadas só as derivadas da lista; comandos simples sem IA;
@@ -65,7 +68,12 @@ export function lerConfiguracaoMova(env) {
   const homologacao = !piloto && sinaisHomolog.every(Boolean);
   if (!piloto && sinaisHomolog.some(Boolean) && !homologacao) contradicoes.push("HOMOLOGACAO_INCOMPLETA");
   if (env.MOVA_MODO && !["HOMOLOGACAO", "SIMULACAO", "PILOTO", "OPERACAO"].includes(env.MOVA_MODO)) contradicoes.push("MODO_DESCONHECIDO");
-  if ((homologacao || piloto) && !/^[A-Za-z0-9_-]{12,64}$/.test(env.MOVA_HOMOLOGACAO_MARCADOR ?? "")) contradicoes.push("MARCADOR_INVALIDO");
+  const marcadorValido = (m) => /^[A-Za-z0-9_-]{12,64}$/.test(m ?? "");
+  if ((homologacao || (piloto && !operacao)) && !marcadorValido(env.MOVA_HOMOLOGACAO_MARCADOR)) contradicoes.push("MARCADOR_INVALIDO");
+  // OPERACAO: marcador PRÓPRIO do schema de produção; o de homologação junto é contradição (nunca o banco de teste).
+  if (operacao && !marcadorValido(env.MOVA_OPERACAO_MARCADOR)) contradicoes.push("MARCADOR_INVALIDO");
+  if (operacao && env.MOVA_HOMOLOGACAO_MARCADOR) contradicoes.push("OPERACAO_COM_MARCADOR_DE_HOMOLOGACAO");
+  if (!operacao && env.MOVA_OPERACAO_MARCADOR) contradicoes.push("MARCADOR_DE_OPERACAO_FORA_DA_OPERACAO");
   // 16A: o piloto lê o Financeiro REAL só pela credencial de leitura; o estado do MOVA continua no banco de homologação.
   if (piloto) {
     if (env.MOVA_AMBIENTE !== (operacao ? "operacao" : "piloto")) contradicoes.push(operacao ? "OPERACAO_INCOMPLETA" : "PILOTO_INCOMPLETO");
@@ -117,7 +125,7 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
+    recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: operacao ? env.MOVA_OPERACAO_MARCADOR : homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
       somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), comandosDeterministicos: true, autonomia, escrita, entregadores, rotinaEntregadores,
@@ -159,6 +167,18 @@ export async function exigirBancoDeHomologacao(pool, marcador) {
   if (!marcador || r.rows[0]?.c !== `MOVA_HOMOLOGACAO:${marcador}`) throw Object.assign(new Error("Banco não é o de homologação do MOVA."), { codigo: "BANCO_NAO_E_DE_HOMOLOGACAO" });
 }
 
+/**
+ * OPERACAO: recusa (lança) se o schema `mova` não for o da operação marcado, ou se o banco for o de HOMOLOGAÇÃO.
+ * Dados reais ficam só no schema próprio de produção; o banco de teste nunca guarda estado da operação.
+ */
+export async function exigirBancoDaOperacao(pool, marcador) {
+  const r = await pool.query(
+    "select obj_description(n.oid, 'pg_namespace') as s, (select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()) as d from pg_namespace n where n.nspname = 'mova'");
+  const linha = r.rows[0];
+  if (typeof linha?.d === "string" && linha.d.startsWith("MOVA_HOMOLOGACAO:")) throw Object.assign(new Error("Banco de homologação não guarda a operação."), { codigo: "BANCO_DE_HOMOLOGACAO_NA_OPERACAO" });
+  if (!marcador || linha?.s !== `MOVA_OPERACAO:${marcador}`) throw Object.assign(new Error("Schema mova não é o da operação."), { codigo: "BANCO_NAO_E_DA_OPERACAO" });
+}
+
 /** Extrator quando a IA está DESLIGADA: nada vai a provedor externo; o evento falha com código claro (não é transitório). */
 export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object.assign(new Error("IA_DESLIGADA"), { codigo: "IA_DESLIGADA" }); } });
 
@@ -169,7 +189,9 @@ export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object
  */
 export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null }) {
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
-    await exigirBancoDeHomologacao(pool, cfg.marcador); // o estado do MOVA fica SEMPRE no banco de homologação
+    // HOMOLOGACAO/PILOTO: estado no banco de homologação marcado. OPERACAO: schema próprio de produção marcado (nunca o de teste).
+    if (cfg.modo === "OPERACAO") await exigirBancoDaOperacao(pool, cfg.marcador);
+    else await exigirBancoDeHomologacao(pool, cfg.marcador);
     if (!verificarBancoFinanceiro) throw Object.assign(new Error("Sem verificação do banco do Financeiro."), { codigo: "BANCO_FINANCEIRO_NAO_VERIFICADO" });
     // HOMOLOGACAO: o Financeiro também é o de homologação. PILOTO: a credencial do Financeiro é de leitura pura (0028).
     await verificarBancoFinanceiro();
