@@ -13,6 +13,8 @@ const E164 = /^\+[1-9]\d{7,14}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRIVADO = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 const AGUARDANDO = ["AGUARDANDO_NF", "NF_REJEITADA"];
+const LID = /^[0-9]{5,30}@lid$/;
+export const PERFIL_ENTREGADOR = "ENTREGADOR";
 
 /** Lista fechada: { unidadeId, chave (do fechamento), telefoneE164, privado (jid), nome? }. Telefone único POR UNIDADE. */
 export function validarEntregadores(lista = []) {
@@ -25,7 +27,25 @@ export function validarEntregadores(lista = []) {
     const k = `${x.unidadeId.toLowerCase()}|${x.telefoneE164}`;
     if (vistos.has(k)) throw new TypeError(`entregadores[${i}]: telefone repetido na unidade`);
     vistos.add(k);
-    return Object.freeze({ unidadeId: x.unidadeId.toLowerCase(), chave: x.chave, telefoneE164: x.telefoneE164, privado: x.privado, nome: x.nome ?? null, ativo: x.ativo !== false });
+    const ids = Array.isArray(x.ids) ? x.ids : [];
+    if (!ids.every((j) => LID.test(j))) throw new TypeError(`entregadores[${i}].ids`);
+    if (x.organizacaoId != null && !UUID.test(x.organizacaoId)) throw new TypeError(`entregadores[${i}].organizacaoId`);
+    return Object.freeze({ organizacaoId: x.organizacaoId?.toLowerCase() ?? null, unidadeId: x.unidadeId.toLowerCase(), chave: x.chave, telefoneE164: x.telefoneE164, privado: x.privado,
+      ids: Object.freeze([...ids]), nome: x.nome ?? null, ativo: x.ativo !== false });
+  }));
+}
+
+/**
+ * Conversa privada de cada entregador ATIVO: só aquele número (PN + LIDs cadastrados), uma unidade, perfil ENTREGADOR, sem
+ * consultas no grupo. O número que já é conversa de outra pessoa (equipe) não vira conversa de entregador (`ocupados`).
+ */
+export function conversasDosEntregadores(entregadores, { ocupados = new Set() } = {}) {
+  const porJid = new Map();
+  for (const e of entregadores) if (e.ativo) porJid.set(e.privado, [...(porJid.get(e.privado) ?? []), e]);
+  return [...porJid.entries()].filter(([jid, lista]) => lista.length === 1 && !ocupados.has(jid)).map(([jid, [e]]) => Object.freeze({
+    grupoId: jid, unidades: Object.freeze([e.unidadeId]), acesso: "LISTA", privada: true, derivada: true, consultasNoGrupo: Object.freeze([]),
+    entregador: Object.freeze({ chave: e.chave, unidadeId: e.unidadeId, nome: e.nome }),
+    participantes: Object.freeze([Object.freeze({ ids: Object.freeze([jid, ...e.ids]), telefones: Object.freeze([e.telefoneE164]), perfil: PERFIL_ENTREGADOR, unidades: Object.freeze([e.unidadeId]), privado: jid, nome: e.nome })]),
   }));
 }
 

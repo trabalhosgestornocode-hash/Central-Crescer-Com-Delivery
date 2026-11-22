@@ -58,7 +58,7 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -142,6 +142,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (novo) {
         const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
         if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
+      }
+      // Agente 2 — Frente D: conversa privada de ENTREGADOR ⇒ fluxo próprio, determinístico e SEM IA (só o fechamento dele).
+      if (grupo.entregador) {
+        if (!entregadores) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "ENTREGADORES_DESLIGADO" });
+        const r = await entregadores.atender(evento, grupo);
+        return concluir(evento, { decisao: r.decisao, motivo: r.motivo, escopo: r.escopo, resposta: r.resposta, extra: { entregador: true } });
       }
 
       // 5. Mensagem relacionada: texto respondendo a um documento que aguarda esclarecimento (atômico; sobrevive a reinício).

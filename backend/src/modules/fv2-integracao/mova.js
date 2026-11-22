@@ -86,6 +86,11 @@ export function lerConfiguracaoMova(env) {
   if ((autonomia || escrita) && !operacao) contradicoes.push("AUTONOMIA_FORA_DA_OPERACAO");
   if (escrita && !autonomia) contradicoes.push("ESCRITA_SEM_AUTONOMIA");
   if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) contradicoes.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
+  // Agente 2 — Frente D: entregadores no privado (só OPERACAO) e a rotina semanal (exige os entregadores).
+  const entregadores = sim(env.MOVA_ENTREGADORES);
+  const rotinaEntregadores = sim(env.MOVA_ENTREGADORES_ROTINA);
+  if (entregadores && !operacao) contradicoes.push("ENTREGADORES_FORA_DA_OPERACAO");
+  if (rotinaEntregadores && !entregadores) contradicoes.push("ROTINA_SEM_ENTREGADORES");
   if (escrita && String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase() === String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase()) contradicoes.push("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA");
   if (processamento && !recebimento) contradicoes.push("PROCESSAMENTO_SEM_RECEBIMENTO");
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
@@ -115,7 +120,7 @@ export function lerConfiguracaoMova(env) {
     recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
-      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), comandosDeterministicos: true, autonomia, escrita,
+      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), comandosDeterministicos: true, autonomia, escrita, entregadores, rotinaEntregadores,
       identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
     // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
     envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
@@ -199,14 +204,16 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
     habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
     // Homologação/piloto: só conversas PRIVADAS autorizadas. OPERACAO: os grupos por LISTA e as privadas DERIVADAS da lista.
     destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter((j) => cfg.modo === "OPERACAO" || ehConversaPrivada(j)) });
-  return { mova, worker, enviador, configuracao, controle, orcamento };
+  // Rotina dos entregadores: um passo a cada 5 min (idempotente; automação desligada/pausada por unidade não envia nada).
+  const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(() => mova.entregadores.rotina(), { registrar }) : null;
+  return { mova, worker, enviador, configuracao, controle, orcamento, rotina };
 }
 
 /** Cliente de envio pelo canal isolado do Gateway (rota /internal/mova/messages, segredo MOVA). */
@@ -240,6 +247,18 @@ let obterDependenciasFv2 = null;
 export function registrarDependenciasFv2(fn) { obterDependenciasFv2 = fn; }
 
 /** MOVA da plataforma, ou null (desligado/incompleto/recusado). Nunca derruba o backend. */
+/** Passo periódico sem sobreposição (um de cada vez); falha só registra. `parar()` encerra. */
+export function criarRotinaPeriodica(passo, { intervaloMs = 5 * 60 * 1000, registrar = () => {} } = {}) {
+  let rodando = false;
+  const tick = async () => {
+    if (rodando) return null;
+    rodando = true;
+    try { return await passo(); } catch (e) { registrar({ tipo: "MOVA_ROTINA_FALHOU", codigo: e?.codigo ?? e?.code ?? "ERRO" }); return null; } finally { rodando = false; }
+  };
+  const timer = setInterval(tick, intervaloMs);
+  timer.unref?.();
+  return Object.freeze({ tick, parar: () => clearInterval(timer) });
+}
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;

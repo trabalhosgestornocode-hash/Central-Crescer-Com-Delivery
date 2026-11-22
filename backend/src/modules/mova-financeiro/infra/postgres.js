@@ -43,6 +43,10 @@ const linhaProposta = (r) => r && Object.freeze({
   eventoId: r.evento_id, participanteId: r.participante_jid, versao: r.versao, criadaEm: r.criada_em.toISOString(), resultado: r.resultado, simulada: false, ...r.dados,
 });
 
+const linhaNota = (r) => r && Object.freeze({ id: r.id, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, semanaInicio: dia(r.semana_inicio), sha256: r.sha256,
+  eventoId: r.evento_id, estado: r.estado, motivo: r.motivo, documentoId: r.documento_id, situacaoDocumental: r.situacao_documental, criadaEm: r.criada_em.toISOString() });
+const linhaAutomacao = (r) => r ? Object.freeze({ nome: r.nome, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, ativa: r.ativa, horario: r.horario,
+  pausadaEm: r.pausada_em?.toISOString() ?? null, pausadaPor: r.pausada_por, motivo: r.motivo, ultimaExecucao: r.ultima_execucao?.toISOString() ?? null }) : null;
 /**
  * @param {{pool:object, gerarId?:() => string}} deps
  */
@@ -248,6 +252,48 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
      * Agente 2 — RETRATO DOS MEMBROS do grupo (gravado pelo Gateway/relé; o MOVA só confere). Base da política GRUPO_FINANCEIRO:
      * sem retrato recente, valores nunca saem no grupo.
      */
+    // Agente 2 — Frente D: notas recebidas dos entregadores, envios da rotina (chave única) e automações com pausa.
+    notasEntregador: Object.freeze({
+      async registrar(n) {
+        const ins = await q(`insert into mova.nota_entregador (organizacao_id, unidade_id, entregador, semana_inicio, sha256, evento_id, estado) values ($1,$2,$3,$4,$5,$6,'PENDENTE_ANEXO')
+                             on conflict (unidade_id, entregador, semana_inicio, sha256) do nothing returning *`, [n.organizacaoId, n.unidadeId, n.entregador, n.semanaInicio, n.sha256, n.eventoId]);
+        if (ins.rows[0]) return { nota: linhaNota(ins.rows[0]), nova: true };
+        const r = await q("select * from mova.nota_entregador where unidade_id = $1 and entregador = $2 and semana_inicio = $3 and sha256 = $4", [n.unidadeId, n.entregador, n.semanaInicio, n.sha256]);
+        return { nota: linhaNota(r.rows[0]), nova: false };
+      },
+      async concluir(id, { estado, motivo = null, documentoId = null, situacaoDocumental = null }) {
+        const r = await q(`update mova.nota_entregador set estado = $2, motivo = $3, documento_id = $4, situacao_documental = $5, atualizada_em = now() where id = $1 and estado = 'PENDENTE_ANEXO'`, [id, estado, motivo, documentoId, situacaoDocumental]);
+        return r.rowCount === 1;
+      },
+      async listar(escopo) {
+        return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
+      },
+    }),
+    enviosEntregador: Object.freeze({
+      async registrar(e) {
+        const r = await q(`insert into mova.entregador_envio (chave, organizacao_id, unidade_id, entregador, tipo, semana_inicio) values ($1,$2,$3,$4,$5,$6) on conflict (chave) do nothing`, [e.chave, e.organizacaoId, e.unidadeId, e.entregador, e.tipo, e.semanaInicio]);
+        return r.rowCount === 1;
+      },
+      async listar(escopo) {
+        return (await q(`select chave, entregador, tipo, semana_inicio, criado_em from mova.entregador_envio where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 200`, [escopo.organizacaoId, escopo.unidadeId]))
+          .rows.map((r) => ({ chave: r.chave, entregador: r.entregador, tipo: r.tipo, semanaInicio: dia(r.semana_inicio), criadoEm: r.criado_em.toISOString() }));
+      },
+    }),
+    automacoes: Object.freeze({
+      async obter(nome, unidadeId) { return linhaAutomacao((await q("select * from mova.automacao where nome = $1 and unidade_id = $2", [nome, unidadeId])).rows[0]); },
+      async listar(escopo) { return (await q("select * from mova.automacao where organizacao_id = $1 and unidade_id = $2 order by nome", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaAutomacao); },
+      async definir({ nome, organizacaoId, unidadeId, ativa, horario = "09:00" }) {
+        return linhaAutomacao((await q(`insert into mova.automacao (nome, organizacao_id, unidade_id, ativa, horario) values ($1,$2,$3,$4,$5)
+          on conflict (nome, unidade_id) do update set ativa = excluded.ativa, horario = excluded.horario, atualizada_em = now() where mova.automacao.organizacao_id = excluded.organizacao_id returning *`, [nome, organizacaoId, unidadeId, ativa, horario])).rows[0]);
+      },
+      async pausar({ nome, unidadeId, por, motivo = null }) {
+        return linhaAutomacao((await q("update mova.automacao set pausada_em = now(), pausada_por = $3, motivo = $4, atualizada_em = now() where nome = $1 and unidade_id = $2 returning *", [nome, unidadeId, por, motivo])).rows[0]);
+      },
+      async retomar({ nome, unidadeId }) {
+        return linhaAutomacao((await q("update mova.automacao set pausada_em = null, pausada_por = null, motivo = null, atualizada_em = now() where nome = $1 and unidade_id = $2 returning *", [nome, unidadeId])).rows[0]);
+      },
+      async marcarExecucao(nome, unidadeId, em) { await q("update mova.automacao set ultima_execucao = $3 where nome = $1 and unidade_id = $2", [nome, unidadeId, em]); },
+    }),
     membros: Object.freeze({
       async registrar({ grupoId, membros, verificadoEm = null, fonte = "GATEWAY" }) {
         await q(`insert into mova.grupo_membros (grupo_jid, membros, verificado_em, fonte) values ($1, $2, coalesce($3::timestamptz, now()), $4)
@@ -450,7 +496,7 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
  * `ativo: true`. Participantes: a lista ATIVA do grupo passa a ser exatamente a informada (quem saiu é REVOGADO, nunca apagado).
  */
 export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal" } = {}) {
-  const tipoDe = (g) => (g.grupoId.endsWith("@g.us") ? "GRUPO" : g.derivada ? "PRIVADO_PARTICIPANTE" : "PRIVADO_HOMOLOGACAO");
+  const tipoDe = (g) => (g.grupoId.endsWith("@g.us") ? "GRUPO" : g.entregador ? "PRIVADO_ENTREGADOR" : g.derivada ? "PRIVADO_PARTICIPANTE" : "PRIVADO_HOMOLOGACAO");
   const mesmo = (r, p) => JSON.stringify([[...r.ids].sort(), [...r.telefones].sort(), r.perfil, [...r.unidades].sort(), r.privado ?? null, r.nome ?? null])
     === JSON.stringify([[...p.ids].sort(), [...p.telefones].sort(), p.perfil, [...p.unidades].sort(), p.privado ?? null, p.nome ?? null]);
   await emTransacao(pool, async (tx) => {
@@ -465,12 +511,22 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
                   on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes`,
         [g.grupoId, u.organizacaoId, u.unidadeId, u.nome, u.apelidosOriginais ?? u.apelidos, u.documentos, JSON.stringify(u.fontesOriginais ?? u.fontes)]);
       }
-      if (g.derivada || (g.acesso ?? "ABERTO") !== "LISTA") continue; // a privada derivada vem da lista dos grupos
+      if (g.derivada || (g.acesso ?? "ABERTO") !== "LISTA") continue; // a privada derivada (e a do entregador) vem das listas
       const ativos = (await tx("select id, ids, telefones, perfil, unidades, privado, nome from mova.participante_autorizado where grupo_jid = $1 and ativo for update", [g.grupoId])).rows;
       const lista = g.participantes.map((p) => ({ ...p, unidades: p.unidades.length === g.unidades.length && g.unidades.every((u) => p.unidades.includes(u)) ? [] : p.unidades }));
       for (const r of ativos) if (!lista.some((p) => mesmo(r, p))) await tx("update mova.participante_autorizado set ativo = false, revogado_em = now() where id = $1", [r.id]);
       for (const p of lista) if (!ativos.some((r) => mesmo(r, p))) {
         await tx("insert into mova.participante_autorizado (grupo_jid, ids, telefones, perfil, unidades, privado, nome) values ($1,$2,$3,$4,$5,$6,$7)", [g.grupoId, p.ids, p.telefones, p.perfil, p.unidades, p.privado, p.nome]);
+      }
+    }
+    // Agente 2 — Frente D: a lista ATIVA de entregadores passa a ser exatamente a informada (quem saiu é REVOGADO, nunca apagado).
+    if (Array.isArray(cfg.entregadores)) {
+      const ativos = (await tx("select id, unidade_id, chave, telefone_e164, privado, ids, nome from mova.entregador_autorizado where ativo for update")).rows;
+      const igual = (r, e) => r.unidade_id === e.unidadeId && r.chave === e.chave && r.telefone_e164 === e.telefoneE164 && r.privado === e.privado && JSON.stringify([...r.ids].sort()) === JSON.stringify([...e.ids].sort()) && (r.nome ?? null) === (e.nome ?? null);
+      const lista = cfg.entregadores.filter((e) => e.ativo);
+      for (const r of ativos) if (!lista.some((e) => igual(r, e))) await tx("update mova.entregador_autorizado set ativo = false, revogado_em = now() where id = $1", [r.id]);
+      for (const e of lista) if (!ativos.some((r) => igual(r, e))) {
+        await tx("insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome) values ($1,$2,$3,$4,$5,$6,$7)", [e.organizacaoId, e.unidadeId, e.chave, e.telefoneE164, e.privado, e.ids, e.nome]);
       }
     }
   });
@@ -483,14 +539,17 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   // 16A: no PILOTO entram SÓ as conversas privadas — nenhum grupo, mesmo ativo.
   // Agente 2: OPERACAO lê só GRUPOS; as conversas privadas dos participantes são DERIVADAS da lista (validarConfiguracao).
   // A conversa privada de homologação (PRIVADO_HOMOLOGACAO) nunca entra na OPERACAO, e a derivada nunca entra fora dela.
-  const filtro = "g.ativo and g.tipo <> 'PRIVADO_PARTICIPANTE' and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
+  const filtro = "g.ativo and g.tipo not in ('PRIVADO_PARTICIPANTE','PRIVADO_ENTREGADOR') and (case $1 when 'PILOTO' then g.tipo <> 'GRUPO' when 'HOMOLOGACAO' then true else g.tipo = 'GRUPO' end)";
   const grupos = (await q(`select g.grupo_jid, g.acesso, g.consultas_no_grupo from mova.grupo_autorizado g where ${filtro}`, [modo])).rows;
   const participantes = (await q(`select p.* from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid) where p.ativo and ${filtro} order by p.criado_em`, [modo])).rows;
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
+  // Agente 2 — Frente D: entregadores autorizados (só OPERACAO); as conversas deles nascem em validarConfiguracao.
+  const entregadores = modo === "OPERACAO" ? (await q("select * from mova.entregador_autorizado where ativo order by criado_em")).rows
+    .map((r) => ({ organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, chave: r.chave, telefoneE164: r.telefone_e164, privado: r.privado, ids: r.ids, nome: r.nome })) : [];
   return {
-    modo, identidadeServico,
+    modo, identidadeServico, entregadores,
     unidades: [...porId.values()],
     gruposAutorizados: grupos.map((g) => ({
       grupoId: g.grupo_jid, unidades: unidades.filter((u) => u.grupo_jid === g.grupo_jid).map((u) => u.unidade_id), acesso: g.acesso, consultasNoGrupo: g.consultas_no_grupo, politicaResposta: g.politica_resposta,
