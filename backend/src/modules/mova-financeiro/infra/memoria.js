@@ -81,6 +81,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     documentos: Object.freeze({
       async visto(sha256) { return documentos.get(sha256) ?? null; },
       async marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
+      async porChave({ organizacaoId, chave }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.chaveDocumento === chave) ?? null; },
       async porTransacao({ organizacaoId, idTransacao }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.idTransacao === idTransacao) ?? null; },
     }),
     mensagens: Object.freeze({

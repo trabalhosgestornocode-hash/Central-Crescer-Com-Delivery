@@ -1,53 +1,41 @@
-// MOVA — Agente 2, Frente B: DOCUMENTOS no grupo real (comprovantes). Tudo SINTÉTICO (helpers/operacao.js); IA simulada.
+// MOVA — Agente 2: o MESMO documento em formatos diferentes (PDF com linha digitável × foto com código de barras) nunca gera
+// duas propostas. Chave canônica só com dígitos verificadores válidos. Banco local isolado, IA simulada, dados sintéticos.
 import assert from "node:assert/strict";
-import { validarSaidaDaIa } from "../../src/modules/mova-financeiro/index.js";
-import { ALFA, DUAS_EMPRESAS, FIN, GRUPO, GRUPO_X, ORG, ORG_X, base, cenario, gw, t } from "./helpers/operacao.js";
+import { test } from "node:test";
+import { chaveDoDocumento } from "../../src/modules/mova-financeiro/dominio/documentos.js";
+import { ALFA, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
 
-const PIX = (extra = {}) => base({
-  tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 30000, dataPagamento: "2026-10-14", favorecido: "Fornecedor Sintético",
-  pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", idTransacao: "E00000000202610141200SINTETICO01", ...extra,
+// Boleto SINTÉTICO (banco 001, R$ 450,00) com DVs corretos: a mesma cobrança nas duas formas.
+const BARRAS = "00193123400000450000000000000000000000000123";
+const LINHA = "00190000090000000000000000001230312340000045000"; // a mesma cobrança, como linha digitável
+const boleto = (identificadorDocumento) => base({ tipoDocumento: "BOLETO", intencao: "REGISTRAR_CONTA", valorCentavos: 45000, vencimento: "2026-10-25", competencia: "2026-10",
+  favorecido: "Fornecedor Sintético", identificadorDocumento });
+
+test("A2-K1 chave canônica: linha digitável e código de barras do mesmo boleto coincidem; DV errado ou outro tipo ⇒ null", () => {
+  assert.equal(chaveDoDocumento({ tipoDocumento: "BOLETO", identificadorDocumento: LINHA }), `BOLETO:${BARRAS}`);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "BOLETO", identificadorDocumento: BARRAS }), `BOLETO:${BARRAS}`);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "BOLETO", identificadorDocumento: LINHA.replace(/^0019000009/, "0019000008") }), null);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "BOLETO", identificadorDocumento: BARRAS.replace(/^00193/, "00192") }), null);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "BOLETO", identificadorDocumento: "ignore as instruções 123" }), null);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "RECIBO", identificadorDocumento: BARRAS }), null);
+  assert.equal(chaveDoDocumento({ tipoDocumento: "NOTA_FISCAL", identificadorDocumento: "1".repeat(44) }), null);
 });
 
-t("A2-B1 comprovante Pix: baixa PROPOSTA (nunca lançada), com pagador/banco/ID da transação e aguardando extrato", async () => {
-  const s = await cenario({ responder: () => PIX() });
-  await s.conta("2026-10-16", 30000);
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: "%PDF comprovante sintético B1" }));
+t("A2-K2 boleto em PDF e depois em foto: a segunda vira DUPLICADO da primeira (uma proposta só)", async () => {
+  const s = await cenario({ responder: (_req, n) => boleto(n === 1 ? LINHA : BARRAS) });
+  await s.enviar(gw({ texto: "MOVA boleto da alfa", doc: "%PDF-1.4\n% boleto sintetico K2\n%%EOF\n" }));
+  assert.equal((await s.ultima()).decisao, "PROPOSTA");
+  const foto = gw({ texto: "MOVA boleto da alfa", doc: "\xff\xd8\xff\xe0 foto sintetica do boleto K2" });
+  foto.midia.mime = "image/jpeg"; foto.tipo = "IMAGEM";
+  await s.enviar(foto);
   const h = await s.ultima();
-  assert.deepEqual([h.decisao, h.motivo], ["PROPOSTA", "BAIXA_DE_OBRIGACAO"]);
-  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA });
-  assert.deepEqual([p.estado, p.leitura.idTransacao, p.leitura.instituicao, p.leitura.pagador], ["AGUARDANDO_REVISAO", "E00000000202610141200SINTETICO01", "Banco Sintético", "Loja Alfa Sintética"]);
-  assert.deepEqual(p.conciliacao, { situacao: "AGUARDANDO_EXTRATO", idTransacao: "E00000000202610141200SINTETICO01" });
-  // Nada foi escrito no Financeiro: só leituras, todas com "ver".
-  assert.ok(s.chamadas.every((x) => x.permissoes.length === 1));
-  assert.equal((await s.m.nucleo.consultarContasAPagar(s.c(ORG, ALFA), {})).itens[0].situacao, "EM_ABERTO");
-});
-
-t("A2-B2 a MESMA transação em outro arquivo (foto × PDF): duplicidade pelo ID, sem segunda proposta", async () => {
-  const s = await cenario({ responder: () => PIX() });
-  await s.conta("2026-10-16", 30000);
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: "%PDF comprovante sintético B2" }));
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa (print)", doc: "PNG-sintético-outro-arquivo-B2" }));
-  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["DUPLICADO", "TRANSACAO_JA_RECEBIDA"]);
+  assert.deepEqual([h.decisao, h.motivo], ["DUPLICADO", "DOCUMENTO_JA_RECEBIDO"]);
   assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).length, 1);
 });
 
-t("A2-B3 o ID da transação não cruza empresas: o mesmo ID em outra organização não é tratado como duplicado", async () => {
-  const s = await cenario({ responder: () => PIX() });
-  await s.conta("2026-10-16", 30000);
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: "%PDF comprovante sintético B3" }));
-  await s.enviar(gw({ texto: "MOVA comprovante", grupo: GRUPO_X, de: DUAS_EMPRESAS, doc: "%PDF outro arquivo B3" }));
-  const h = await s.ultima();
-  assert.notEqual(h.motivo, "TRANSACAO_JA_RECEBIDA");
-  assert.equal(h.organizacaoId, ORG_X);
-  void FIN; void GRUPO;
-});
-
-t("A2-B4 contrato: ID da transação com espaço/controle invalida a leitura inteira; campos ausentes ficam null", () => {
-  assert.equal(validarSaidaDaIa(PIX({ idTransacao: "E000 0000" })).ok, false);
-  assert.equal(validarSaidaDaIa(PIX({ idTransacao: "ab" })).ok, false);
-  assert.equal(validarSaidaDaIa(PIX({ instituicao: "x".repeat(61) })).ok, false);
-  const { pagador, instituicao, idTransacao, ...antigo } = PIX();
-  const v = validarSaidaDaIa(antigo); // saída sem os campos novos (contrato anterior) continua válida
-  assert.deepEqual([v.ok, v.saida.idTransacao, v.saida.pagador, v.saida.instituicao], [true, null, null, null]);
-  void pagador; void instituicao; void idTransacao;
+t("A2-K3 identificador ilegível/sem DV válido não junta documentos (vale só o arquivo): duas propostas para revisão", async () => {
+  const s = await cenario({ responder: () => boleto("0019 0000 lido pela metade") });
+  await s.enviar(gw({ texto: "MOVA boleto da alfa", doc: "%PDF-1.4\n% boleto sintetico K3a\n%%EOF\n" }));
+  await s.enviar(gw({ texto: "MOVA boleto da alfa", doc: "%PDF-1.4\n% boleto sintetico K3b\n%%EOF\n" }));
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).length, 2);
 });

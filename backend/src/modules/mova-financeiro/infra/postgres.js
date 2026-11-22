@@ -152,6 +152,11 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return x ? { organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, propostaId: x.proposta_id, eventoId: x.evento_id } : null;
       },
       /** Agente 2 — Frente B: documento já recebido com o MESMO identificador de transação na MESMA organização. */
+      async porChave({ organizacaoId, chave }) {
+        const r = await q(`select unidade_id, proposta_id, evento_id from mova.documento where organizacao_id = $1 and leitura->>'chaveDocumento' = $2 order by evento_id limit 1`, [organizacaoId, chave]);
+        const x = r.rows[0];
+        return x ? { organizacaoId, unidadeId: x.unidade_id, propostaId: x.proposta_id, eventoId: x.evento_id } : null;
+      },
       async porTransacao({ organizacaoId, idTransacao }) {
         const r = await q(`select organizacao_id, unidade_id, proposta_id, evento_id from mova.documento
                             where organizacao_id = $1 and leitura->>'idTransacao' = $2 order by evento_id limit 1`, [organizacaoId, idTransacao]);
