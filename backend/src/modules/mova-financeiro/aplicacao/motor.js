@@ -24,7 +24,8 @@ import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
 import { interpretarComando } from "./comandos.js";
-import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento } from "./recebimentoDocumental.js";
+import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
+import { MIDIA_RECUSADA } from "../contratos/evento.js";
 
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
@@ -112,15 +113,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
    * esclarecimento ou grupo de uma unidade), arquivo GUARDADO conferido (sha256, assinatura, PDF sem conteúdo ativo) e registro
    * efetivo antes de confirmar. A confirmação não tem valor nem conteúdo do arquivo (pode sair no grupo).
    */
-  async function receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao }) {
+  async function receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao, midiaLocal = null }) {
     const m = evento.midia;
     if (!MIMES_SEM_LEITURA.includes(m.mime)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "FORMATO_NAO_ACEITO_SEM_LEITURA", resposta: RESPOSTA_DOCUMENTO.formatoNaoAceito(), injecao });
     if (!algumaUnidadePermite(participante, (c) => c.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", resposta: RESPOSTA.perfilSemDocumentos(), injecao });
+    // Integridade ANTES de gravar (bytes ainda em memória): arquivo hostil não chega ao banco nem de quem é autorizado.
+    const arquivoRecusado = (c) => concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: c.motivo, resposta: c.motivo === "PDF_COM_CONTEUDO_ATIVO" ? RESPOSTA_DOCUMENTO.conteudoAtivo() : c.motivo === "ARQUIVO_NAO_GUARDADO" ? RESPOSTA_DOCUMENTO.falhaAoRegistrar() : RESPOSTA_DOCUMENTO.naoConfere(), injecao, extra: { semLeitura: true } });
+    if (midiaLocal) { const c0 = conferirArquivo({ bytes: midiaLocal.bytes, sha256: m.sha256, mime: m.mime }); if (!c0.ok) return arquivoRecusado(c0); }
     const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto]).filter(Boolean);
-    const u = resolverUnidade({ cfg, grupo: daPessoa, textos });
+    // Só as unidades em que ESTA pessoa envia documentos: a pergunta de unidade nunca oferece uma unidade que ela não pode usar.
+    const comDocumentos = { ...daPessoa, unidades: daPessoa.unidades.filter((x) => CAPACIDADES[perfilNa(participante, x)]?.documentos) };
+    const u = resolverUnidade({ cfg, grupo: comDocumentos, textos });
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
-      const nomes = cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId)).map((x) => x.nome);
+      const nomes = cfg.unidades.filter((x) => comDocumentos.unidades.includes(x.unidadeId)).map((x) => x.nome);
       if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
+        // Pendente de identificação: a pessoa já pode enviar documentos em TODAS as unidades oferecidas; o original é guardado
+        // (sem unidade) para a resposta poder ser conferida depois, quando a mensagem desta fila já tiver terminado.
+        if (midiaLocal) await midiaLocal.guardar();
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
       }
@@ -130,21 +139,19 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const unidade = u.unidade;
     const escopo = escopoDe(unidade);
     if (!(CAPACIDADES[perfilNa(participante, unidade.unidadeId)]?.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", escopo, resposta: RESPOSTA.perfilSemDocumentos(), injecao });
+    if (midiaLocal) await midiaLocal.guardar(); // autorizado: perfil na unidade, formato, tamanho e integridade conferidos
     const bytes = obterEvidencia ? await obterEvidencia(m.referencia) : null;
     const c = conferirArquivo({ bytes, sha256: m.sha256, mime: m.mime });
-    if (!c.ok) {
-      const resposta = c.motivo === "PDF_COM_CONTEUDO_ATIVO" ? RESPOSTA_DOCUMENTO.conteudoAtivo() : c.motivo === "ARQUIVO_NAO_GUARDADO" ? RESPOSTA_DOCUMENTO.falhaAoRegistrar() : RESPOSTA_DOCUMENTO.naoConfere();
-      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: c.motivo, escopo, resposta, injecao, extra: { semLeitura: true } });
-    }
+    if (!c.ok) return arquivoRecusado(c); // conferência do que FICOU guardado (lido de volta)
     await a.documentos.marcar(m.sha256, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, eventoId: evento.eventoId, propostaId: null,
       leitura: { modo: MODO_SEM_LEITURA, mime: m.mime, tamanhoBytes: m.tamanhoBytes, nomeArquivo: m.nomeArquivo ?? null, participanteId: evento.participanteId,
         recebidoEm: evento.recebidoEm, legenda: legendaDoDocumento(esclarecimento ? `${evento.texto ?? ""} ${esclarecimento.texto}` : evento.texto), evidenciaUnidade: u.evidencia } });
     // Confirmação SÓ depois do registro efetivo (lido de volta): mesmo arquivo, mesma mensagem, mesma unidade.
     const gravado = await a.documentos.visto(m.sha256);
-    if (gravado && gravado.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: gravado, resposta: RESPOSTA_DOCUMENTO.jaRecebido(), injecao });
+    if (gravado && gravado.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: gravado, resposta: RESPOSTA_DOCUMENTO.jaRecebido(protocoloDoDocumento(m.sha256)), injecao });
     if (!gravado || gravado.unidadeId !== escopo.unidadeId) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: "DOCUMENTO_NAO_REGISTRADO", escopo, resposta: RESPOSTA_DOCUMENTO.falhaAoRegistrar(), injecao });
     await a.auditoria.registrar({ acao: "DOCUMENTO_RECEBIDO_SEM_LEITURA", atorTipo: "SISTEMA", alvo: m.sha256, dados: { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, eventoId: evento.eventoId, mime: m.mime, tamanhoBytes: m.tamanhoBytes } });
-    return concluir(evento, { decisao: DECISAO.DOCUMENTO_RECEBIDO, motivo: "AGUARDANDO_CONFERENCIA", escopo, resposta: RESPOSTA_DOCUMENTO.recebido(unidade.nome), injecao, extra: { semLeitura: true } });
+    return concluir(evento, { decisao: DECISAO.DOCUMENTO_RECEBIDO, motivo: "AGUARDANDO_CONFERENCIA", escopo, resposta: RESPOSTA_DOCUMENTO.recebido(unidade.nome, protocoloDoDocumento(m.sha256)), injecao, extra: { semLeitura: true, protocolo: protocoloDoDocumento(m.sha256) } });
   }
 
   /**
@@ -162,7 +169,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return resto.split(" ").filter(Boolean).every((p) => PALAVRAS_DE_LIGACAO.has(p));
   }
 
-  async function processar(evento, { esclarecimento = null } = {}) {
+  async function processar(evento, { esclarecimento = null, midiaLocal = null } = {}) {
     // 1. Grupo autorizado. Fora da lista: nada é lido, guardado nem respondido.
     const grupo = grupoAutorizado(cfg, evento.grupoId);
     if (!grupo) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "GRUPO_NAO_AUTORIZADO" });
@@ -189,6 +196,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Agente 2 — Frente D: conversa privada de ENTREGADOR ⇒ fluxo próprio, determinístico e SEM IA (só o fechamento dele).
       if (grupo.entregador) {
         if (!entregadores) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "ENTREGADORES_DESLIGADO" });
+        if (evento.midia && midiaLocal) await midiaLocal.guardar(); // entregador cadastrado (fluxo próprio, desligado em produção)
         const r = await entregadores.atender(evento, grupo);
         return concluir(evento, { decisao: r.decisao, motivo: r.motivo, escopo: r.escopo, resposta: r.resposta, extra: { entregador: true } });
       }
@@ -213,10 +221,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       }
     }
 
+    // Agente 2 — arquivo recusado no receptor ANTES de qualquer gravação (perfil, formato, tamanho, cadastro revogado): só a resposta.
+    if (evento.midiaRecusada) {
+      const resposta = { [MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS]: RESPOSTA.perfilSemDocumentos(), [MIDIA_RECUSADA.ARQUIVO_GRANDE]: RESPOSTA_DOCUMENTO.arquivoGrande() }[evento.midiaRecusada] ?? RESPOSTA_DOCUMENTO.formatoNaoAceito();
+      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: evento.midiaRecusada, resposta, extra: { arquivoDescartadoAntesDeGuardar: true } });
+    }
     // 6. Idempotência por DOCUMENTO (mesmo arquivo reenviado em outra mensagem).
     if (evento.midia) {
       const visto = await a.documentos.visto(evento.midia.sha256);
-      if (visto && visto.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: visto, propostaId: visto.propostaId ?? null, resposta: recebimentoDocumental && !visto.propostaId ? RESPOSTA_DOCUMENTO.jaRecebido() : RESPOSTA.duplicado(visto.propostaId) });
+      if (visto && visto.eventoId !== evento.eventoId) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo: visto, propostaId: visto.propostaId ?? null, resposta: recebimentoDocumental && !visto.propostaId ? RESPOSTA_DOCUMENTO.jaRecebido(protocoloDoDocumento(evento.midia.sha256)) : RESPOSTA.duplicado(visto.propostaId) });
     }
 
     // 7. Guardas determinísticas ANTES da IA (nada restrito vai ao modelo): dado restrito e pedido de aprovação pelo grupo.
@@ -228,11 +241,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
     // Agente 2 — recebimento SEM IA: o documento é conferido, guardado e fica para a revisão humana (nada vai à IA, nada é criado
     // no Financeiro). Vem antes do "só consultas": com o recebimento ligado, documento deixa de ser recusado.
-    if (recebimentoDocumental && evento.midia) return receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao });
+    if (recebimentoDocumental && evento.midia) return receberSemLeitura(evento, { participante, daPessoa, esclarecimento, injecao, midiaLocal });
     // 16A (piloto): documento/áudio não é lido (nada vai à IA, nada é criado) — o piloto só responde consultas.
     if (somenteConsultas && evento.midia) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PILOTO_SOMENTE_CONSULTAS", resposta: RESPOSTA.pilotoSomenteConsultas(), injecao });
     // Agente 2: perfil sem envio de documentos (ex.: só consultas) — o documento nem vai à IA.
     if (evento.midia && !algumaUnidadePermite(participante, (c) => c.documentos)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PERFIL_SEM_DOCUMENTOS", resposta: RESPOSTA.perfilSemDocumentos(), injecao });
+    if (evento.midia && midiaLocal) await midiaLocal.guardar(); // leitura por IA (legado): o original é guardado só depois da conferência de perfil
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_APROVACAO.test(evento.texto ?? "")) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "APROVACAO_SO_NO_CENTRO_FINANCEIRO", resposta: RESPOSTA.aprovacaoSoNoDashboard(), injecao });
 
     // 8. Leitura (IA): saída estrita; falha = pede reenvio, nada é criado.

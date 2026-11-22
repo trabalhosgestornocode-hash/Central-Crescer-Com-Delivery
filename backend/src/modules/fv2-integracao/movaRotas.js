@@ -177,6 +177,8 @@ export const CONSULTAS_MOVA = Object.freeze({
     let d;
     try { d = await mova.evidencias.obterDaUnidade(params.sha, escopo(ctx)); } catch (e) { if (e?.codigo === "EVIDENCIA_ADULTERADA") throw recusa(409, "EVIDENCIA_ADULTERADA", "O documento não confere com o registro."); throw e; }
     if (!d) throw recusa(404, "DOCUMENTO_NAO_ENCONTRADO", "Documento não encontrado nesta unidade.");
+    // Agente 2: toda abertura do original fica na trilha (quem, unidade, quando). Sem trilha, o arquivo não sai.
+    await mova.armazenamento.auditoria.registrar({ acao: "DOCUMENTO_ORIGINAL_ABERTO", atorTipo: "USUARIO", alvo: params.sha, dados: { usuarioId: ctx.usuarioId ?? null, ...escopo(ctx) } });
     return { mime: d.mime, nomeArquivo: d.nomeArquivo, base64: Buffer.from(d.bytes).toString("base64") };
   },
 });

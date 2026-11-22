@@ -99,7 +99,7 @@ export const ROTULO_SAIDA = Object.freeze({
   PAGAMENTO_DE_PESSOAL: "Pagamento a pessoa já registrada em conta de pessoal",
   BOLETO_PAGO: "Boleto pago (liquidação de título) sem conta vinculada",
   ARRECADACAO_OU_CONVENIO: "Guia, tributo ou conta de consumo paga por convênio",
-  SEM_ORIGEM_IDENTIFICADA: "Sem origem identificada nos registros",
+  SEM_ORIGEM_IDENTIFICADA: "Sem origem identificada — pendente de classificação (não é pagamento nem despesa presumidos)",
 });
 const REGRAS_DESCRICAO = [
   [MOTIVO_SAIDA.TRANSFERENCIA_ENTRE_CONTAS, /\btransferencia entre contas\b|\bentre contas\b/],

@@ -65,3 +65,5 @@ code { font-size: var(--t-micro); }
 .cf-documento h3 { margin: 0 0 var(--e2); font-size: var(--t-base); }
 .cf-documento .botao { margin-right: var(--e1); }
 .cf-relacionadas select { max-width: 100%; }
+
+.cf-alerta { margin: 8px 0; padding: 8px 12px; border-left: 4px solid var(--cf-alerta, #b45309); background: color-mix(in srgb, var(--cf-alerta, #b45309) 10%, transparent); }

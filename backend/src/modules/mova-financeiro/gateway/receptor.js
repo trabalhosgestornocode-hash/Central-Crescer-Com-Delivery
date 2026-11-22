@@ -9,11 +9,17 @@
 // Não envia nada ao WhatsApp: as respostas ficam na caixa de saída (estado PENDENTE). Não altera as mensagens automáticas.
 import { normalizarGatewayMova } from "../adaptadores/gatewayBaileys.js";
 import { normalizarBaileys } from "../adaptadores/baileys.js";
-import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIMES_ACEITOS, validarEvento } from "../contratos/evento.js";
+import { createHash } from "node:crypto";
+import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIDIA_RECUSADA, MIMES_ACEITOS, validarEvento } from "../contratos/evento.js";
+import { referenciaDoConteudo } from "./evidencias.js";
+import { MIMES_SEM_LEITURA } from "../aplicacao/recebimentoDocumental.js";
 import { conversaAutorizada, grupoAutorizado, mascarar } from "../dominio/configuracao.js";
 import { ErroTransitorio } from "./fila.js";
 import { RESPOSTA } from "../aplicacao/respostas.js";
-import { ACESSO, RETRATO_VALIDADE_MS, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, RETRATO_VALIDADE_MS, algumaUnidadePermite, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
+
+/** Tamanho real do conteúdo em base64 (sem decodificar). */
+const bytesDoBase64 = (b64) => { const s = String(b64).replace(/\s/g, ""); return Math.floor((s.length * 3) / 4) - (s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0); };
 
 /** GATEWAY = payload do Gateway próprio (produção futura); WAMESSAGE = item cru do Baileys (fixtures/simulação). */
 const ADAPTADORES = Object.freeze({ GATEWAY: normalizarGatewayMova, WAMESSAGE: normalizarBaileys });
@@ -22,7 +28,29 @@ const ADAPTADORES = Object.freeze({ GATEWAY: normalizarGatewayMova, WAMESSAGE: n
  * @param {{cfg:object, motor:{processar:Function}, fila:object, evidencias:object, armazenamento:object,
  *          obterMidia?:(bruto:object) => Promise<Uint8Array>, relogio?:() => Date, registrar?:Function}} deps
  */
-export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obterMidia = null, relogio = () => new Date(), registrar = () => {}, controle = null }) {
+export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obterMidia = null, relogio = () => new Date(), registrar = () => {}, controle = null, recebimentoDocumental = false }) {
+  /**
+   * Agente 2 — AUTORIZAÇÃO DO ARQUIVO antes de qualquer gravação (fila, evidência, documento): remetente da lista com perfil que
+   * envia documentos em alguma unidade, cadastro AINDA ativo no banco (revogação vale sem reiniciar), formato e tamanho.
+   * Devolve o motivo da recusa (o conteúdo é descartado) ou null. Grupo ABERTO (legado) não envia documento sem leitura.
+   */
+  async function recusaDoArquivo(grupo, bruto) {
+    const entregador = Boolean(grupo.entregador); // conversa de entregador: cadastro próprio, conferido pelo fluxo dele (desligado em produção)
+    const p = entregador ? null : participanteAutorizado(grupo, bruto);
+    if (!entregador && (!p || (recebimentoDocumental && p.aberto) || !algumaUnidadePermite(p, (c) => c.documentos))) return MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS;
+    const mime = String(bruto.midia.mime ?? "").split(";")[0].trim();
+    if (!MIMES_ACEITOS.includes(mime)) return MIDIA_RECUSADA.FORMATO_NAO_ACEITO;
+    if (recebimentoDocumental && !entregador && !MIMES_SEM_LEITURA.includes(mime)) return MIDIA_RECUSADA.FORMATO_NAO_ACEITO_SEM_LEITURA;
+    const tamanho = bruto.midia.base64 ? bytesDoBase64(bruto.midia.base64) : Number(bruto.midia.tamanhoBytes ?? 0);
+    if (tamanho > MIDIA_MAX_BYTES) return MIDIA_RECUSADA.ARQUIVO_GRANDE;
+    if (recebimentoDocumental && !entregador) {
+      if (typeof armazenamento.autorizacoes?.vigentes !== "function") return MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS; // sem como conferir ⇒ não guarda
+      const v = await armazenamento.autorizacoes.vigentes({ grupoId: bruto.grupoId, participanteId: bruto.participanteId, telefoneE164: bruto.telefoneE164 ?? null });
+      if (!v.some((r) => CAPACIDADES[r.perfil]?.documentos)) return MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS;
+    }
+    return null;
+  }
+
   async function receber(payload, { formato = "GATEWAY" } = {}) {
     // Interruptor em tempo real (Execução 05): desligado/suspenso ⇒ aceita e descarta (200: o Gateway não re-tenta), sem registro.
     if (controle && !(await controle.ligado("recebimento"))) return { status: "IGNORADO", motivo: "RECEBIMENTO_DESLIGADO" };
@@ -68,6 +96,17 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
         if (!a.acionado) return { status: "IGNORADO", motivo: "NAO_ACIONADO" };
         bruto.acionadoPor = a.por;
       }
+      if (bruto.midia) {
+        const motivo = await recusaDoArquivo(grupo, bruto);
+        if (motivo) {
+          registrar({ tipo: "MOVA_ARQUIVO_RECUSADO_ANTES_DE_GUARDAR", motivo, grupo: mascarar(bruto.grupoId) });
+          // Com o recebimento ligado o motor responde o motivo; no legado (com leitura), formato/tamanho seguem como antes (OUTRO, sem resposta própria).
+          const avisar = recebimentoDocumental || motivo === MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS;
+          bruto.midia = null;
+          bruto.tipo = "OUTRO";
+          if (avisar) bruto.midiaRecusada = motivo;
+        }
+      }
       const r = await fila.enfileirar(bruto.eventoId, bruto);
       return r.duplicado ? { status: "DUPLICADO", motivo: "EVENTO_JA_RECEBIDO" } : { status: "ENFILEIRADO" };
     } catch (e) {
@@ -78,6 +117,7 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
 
   async function montarEvento(bruto) {
     let midia = null;
+    let midiaLocal = null;
     let tipo = bruto.tipo;
     if (bruto.midia) {
       const mime = String(bruto.midia.mime ?? "").split(";")[0].trim();
@@ -91,16 +131,21 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
         if (!bytes || bytes.length === 0) throw new ErroTransitorio("MIDIA_INDISPONIVEL");
         if (bytes.length > MIDIA_MAX_BYTES) { tipo = "OUTRO"; }
         else {
-          const g = await evidencias.guardar(bytes, { mime, nomeArquivo: bruto.midia.nomeArquivo });
-          midia = { mime, tamanhoBytes: g.tamanhoBytes, sha256: g.sha256, nomeArquivo: bruto.midia.nomeArquivo ?? null, referencia: g.referencia };
+          // Nada é gravado aqui: o motor confere os bytes em memória e chama `guardar` SÓ depois de autorizar (perfil na unidade,
+          // formato, assinatura, conteúdo ativo).
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          midia = { mime, tamanhoBytes: bytes.length, sha256, nomeArquivo: bruto.midia.nomeArquivo ?? null, referencia: referenciaDoConteudo(sha256) };
+          midiaLocal = Object.freeze({ bytes, guardar: () => evidencias.guardar(bytes, { mime, nomeArquivo: bruto.midia.nomeArquivo ?? null }) });
         }
       }
     }
-    return validarEvento({
+    const v = validarEvento({
+      ...(bruto.midiaRecusada ? { midiaRecusada: bruto.midiaRecusada } : {}),
       contrato: CONTRATO_EVENTO_VERSAO, provedor: bruto.provedor, eventoId: bruto.eventoId, mensagemId: bruto.mensagemId, grupoId: bruto.grupoId,
       participanteId: bruto.participanteId, telefoneE164: bruto.telefoneE164 ?? null, nomeExibicao: bruto.nomeExibicao ?? null, fromMe: bruto.fromMe,
       tipo, texto: bruto.texto ?? null, respostaA: bruto.respostaA ?? null, midia, recebidoEm: bruto.recebidoEm ?? relogio().toISOString(),
     });
+    return v.ok ? { ...v, midiaLocal } : v;
   }
 
   /** Processa o que estiver pendente na fila (chamado por um laço/agendador; nos testes, diretamente). */
@@ -112,7 +157,7 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
         await armazenamento.historico.registrar({ organizacaoId: null, unidadeId: null, eventoId: bruto.eventoId, decisao: "IGNORADO", motivo: `EVENTO_INVALIDO:${v.erro}` });
         return { decisao: "IGNORADO", motivo: "EVENTO_INVALIDO" };
       }
-      return motor.processar(v.evento);
+      return motor.processar(v.evento, { midiaLocal: v.midiaLocal });
     }, {
       aoDesistir: async ({ carga, codigo }) => {
         try {

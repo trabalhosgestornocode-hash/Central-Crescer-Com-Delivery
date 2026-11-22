@@ -8,6 +8,8 @@
 import { createHash } from "node:crypto";
 
 export const METODOS_DAS_EVIDENCIAS = Object.freeze(["guardar", "obter"]);
+/** Referência opaca de um conteúdo (a mesma que `guardar` devolve) — calculada SEM gravar nada. */
+export const referenciaDoConteudo = (sha256) => `evd_${sha256.slice(0, 32)}`;
 
 export function criarEvidenciasMemoria() {
   const porSha = new Map();
@@ -15,7 +17,7 @@ export function criarEvidenciasMemoria() {
     async guardar(bytes, { mime, nomeArquivo = null } = {}) {
       if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new TypeError("bytes inválidos");
       const sha256 = createHash("sha256").update(bytes).digest("hex");
-      const referencia = `evd_${sha256.slice(0, 32)}`;
+      const referencia = referenciaDoConteudo(sha256);
       const repetido = porSha.has(sha256);
       if (!repetido) porSha.set(sha256, { referencia, mime, nomeArquivo, bytes: Buffer.from(bytes) });
       return { referencia, sha256, tamanhoBytes: bytes.length, repetido };
