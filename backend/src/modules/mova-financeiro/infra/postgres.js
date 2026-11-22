@@ -589,6 +589,35 @@ export function criarConsultasPostgres({ pool }) {
   // Conversas que atendem a unidade (escopo das falhas sem unidade). Só metadados saem destas consultas — nunca texto ou documento.
   const CONVERSAS = "select gu.grupo_jid from mova.grupo_unidade gu where gu.organizacao_id = $1 and gu.unidade_id = $2";
   return Object.freeze({
+    /**
+     * Agente 2 — Frente E: VISÃO GERAL da Central de Operações, só com CONTAGENS REAIS do banco do MOVA desta unidade
+     * (nenhum indicador estimado). `dias` limita o período das mensagens; propostas/operações/notas são o estado atual.
+     */
+    async visaoGeral({ organizacaoId, unidadeId, dias = 7 }) {
+      const d = Number.isInteger(dias) && dias >= 1 && dias <= 90 ? dias : 7;
+      const p = [organizacaoId, unidadeId, d];
+      const periodo = "organizacao_id = $1 and unidade_id = $2 and em >= now() - make_interval(days => $3::int)";
+      const [decisoes, mensagens, respostas, propostas, operacoes, notas, automacoes] = await Promise.all([
+        q(`select decisao, count(*)::int n from mova.decisao where ${periodo} group by decisao`, p),
+        q(`select count(distinct evento_id)::int mensagens, count(distinct documento_sha256)::int documentos from mova.decisao where ${periodo}`, p),
+        q(`select r.estado, count(*)::int n from mova.resposta r where r.evento_id in (select evento_id from mova.decisao where ${periodo}) group by r.estado`, p),
+        q("select estado, count(*)::int n, coalesce(sum(valor_centavos), 0)::bigint v from mova.proposta where organizacao_id = $1 and unidade_id = $2 group by estado", [organizacaoId, unidadeId]),
+        q("select estado, count(*)::int n, coalesce(sum(valor_centavos), 0)::bigint v from mova.operacao_executada where organizacao_id = $1 and unidade_id = $2 group by estado", [organizacaoId, unidadeId]),
+        q("select estado, count(*)::int n from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 group by estado", [organizacaoId, unidadeId]),
+        q("select count(*) filter (where ativa and pausada_em is null)::int ativas, count(*) filter (where pausada_em is not null)::int pausadas from mova.automacao where organizacao_id = $1 and unidade_id = $2", [organizacaoId, unidadeId]),
+      ]);
+      const mapa = (rows, f = (r) => r.n) => Object.fromEntries(rows.map((r) => [r.decisao ?? r.estado, f(r)]));
+      const porDecisao = mapa(decisoes.rows);
+      return {
+        periodoDias: d, geradoEm: new Date().toISOString(),
+        mensagens: { recebidas: mensagens.rows[0].mensagens, consultas: porDecisao.CONSULTA ?? 0, documentos: mensagens.rows[0].documentos, ignoradas: porDecisao.IGNORADO ?? 0, bloqueadas: porDecisao.BLOQUEADO ?? 0, porDecisao },
+        respostas: mapa(respostas.rows),
+        propostas: mapa(propostas.rows, (r) => ({ quantidade: r.n, valorCentavos: Number(r.v) })),
+        operacoes: mapa(operacoes.rows, (r) => ({ quantidade: r.n, valorCentavos: Number(r.v) })),
+        notasEntregadores: mapa(notas.rows),
+        automacoes: automacoes.rows[0],
+      };
+    },
     /** H-1: falhas GERAIS (sem unidade identificada) das conversas que atendem a unidade + pendentes dessas conversas. */
     async falhasGerais({ organizacaoId, unidadeId, limite = 100 }) {
       const itens = (await q(`select d.evento_id as "eventoId", d.decisao as tipo, d.motivo, d.em, f.estado, f.tentativas
