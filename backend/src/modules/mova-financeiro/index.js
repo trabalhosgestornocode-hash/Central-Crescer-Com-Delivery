@@ -49,7 +49,7 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false }) {
   const cfg = validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
@@ -59,15 +59,19 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
   // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
   const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
-  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores });
+  const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,
+    recebimentoDocumental, obterEvidencia: (r) => evidencias.obter(r) });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada, execucao });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;
-  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores });
+  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores, recebimentoDocumental });
 }
 /** Nome mantido da Execução 01. */
 export const criarMovaSimulado = criarMova;
 import { criarExecucao } from "./aplicacao/execucao.js";
+// Agente 2 — Central de pendências e documentos recebidos sem IA (só leitura do Financeiro; conferência humana no banco do MOVA).
+export { MOTIVO as MOTIVO_PENDENCIA, MOTIVO_SAIDA, ROTULO_MOTIVO, ROTULO_SAIDA, classificarSaidas, contasRelacionadas, montarConferencia, pendenciaDaConta } from "./aplicacao/centralConferencia.js";
+export { ESTADO_CONFERENCIA, MIMES_SEM_LEITURA, RESPOSTA_DOCUMENTO, TIPOS_INFORMADOS, conferirArquivo } from "./aplicacao/recebimentoDocumental.js";
 import { criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";
 export { AUTOMACAO, RESPOSTA_ENTREGADOR, criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";
 export { criarPortaOperacional, executorDaPessoa, ErroDeExecucao, OPERACOES_DE_ESCRITA } from "./aplicacao/portaOperacional.js";

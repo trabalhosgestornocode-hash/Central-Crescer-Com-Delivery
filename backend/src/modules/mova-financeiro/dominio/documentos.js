@@ -46,3 +46,19 @@ export function chaveDoDocumento({ tipoDocumento, identificadorDocumento } = {})
   if (tipoDocumento === "NOTA_FISCAL" && d.length === 44 && dv11Chave(d.slice(0, 43)) === Number(d[43])) return `NOTA_FISCAL:${d}`;
   return null;
 }
+
+/**
+ * Agente 2 — documento recebido SEM leitura, como a Central o mostra. Estado = a ÚLTIMA conferência humana (trilha só de inclusão);
+ * versão = quantas conferências já houve (concorrência otimista). Nenhum campo vem do conteúdo do arquivo.
+ */
+export function linhaDoRecebido(sha256, d, conferencias = [], { removida = false } = {}) {
+  const l = d.leitura ?? {};
+  const ultima = conferencias.at(-1) ?? null;
+  const conf = (x) => ({ estado: x.estado, tipo: x.tipo ?? null, obrigacaoId: x.obrigacaoId ?? null, observacao: x.observacao ?? null, por: x.por ?? null, em: x.em instanceof Date ? x.em.toISOString() : x.em ?? null });
+  return Object.freeze({
+    sha256, eventoId: d.eventoId, recebidoEm: l.recebidoEm ?? null, mime: l.mime ?? null, tamanhoBytes: l.tamanhoBytes ?? null, nomeArquivo: l.nomeArquivo ?? null,
+    participanteId: l.participanteId ?? null, legenda: l.legenda ?? null, evidenciaUnidade: l.evidenciaUnidade ?? null, arquivoRemovido: Boolean(removida),
+    conferencia: ultima ? { ...conf(ultima), versao: conferencias.length } : { estado: "AGUARDANDO_CONFERENCIA", tipo: null, obrigacaoId: null, observacao: null, por: null, em: null, versao: 0 },
+    historico: conferencias.map(conf),
+  });
+}

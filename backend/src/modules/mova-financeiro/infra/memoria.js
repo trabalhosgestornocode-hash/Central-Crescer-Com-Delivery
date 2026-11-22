@@ -2,6 +2,7 @@
 // durável, Execução 02): eventos, participantes, propostas (com transição condicional), histórico, documentos, mensagens
 // pendentes, caixa de saída, aprovações e auditoria. Tudo separado por organização + unidade.
 import { randomUUID } from "node:crypto";
+import { linhaDoRecebido } from "../dominio/documentos.js";
 
 export const ESTADO_PROPOSTA_MOVA = Object.freeze({ AGUARDANDO_REVISAO: "AGUARDANDO_REVISAO", APLICANDO: "APLICANDO", APLICADA: "APLICADA", REJEITADA: "REJEITADA" });
 const TRANSICOES = { AGUARDANDO_REVISAO: ["APLICANDO", "REJEITADA"], APLICANDO: ["APLICADA", "AGUARDANDO_REVISAO"] };
@@ -14,6 +15,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const propostaPorChave = new Map();
   const historico = [];
   const documentos = new Map();
+  const conferencias = new Map(); // sha256 → conferências em ordem (estado atual = a última)
   const pendentes = new Map();
   const saida = [];
   const aprovacoes = [];
@@ -83,6 +85,27 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async marcar(sha256, dados) { if (!documentos.has(sha256)) documentos.set(sha256, Object.freeze({ ...dados })); },
       async porChave({ organizacaoId, chave }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.chaveDocumento === chave) ?? null; },
       async porTransacao({ organizacaoId, idTransacao }) { return [...documentos.values()].find((d) => d.organizacaoId === organizacaoId && d.leitura?.idTransacao === idTransacao) ?? null; },
+    }),
+    // Agente 2 — documentos recebidos SEM leitura e a conferência humana deles (trilha só de inclusão, como mova.auditoria).
+    documentosRecebidos: Object.freeze({
+      async listar({ organizacaoId, unidadeId, limite = 200 }) {
+        return [...documentos.entries()].filter(([, d]) => d.organizacaoId === organizacaoId && d.unidadeId === unidadeId && d.leitura?.modo === "SEM_LEITURA")
+          .map(([sha256, d]) => linhaDoRecebido(sha256, d, conferencias.get(sha256) ?? [])).sort((x, y) => y.recebidoEm.localeCompare(x.recebidoEm)).slice(0, limite);
+      },
+      async obter({ organizacaoId, unidadeId, sha256 }) {
+        const d = documentos.get(sha256);
+        return d && d.organizacaoId === organizacaoId && d.unidadeId === unidadeId && d.leitura?.modo === "SEM_LEITURA" ? linhaDoRecebido(sha256, d, conferencias.get(sha256) ?? []) : null;
+      },
+      async conferir({ organizacaoId, unidadeId, sha256, versao, por, ...dados }) {
+        const d = documentos.get(sha256);
+        if (!d || d.organizacaoId !== organizacaoId || d.unidadeId !== unidadeId || d.leitura?.modo !== "SEM_LEITURA") return null;
+        const lista = conferencias.get(sha256) ?? [];
+        if (lista.length !== versao) throw Object.assign(new Error("versão"), { codigo: "CONFLITO_VERSAO" });
+        lista.push(Object.freeze({ ...dados, organizacaoId, unidadeId, por, em: relogio().toISOString() }));
+        conferencias.set(sha256, lista);
+        auditoria.push(Object.freeze({ acao: "DOCUMENTO_CONFERENCIA", atorTipo: "USUARIO", atorRef: por, alvo: sha256, dados: { ...dados, organizacaoId, unidadeId, versao } }));
+        return linhaDoRecebido(sha256, d, lista);
+      },
     }),
     mensagens: Object.freeze({
       async lembrar(mensagemId, { grupoId, pendente }) { if (pendente) pendentes.set(mensagemId, { grupoId, pendente, criadaEm: relogio() }); else pendentes.delete(mensagemId); },

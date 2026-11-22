@@ -115,6 +115,8 @@ export function criarFerramentas({ porta, armazenamento }) {
     } catch (e) { if (porta.ehErroDeRegra?.(e)) return { saidas: null, falhou: true }; throw e; }
   }
   const posicao = (hoje) => ({ rotulo: `posição de ${dataBr(hoje)}` });
+  const contas = (n) => `${n} ${n === 1 ? "conta" : "contas"}`;
+  const intervalo = (de, ate) => (de === ate ? `em ${dataBr(de)}` : `de ${dataBr(de)} a ${dataBr(ate)}`);
   const termosDaBusca = (s) => [...new Set(String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3))].slice(0, 6);
   /** Cobertura de dias do canal no mês (calendário do Financeiro). Erro de REGRA (canal fora da unidade) ⇒ sem cobertura. */
   async function coberturaDoCanal(escopo, canal, competencia) {
@@ -198,20 +200,20 @@ export function criarFerramentas({ porta, armazenamento }) {
       if (!x || x.situacao !== "CALCULADO") return insuficiente("SEM_RECEBIVEIS");
       return ok([`a receber em aberto: ${reais(x.saldoCentavos)} (${x.registros} títulos)`]);
     },
-    async CONTAS_A_PAGAR_ABERTAS(escopo) {
+    async CONTAS_A_PAGAR_ABERTAS(escopo, { hoje } = {}) {
       // 16C: UMA varredura das contas (as abertas saem do mesmo resultado); antes eram duas, o dobro do tempo.
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
       const abertas = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao));
       const vencido = abertas.filter((t) => t.vencido).reduce((s, t) => s + t.saldoCentavos, 0);
-      return ok([`a pagar em aberto: ${abertas.length} contas, ${reais(abertas.reduce((s, t) => s + t.saldoCentavos, 0))} (vencido: ${reais(vencido)})`]);
+      return ok([`a pagar em aberto: ${contas(abertas.length)}, ${reais(abertas.reduce((s, t) => s + t.saldoCentavos, 0))} (vencido: ${reais(vencido)})`], hoje ? posicao(hoje) : {});
     },
     async CONTAS_VENCENDO(escopo, { periodo, hoje, detalhe = false }) {
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
       const [de, ate] = periodo.explicito ? [periodo.inicio, periodo.fim] : [hoje, somarDias(hoje, 7)];
       const lista = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.vencimento >= de && t.vencimento <= ate);
-      if (!detalhe) return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
+      if (!detalhe) return ok([`vencendo ${intervalo(de, ate)}: ${contas(lista.length)}, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
       return ok(detalharContas({ todas, lista, de, ate }));
     },
     /** Agente 2: contas VENCIDAS e não pagas (até hoje), com a mais antiga. Detalhe (só FINANCEIRO): a lista com as marcas. */
@@ -223,9 +225,9 @@ export function criarFerramentas({ porta, armazenamento }) {
         return ok(contasVencidas({ todas, hoje, saidas: x.saidas, extratoFalhou: x.falhou }), posicao(hoje));
       }
       const vencidas = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.saldoCentavos > 0 && t.vencimento < hoje).sort((a, b) => a.vencimento.localeCompare(b.vencimento));
-      if (vencidas.length === 0) return ok([`nenhuma conta a pagar vencida até ${dataBr(hoje)}`], { valorCentavos: 0 });
+      if (vencidas.length === 0) return ok([`nenhuma conta a pagar vencida até ${dataBr(hoje)}`], { valorCentavos: 0, ...posicao(hoje) });
       const total = vencidas.reduce((s, t) => s + t.saldoCentavos, 0);
-      return ok([`vencidas e não pagas: ${vencidas.length} contas, ${reais(total)} (a mais antiga venceu em ${dataBr(vencidas[0].vencimento)})`], { valorCentavos: total });
+      return ok([`vencidas e não pagas: ${contas(vencidas.length)}, ${reais(total)} (a mais antiga venceu em ${dataBr(vencidas[0].vencimento)})`], { valorCentavos: total, ...posicao(hoje) });
     },
     /**
      * Agente 2: fechamento semanal dos entregadores próprios — AGREGADO da unidade (nunca o valor de uma pessoa no grupo).
@@ -304,11 +306,12 @@ export function criarFerramentas({ porta, armazenamento }) {
       const c = (await contasTodas(escopo)).filter((t) => (!saida.valorCentavos || t.valorOriginalCentavos === saida.valorCentavos)
         && (!saida.favorecido || nome(t.fornecedor?.nome).includes(nome(saida.favorecido)) || nome(saida.favorecido).includes(nome(t.fornecedor?.nome)))
         && (!saida.vencimento || t.vencimento === saida.vencimento));
-      if (c.length === 0) return insuficiente("CONTA_NAO_ENCONTRADA");
-      if (c.length > 1) return ok([`encontrei ${c.length} contas compatíveis; informe valor e vencimento para eu dizer qual`]);
+      // Não achar a conta é uma resposta (sem valores), não "dados insuficientes" do Financeiro.
+      if (c.length === 0) return ok(["não encontrei conta a pagar com esse fornecedor ou valor; confira o nome do fornecedor ou informe o valor"], posicao(hoje));
+      if (c.length > 1) return ok([`encontrei ${c.length} contas compatíveis; informe valor e vencimento para eu dizer qual`], posicao(hoje));
       const t = c[0];
       const situacao = { PAGO: "paga", PARCIALMENTE_PAGO: "parcialmente paga", EM_ABERTO: "em aberto", VENCIDO: "vencida e em aberto", CANCELADO: "cancelada", AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA: "em aberto (aguardando classificação)" }[t.situacao] ?? t.situacao;
-      return ok([`conta de ${reais(t.valorOriginalCentavos)} com vencimento ${dataBr(t.vencimento)}: ${situacao}; saldo ${reais(t.saldoCentavos)} (pagamento registrado não significa conciliado com o extrato)`]);
+      return ok([`conta de ${reais(t.valorOriginalCentavos)} com vencimento ${dataBr(t.vencimento)}: ${situacao}; saldo ${reais(t.saldoCentavos)} (pagamento registrado não significa conciliado com o extrato)`], posicao(hoje));
     },
     async CATEGORIAS(escopo) {
       const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);

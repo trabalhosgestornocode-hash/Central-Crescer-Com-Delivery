@@ -25,13 +25,48 @@
 //   GET  /api/mova/automacoes            automações da unidade (ver)
 //   POST /acoes/mova/automacao           ligar/desligar e horário (configurar)
 //   POST /acoes/mova/automacao-pausa     pausar/retomar uma automação (configurar)
-import { ACAO } from "../financeiro-v2/index.js";
-import { AUTOMACAO, ErroDeAprovacao } from "../mova-financeiro/index.js";
+//   Agente 2 — Central de pendências e documentos recebidos SEM IA (nada escreve no Financeiro):
+//   GET  /api/mova/conferencia           indicadores, pendências e saídas do extrato classificadas (ver; leitura com a sessão)
+//   GET  /api/mova/documentos-recebidos  fila de revisão dos documentos do WhatsApp (ver)
+//   GET  /api/mova/documento-relacionadas?sha=&busca=  contas que podem se relacionar (pela legenda/busca; o arquivo não é lido) (ver)
+//   POST /acoes/mova/documento-conferir  marcar revisado/encaminhado (documentos); NÃO é baixa nem vínculo financeiro
+import { ACAO, ErroFinanceiro } from "../financeiro-v2/index.js";
+import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, montarConferencia } from "../mova-financeiro/index.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
 const STATUS = { BAIXA_CONFERIDA_COM_EXTRATO: 409, EXTRATO_NAO_CONFERIDO: 409, OPERACAO_NAO_REVERSIVEL: 409, OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const escopo = (ctx) => ({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
+const SHA = /^[0-9a-f]{64}$/;
+const mascararJid = (j) => { const d = String(j ?? "").split("@")[0].replace(/\D/g, ""); return d ? `…${d.slice(-4)}` : "—"; };
+/** Data de hoje em São Paulo (posição da Central). */
+const hojeSp = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const MAX_PAGINAS = 20;
+/** Todas as contas a pagar da unidade da SESSÃO, pelo serviço oficial e com as permissões da sessão (só leitura). */
+async function contasDaSessao(nucleo, ctx) {
+  if (typeof nucleo?.consultarContasAPagar !== "function") throw recusa(503, "FINANCEIRO_INDISPONIVEL", "Financeiro indisponível.");
+  const itens = [];
+  for (let pagina = 1; pagina <= MAX_PAGINAS; pagina++) {
+    const r = await nucleo.consultarContasAPagar(ctx, { pagina, tamanho: 100 });
+    itens.push(...(r.itens ?? []));
+    if (!r.itens || r.itens.length < 100) break;
+  }
+  return itens;
+}
+/** Saídas do extrato sem vínculo (prévia oficial; só leitura). Erro de regra ⇒ null (extrato indisponível, dito na tela). */
+async function saidasDaSessao(nucleo, ctx, todas) {
+  const alguma = todas.find((t) => t.id);
+  if (!alguma) return [];
+  if (typeof nucleo?.previaDoVinculoDoExtrato !== "function") return null;
+  try { const p = await nucleo.previaDoVinculoDoExtrato(ctx, { obrigacaoId: alguma.id }); return Array.isArray(p?.saidasElegiveis) ? p.saidasElegiveis : null; }
+  catch (e) { if (e instanceof ErroFinanceiro) return null; throw e; }
+}
+/** Remetente para a revisão: identificador MASCARADO e o nome do cadastro do grupo (nunca o número inteiro). */
+function remetente(mova, participanteId) {
+  for (const g of mova.cfg.gruposAutorizados) for (const p of g.participantes ?? []) if (p.ids.includes(participanteId)) return { id: mascararJid(participanteId), nome: p.nome ?? null, perfil: p.perfil ?? null };
+  return { id: mascararJid(participanteId), nome: null, perfil: null };
+}
+const documentoParaTela = (mova, d) => { const { participanteId, ...resto } = d; return { ...resto, remetente: remetente(mova, participanteId) }; };
 
 const exigirConfigurar = (ctx) => { if (!ctx?.permissoes?.includes(ACAO.CONFIGURAR)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Alterar automações exige permissão de configuração."); };
 function exigirVer(ctx) {
@@ -43,6 +78,27 @@ const traduzir = (e) => {
 };
 
 export const CONSULTAS_MOVA = Object.freeze({
+  "/mova/conferencia": async ({ ctx, mova, nucleo, nomes }) => {
+    exigirVer(ctx);
+    const todas = await contasDaSessao(nucleo, ctx);
+    const saidas = await saidasDaSessao(nucleo, ctx, todas);
+    const unidade = nomes?.unidade ?? mova.cfg.unidades.find((u) => u.unidadeId === ctx.unidadeId)?.nome ?? null;
+    const documentos = mova.armazenamento.documentosRecebidos ? await mova.armazenamento.documentosRecebidos.listar(escopo(ctx)) : [];
+    return { ...montarConferencia({ todas, saidas, hoje: hojeSp(), empresa: nomes?.empresa ?? null, unidade, documentos }), geradoEm: new Date().toISOString(), recebimentoDocumental: Boolean(mova.recebimentoDocumental) };
+  },
+  "/mova/documentos-recebidos": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const itens = mova.armazenamento.documentosRecebidos ? await mova.armazenamento.documentosRecebidos.listar(escopo(ctx)) : [];
+    return { recebimentoDocumental: Boolean(mova.recebimentoDocumental), podeConferir: Boolean(ctx.permissoes?.includes(ACAO.DOCUMENTOS)), itens: itens.map((d) => documentoParaTela(mova, d)) };
+  },
+  "/mova/documento-relacionadas": async ({ ctx, mova, nucleo, params }) => {
+    exigirVer(ctx);
+    if (!SHA.test(params.sha ?? "")) throw recusa(400, "PARAMETRO_INVALIDO", "Documento inválido.");
+    const d = mova.armazenamento.documentosRecebidos ? await mova.armazenamento.documentosRecebidos.obter({ ...escopo(ctx), sha256: params.sha }) : null;
+    if (!d) throw recusa(404, "DOCUMENTO_NAO_ENCONTRADO", "Documento não encontrado nesta unidade.");
+    const busca = typeof params.busca === "string" && params.busca.trim() ? params.busca.slice(0, 120) : d.legenda ?? "";
+    return { busca, itens: contasRelacionadas(await contasDaSessao(nucleo, ctx), busca) };
+  },
   "/mova/caixa": async ({ ctx, mova }) => { exigirVer(ctx); return mova.consultas.caixaDeEntrada(escopo(ctx)); },
   "/mova/proposta": async ({ ctx, mova, params }) => {
     exigirVer(ctx);
@@ -126,6 +182,29 @@ export const CONSULTAS_MOVA = Object.freeze({
 });
 
 export const ACOES_MOVA = Object.freeze({
+  // Conferência humana de um documento recebido sem IA: trilha só de inclusão no banco do MOVA. Revisado ≠ pago ≠ conciliado.
+  "/mova/documento-conferir": { campos: ["sha256", "versao", "estado", "tipo", "obrigacaoId", "observacao"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, nucleo, b }) => {
+      if (!ctx?.permissoes?.includes(ACAO.DOCUMENTOS)) throw recusa(403, "PERMISSAO_INSUFICIENTE", "Conferir documentos exige permissão de documentos.");
+      if (!SHA.test(b.sha256 ?? "") || !Number.isSafeInteger(b.versao) || b.versao < 0) throw recusa(400, "PARAMETRO_INVALIDO", "Documento ou versão inválidos.");
+      if (![ESTADO_CONFERENCIA.REVISADO, ESTADO_CONFERENCIA.ENCAMINHADO].includes(b.estado)) throw recusa(400, "PARAMETRO_INVALIDO", "Situação inválida (revisado ou encaminhado).");
+      if (b.tipo !== undefined && b.tipo !== null && !TIPOS_INFORMADOS.includes(b.tipo)) throw recusa(400, "PARAMETRO_INVALIDO", "Tipo de documento inválido.");
+      if (b.observacao !== undefined && b.observacao !== null && (typeof b.observacao !== "string" || b.observacao.length > 500)) throw recusa(400, "PARAMETRO_INVALIDO", "Observação de até 500 caracteres.");
+      let obrigacaoId = null;
+      if (b.obrigacaoId !== undefined && b.obrigacaoId !== null) {
+        if (!UUID.test(b.obrigacaoId)) throw recusa(400, "PARAMETRO_INVALIDO", "Conta inválida.");
+        // A conta citada precisa ser DESTA unidade (lida com a sessão). É só uma anotação: nada é vinculado no Financeiro.
+        if (!(await contasDaSessao(nucleo, ctx)).some((t) => t.id === b.obrigacaoId.toLowerCase())) throw recusa(404, "CONTA_NAO_ENCONTRADA", "Conta não encontrada nesta unidade.");
+        obrigacaoId = b.obrigacaoId.toLowerCase();
+      }
+      let r;
+      try {
+        r = await mova.armazenamento.documentosRecebidos.conferir({ ...escopo(ctx), sha256: b.sha256, versao: b.versao, por: ctx.usuarioId,
+          estado: b.estado, tipo: b.tipo ?? null, obrigacaoId, observacao: b.observacao?.trim() || null });
+      } catch (e) { if (e?.codigo === "CONFLITO_VERSAO") throw recusa(409, "CONFLITO_VERSAO", "Outra pessoa conferiu este documento agora. Recarregue e confira de novo."); throw e; }
+      if (!r) throw recusa(404, "DOCUMENTO_NAO_ENCONTRADO", "Documento não encontrado nesta unidade.");
+      return documentoParaTela(mova, r);
+    } },
   // 15A: competência informada na revisão humana (nunca presumida pelo MOVA); não escreve no Financeiro.
   "/mova/competencia": { campos: ["propostaId", "versao", "competencia"], escreveNoFinanceiro: false,
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarCompetencia(ctx, { propostaId: b.propostaId, versao: b.versao, competencia: b.competencia }) },

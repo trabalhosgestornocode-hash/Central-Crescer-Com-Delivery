@@ -8,6 +8,7 @@
 // tenta de novo. Erro de regra do banco (gatilhos MV00x, violação de chave) NÃO é transitório.
 import { createHash, randomUUID } from "node:crypto";
 import { ErroTransitorio } from "../gateway/fila.js";
+import { linhaDoRecebido } from "../dominio/documentos.js";
 
 const TRANSITORIOS = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE", "57P01", "57P02", "57P03", "08000", "08001", "08003", "08006", "53300"]);
 export function ehFalhaDeConexao(e) {
@@ -167,6 +168,35 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         await q(`insert into mova.documento (sha256, organizacao_id, unidade_id, evento_id, proposta_id, leitura) values ($1,$2,$3,$4,$5,$6) on conflict do nothing`,
           [sha256, d.organizacaoId ?? null, d.unidadeId ?? null, d.eventoId, d.propostaId ?? null, d.leitura ? JSON.stringify(d.leitura) : null]);
         if (d.unidadeId) await q("update mova.evidencia set organizacao_id = $2, unidade_id = $3 where sha256 = $1 and unidade_id is null", [sha256, d.organizacaoId, d.unidadeId]);
+      },
+    }),
+    // Agente 2 — documentos recebidos SEM leitura. A conferência humana é trilha SÓ DE INCLUSÃO em mova.auditoria
+    // (DOCUMENTO_CONFERENCIA, alvo = sha256): nada é atualizado nem apagado; o estado é a última conferência.
+    documentosRecebidos: Object.freeze({
+      async listar({ organizacaoId, unidadeId, limite = 200, sha256 = null }) {
+        const r = await q(`select d.sha256, d.evento_id, d.leitura, ev.removida_em, coalesce(c.lista, '[]'::jsonb) as lista
+                             from mova.documento d join mova.evidencia ev on ev.sha256 = d.sha256
+                             left join lateral (select jsonb_agg(a.dados || jsonb_build_object('por', a.ator_ref, 'em', a.em) order by a.seq) as lista
+                                                  from mova.auditoria a where a.acao = 'DOCUMENTO_CONFERENCIA' and a.alvo = d.sha256 and a.dados->>'unidadeId' = d.unidade_id::text) c on true
+                            where d.organizacao_id = $1 and d.unidade_id = $2 and d.leitura->>'modo' = 'SEM_LEITURA' and ($4::text is null or d.sha256 = $4)
+                            order by d.criado_em desc limit $3`, [organizacaoId, unidadeId, limite, sha256]);
+        return r.rows.map((x) => linhaDoRecebido(x.sha256, { eventoId: x.evento_id, leitura: x.leitura }, x.lista, { removida: Boolean(x.removida_em) }));
+      },
+      async obter({ organizacaoId, unidadeId, sha256 }) {
+        return (await this.listar({ organizacaoId, unidadeId, limite: 1, sha256 }))[0] ?? null;
+      },
+      async conferir({ organizacaoId, unidadeId, sha256, versao, por, ...dados }) {
+        return emTransacao(pool, async (tq) => {
+          // Duas pessoas conferindo o MESMO documento: uma espera a outra (sem UPDATE em mova.documento: trava consultiva).
+          await tq("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.documento:${sha256}`]);
+          const d = await tq("select 1 from mova.documento where sha256 = $1 and organizacao_id = $2 and unidade_id = $3 and leitura->>'modo' = 'SEM_LEITURA'", [sha256, organizacaoId, unidadeId]);
+          if (d.rowCount === 0) return null;
+          const n = Number((await tq("select count(*)::int as n from mova.auditoria where acao = 'DOCUMENTO_CONFERENCIA' and alvo = $1", [sha256])).rows[0].n);
+          if (n !== versao) throw Object.assign(new Error("versão"), { codigo: "CONFLITO_VERSAO" });
+          await tq("insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('DOCUMENTO_CONFERENCIA', 'USUARIO', $1, $2, $3)",
+            [por, sha256, JSON.stringify({ ...dados, organizacaoId, unidadeId, versao })]);
+          return true;
+        }).then(async (ok) => (ok ? this.obter({ organizacaoId, unidadeId, sha256 }) : null));
       },
     }),
     mensagens: Object.freeze({
