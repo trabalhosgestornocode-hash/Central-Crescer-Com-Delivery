@@ -61,28 +61,39 @@ export function criarFerramentas({ porta, armazenamento }) {
 
   const ferramentas = {
     async FATURAMENTO(escopo, { periodo, hoje }) {
+      const comp = periodo.competencia;
+      const competenciaInteira = comp && periodo.inicio === `${comp}-01` && (periodo.fim === ultimoDia(comp) || periodo.fim === hoje);
+      // 16C (achado no ensaio com dados reais): na competência inteira (ou até hoje, no mês corrente) a MANCHETE e os canais saem da
+      // MESMA fonte, a DRE — a mesma conta da tela do Financeiro. A lista de vendas venda a venda NÃO inclui os relatórios oficiais
+      // por período (iFood/99Food) e subestimava o total.
+      if (competenciaInteira) {
+        const ap = await porta.ler("apurarCompetencia", escopo, { competencia: comp });
+        const fb = ap?.indicadores?.FATURAMENTO_BRUTO_PROPRIO;
+        if (fb && typeof fb.valorCentavos === "number" && SITUACOES_COM_VALOR.has(fb.situacao)) {
+          const porCanal = Array.isArray(fb.porCanal) ? fb.porCanal : [];
+          const linhas = [`faturamento bruto próprio: ${reais(fb.valorCentavos)} — na DRE: ${ROTULO_SITUACAO_CURTO[fb.situacao]}`];
+          const coberturas = await Promise.all(porCanal.map((c) => coberturaDoCanal(escopo, c.canal, comp)));
+          porCanal.forEach((c, i) => {
+            const cob = coberturas[i];
+            const fonte = FONTE_DO_CANAL[c.canal] ?? cob?.fonte ?? null;
+            // Valor zero sem nenhum dia com dado (ou sem cobertura conhecida) NÃO é "zero confirmado": é ausência de dado.
+            if (c.valorCentavos === 0 && (!cob || cob.diasComDado === 0)) { linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: sem dados registrados${fonte ? ` (${fonte})` : ""} — não é zero confirmado`); return; }
+            const partes = [fonte, c.comprovado ? "comprovado" : "sem comprovação", cob?.texto ?? null].filter(Boolean);
+            linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: ${reais(c.valorCentavos)} (${partes.join("; ")})`);
+          });
+          const soma = porCanal.reduce((t, c) => t + (c.valorCentavos ?? 0), 0);
+          if (porCanal.length && soma !== fb.valorCentavos) linhas.push("atenção: a soma dos canais difere do total da DRE; confira no Centro Financeiro antes de usar");
+          return ok(linhas, { valorCentavos: fb.valorCentavos });
+        }
+      }
+      // Período parcial (ou competência ainda sem faturamento apurado na DRE): só as vendas registradas venda a venda — e a resposta diz isso.
       const r = await porta.ler("consultarVendas", escopo, { inicio: periodo.inicio, fim: periodo.fim });
       const s = r?.resumo;
       if (!s || s.operacoes === 0 || s.brutoProprioCentavos === null) return insuficiente("SEM_VENDAS_REGISTRADAS");
       const linhas = [`faturamento bruto próprio: ${reais(s.brutoProprioCentavos)} (${s.operacoes} registros)`];
-      // 16A: competência inteira (ou até hoje, no mês corrente) ⇒ a composição por canal da DRE, com situação e cobertura.
-      const comp = periodo.competencia;
-      const competenciaInteira = comp && periodo.inicio === `${comp}-01` && (periodo.fim === ultimoDia(comp) || periodo.fim === hoje);
-      const porCanal = competenciaInteira ? (s.dre?.porCanal ?? []) : [];
-      if (porCanal.length) {
-        if (s.dre.situacao && ROTULO_SITUACAO_CURTO[s.dre.situacao]) linhas[0] += ` — na DRE: ${ROTULO_SITUACAO_CURTO[s.dre.situacao]}`;
-        if (s.conferenciaComDre && s.conferenciaComDre.confere === false) linhas.push("atenção: o total das vendas listadas difere do faturamento da DRE; confira no Centro Financeiro antes de usar");
-        for (const c of porCanal) {
-          const cob = await coberturaDoCanal(escopo, c.canal, comp);
-          const fonte = FONTE_DO_CANAL[c.canal] ?? cob?.fonte ?? null;
-          // Valor zero sem nenhum dia com dado (ou sem cobertura conhecida) NÃO é "zero confirmado": é ausência de dado.
-          if (c.valorCentavos === 0 && (!cob || cob.diasComDado === 0)) { linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: sem dados registrados${fonte ? ` (${fonte})` : ""} — não é zero confirmado`); continue; }
-          const partes = [fonte, c.comprovado ? "comprovado" : "sem comprovação", cob?.texto ?? null].filter(Boolean);
-          linhas.push(`${NOME_DO_CANAL[c.canal] ?? c.canal}: ${reais(c.valorCentavos)} (${partes.join("; ")})`);
-        }
-      } else if (comp && !competenciaInteira) {
-        linhas.push("divisão por canal só para a competência inteira (peça o mês)");
-      }
+      linhas.push(competenciaInteira
+        ? "a DRE desta competência ainda não tem faturamento apurado: o valor acima é só das vendas registradas venda a venda"
+        : "valor parcial: só as vendas registradas venda a venda; os relatórios oficiais de iFood e 99Food entram apenas na consulta da competência inteira (peça o mês)");
       if (s.recebidoComprovadoCentavos !== null && s.recebidoComprovadoCentavos !== undefined) linhas.push(`recebido com comprovação no período: ${reais(s.recebidoComprovadoCentavos)} (recebimento não é faturamento)`);
       return ok(linhas, { valorCentavos: s.brutoProprioCentavos });
     },
@@ -114,9 +125,10 @@ export function criarFerramentas({ porta, armazenamento }) {
       return ok([`a receber em aberto: ${reais(x.saldoCentavos)} (${x.registros} títulos)`]);
     },
     async CONTAS_A_PAGAR_ABERTAS(escopo) {
-      const abertas = await porta.contasAPagarAbertas(escopo);
+      // 16C: UMA varredura das contas (as abertas saem do mesmo resultado); antes eram duas, o dobro do tempo.
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
+      const abertas = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao));
       const vencido = abertas.filter((t) => t.vencido).reduce((s, t) => s + t.saldoCentavos, 0);
       return ok([`a pagar em aberto: ${abertas.length} contas, ${reais(abertas.reduce((s, t) => s + t.saldoCentavos, 0))} (vencido: ${reais(vencido)})`]);
     },
@@ -124,7 +136,7 @@ export function criarFerramentas({ porta, armazenamento }) {
       const todas = await contasTodas(escopo);
       if (todas.length === 0) return insuficiente("SEM_CONTAS_A_PAGAR");
       const [de, ate] = periodo.explicito ? [periodo.inicio, periodo.fim] : [hoje, somarDias(hoje, 7)];
-      const lista = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.vencimento >= de && t.vencimento <= ate);
+      const lista = todas.filter((t) => SITUACOES_ABERTAS.includes(t.situacao) && t.vencimento >= de && t.vencimento <= ate);
       return ok([`vencendo de ${dataBr(de)} a ${dataBr(ate)}: ${lista.length} contas, ${reais(lista.reduce((s, t) => s + t.saldoCentavos, 0))}`]);
     },
     async PENDENCIAS(escopo, { periodo }) {
