@@ -114,8 +114,10 @@ export function montarEventoMovaPrivado(m, { jidVerificado, origemTipo = "OFFLIN
  * @param {{grupos:readonly string[], notificar:(payload:object) => Promise<any>, baixarMidia?:(m:any, socket:any) => Promise<Uint8Array>,
  *          log?:Function, maxRecentes?:number, maxMidiaBytes?:number, contatoHomologacao?:object|null}} deps
  *   `contatoHomologacao`: verificador de src/movaHomologacao.js (null = conversa privada nunca passa)
+ *   `retratarMembros`: (grupoJid, socket) => {membros, verificadoEm}|null — retrato dos membros ATUAIS do grupo (grupoInterno.js),
+ *                      enviado junto do evento como `membrosGrupo` (base da política GRUPO_FINANCEIRO). Falha ⇒ o campo não vai.
  */
-export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, log = () => {}, maxRecentes = 2000, maxMidiaBytes = MIDIA_MAX_BYTES, contatoHomologacao = null }) {
+export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, log = () => {}, maxRecentes = 2000, maxMidiaBytes = MIDIA_MAX_BYTES, contatoHomologacao = null, retratarMembros = null }) {
   const recentes = new Set();
   const ativo = (Array.isArray(grupos) && grupos.length > 0) || Boolean(contatoHomologacao);
   const lembrar = (id) => { recentes.add(id); if (recentes.size > maxRecentes) recentes.delete(recentes.values().next().value); };
@@ -127,6 +129,12 @@ export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, l
         if (bytes && bytes.length > 0 && bytes.length <= maxMidiaBytes) payload.midia = { ...payload.midia, tamanhoBytes: bytes.length, base64: Buffer.from(bytes).toString("base64") };
         else if (bytes && bytes.length > maxMidiaBytes) { payload.tipo = "OUTRO"; payload.midia = null; log("warn", "mova.midia_acima_do_limite", {}); }
       } catch { log("warn", "mova.midia_falhou", {}); }   // backend tenta pela porta dele ou responde "não consegui ler"
+    }
+    if (retratarMembros && typeof payload.grupoId === "string" && payload.grupoId.endsWith("@g.us")) {
+      let r = null;
+      try { r = await retratarMembros(payload.grupoId, socket); } catch { r = null; }
+      if (r && Array.isArray(r.membros) && r.membros.length && typeof r.verificadoEm === "string") payload.membrosGrupo = { membros: [...r.membros], verificadoEm: r.verificadoEm };
+      else log("warn", "mova.retrato_membros_indisponivel", {});
     }
     try { await notificar(payload); } catch (e) { log("warn", "mova.notificar_falhou", { erro: e?.codigo ?? e?.name ?? "erro" }); }
   }

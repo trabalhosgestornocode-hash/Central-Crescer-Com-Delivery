@@ -13,7 +13,7 @@ import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIMES_ACEITOS, validarEvento }
 import { conversaAutorizada, grupoAutorizado, mascarar } from "../dominio/configuracao.js";
 import { ErroTransitorio } from "./fila.js";
 import { RESPOSTA } from "../aplicacao/respostas.js";
-import { ACESSO, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
+import { ACESSO, RETRATO_VALIDADE_MS, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
 
 /** GATEWAY = payload do Gateway próprio (produção futura); WAMESSAGE = item cru do Baileys (fixtures/simulação). */
 const ADAPTADORES = Object.freeze({ GATEWAY: normalizarGatewayMova, WAMESSAGE: normalizarBaileys });
@@ -48,6 +48,17 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
         return { status: "IGNORADO", motivo: "GRUPO_NAO_AUTORIZADO" };
       }
       if (bruto.fromMe) return { status: "IGNORADO", motivo: "MENSAGEM_PROPRIA" };
+      // Retrato dos membros (Gateway, canal HMAC) do grupo AUTORIZADO: gravado com a hora da verificação, nunca no futuro e nunca
+      // vencido (o motor exige no máximo 15 min). Sai da carga antes da fila: a lista de membros não fica guardada no evento.
+      if (bruto.membrosGrupo) {
+        const r = bruto.membrosGrupo;
+        delete bruto.membrosGrupo;
+        const agora = relogio().getTime();
+        const em = Date.parse(r.verificadoEm);
+        if (typeof armazenamento.membros?.registrar === "function" && bruto.grupoId.endsWith("@g.us") && em <= agora + 60_000 && agora - em <= RETRATO_VALIDADE_MS) {
+          await armazenamento.membros.registrar({ grupoId: bruto.grupoId, membros: r.membros, verificadoEm: new Date(Math.min(em, agora)).toISOString(), fonte: "GATEWAY" });
+        } else registrar({ tipo: "MOVA_RETRATO_DESCARTADO", grupo: mascarar(bruto.grupoId) });
+      }
       // Agente 2 — grupo por LISTA: quem não está na lista e mensagem que não chama o MOVA são descartados ANTES de guardar
       // qualquer coisa (texto e documento de terceiro não ficam no banco); só um código no log operacional.
       const grupo = grupoAutorizado(cfg, bruto.grupoId);

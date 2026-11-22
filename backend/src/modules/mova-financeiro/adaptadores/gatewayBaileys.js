@@ -10,13 +10,17 @@ const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 export const BASE64_MAX = Math.ceil((15 * 1024 * 1024) / 3) * 4;
 const ehObjeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// Retrato dos membros ATUAIS do grupo (opcional; só em grupo): JIDs de telefone ou LID, sem a própria conta. Base da política
+// GRUPO_FINANCEIRO (valores no grupo só se TODOS estão autorizados). Inválido ⇒ recusa o evento inteiro (contrato fechado).
+const MEMBRO = /^([1-9][0-9]{7,14}@s\.whatsapp\.net|[0-9]{5,24}@lid)$/;
+export const MEMBROS_MAX = 1024;
 
 /**
  * @returns {{ok:true, bruto:object} | {ok:false, motivo:string}}
  */
 export function normalizarGatewayMova(c) {
   if (!ehObjeto(c)) return { ok: false, motivo: "corpo_invalido" };
-  for (const k of Object.keys(c)) if (!CHAVES.includes(k)) return { ok: false, motivo: "campo_desconhecido" };
+  for (const k of Object.keys(c)) if (!CHAVES.includes(k) && k !== "membrosGrupo") return { ok: false, motivo: "campo_desconhecido" };
   for (const k of CHAVES) if (!(k in c)) return { ok: false, motivo: `${k}_ausente` };
   if (c.contratoMova !== CONTRATO_MOVA_VERSAO) return { ok: false, motivo: "contratoMova" };
   if (typeof c.eventoId !== "string" || !ID.test(c.eventoId) || typeof c.mensagemId !== "string" || !ID.test(c.mensagemId)) return { ok: false, motivo: "ids" };
@@ -44,12 +48,22 @@ export function normalizarGatewayMova(c) {
     midia = { mime: m.mime, nomeArquivo: m.nomeArquivo, tamanhoBytes: m.tamanhoBytes ?? null, base64: m.base64 };
   }
   if (["IMAGEM", "DOCUMENTO", "AUDIO"].includes(c.tipo) !== (midia !== null)) return { ok: false, motivo: "midia_incoerente" };
+  let membrosGrupo = null;
+  if (c.membrosGrupo !== undefined && c.membrosGrupo !== null) {
+    const r = c.membrosGrupo;
+    if (!ehObjeto(r) || Object.keys(r).some((k) => k !== "membros" && k !== "verificadoEm")) return { ok: false, motivo: "membrosGrupo" };
+    if (!c.grupoId.endsWith("@g.us")) return { ok: false, motivo: "membrosGrupo" };
+    if (!Array.isArray(r.membros) || r.membros.length < 1 || r.membros.length > MEMBROS_MAX || !r.membros.every((m) => typeof m === "string" && MEMBRO.test(m))) return { ok: false, motivo: "membrosGrupo" };
+    if (new Set(r.membros).size !== r.membros.length) return { ok: false, motivo: "membrosGrupo" };
+    if (typeof r.verificadoEm !== "string" || !ISO.test(r.verificadoEm) || !Number.isFinite(Date.parse(r.verificadoEm))) return { ok: false, motivo: "membrosGrupo" };
+    membrosGrupo = { membros: [...r.membros], verificadoEm: r.verificadoEm };
+  }
   return {
     ok: true,
     bruto: {
       provedor: "BAILEYS", eventoId: c.eventoId, mensagemId: c.mensagemId, grupoId: c.grupoId, participanteId: c.participanteId,
       telefoneE164: c.telefoneE164, nomeExibicao: c.nomeExibicao, fromMe: c.fromMe, tipo: c.tipo, texto: c.texto, respostaA: c.respostaA,
-      midia, recebidoEm: c.recebidoEm, origemTipo: c.origemTipo,
+      midia, recebidoEm: c.recebidoEm, origemTipo: c.origemTipo, ...(membrosGrupo ? { membrosGrupo } : {}),
     },
   };
 }

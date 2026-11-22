@@ -166,3 +166,39 @@ export function exigirGrupoEnviavel(info) {
   if (!info.participa) throw falha(CODIGOS.GRUPO_INEXISTENTE, "a conta não participa do grupo");
   if (!info.podeEnviar) throw falha(CODIGOS.GRUPO_SEM_PERMISSAO, "grupo só-admins e a conta não é admin");
 }
+
+/** JID de membro para o retrato do MOVA: o de TELEFONE (PN) quando o WhatsApp informa; senão o LID. Nunca o da própria conta. */
+const pnCanonico = (j) => (ehPn(j) ? `${j.split("@")[0].split(":")[0]}@s.whatsapp.net` : null);
+const lidCanonico = (j) => (ehLid(j) ? `${j.split("@")[0].split(":")[0]}@lid` : null);
+
+/**
+ * MOVA — RETRATO DOS MEMBROS ATUAIS de um grupo (base da política GRUPO_FINANCEIRO do backend: valores no grupo só se TODOS os
+ * membros estão autorizados). Somente leitura (groupMetadata). Cada membro vira o JID de telefone (PN) quando o WhatsApp o
+ * informa, senão o LID; a própria conta fica de fora. Cache curto por grupo (sem consulta a cada mensagem). Falha ⇒ null (o
+ * backend trata "membros não comprovados" como privado — nunca expõe).
+ * @returns {(grupoJid:string, socket:object) => Promise<{membros:string[], verificadoEm:string}|null>}
+ */
+export function criarRetratoDeMembros({ timeoutMs = TIMEOUT_CONSULTA_GRUPO_MS, cacheMs = 60_000, agora = () => Date.now(), max = 1024 } = {}) {
+  const cache = new Map();
+  return async function retratar(grupoJid, socket) {
+    if (typeof grupoJid !== "string" || !REGEX_JID_GRUPO.test(grupoJid) || typeof socket?.groupMetadata !== "function") return null;
+    const guardado = cache.get(grupoJid);
+    if (guardado && agora() - guardado.em < cacheMs && guardado.socket === socket) return guardado.retrato;
+    let meta;
+    try { meta = await comTimeout(socket.groupMetadata(grupoJid), timeoutMs); } catch { return null; }
+    const minhas = identidadesDaConta(socket);
+    const daConta = (p) => [p?.id, p?.jid, p?.lid, p?.phoneNumber].some((x) => { try { return typeof x === "string" && minhas.has(jidNormalizedUser(x)); } catch { return false; } });
+    const membros = [];
+    for (const p of Array.isArray(meta?.participants) ? meta.participants : []) {
+      if (daConta(p)) continue;
+      const j = pnCanonico(p?.phoneNumber) ?? pnCanonico(p?.jid) ?? pnCanonico(p?.id) ?? lidCanonico(p?.lid) ?? lidCanonico(p?.id);
+      if (!j) return null; // membro sem identidade reconhecível ⇒ não comprova nada
+      if (!membros.includes(j)) membros.push(j);
+    }
+    if (membros.length === 0 || membros.length > max) return null;
+    const retrato = Object.freeze({ membros: Object.freeze(membros), verificadoEm: new Date(agora()).toISOString() });
+    cache.set(grupoJid, { em: agora(), socket, retrato });
+    if (cache.size > 200) cache.delete(cache.keys().next().value);
+    return retrato;
+  };
+}
