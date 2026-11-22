@@ -97,25 +97,39 @@ Barreiras, todas testadas em PostgreSQL real (`test/financeiro-v2/leitor-mova.te
 
 Os testes 16A-05 (motor) e "lê as contas da SUA unidade" (banco) provam isso com uma segunda empresa com dados.
 
-## 5. Implantação (cada passo exige autorização própria)
+## 5. Integração e implantação (cada passo exige autorização própria)
 
+### 5.1 Integração dos três PRs com um único deploy
+- Pilha: **#154** (base `main`) ← **#156** (base `feat/mova-rele-homologacao`) ← **#158** (base `fix/mova-15h-saudacao-destino`).
+- A simulação dos três merges em sequência sobre a `main` atual não tem conflito e **não altera nenhum arquivo do Gateway**.
+- O backend de produção redeploya a cada merge que mude `backend/`. Para publicar **uma vez só**, mescla-se **de cima para baixo nas branches empilhadas**: #158 → #156 → #154. Só o último merge, o do #154 na `main`, publica. Os dois primeiros apenas atualizam branches de feature.
+- Com o deploy, o MOVA continua **desligado em produção**: o boot registra `MOVA: DESABILITADO (DESLIGADO)` e nenhuma variável `MOVA_*` está ligada. O código do piloto só é executado com `MOVA_MODO=PILOTO`, no backend local.
+- **Nenhum código publicado depende da migração 0028 em produção**. A ordem entre o merge e a 0028 é livre; recomenda-se o merge primeiro.
+- O `frontend/` é servido pelo mesmo checkout: o deploy leva também os 2 arquivos da tela Centro Financeiro, que já tem estado "indisponível" sem o MOVA.
+- Reversão do código: deploy do commit anterior no Render. O banco não é afetado.
+
+### 5.2 Sequência até a primeira pergunta real
 | Passo | O quê | Onde | Reversão |
 |---|---|---|---|
-| P1 | merge dos PRs na ordem #154 → #156 → este PR | GitHub | revert |
-| P2 | aplicar `database/financeiro-v2/producao/atualizar.sql` (só a 0028; aborta se produção não estiver exatamente em 0027) | Financeiro **produção** | a 0028 não altera dados; para desligar, revogar (P4) e `nologin` (P3) |
-| P3 | criar o login `fv2_mova_leitor_piloto` (senha fora do Git) **membro só de `fv2_leitor_mova`**, com `search_path` e `connection limit 2` | Financeiro **produção** | `alter role … nologin` (ou `desativar.sql`) |
-| P4 | conceder `financeiro_v2.ver` à `IDENTIDADE_MOVA` **só** no Açaí, pelo próprio Financeiro (administrador, com justificativa e trilha) | Financeiro **produção** | `revogarAcesso`: desligamento **imediato** (a sessão já emitida é encerrada e nenhuma nova é emitida) |
-| P5 | no banco do MOVA (homologação): cadastrar a unidade Açaí (fontes da unidade) e a conversa privada; desativar as unidades e conversas fictícias | MOVA homologação | reativar as anteriores |
-| P6 | perfil local `fase-p`: `MOVA_MODO=PILOTO`, `MOVA_AMBIENTE=piloto`, `MOVA_FINANCEIRO_LEITURA_URL`, `MOVA_PILOTO_UNIDADE_ID`, `MOVA_SERVICO_USUARIO_ID=IDENTIDADE_MOVA`, IA ligada, `MOVA_RESPOSTAS_NATURAIS=0`, envio pelo relé com marco novo e `MOVA_ENVIO_MAXIMO=1` | máquina local | voltar ao perfil fase-b |
-| P7 | orçamento de IA **novo** (o atual está esgotado): Haiku, 1 chamada por pergunta | MOVA homologação | controle `ia=false` |
-| P8 | ativação igual à 15I (flag do Render, relé, controle) para **uma** pergunta, e desligamento logo depois | Render / relé | flag 0, relé e controle desligados |
+| P1 | merges #158 → #156 → #154 (um deploy) | GitHub, Render | deploy anterior |
+| P2 | backup do Financeiro e foto do inventário; `atualizar.sql` (só a 0028; aborta se produção não estiver exatamente na 0027); foto do inventário depois | Financeiro **produção** | a 0028 não altera dados; desligar pelo P3-reversão |
+| P3 | login do leitor: `FV2_MOVA_LEITOR_SENHA=<senha> node scripts/fv2/pacoteProducao.mjs --mova-login fv2_mova_leitor_piloto`; a senha entra como verificador SCRAM e **nunca aparece em SQL ou log**; conferir com `--mova-verificar` | Financeiro **produção** | `--mova-desativar` (bloqueia o login e derruba as conexões; não apaga nada) |
+| P4 | concessão "ver" da identidade do MOVA **só** na unidade piloto: `node scripts/fv2/pacoteProducao.mjs --mova-concessao <empresa> <unidade>`; recusa se já existir concessão ativa em outra unidade | Financeiro **produção** | revogar pelo Financeiro (a sessão já emitida é encerrada na hora) |
+| P5 | no banco do MOVA (homologação): substituir as unidades fictícias da conversa privada pela unidade piloto, com as fontes de faturamento dela; backup das linhas antes | MOVA homologação | restaurar as linhas |
+| P6 | orçamento novo e exclusivo do Haiku: poucas chamadas e teto de custo pequeno, somados ao consumo já registrado | MOVA homologação | voltar os limites anteriores |
+| P7 | perfil local do piloto: `MOVA_MODO=PILOTO`, `MOVA_AMBIENTE=piloto`, `MOVA_FINANCEIRO_LEITURA_URL`, `MOVA_PILOTO_UNIDADE_ID`, `MOVA_SERVICO_USUARIO_ID` da identidade do MOVA, IA ligada, respostas naturais desligadas, teto de 1 resposta; ativação como na 15I e **uma** pergunta | máquina local, Render | desligar controle, relé e flag |
+| P8 | primeiro grupo real: **etapa posterior**, ver 5.3 | — | — |
 
-Primeira pergunta sugerida: **"Quanto o Açaí faturou em novembro?"**
+Os valores reais (IDs, SQL do P5 e do P6, números do orçamento) ficam no roteiro privado, fora do repositório.
 
-A resposta esperada traz:
-- o bruto, com a situação na DRE;
-- uma linha por canal, com a fonte, se está comprovado, "dados até" e os dias sem registro;
-- a posição de leitura do Financeiro.
+### 5.3 Primeiro grupo real (não faz parte do piloto)
+O modo PILOTO recusa grupos de propósito. Para um grupo é preciso, antes:
+1. lista de participantes autorizados por grupo (hoje todo participante de um grupo autorizado é registrado automaticamente);
+2. validar o envio a grupo pelo Gateway no ambiente real;
+3. definir quais consultas valem em grupo;
+4. um grupo real pequeno, com poucos participantes.
+
+Isso é uma etapa de desenvolvimento própria e só começa depois da primeira pergunta privada validada.
 
 ## 6. Testes desta execução (sem rede, sem custo)
 
@@ -145,6 +159,7 @@ A resposta esperada traz:
   - configuração;
   - escopo;
   - montagem recusada sem marcador ou com leitor que escreve.
+- **`test/financeiro-v2/mova-implantacao-sql.test.js` (PostgreSQL real, 2 testes):** concessão só-ver idempotente com histórico; login com verificador SCRAM que conecta de verdade e passa na conferência do próprio MOVA; conferência pós-criação; desligamento de emergência; recusas (outra unidade, papel reservado ou inválido, senha curta).
 - **Ensaio do pacote de produção (`atualizacao-producao.test.js`):**
   - de 0027 para 0028 sem mexer em dado;
   - repetir o pacote é recusado;

@@ -16,7 +16,7 @@
 //   inventario.sql — consulta SÓ-LEITURA que fotografa (sha256) objetos, ACLs, políticas, privilégios padrão e papéis
 //                    de fora do Financeiro v2: rodar ANTES e DEPOIS e comparar (C0).
 //   desativar.sql  — reversão NÃO destrutiva: tira o acesso de login/uso dos papéis do módulo; dados e objetos ficam.
-import { createHash } from "node:crypto";
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -236,6 +236,97 @@ select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CRIACAO'
 /** Executor sintético do bootstrap (não é conta da plataforma; o papel de banco real fica em papel_de_banco). */
 export const EXECUTOR_BOOTSTRAP = "00000000-0000-4000-8000-0000000b0075";
 
+// ------------------------------------------------------------------------------------------------ MOVA (16A/16C)
+/** Identidade técnica do MOVA no Financeiro v2 (a mesma da migração 0028 e de fv2-integracao/leitorMova.js). */
+export const IDENTIDADE_DO_MOVA = "00000000-0000-4000-8000-00000000a0a0";
+const UUID_MOVA = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PAPEIS_DO_MODULO_RESERVADOS = ["fv2_app", "fv2_autoridade", "fv2_guardiao", "fv2_leitor_mova"];
+function exigirPapelDoLeitor(papel) {
+  if (typeof papel !== "string" || !/^fv2_[a-z0-9_]{1,40}$/.test(papel) || PAPEIS_DO_MODULO_RESERVADOS.includes(papel) || /^fv2_(app|autoridade)_login/.test(papel)) {
+    throw new Error("Nome inválido para o papel de login do leitor do MOVA (use fv2_mova_<sufixo>; nunca o de outro papel do módulo).");
+  }
+  return papel;
+}
+
+/**
+ * Concessão SOMENTE-LEITURA ("ver") da identidade do MOVA em UMA unidade: concessão + histórico, no formato do núcleo e
+ * como a dos entregadores. Recusa se a unidade não está no Financeiro v2, se a 0028 não foi aplicada ou se a identidade já
+ * tem concessão ativa em OUTRA unidade (o piloto é de uma unidade só). Idempotente. Gera o SQL; não executa nada.
+ */
+export function sqlConcessaoDoMova(organizacaoId, unidadeId) {
+  if (!UUID_MOVA.test(organizacaoId) || !UUID_MOVA.test(unidadeId)) throw new Error("IDs de empresa/unidade inválidos.");
+  const [o, u, p] = [organizacaoId.toLowerCase(), unidadeId.toLowerCase(), IDENTIDADE_DO_MOVA];
+  const just = "Identidade técnica do MOVA: consultas somente-leitura (piloto de uma unidade).";
+  return `set local search_path = ${S}, pg_catalog, public;
+do $$ begin
+  if not exists (select 1 from pg_proc where proname = 'fv2_abrir_sessao_mova') then raise exception 'MOVA: a migração 0028 não foi aplicada — nada foi feito'; end if;
+  if not exists (select 1 from fv2_escopo where organizacao_id = '${o}' and unidade_id = '${u}') then raise exception 'MOVA: a unidade não está no Financeiro v2 — nada foi feito'; end if;
+  if exists (select 1 from fv2_concessao where usuario_id = '${p}' and situacao = 'ATIVA' and unidade_id <> '${u}') then raise exception 'MOVA: a identidade já tem concessão ativa em outra unidade (o piloto é de uma só) — nada foi feito'; end if;
+end $$;
+with nova as (
+  insert into fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
+  values (gen_random_uuid(), '${o}', '${u}', 1, now(), '${EXECUTOR_BOOTSTRAP}', now(), '${EXECUTOR_BOOTSTRAP}', 'concessao:${p}', null, '{}'::jsonb, '${p}', '["financeiro_v2.ver"]'::jsonb, 'ATIVA', '${EXECUTOR_BOOTSTRAP}', ${literal(just)})
+  on conflict do nothing returning *)
+insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CRIACAO', null, jsonb_build_object('versao', 1, 'acoes', acoes, 'situacao', situacao), justificativa, concedido_por, now() from nova;
+select unidade_id, usuario_id, acoes, situacao, versao from fv2_concessao where usuario_id = '${p}' order by unidade_id;
+`;
+}
+
+/** Verificador SCRAM-SHA-256 do PostgreSQL: a senha em claro nunca vai ao SQL, ao log do banco nem ao histórico de comandos. */
+export function verificadorScram(senha, iteracoes = 4096, sal = randomBytes(16)) {
+  const salgada = pbkdf2Sync(senha, sal, iteracoes, 32, "sha256");
+  const chaveDoCliente = createHmac("sha256", salgada).update("Client Key").digest();
+  const guardada = createHash("sha256").update(chaveDoCliente).digest();
+  const chaveDoServidor = createHmac("sha256", salgada).update("Server Key").digest();
+  return `SCRAM-SHA-256$${iteracoes}:${sal.toString("base64")}$${guardada.toString("base64")}:${chaveDoServidor.toString("base64")}`;
+}
+
+/**
+ * Login do leitor do MOVA: membro SOMENTE de fv2_leitor_mova, máximo de 2 conexões, caminho de busca do módulo e tempos
+ * limite. A senha entra como verificador SCRAM (nunca em claro). Recusa se a 0028 não foi aplicada ou se o papel já existe.
+ * Gera o SQL; não executa nada.
+ */
+export function sqlLoginDoLeitorDoMova(papel, senha) {
+  exigirPapelDoLeitor(papel);
+  if (typeof senha !== "string" || senha.length < 32) throw new Error("Senha do leitor do MOVA: use pelo menos 32 caracteres.");
+  return `do $$ begin
+  if not exists (select 1 from pg_roles where rolname = 'fv2_leitor_mova') then raise exception 'MOVA: a migração 0028 não foi aplicada — nada foi feito'; end if;
+  if exists (select 1 from pg_roles where rolname = '${papel}') then raise exception 'MOVA: o papel ${papel} já existe — nada foi feito'; end if;
+end $$;
+create role ${papel} login password '${verificadorScram(senha)}' nosuperuser nocreatedb nocreaterole noreplication nobypassrls connection limit 2 in role fv2_leitor_mova;
+alter role ${papel} set search_path = ${S}, pg_catalog;
+alter role ${papel} set statement_timeout = '15s';
+alter role ${papel} set idle_in_transaction_session_timeout = '30s';
+`;
+}
+
+/** Conferência SOMENTE-LEITURA do login do leitor (rodar depois de criar). Cada coluna tem o valor esperado no nome. */
+export function sqlVerificacaoDoLeitorDoMova(papel) {
+  exigirPapelDoLeitor(papel);
+  return `select
+  (select count(*) from pg_roles where rolname = '${papel}' and rolcanlogin and not rolsuper and not rolcreaterole and not rolcreatedb and not rolbypassrls and not rolreplication and rolconnlimit = 2)::int as "login_restrito_esperado_1",
+  (select count(*) from pg_auth_members m join pg_roles g on g.oid = m.roleid join pg_roles r on r.oid = m.member where r.rolname = '${papel}')::int as "papeis_membro_esperado_1",
+  (select string_agg(g.rolname, ',') from pg_auth_members m join pg_roles g on g.oid = m.roleid join pg_roles r on r.oid = m.member where r.rolname = '${papel}') as "membro_de_esperado_fv2_leitor_mova",
+  (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = '${S}' and c.relkind in ('r', 'p')
+     and (has_table_privilege('${papel}', c.oid, 'insert') or has_table_privilege('${papel}', c.oid, 'update') or has_table_privilege('${papel}', c.oid, 'delete') or has_table_privilege('${papel}', c.oid, 'truncate')))::int as "tabelas_com_escrita_esperado_0",
+  has_function_privilege('${papel}', '${S}.fv2_abrir_sessao(uuid, uuid, uuid, integer, text)', 'execute') as "emite_sessao_alheia_esperado_false",
+  has_function_privilege('${papel}', '${S}.fv2_gravar_concessao(jsonb, integer)', 'execute') as "grava_concessao_esperado_false",
+  has_function_privilege('${papel}', '${S}.fv2_abrir_sessao_mova(uuid, uuid)', 'execute') as "abre_sessao_mova_esperado_true",
+  (select string_agg(n.nspname || '.' || c.relname, ',' order by 1) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+     where c.relkind in ('r', 'p', 'v', 'm') and n.nspname not in ('pg_catalog', 'information_schema', 'pg_toast', '${S}')
+       and (has_table_privilege('${papel}', c.oid, 'select') or has_table_privilege('${papel}', c.oid, 'insert') or has_table_privilege('${papel}', c.oid, 'update') or has_table_privilege('${papel}', c.oid, 'delete'))) as "fora_do_modulo_esperado_so_pg_stat_statements";
+`;
+}
+
+/** Desligamento de emergência do leitor: bloqueia novas conexões e derruba as abertas. Não apaga nada. Gera o SQL. */
+export function sqlDesativarLeitorDoMova(papel) {
+  exigirPapelDoLeitor(papel);
+  return `alter role ${papel} nologin;
+select count(pg_terminate_backend(pid))::int as conexoes_encerradas from pg_stat_activity where usename = '${papel}';
+`;
+}
+
 /**
  * BOOTSTRAP ADMINISTRATIVO ÚNICO (decisão do proprietário, 15/11): a PRIMEIRA administração financeira de UMA unidade,
  * sem segundo atestador, executada pela autoridade de infraestrutura (`postgres`, mesma credencial da instalação).
@@ -318,6 +409,10 @@ if (executadoDireto && process.argv[2] === "--escopo") {
   process.stdout.write(`${t}-- sha256 ${sha(t)}\n`);
   process.exit(0);
 }
+if (executadoDireto && process.argv[2] === "--mova-concessao") { process.stdout.write(sqlConcessaoDoMova(process.argv[3], process.argv[4])); process.exit(0); }
+if (executadoDireto && process.argv[2] === "--mova-login") { process.stdout.write(sqlLoginDoLeitorDoMova(process.argv[3], process.env.FV2_MOVA_LEITOR_SENHA ?? "")); process.exit(0); }
+if (executadoDireto && process.argv[2] === "--mova-verificar") { process.stdout.write(sqlVerificacaoDoLeitorDoMova(process.argv[3])); process.exit(0); }
+if (executadoDireto && process.argv[2] === "--mova-desativar") { process.stdout.write(sqlDesativarLeitorDoMova(process.argv[3])); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--bootstrap") {
   const { ACAO } = await import("../../src/modules/financeiro-v2/dominio/contexto.js");
   const t = sqlBootstrapAdministrador({ organizacaoId: process.argv[3], unidadeId: process.argv[4], usuarioId: process.argv[5], autorizacao: process.argv[6], acoes: Object.values(ACAO) });
