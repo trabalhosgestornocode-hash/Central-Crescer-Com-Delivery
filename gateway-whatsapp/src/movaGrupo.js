@@ -140,12 +140,20 @@ export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, l
       for (const m of messages ?? []) {
         const remoto = m?.key?.remoteJid;
         if (typeof remoto === "string" && !remoto.endsWith("@g.us")) {
-          // Conversa PRIVADA: só o contato de homologação VERIFICADO; qualquer outro privado é ignorado em silêncio.
+          // Conversa PRIVADA: só contatos VERIFICADOS (homologação e/ou lista autorizada); qualquer outro privado é ignorado.
           if (!contatoHomologacao || m?.key?.fromMe === true) continue;
           const origem = origemDe(m?.key?.id);
           enviados.push((async () => {
-            if (!(await contatoHomologacao.mensagemDoContato(m, socket))) return;
-            const { jid } = await contatoHomologacao.identidade(socket);
+            // Vários contatos (src/movaPrivados.js): a conversa é a do contato que ENVIOU; um só (homologação): o verificado.
+            let jid;
+            if (typeof contatoHomologacao.quemEnviou === "function") {
+              const ident = await contatoHomologacao.quemEnviou(m, socket);
+              if (!ident) return;
+              jid = ident.jid;
+            } else {
+              if (!(await contatoHomologacao.mensagemDoContato(m, socket))) return;
+              ({ jid } = await contatoHomologacao.identidade(socket));
+            }
             const payload = montarEventoMovaPrivado(m, { jidVerificado: jid, origemTipo: origem });
             if (!payload || recentes.has(payload.eventoId)) return;
             lembrar(payload.eventoId);
