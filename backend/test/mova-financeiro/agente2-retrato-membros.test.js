@@ -95,3 +95,11 @@ t("A2-R7 membro só-LID desconhecido no retrato ⇒ privado (identidade não com
   await s.enviar(comRetrato(gw({ texto: PERGUNTA }), [FIN, SOCIO, "123456789012345@lid"]));
   assert.equal((await s.ultima()).politicaResposta, "MEMBRO_SEM_AUTORIZACAO");
 });
+
+t("A2-R8 a política do grupo sobrevive à ida e volta pelo banco (instalar → carregar): GRUPO_FINANCEIRO não vira PRIVADO_RESTRITO", async () => {
+  const { instalarConfiguracao, carregarConfiguracao, validarConfiguracao } = await import("../../src/modules/mova-financeiro/index.js");
+  const s = await cenario({ config: financeiro });
+  await instalarConfiguracao(s.banco.pool, validarConfiguracao(financeiro));
+  const lida = validarConfiguracao(await carregarConfiguracao(s.banco.pool, { identidadeServico: financeiro.identidadeServico, modo: financeiro.modo }));
+  assert.equal(lida.gruposAutorizados.find((g) => g.grupoId === GRUPO).politicaResposta, "GRUPO_FINANCEIRO");
+});
