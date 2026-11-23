@@ -54,6 +54,8 @@ const OPCIONAIS = Object.freeze({
   // Agente 2 — Frente B: campos de COMPROVANTE (quem pagou, banco, identificador da transação). Só leitura do documento: nunca
   // decidem nada sozinhos; servem à duplicidade (a mesma transação em foto e em PDF) e à conferência humana/extrato.
   pagador: null, instituicao: null, idTransacao: null,
+  // 23/11: banco do DESTINATÁRIO e hora impressa (HH:MM[:SS]) — só leitura; nunca decidem nada.
+  instituicaoDestino: null, horaTransacao: null,
   // Execução 17: situação IMPRESSA no comprovante (concluída, agendada, pendente, cancelada). Só leitura: nunca atesta
   // autenticidade; a avaliação (dominio/comprovante.js) decide se o documento serve de evidência.
   situacaoTransacao: null,
@@ -100,6 +102,8 @@ export function validarSaidaDaIa(s) {
   if (typeof o.todasUnidades !== "boolean") return { ok: false, erro: "todasUnidades" };
   if (!textoCurto(o.pagador, 120)) return { ok: false, erro: "pagador" };
   if (!textoCurto(o.instituicao, 60)) return { ok: false, erro: "instituicao" };
+  if (!textoCurto(o.instituicaoDestino, 60)) return { ok: false, erro: "instituicaoDestino" };
+  if (o.horaTransacao !== null && (typeof o.horaTransacao !== "string" || !/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(o.horaTransacao))) return { ok: false, erro: "horaTransacao" };
   if (o.idTransacao !== null && (typeof o.idTransacao !== "string" || !ID_TRANSACAO.test(o.idTransacao))) return { ok: false, erro: "idTransacao" };
   if (o.situacaoTransacao !== null && !SITUACAO_TRANSACAO.includes(o.situacaoTransacao)) return { ok: false, erro: "situacaoTransacao" };
   return { ok: true, saida: Object.freeze({ ...s, ...o }) };
@@ -128,7 +132,7 @@ export function esquemaDaSaida() {
     camposAusentes: { type: "array", items: e(CAMPOS_AUSENTES) }, incertezas: { type: "array", items: { type: "string" } },
     justificativa: t(500), referenciasDocumentais: { type: "array", items: { type: "string" } }, periodoInicio: d, periodoFim: d,
     todasUnidades: { type: "boolean" }, transcricao: t(4096),
-    pagador: t(120), instituicao: t(60), idTransacao: nulo({ type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{3,79}$" }),
+    pagador: t(120), instituicao: t(60), instituicaoDestino: t(60), horaTransacao: nulo({ type: "string", pattern: "^([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d)?$" }), idTransacao: nulo({ type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._/-]{3,79}$" }),
     situacaoTransacao: en(SITUACAO_TRANSACAO),
   };
   return { type: "object", properties: props, required: Object.keys(props), additionalProperties: false };
@@ -147,7 +151,7 @@ export const PROMPT_DO_EXTRATOR = [
   "Mensagem SÓ DE TEXTO (sem documento): tipoDocumento = OUTRO; pagamento já feito = INFORMAR_PAGAMENTO (dataPagamento); conta/boleto a vencer = REGISTRAR_CONTA (vencimento). categoriaSugerida em MAIÚSCULAS_COM_SUBLINHADO (ex.: ENERGIA_ELETRICA, ALUGUEL, INSUMOS). Receita recebida = natureza RECEITA.",
   "Nunca presuma data que não foi dita: sem data na mensagem, a data fica null e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
   "Nota fiscal de serviço (NFS-e): tipoDocumento NOTA_FISCAL; favorecido = prestador/emitente; pagador = tomador; documentoDestinatario = CNPJ/CPF do tomador; identificadorDocumento = número da nota; competencia = mês de competência; valorCentavos = valor dos serviços.",
-  "Comprovante (Pix, TED, boleto pago): pagador = quem pagou; favorecido = quem recebeu; instituicao = banco; idTransacao = ID/E2E/autenticação exatamente como impresso (sem espaços).",
+  "Comprovante (Pix, TED, boleto pago): pagador = quem pagou; favorecido = quem recebeu; instituicao = banco do pagador; instituicaoDestino = banco do recebedor; horaTransacao = hora impressa (HH:MM:SS, sem fuso); idTransacao = ID/E2E/autenticação exatamente como impresso (sem espaços).",
   "situacaoTransacao = o que o comprovante IMPRIME: CONCLUIDA (efetivado/realizado/concluído), AGENDADA (agendamento), PENDENTE (em processamento), CANCELADA; sem indicação clara = NAO_IDENTIFICADA. Nunca afirme que o documento é autêntico.",
   "Contas já vencidas e não pagas = consulta CONTAS_VENCIDAS; fechamento/pagamento semanal dos entregadores = FECHAMENTO_ENTREGADORES.",
   "Seja econômico: incertezas e referenciasDocumentais ficam [] salvo dúvida ou referência real; não repita o texto recebido.",

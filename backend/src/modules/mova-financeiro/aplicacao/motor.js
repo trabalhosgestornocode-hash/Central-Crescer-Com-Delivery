@@ -64,6 +64,18 @@ function fornecedorCompativel(favorecido, titulo) {
  */
 /** 16A: códigos do controle/orçamento da IA (a pergunta não foi lida por decisão operacional, não por erro de quem escreveu). */
 const IA_PAUSADA = Object.freeze(["ORCAMENTO_ESGOTADO", "ORCAMENTO_INDISPONIVEL", "IA_DESLIGADA_NO_CONTROLE"]);
+/** Resposta por CAUSA da falha de leitura: problema técnico nunca vira "envie uma foto mais nítida" (23/11). */
+const CODIGOS_FORMATO = ["MIDIA_NAO_SUPORTADA", "IA_TETO_MIDIA_RECUSADA"];
+const CODIGOS_PESADO = ["IA_TETO_ENTRADA_EXCEDIDA", "IA_TETO_MIDIA_INVALIDA"];
+export function respostaDaFalhaDeLeitura(lida, evento) {
+  if (lida.codigo === "AUDIO_SEM_TRANSCRICAO") return RESPOSTA.audioSemTranscricao();
+  if (!evento.midia) return RESPOSTA.falhaInterpretacao();
+  if (CODIGOS_FORMATO.includes(lida.codigo)) return RESPOSTA_DOCUMENTO.formatoNaoAceito();
+  if (CODIGOS_PESADO.includes(lida.codigo)) return RESPOSTA.documentoPesadoParaLeitura();
+  if (String(lida.motivo).startsWith("IA_SAIDA_INVALIDA")) return RESPOSTA.documentoNaoIdentificado();
+  if (lida.motivo === "DOCUMENTO_ILEGIVEL") return RESPOSTA.falhaLeitura(); // único caso em que o MODELO leu e declarou ilegível
+  return RESPOSTA.falhaTecnicaDeLeitura();
+}
 export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null, recebimentoDocumental = false, obterEvidencia = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
@@ -102,7 +114,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       bruta = await extrator.extrair({ texto: evento.texto, tipo: evento.tipo, midia: evento.midia ? { mime: evento.midia.mime, referencia: evento.midia.referencia } : null, contexto });
     } catch (e) {
       if (e instanceof ErroTransitorio) throw e; // IA/transcrição fora do ar: a fila tenta de novo; nada é criado agora
-      return { ok: false, motivo: e?.codigo ? `EXTRATOR_FALHOU:${e.codigo}` : "EXTRATOR_FALHOU", codigo: e?.codigo ?? null };
+      return { ok: false, motivo: e?.codigo ? `EXTRATOR_FALHOU:${e.codigo}${e.detalhe ? `:${e.detalhe}` : ""}` : "EXTRATOR_FALHOU", codigo: e?.codigo ?? null };
     }
     const v = validarSaidaDaIa(bruta);
     if (!v.ok) return { ok: false, motivo: `IA_SAIDA_INVALIDA:${v.erro}` };
@@ -267,7 +279,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
       // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
       if (!lida.ok && IA_PAUSADA.includes(lida.codigo)) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.iaPausada(), injecao });
-      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: lida.codigo === "AUDIO_SEM_TRANSCRICAO" ? RESPOSTA.audioSemTranscricao() : evento.midia ? RESPOSTA.falhaLeitura() : RESPOSTA.falhaInterpretacao(), injecao });
+      if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: respostaDaFalhaDeLeitura(lida, evento), injecao });
       saida = lida.saida;
     }
 
