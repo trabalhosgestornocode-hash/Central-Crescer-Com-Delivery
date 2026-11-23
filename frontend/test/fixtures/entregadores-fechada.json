@@ -1,0 +1,685 @@
+{
+ "dataBase": "2026-11-23",
+ "fuso": "America/Fortaleza",
+ "inicioDaOperacao": "2026-10-26",
+ "semanaAtual": {
+  "inicio": "2026-11-23",
+  "fim": "2026-11-29",
+  "fimExclusivo": "2026-11-30",
+  "demonstrativo": "2026-11-30",
+  "prazoDaNota": "2026-12-01",
+  "vencimento": "2026-12-02"
+ },
+ "semana": {
+  "inicio": "2026-11-09",
+  "fim": "2026-11-15",
+  "fimExclusivo": "2026-11-16",
+  "demonstrativo": "2026-11-16",
+  "prazoDaNota": "2026-11-17",
+  "vencimento": "2026-11-18",
+  "rotulo": "09 a 15/11/2026",
+  "situacao": "CONSOLIDADA",
+  "provisoria": false,
+  "pendencias": [],
+  "dias": [
+   {
+    "data": "2026-11-09",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-10",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-11",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-12",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-13",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-14",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   },
+   {
+    "data": "2026-11-15",
+    "fonte": "foody",
+    "provisorio": false,
+    "aberto": false,
+    "triagem": 0
+   }
+  ],
+  "fonteDisponivel": true,
+  "motivoDaFonte": null,
+  "atualizadoEm": null,
+  "historica": false,
+  "divergencias": []
+ },
+ "indicadores": {
+  "acumuladoSemanaCentavos": 8500,
+  "entregadoresAtivos": 3,
+  "entregas": 12,
+  "proximaQuarta": {
+   "data": "2026-11-25",
+   "quantidade": 0,
+   "valorCentavos": 0
+  },
+  "aguardandoNotaCentavos": 25500,
+  "liberadoCentavos": 0,
+  "vencidoCentavos": 25500,
+  "pagoCentavos": 0
+ },
+ "entregadores": [
+  {
+   "chave": "ana",
+   "nome": "Ana Sintética",
+   "referencia": null,
+   "valorSemanaCentavos": 1950,
+   "entregasSemana": 3,
+   "porDia": [
+    {
+     "data": "2026-11-09",
+     "entregas": 1,
+     "valorCentavos": 650
+    },
+    {
+     "data": "2026-11-10",
+     "entregas": 1,
+     "valorCentavos": 650
+    },
+    {
+     "data": "2026-11-11",
+     "entregas": 1,
+     "valorCentavos": 650
+    }
+   ],
+   "aPagarCentavos": 5850,
+   "aguardandoNota": 3
+  },
+  {
+   "chave": "bruno",
+   "nome": "Bruno Sintético",
+   "referencia": null,
+   "valorSemanaCentavos": 2800,
+   "entregasSemana": 4,
+   "porDia": [
+    {
+     "data": "2026-11-09",
+     "entregas": 1,
+     "valorCentavos": 700
+    },
+    {
+     "data": "2026-11-10",
+     "entregas": 1,
+     "valorCentavos": 700
+    },
+    {
+     "data": "2026-11-11",
+     "entregas": 1,
+     "valorCentavos": 700
+    },
+    {
+     "data": "2026-11-12",
+     "entregas": 1,
+     "valorCentavos": 700
+    }
+   ],
+   "aPagarCentavos": 8400,
+   "aguardandoNota": 2
+  },
+  {
+   "chave": "carla",
+   "nome": "Carla Sintética",
+   "referencia": null,
+   "valorSemanaCentavos": 3750,
+   "entregasSemana": 5,
+   "porDia": [
+    {
+     "data": "2026-11-09",
+     "entregas": 1,
+     "valorCentavos": 750
+    },
+    {
+     "data": "2026-11-10",
+     "entregas": 1,
+     "valorCentavos": 750
+    },
+    {
+     "data": "2026-11-11",
+     "entregas": 1,
+     "valorCentavos": 750
+    },
+    {
+     "data": "2026-11-12",
+     "entregas": 1,
+     "valorCentavos": 750
+    },
+    {
+     "data": "2026-11-13",
+     "entregas": 1,
+     "valorCentavos": 750
+    }
+   ],
+   "aPagarCentavos": 11250,
+   "aguardandoNota": 3
+  }
+ ],
+ "fechamentos": [
+  {
+   "id": "a192ec88-c6eb-484f-9225-c3c8bb5cf159",
+   "semanaInicio": "2026-11-09",
+   "semanaFim": "2026-11-15",
+   "rotuloSemana": "09 a 15/11/2026",
+   "vencimento": "2026-11-18",
+   "prazoDaNota": "2026-11-17",
+   "entregador": {
+    "chave": "ana",
+    "nome": "Ana Sintética",
+    "referencia": null
+   },
+   "entregas": 3,
+   "valorCentavos": 1950,
+   "entregasCentavos": 1950,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "d19c2e04-ec57-449d-817a-4b15b3eeac9e",
+   "saldoCentavos": 1950,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Ana Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 09–15"
+   ]
+  },
+  {
+   "id": "80c4ca12-71c5-4ea5-a60a-4d372f943f67",
+   "semanaInicio": "2026-11-09",
+   "semanaFim": "2026-11-15",
+   "rotuloSemana": "09 a 15/11/2026",
+   "vencimento": "2026-11-18",
+   "prazoDaNota": "2026-11-17",
+   "entregador": {
+    "chave": "bruno",
+    "nome": "Bruno Sintético",
+    "referencia": null
+   },
+   "entregas": 4,
+   "valorCentavos": 2800,
+   "entregasCentavos": 2800,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "NF_RECEBIDA",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "99dd7c3c-f296-4687-a657-7ec2da7ff26b",
+   "saldoCentavos": 2800,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": {
+    "documentoId": "7077021f-c575-4a21-828e-8c8776c5a5d8",
+    "enviadaEm": "2026-11-23T12:00:00.000Z",
+    "enviadaPor": "cccccccc-0000-4000-8000-000000000001",
+    "vigente": true,
+    "situacao": "NF_RECEBIDA",
+    "numero": "77",
+    "emitente": "Bruno Sintético",
+    "tomador": "Loja Sintética",
+    "referencia": null,
+    "valorCentavos": 2800,
+    "automatica": {
+     "liberada": false,
+     "motivos": [
+      "A nota não é um PDF do emissor nacional legível: confira à mão."
+     ]
+    }
+   },
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Bruno Sintético",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 09–15"
+   ]
+  },
+  {
+   "id": "eb3214d4-6758-4634-b753-96e7d9e8c401",
+   "semanaInicio": "2026-11-09",
+   "semanaFim": "2026-11-15",
+   "rotuloSemana": "09 a 15/11/2026",
+   "vencimento": "2026-11-18",
+   "prazoDaNota": "2026-11-17",
+   "entregador": {
+    "chave": "carla",
+    "nome": "Carla Sintética",
+    "referencia": null
+   },
+   "entregas": 5,
+   "valorCentavos": 3750,
+   "entregasCentavos": 3750,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "13b8fa66-17f8-43ac-96d3-dc1328bf4aa4",
+   "saldoCentavos": 3750,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Carla Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 09–15"
+   ]
+  },
+  {
+   "id": "c3eb060a-0587-4f3e-a0bd-99c7d2b22ab8",
+   "semanaInicio": "2026-11-02",
+   "semanaFim": "2026-11-08",
+   "rotuloSemana": "02 a 08/11/2026",
+   "vencimento": "2026-11-11",
+   "prazoDaNota": "2026-11-10",
+   "entregador": {
+    "chave": "ana",
+    "nome": "Ana Sintética",
+    "referencia": null
+   },
+   "entregas": 3,
+   "valorCentavos": 1950,
+   "entregasCentavos": 1950,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "ab432e2b-0726-4855-a1be-c57af9a25f80",
+   "saldoCentavos": 1950,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Ana Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 02–08"
+   ]
+  },
+  {
+   "id": "27bfa692-a97c-4dc7-8ea0-a077fe5e2bbf",
+   "semanaInicio": "2026-11-02",
+   "semanaFim": "2026-11-08",
+   "rotuloSemana": "02 a 08/11/2026",
+   "vencimento": "2026-11-11",
+   "prazoDaNota": "2026-11-10",
+   "entregador": {
+    "chave": "bruno",
+    "nome": "Bruno Sintético",
+    "referencia": null
+   },
+   "entregas": 4,
+   "valorCentavos": 2800,
+   "entregasCentavos": 2800,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "08c28c29-1442-4875-95c8-b8a59bac4e68",
+   "saldoCentavos": 2800,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Bruno Sintético",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 02–08"
+   ]
+  },
+  {
+   "id": "e5f3ab6f-7a60-4402-923e-223dba433b03",
+   "semanaInicio": "2026-11-02",
+   "semanaFim": "2026-11-08",
+   "rotuloSemana": "02 a 08/11/2026",
+   "vencimento": "2026-11-11",
+   "prazoDaNota": "2026-11-10",
+   "entregador": {
+    "chave": "carla",
+    "nome": "Carla Sintética",
+    "referencia": null
+   },
+   "entregas": 5,
+   "valorCentavos": 3750,
+   "entregasCentavos": 3750,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "b1d21272-8c28-49d7-b84d-9ba3512644ba",
+   "saldoCentavos": 3750,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Carla Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 02–08"
+   ]
+  },
+  {
+   "id": "81296cac-681f-4a24-b506-1d576580f358",
+   "semanaInicio": "2026-10-26",
+   "semanaFim": "2026-11-01",
+   "rotuloSemana": "26/10 a 01/11/2026",
+   "vencimento": "2026-11-04",
+   "prazoDaNota": "2026-11-03",
+   "entregador": {
+    "chave": "ana",
+    "nome": "Ana Sintética",
+    "referencia": null
+   },
+   "entregas": 3,
+   "valorCentavos": 1950,
+   "entregasCentavos": 1950,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "1ce8ee4c-9797-437d-9a6f-b54fc4346ccc",
+   "saldoCentavos": 1950,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Ana Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 26–01"
+   ]
+  },
+  {
+   "id": "6f3f1c5a-192c-4c3c-9e44-3ae16b721e1c",
+   "semanaInicio": "2026-10-26",
+   "semanaFim": "2026-11-01",
+   "rotuloSemana": "26/10 a 01/11/2026",
+   "vencimento": "2026-11-04",
+   "prazoDaNota": "2026-11-03",
+   "entregador": {
+    "chave": "bruno",
+    "nome": "Bruno Sintético",
+    "referencia": null
+   },
+   "entregas": 4,
+   "valorCentavos": 2800,
+   "entregasCentavos": 2800,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "50125e07-c829-4551-80b7-61b25189051a",
+   "saldoCentavos": 2800,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Bruno Sintético",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 26–01"
+   ]
+  },
+  {
+   "id": "8008ce98-d804-4afb-bb82-557835e90b61",
+   "semanaInicio": "2026-10-26",
+   "semanaFim": "2026-11-01",
+   "rotuloSemana": "26/10 a 01/11/2026",
+   "vencimento": "2026-11-04",
+   "prazoDaNota": "2026-11-03",
+   "entregador": {
+    "chave": "carla",
+    "nome": "Carla Sintética",
+    "referencia": null
+   },
+   "entregas": 5,
+   "valorCentavos": 3750,
+   "entregasCentavos": 3750,
+   "ajustesCentavos": 0,
+   "situacaoDocumental": "AGUARDANDO_NF",
+   "situacaoPagamento": "VENCIDO",
+   "obrigacaoId": "574b6a54-386d-4c2d-9210-348ed866e2ce",
+   "saldoCentavos": 3750,
+   "pagoCentavos": 0,
+   "impedimentoDocumental": true,
+   "duplicidade": null,
+   "contaManual": null,
+   "notaVigente": null,
+   "documentos": [],
+   "pasta": [
+    "Entregadores Próprios",
+    "Carla Sintética",
+    "Notas Fiscais",
+    "2026",
+    "Novembro",
+    "Semana 26–01"
+   ]
+  }
+ ],
+ "semanas": [
+  {
+   "inicio": "2026-11-16",
+   "situacao": "AGUARDANDO_FECHAMENTO",
+   "semRegistro": true,
+   "rotulo": "16 a 22/11/2026",
+   "pendencias": null,
+   "divergenciasAbertas": 0,
+   "origem": null
+  },
+  {
+   "inicio": "2026-11-09",
+   "situacao": "CONSOLIDADA",
+   "semRegistro": false,
+   "rotulo": "09 a 15/11/2026",
+   "pendencias": 0,
+   "divergenciasAbertas": 0,
+   "origem": "MANUAL"
+  },
+  {
+   "inicio": "2026-11-02",
+   "situacao": "CONSOLIDADA",
+   "semRegistro": false,
+   "rotulo": "02 a 08/11/2026",
+   "pendencias": 0,
+   "divergenciasAbertas": 0,
+   "origem": "MANUAL"
+  },
+  {
+   "inicio": "2026-10-26",
+   "situacao": "CONSOLIDADA",
+   "semRegistro": false,
+   "rotulo": "26/10 a 01/11/2026",
+   "pendencias": 0,
+   "divergenciasAbertas": 0,
+   "origem": "MANUAL"
+  }
+ ],
+ "extras": [
+  {
+   "id": "31b8bfd2-2d68-4d56-af78-d280ea90c328",
+   "entregador": {
+    "chave": "ana",
+    "nome": "Ana Sintética"
+   },
+   "data": "2026-11-12",
+   "semanaInicio": "2026-11-09",
+   "rotuloSemana": "09 a 15/11/2026",
+   "descricao": "Entrega extra no evento",
+   "valorCentavos": 2500,
+   "situacao": "PENDENTE",
+   "pagoCentavos": 0,
+   "saldoCentavos": 2500,
+   "obrigacaoId": "94ddd776-366c-4ae8-97fe-70910464e5cc",
+   "movimentacaoId": null,
+   "meioPagamento": null,
+   "origem": "CONTA_NOVA",
+   "registroFonteId": null,
+   "justificativa": "Fixture sintética."
+  }
+ ],
+ "resumoSemana": {
+  "taxasFoodyCentavos": 8500,
+  "extrasCentavos": 2500,
+  "totalDevidoCentavos": 11000,
+  "totalPagoCentavos": 0,
+  "saldoAbertoCentavos": 11000,
+  "aguardandoVinculoCentavos": 0,
+  "pendenciasDocumentais": 3,
+  "porEntregador": [
+   {
+    "chave": "ana",
+    "nome": "Ana Sintética",
+    "taxasCentavos": 1950,
+    "taxasPagasCentavos": 0,
+    "extrasCentavos": 2500,
+    "extrasPagosCentavos": 0,
+    "aguardandoVinculoCentavos": 0,
+    "totalDevidoCentavos": 4450,
+    "totalPagoCentavos": 0,
+    "saldoAbertoCentavos": 4450
+   },
+   {
+    "chave": "bruno",
+    "nome": "Bruno Sintético",
+    "taxasCentavos": 2800,
+    "taxasPagasCentavos": 0,
+    "extrasCentavos": 0,
+    "extrasPagosCentavos": 0,
+    "aguardandoVinculoCentavos": 0,
+    "totalDevidoCentavos": 2800,
+    "totalPagoCentavos": 0,
+    "saldoAbertoCentavos": 2800
+   },
+   {
+    "chave": "carla",
+    "nome": "Carla Sintética",
+    "taxasCentavos": 3750,
+    "taxasPagasCentavos": 0,
+    "extrasCentavos": 0,
+    "extrasPagosCentavos": 0,
+    "aguardandoVinculoCentavos": 0,
+    "totalDevidoCentavos": 3750,
+    "totalPagoCentavos": 0,
+    "saldoAbertoCentavos": 3750
+   }
+  ]
+ },
+ "indicadoresDaSemana": {
+  "semanaInicio": "2026-11-09",
+  "provisoria": false,
+  "entregadores": 3,
+  "devidoCentavos": 11000,
+  "pagoCentavos": 0,
+  "saldoCentavos": 11000,
+  "aguardandoNota": {
+   "quantidade": 2,
+   "valorCentavos": 5700
+  },
+  "emAnalise": {
+   "quantidade": 1,
+   "valorCentavos": 2800
+  },
+  "liberado": {
+   "quantidade": 0,
+   "valorCentavos": 0
+  },
+  "vencido": {
+   "quantidade": 3,
+   "valorCentavos": 8500
+  }
+ },
+ "origensDeExtra": {
+  "contas": [],
+  "saidas": []
+ },
+ "cofreDisponivel": true,
+ "permissoes": [
+  "financeiro_v2.ver",
+  "financeiro_v2.registrar",
+  "financeiro_v2.corrigir",
+  "financeiro_v2.cancelar",
+  "financeiro_v2.conciliar",
+  "financeiro_v2.fechar",
+  "financeiro_v2.homologar",
+  "financeiro_v2.revisar",
+  "financeiro_v2.configurar",
+  "financeiro_v2.importar",
+  "financeiro_v2.conceder",
+  "financeiro_v2.documentos",
+  "financeiro_v2.aprovar",
+  "financeiro_v2.aplicar",
+  "financeiro_v2.revogar",
+  "financeiro_v2.confirmar_importacao",
+  "financeiro_v2.reabrir",
+  "financeiro_v2.reclassificar",
+  "financeiro_v2.enviar_documento",
+  "financeiro_v2.vincular_pagamento",
+  "financeiro_v2.baixar_por_comprovante",
+  "financeiro_v2.registrar_obrigacao"
+ ]
+}

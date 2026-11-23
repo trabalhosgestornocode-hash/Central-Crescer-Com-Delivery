@@ -101,8 +101,12 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
   // 15A (Fase D): habilitado EXIGE marco de ativação e lista fechada de destinos — sem eles, o enviador fica desligado
   // (nunca "envia tudo o que está pendente" desde o início da homologação).
   const marcoValido = typeof naoAntesDe === "string" && !Number.isNaN(Date.parse(naoAntesDe));
-  const destinos = Array.isArray(destinosPermitidos) && destinosPermitidos.length > 0 ? [...destinosPermitidos] : null;
-  const ativo = habilitado && marcoValido && destinos !== null;
+  // 23/11: `destinosPermitidos` pode ser uma FUNÇÃO (lista viva: cadastro de entregador sem reinício). É lida a cada lote;
+  // lista vazia ⇒ nada sai. O número antigo de um entregador sai da lista no ato da troca.
+  const dinamico = typeof destinosPermitidos === "function";
+  const lerDestinos = () => { const l = dinamico ? destinosPermitidos() : destinosPermitidos; return Array.isArray(l) && l.length > 0 ? [...l] : null; };
+  const destinosIniciais = lerDestinos();
+  const ativo = habilitado && marcoValido && (dinamico || destinosIniciais !== null);
   if (habilitado && !ativo) registrar({ tipo: "MOVA_ENVIO_RECUSADO_SEM_MARCO_OU_DESTINOS" });
   return Object.freeze({
     habilitado: ativo,
@@ -113,6 +117,8 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       if (rele) await sincronizarRele(envioLigado);
       if (!envioLigado) return { enviadas: 0, desligado: true }; // interruptor em tempo real
       await sincronizarTeto();
+      const destinos = lerDestinos();
+      if (!destinos) return { enviadas: 0, desligado: false, semDestinos: true };
       if (tetoAtingido()) {
         // Atingido: as pendentes não ficam esperando em silêncio — cada uma vira FALHOU com auditoria (gestor vê o motivo).
         for (const r of await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos })) {

@@ -117,6 +117,36 @@ export function validarConfiguracao(c) {
     gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores });
 }
 
+/**
+ * 23/11: CONFIGURAÇÃO VIVA. Antes, o cadastro de um entregador só valia depois de reiniciar o MOVA: a lista e as conversas
+ * privadas dele eram montadas uma vez, na subida. Agora só ESSA parte é trocada em funcionamento — mesma validação
+ * (validarConfiguracao) e só se TODO o resto (unidades, grupos, participantes) estiver idêntico; qualquer outra mudança
+ * continua exigindo reinício. Quem lê `cfg.gruposAutorizados` / `cfg.entregadores` passa a ver a lista nova na hora; o número
+ * antigo sai da lista de conversas (e dos destinos do envio) no mesmo instante.
+ */
+export function configuracaoViva(inicial, { recarregar = null, validadeMs = 60_000, relogio = () => Date.now() } = {}) {
+  let atual = inicial;
+  let lidoEm = relogio();
+  const semEntregadores = (c) => JSON.stringify({ ...c, entregadores: null, gruposAutorizados: c.gruposAutorizados.filter((g) => !g.entregador) });
+  function trocarEntregadores(nova) {
+    if (semEntregadores(nova) !== semEntregadores(atual)) return { trocado: false, motivo: "OUTRAS_MUDANCAS_EXIGEM_REINICIO" };
+    const mudou = JSON.stringify(nova.entregadores) !== JSON.stringify(atual.entregadores);
+    atual = nova;
+    return { trocado: mudou };
+  }
+  const viva = {};
+  for (const k of Object.keys(inicial)) Object.defineProperty(viva, k, { enumerable: true, get: () => atual[k] });
+  /** Relê a lista do banco (forçado, ou se a leitura passou da validade). Falha de leitura mantém a lista atual. */
+  Object.defineProperty(viva, "recarregarEntregadores", { enumerable: false, value: async ({ forcar = false } = {}) => {
+    if (!recarregar) return { trocado: false, motivo: "SEM_RECARGA" };
+    if (!forcar && relogio() - lidoEm < validadeMs) return { trocado: false, motivo: "DENTRO_DA_VALIDADE" };
+    lidoEm = relogio();
+    return trocarEntregadores(await recarregar());
+  } });
+  Object.defineProperty(viva, "trocarEntregadores", { enumerable: false, value: trocarEntregadores });
+  return Object.freeze(viva);
+}
+
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;
 /** Celular brasileiro: o WhatsApp pode identificar a mesma linha com ou sem o nono dígito (55+DDD+9+8 ⇄ 55+DDD+8). */
 const variantesBr = (jid) => {
