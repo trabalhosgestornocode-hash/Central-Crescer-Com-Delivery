@@ -33,6 +33,8 @@ export const RESPOSTA = Object.freeze({
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
   documentoDeOutraUnidade: () => "O documento parece ser de outra unidade (ou de uma unidade que este grupo não atende). Confira e reenvie no lugar certo. Nada foi registrado.",
+  // 24/11: comprovante pago pela conta de uma unidade que esta conversa não atende (identificada pelo titular da conta pagadora).
+  pagadorDeOutraUnidade: (nome) => `Este comprovante foi pago pela conta da ${nome}, que esta conversa não atende. Envie pelo canal autorizado da ${nome} ou peça ao administrador para liberar o acesso. Nada foi registrado.`,
   operacaoBloqueada: () => "Não executo pagamentos bancários nem exclusões. Essas ações são feitas por uma pessoa autorizada, no Financeiro. Nada foi alterado.",
   audioSemTranscricao: () => "Ainda não consigo ouvir áudios aqui. Mande a informação por texto ou foto do documento. Nada foi registrado.",
   relatoRepetido: (propostaId) => `Já existe uma proposta igual aguardando revisão (${curto(propostaId)}). Não criei outra. Se for um novo lançamento, diga o que muda (data ou valor).`,
@@ -62,6 +64,11 @@ export const RESPOSTA = Object.freeze({
   fonteNaoConfirmada: () => "As fontes de faturamento desta unidade ainda não estão confirmadas no Financeiro. Nada foi registrado.",
   propostaBaixa: (p) => `Proposta ${curto(p.id)} criada para revisão: baixa ${p.parcial ? "PARCIAL " : ""}de ${reais(p.valorCentavos)} na conta a pagar existente (pagamento em ${dataBr(p.datas.caixa)}). Nada foi lançado ainda.`,
   propostaDespesaPaga: (p) => `Proposta ${curto(p.id)} criada para revisão: despesa paga de ${reais(p.valorCentavos)} (competência ${p.datas.competencia}, caixa em ${dataBr(p.datas.caixa)}). Não achei conta a pagar correspondente. Nada foi lançado ainda.`,
+  // 24/11: boleto/nota → Contas a Pagar e nota vinculada à conta existente.
+  contaRegistrada: (p, r) => `Conta a pagar registrada: ${reais(p.valorCentavos)}${r?.favorecido ? ` para ${r.favorecido}` : ""}, vencimento ${dataBr(r?.vencimento ?? p.datas?.vencimento)} (competência ${r?.competencia ?? p.datas?.competencia}). Documento anexado; a conta está em aberto no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
+  notaParaVincular: (p, t) => `Esta nota é da conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Proposta ${curto(p.id)}: anexar a nota a essa conta, sem lançar nada novo.`,
+  notaVinculada: (t) => `Nota anexada à conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Nenhuma despesa nova.`,
+  notaComVariasContas: (p) => `Esta nota combina com mais de uma conta a pagar. Encaminhei para conferência (proposta ${curto(p.id)}); nada foi lançado.`,
   propostaObrigacao: (p) => `Proposta ${curto(p.id)} criada para revisão: conta a pagar de ${reais(p.valorCentavos)} com vencimento ${dataBr(p.datas.vencimento)} (competência ${p.datas.competencia}). Nada foi lançado ainda.`,
   financeiroIndisponivel: () => "O Financeiro não respondeu agora. Tente novamente mais tarde; nada foi registrado.",
   bancoIndisponivel: () => "Estou com instabilidade para registrar agora. Reenvie a mensagem em alguns minutos; nada foi registrado.",

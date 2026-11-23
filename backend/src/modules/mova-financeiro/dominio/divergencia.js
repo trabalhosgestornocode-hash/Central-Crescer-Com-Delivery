@@ -96,6 +96,9 @@ const SINONIMOS = Object.freeze([
  */
 export function escolherCategoria({ categorias, categoriaSugerida, legenda }) {
   const lancaveis = (categorias ?? []).filter((c) => c?.aceitaLancamento && c.ativa !== false && ["CUSTO", "DESPESA"].includes(c.natureza));
+  // 24/11: a sugestão que é EXATAMENTE o código de uma categoria lançável do plano da unidade vale (sem ambiguidade possível).
+  const exata = categoriaSugerida ? lancaveis.find((c) => c.codigo === categoriaSugerida) : null;
+  if (exata) return exata.codigo;
   const consulta = normalizar(`${String(categoriaSugerida ?? "").replace(/_/g, " ")} ${legenda ?? ""}`);
   if (!consulta) return null;
   const alvos = new Set();

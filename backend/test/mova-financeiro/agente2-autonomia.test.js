@@ -44,12 +44,13 @@ test("A2-C4 escopo: unidade prevalece sobre empresa; nunca vale para outra empre
   assert.equal(dec([pol({ revogadaEm: "2026-10-14T10:00:00Z" })]).nivel, NIVEL.SOMENTE_PROPOR);
 });
 
-test("A2-C5 política exige responsável, motivo, limite e chaves conhecidas; conta a pagar nova nunca é automática; sem sobreposição", () => {
+test("A2-C5 política exige responsável, motivo, limite e chaves conhecidas; conta a pagar nova automática só por política explícita (24/11); sem sobreposição", () => {
   assert.throws(() => validarPolitica(pol({ responsavel: "" })), /responsavel/);
   assert.throws(() => validarPolitica(pol({ motivo: "curto" })), /motivo/);
   assert.throws(() => validarPolitica(pol({ limiteCentavos: 0 })), /limiteCentavos/);
   assert.throws(() => validarPolitica(pol({ sql: "drop" })), /sql/);
-  assert.throws(() => validarPolitica(pol({ operacao: OPERACAO.CONTA_A_PAGAR })), /automática/);
+  // 24/11 (decisão do proprietário): conta a pagar nova pode ser automática quando a política da unidade o disser.
+  assert.equal(validarPolitica(pol({ operacao: OPERACAO.CONTA_A_PAGAR })).nivel, "APLICAR_AUTOMATICO");
   assert.throws(() => validarPoliticas([pol({ id: "a" }), pol({ id: "b" })]), /vigentes/);
   assert.equal(validarPoliticas([pol({ id: "a", vigenteAte: "2026-10-31" }), pol({ id: "b", vigenteDe: "2026-11-01" })]).length, 2);
 });

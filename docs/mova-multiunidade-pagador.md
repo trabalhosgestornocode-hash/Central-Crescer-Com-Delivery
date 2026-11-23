@@ -1,0 +1,76 @@
+# MOVA multiunidade — unidade pelo pagador, Açaí + Subway, boletos e notas no Contas a Pagar
+
+Estado: **código pronto; nada ativado em produção.** Este PR não aplica migração, não grava cadastro, não concede permissão
+e não liga chave. Cada passo de ativação abaixo exige aprovação específica.
+
+## O que muda
+
+1. **Unidade pelo titular da conta pagadora.** O comprovante traz o pagador (titular da conta de origem) e, quando impresso,
+   o CPF/CNPJ dele. O cadastro da unidade no MOVA ganha `pagadores` (migração MOVA 0015):
+   - Açaí no Grau Saci: `[{"nome": "<titular da conta pagadora do Açaí>"}]`;
+   - Subway Saci: `[{"nome": "<titular da conta pagadora da Subway>"}]` (e, se houver, `{"documento": "<CNPJ da conta>"}`).
+   Os titulares reais são informados pelo proprietário no cadastro (kit abaixo), nunca no repositório.
+   Regras (em `dominio/pagador.js`, um único lugar):
+   - só os campos **pagador** e **documento do pagador** contam. Favorecido, descrição e legenda nunca identificam a unidade;
+   - o nome é comparado depois de normalizado (sem acento, pontuação ou caixa). Para nomes de 4+ letras, aceita sufixo
+     societário (LTDA, ME, EPP…). **Nome curto ("MP") só por igualdade exata**: "MP LTDA", "MERCADO PAGO" e "AMP" não casam;
+   - documento mascarado nunca identifica; nome de uma unidade + documento de outra = conflito;
+   - o mesmo pagador em duas unidades é recusado na montagem.
+   O pagador **não dá acesso**. Se a conversa não atende a unidade do pagador, o MOVA orienta o canal autorizado e não registra
+   nada. Se a legenda ou o documento apontarem outra unidade, ele pergunta, e insistir não força o registro.
+2. **Açaí e Subway na mesma conversa.** Os dois estão em **empresas diferentes** no Financeiro, e até aqui a conversa privada
+   nunca juntava empresas. A Subway (unidade sem grupo, #187) ganha no cadastro:
+   - `participantes`: quem pode enviar documentos dela no privado;
+   - `acesso_multiempresa`: autoriza juntar a Subway às unidades que a pessoa já tem pelo grupo do Açaí.
+   Sem essa marca, a conversa com duas empresas é descartada, como antes. Faturamento de empresas diferentes nunca é somado.
+3. **Boleto/nota → Contas a Pagar e calendário oficiais.**
+   - **Boleto** (ou nota a pagar) com fornecedor, vencimento, competência e categoria definidos vira conta a pagar EM ABERTO,
+     com o documento anexado. Usa o serviço oficial `registrarObrigacaoDocumental` (ação estreita `registrar_obrigacao`) e
+     aparece no Contas a Pagar e no calendário oficial. Nenhuma baixa sem comprovante.
+   - **Nota fiscal** de conta já registrada (mesmo fornecedor e valor) é **anexada** à conta, sem conta ou despesa nova (proposta
+     `VINCULO_DE_DOCUMENTO`). Mais de uma conta compatível vai para conferência.
+   - Chave própria `MOVA_OPERACAO_CRIAR_CONTAS` (desligada; exige a autonomia) e políticas `CONTA_A_PAGAR` e `ANEXAR_DOCUMENTO`.
+4. **Políticas por operação, sem teto universal.** Não existe teto de R$ 500 no código: cada operação tem a própria política por
+   unidade. As operações são compra nova já paga (`DESPESA_DOCUMENTAL`), baixa de conta existente (`BAIXA_DOCUMENTAL`), conta a
+   pagar nova (`CONTA_A_PAGAR`), anexo de nota (`ANEXAR_DOCUMENTO`) e juros (`JUROS_DOCUMENTAL`, inalterada). Acima do limite, a
+   operação vira confirmação de uma pessoa: o valor sozinho nunca impede o cadastro. A conta a pagar nova automática deixou de
+   ser proibida no banco (0015) e depende de política explícita. Duplicidade, idempotência, auditoria e permissões estão mantidas.
+5. **Correção:** a escolha da categoria nunca funcionava. O plano de contas vem em árvore e era lido como lista plana, então
+   tudo ia para "a classificar". Agora a árvore é percorrida, e a sugestão que é exatamente o código de uma categoria do plano
+   vale. Fora isso, continua valendo só uma categoria casando.
+
+## Ativação (nesta ordem; cada passo com aprovação específica)
+
+0. Merge deste PR (deploy automático; nada muda sem os passos abaixo).
+1. Backup dos schemas `mova` e `financeiro_v2`. Aplicar `database/mova-financeiro/producao/atualizar.sql`, que traz só a 0015.
+   Recuperação: `database/mova-financeiro/recuperacao/reverter-0015.sql` (ensaiada: volta byte a byte ao retrato da 0014).
+2. Cadastro pelos kits (geram SQL para revisar; não executam):
+   - Açaí: `node scripts/mova/acessoDaUnidade.mjs --unidade <id Açaí> --pagador "<titular>" --motivo "…"`;
+   - Subway: cadastro da unidade sem grupo (`scripts/mova/unidadeSemGrupo.mjs`, fontes SWF + iFood + 99Food), depois
+     `node scripts/mova/acessoDaUnidade.mjs --unidade <id Subway> --sem-grupo --pagador "<titular>" --participante '<json>' --multiempresa --motivo "…"`.
+   - **Conferir também as fontes do Açaí** no MOVA: hoje estão `A_CONFIRMAR`, e isso bloqueia a aplicação de propostas na Central
+     (`REQUISITOS_FINANCEIROS_INCOMPLETOS`).
+3. Concessão "ver" da identidade de leitura do MOVA na Subway (`pacoteProducao.mjs --mova-concessao … --alem-de …`) e
+   `MOVA_OPERACAO_UNIDADES` com as duas unidades. Reiniciar o MOVA.
+4. Escrita (só quando aprovada): identidade operacional própria (`MOVA_IDENTIDADE_OPERACIONAL`, `MOVA_OPERACAO_ESCRITA=1`) com
+   concessão **por unidade**: `ver`, `enviar_documento`, `baixar_por_comprovante`, `registrar_obrigacao` (e `registrar_juros` se
+   aprovado). Ainda não existe gerador revisado para essa concessão: criar antes de ativar. Políticas por operação e por
+   unidade, cadastradas na Central, com os limites reais de cada empresa.
+5. `MOVA_OPERACAO_CRIAR_CONTAS=1` para boletos e notas.
+6. Homologação real nas duas unidades: um comprovante pago pela conta de cada empresa, um boleto e uma nota, com acompanhamento.
+
+Desligar: revogar a política (vale na hora) ou a concessão; desligar a chave; `acesso_multiempresa = false` e reiniciar.
+
+## Testes (`test/mova-financeiro/mova-multiunidade-pagador.test.js`)
+
+25 testes cobrem:
+- os casos 1–20 pedidos (titulares sintéticos): titular A→unidade A; titular "MP"→unidade B; MP na descrição, "Mercado Pago" e MP no favorecido não identificam; documento
+  sem identificação pergunta; conflito não grava; identidade só de uma empresa não escreve na outra; a conversa que só atende uma
+  unidade, ao receber comprovante da outra, orienta o canal certo; isolamento com as duas;
+- compra nova, conta existente, parcial, juros, duplicado e reenvio;
+- boleto no Contas a Pagar e no calendário;
+- nota vinculada a conta existente;
+- falha intermediária sem duplicar;
+- nenhuma transferência ou saída bancária.
+Os mesmos testes passam com o Financeiro v2 no PostgreSQL real (RLS e gatilhos da 0030).
+Simulação não substitui a homologação operacional.

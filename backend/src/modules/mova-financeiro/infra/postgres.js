@@ -622,9 +622,9 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
                 on conflict (grupo_jid) do update set ativo = true, acesso = excluded.acesso, consultas_no_grupo = excluded.consultas_no_grupo, politica_resposta = excluded.politica_resposta`,
       [g.grupoId, unidades[0].organizacaoId, instanciaId, tipoDe(g), g.acesso ?? "ABERTO", g.consultasNoGrupo ?? [], g.politicaResposta ?? "PRIVADO_RESTRITO"]);
       for (const u of unidades) {
-        await tx(`insert into mova.grupo_unidade (grupo_jid, organizacao_id, unidade_id, nome, apelidos, documentos, fontes) values ($1,$2,$3,$4,$5,$6,$7)
-                  on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes`,
-        [g.grupoId, u.organizacaoId, u.unidadeId, u.nome, u.apelidosOriginais ?? u.apelidos, u.documentos, JSON.stringify(u.fontesOriginais ?? u.fontes)]);
+        await tx(`insert into mova.grupo_unidade (grupo_jid, organizacao_id, unidade_id, nome, apelidos, documentos, fontes, pagadores) values ($1,$2,$3,$4,$5,$6,$7,$8)
+                  on conflict (grupo_jid, unidade_id) do update set nome = excluded.nome, apelidos = excluded.apelidos, documentos = excluded.documentos, fontes = excluded.fontes, pagadores = excluded.pagadores`,
+        [g.grupoId, u.organizacaoId, u.unidadeId, u.nome, u.apelidosOriginais ?? u.apelidos, u.documentos, JSON.stringify(u.fontesOriginais ?? u.fontes), JSON.stringify(pagadoresBrutos(u))]);
       }
       if (g.derivada || (g.acesso ?? "ABERTO") !== "LISTA") continue; // a privada derivada (e a do entregador) vem das listas
       const ativos = (await tx("select id, ids, telefones, perfil, unidades, privado, nome from mova.participante_autorizado where grupo_jid = $1 and ativo for update", [g.grupoId])).rows;
@@ -648,6 +648,10 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
   });
 }
 
+/** 24/11: pagadores no formato do cadastro ([{nome}|{documento}]), a partir da forma bruta ou da validada. */
+const pagadoresBrutos = (u) => (Array.isArray(u.pagadores) ? u.pagadores
+  : [...(u.pagadores?.nomes ?? []).map((nome) => ({ nome })), ...(u.pagadores?.documentos ?? []).map((documento) => ({ documento }))]);
+
 /** Lê do banco a configuração BRUTA (para validarConfiguracao): só grupos ATIVOS. */
 export async function carregarConfiguracao(pool, { identidadeServico, modo = "SIMULACAO" }) {
   const q = consultar(pool);
@@ -660,11 +664,13 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   const participantes = (await q(`select p.* from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid) where p.ativo and ${filtro} order by p.criado_em`, [modo])).rows;
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
-  for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
+  for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes, pagadores: u.pagadores ?? [] });
   // 23/11 (0014): unidade atendida SEM grupo — só na OPERACAO; a do grupo prevalece. Não cria conversa nenhuma.
   if (modo === "OPERACAO") {
     for (const u of (await q("select * from mova.unidade_sem_grupo where ativo order by nome")).rows) {
-      if (!porId.has(u.unidade_id)) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes, semGrupo: true });
+      // 24/11 (0015): pagadores, participantes autorizados e o acesso multiempresa da unidade sem grupo.
+      if (!porId.has(u.unidade_id)) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes, semGrupo: true,
+        pagadores: u.pagadores ?? [], ...(Array.isArray(u.participantes) && u.participantes.length ? { participantes: u.participantes } : {}), acessoMultiempresa: u.acesso_multiempresa === true });
     }
   }
   // Agente 2 — Frente D: entregadores autorizados (só OPERACAO); as conversas deles nascem em validarConfiguracao.

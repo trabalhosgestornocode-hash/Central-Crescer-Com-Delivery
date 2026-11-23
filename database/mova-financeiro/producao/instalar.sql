@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -714,6 +714,46 @@ create table mova.unidade_sem_grupo (
 
 grant select on mova.unidade_sem_grupo to mova_app;
 
+-- ------------------------------------------------------------------------- 0015_mova_pagadores_multiunidade.sql (arquivo f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87)
+-- MOVA — 24/11/2026: IDENTIFICAÇÃO DA UNIDADE PELO PAGADOR e MOVA nas duas empresas (Açaí no Grau Saci + Subway Saci).
+--
+-- 1) `pagadores` no CADASTRO da unidade (grupo_unidade e unidade_sem_grupo): lista explícita dos titulares/documentos da CONTA
+--    PAGADORA da unidade — ex.: [{"nome":"<titular da conta>"}] em cada unidade (valores reais só no cadastro, nunca no Git). O comprovante pago por essa conta
+--    identifica a unidade (dominio/pagador.js). Nunca dá acesso: a conversa só atua nas unidades dela.
+-- 2) Unidade SEM grupo (0014) ganha `participantes` (mesma forma da lista de um grupo: ids, telefones, perfil, privado, nome) e
+--    `acesso_multiempresa` (padrão false). Com participantes, a pessoa ganha a unidade na conversa privada derivada; juntar duas
+--    EMPRESAS na mesma conversa só com acesso_multiempresa = true (autorização explícita, com o motivo da linha).
+-- 3) Conta a pagar NOVA (boleto/nota) pode ser AUTOMÁTICA quando uma política CONTA_A_PAGAR explícita o disser (antes era
+--    proibido no banco). Nada é semeado: sem política, o MOVA só propõe — e a escrita ainda exige a concessão `registrar_obrigacao`
+--    da identidade operacional na unidade (Financeiro v2 0030).
+-- O app (mova_app) continua só LENDO o cadastro; gravar é ato do proprietário pelos kits (scripts/mova/*.mjs).
+
+alter table mova.grupo_unidade add column pagadores jsonb not null default '[]'::jsonb
+  check (jsonb_typeof(pagadores) = 'array' and jsonb_array_length(pagadores) <= 10);
+alter table mova.unidade_sem_grupo add column pagadores jsonb not null default '[]'::jsonb
+  check (jsonb_typeof(pagadores) = 'array' and jsonb_array_length(pagadores) <= 10);
+alter table mova.unidade_sem_grupo add column participantes jsonb not null default '[]'::jsonb
+  check (jsonb_typeof(participantes) = 'array' and jsonb_array_length(participantes) <= 50);
+alter table mova.unidade_sem_grupo add column acesso_multiempresa boolean not null default false;
+
+do $$ declare c text; begin
+  select conname into c from pg_constraint
+   where conrelid = 'mova.politica_autonomia'::regclass and contype = 'c'
+     and pg_get_constraintdef(oid) = 'CHECK ((NOT ((nivel = ''APLICAR_AUTOMATICO''::text) AND (operacao = ''CONTA_A_PAGAR''::text))))';
+  if c is null then raise exception 'MOVA 0015: trava de conta a pagar automática não encontrada'; end if;
+  execute format('alter table mova.politica_autonomia drop constraint %I', c);
+end $$;
+
+-- 4) Proposta VINCULO_DE_DOCUMENTO: nota fiscal de uma conta JÁ registrada — só anexa a nota à conta (nenhum valor muda).
+do $$ declare c text; begin
+  select conname into c from pg_constraint
+   where conrelid = 'mova.proposta'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%BAIXA_DE_OBRIGACAO%SOLICITACAO_DE_REVISAO%';
+  if c is null then raise exception 'MOVA 0015: lista de tipos de proposta não encontrada'; end if;
+  execute format('alter table mova.proposta drop constraint %I', c);
+end $$;
+alter table mova.proposta add constraint proposta_tipo_check
+  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO'));
+
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
 insert into mova.mova_migracao (nome, sha256) values
@@ -730,7 +770,8 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0011_mova_entregadores_rotina.sql', 'ff74849e1f40ea2f799ee3c8a5a5be8562bfebf9ecdbde59d6c9e24c3d2ee0ca'),
   ('0012_mova_juros_documental.sql', 'eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba'),
   ('0013_mova_entregadores_cadastro.sql', '6a4f9f8b4214a03602fa74ad573485a29a69056386882a6597310b71614dea3d'),
-  ('0014_mova_unidade_sem_grupo.sql', '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b');
+  ('0014_mova_unidade_sem_grupo.sql', '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b'),
+  ('0015_mova_pagadores_multiunidade.sql', 'f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
