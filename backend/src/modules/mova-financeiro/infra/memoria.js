@@ -123,13 +123,14 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     }),
     /** Agente 2 — continuidade (mesma regra do Postgres). */
     conversas: Object.freeze({
-      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, validadeMs }) {
+      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, contexto = null, validadeMs }) {
         const k = `${grupoId}|${participanteId}`; const atual = conversas.get(k);
-        conversas.set(k, { ate: relogio().getTime() + validadeMs, unidadeId: unidadeId ?? atual?.unidadeId ?? null, consulta: consulta ?? atual?.consulta ?? null });
+        // O recorte (período) pertence à consulta: nova consulta substitui o contexto; sem consulta nova, mantém o anterior.
+        conversas.set(k, { ate: relogio().getTime() + validadeMs, unidadeId: unidadeId ?? atual?.unidadeId ?? null, consulta: consulta ?? atual?.consulta ?? null, contexto: consulta ? contexto : atual?.contexto ?? null });
       },
       async obter({ grupoId, participanteId }) {
         const c = conversas.get(`${grupoId}|${participanteId}`);
-        return c && c.ate > relogio().getTime() ? { unidadeId: c.unidadeId, consulta: c.consulta } : null;
+        return c && c.ate > relogio().getTime() ? { unidadeId: c.unidadeId, consulta: c.consulta, contexto: c.contexto ?? null } : null;
       },
       async encerrar({ grupoId, participanteId }) { conversas.delete(`${grupoId}|${participanteId}`); },
     }),

@@ -12,6 +12,9 @@ const tem = (t, ...termos) => termos.some((x) => t.includes(` ${x}`));
 const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const NAO_E_COMANDO = ["paguei", "pagamos", "pago ", "pagou", "boleto", "comprovante", "recibo", "nota fiscal", "lanc", "registr", "cadastr", "anot", "aprov", "corrig", "exclu", "apag", "transfer", "pix", "deposit"];
 const MAXIMO = 90;
+// Perguntas de ANÁLISE ("por que aumentou?", "comparado ao mês passado", "quanto gastamos com aluguel") não são comando de palavra-chave:
+// "despesa" aqui não significa DRE. Vão à IA (quando liberada) para escolher a consulta certa; sem IA, o motor diz a limitação.
+const ANALISE = ["por que", "porque", "pq ", "motivo", "aumentou", "aumento", "diminuiu", "subiu", "caiu", "compar", "mais que", "menos que", "gastamos com", "gastei com", "gasto com", "gastos com", "pagamos ", "paguei "];
 
 const dia = (d) => d.toISOString().slice(0, 10);
 const somar = (data, n) => { const d = new Date(`${data}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return dia(d); };
@@ -42,6 +45,7 @@ function periodo(t, hoje) {
 /** Consulta pedida (texto normalizado). Ordem importa: o mais específico primeiro. */
 function consulta(t, p) {
   const pagar = tem(t, "a pagar", "contas", "boletos a vencer");
+  if (tem(t, "entregador", "entregadores", "motoboy", "motoboys", "motoqueiro") && tem(t, "semdocumento", "sem nota", "nao enviaram", "nao mandaram", "nao enviou", "nao mandou", "faltam nota", "falta nota", "sem a nota", "pendente de nota")) return "ENTREGADORES_SEM_NOTA";
   if (tem(t, "entregador", "motoboy", "motoqueiro") && tem(t, "fechamento", "semana", "pagar", "pagamento", "nota", "notas", "acerto", "valor", "quanto")) return "FECHAMENTO_ENTREGADORES";
   // Agente 2 — conferência de contas a pagar (custo zero).
   if (tem(t, "fornecedor", "fornecedores") && tem(t, "mais contas", "pendent", "em aberto", "devendo", "devemos", "mais deve", "contas")) return "FORNECEDORES_COM_PENDENCIAS";
@@ -71,7 +75,7 @@ export function interpretarComando(texto, hoje) {
   if (!bruto || bruto.length > MAXIMO || /\d/.test(bruto)) return null;
   // "sem comprovante/documento/nota" é a CONSULTA de contas sem documento, não o envio de um comprovante.
   const t = sem(bruto.replace(/^\s*@?mova[\s,!.:-]*/i, "")).replace(/ sem (comprovantes?|documentos?|recibos?|notas?( fiscal| fiscais)?)(?= )/g, " semdocumento ");
-  if (NAO_E_COMANDO.some((x) => t.includes(x))) return null;
+  if (NAO_E_COMANDO.some((x) => t.includes(x)) || ANALISE.some((x) => t.includes(x))) return null;
   const p = periodo(t, hoje);
   const c = consulta(t, p);
   if (!c && !p) return null;
@@ -83,6 +87,8 @@ export function interpretarComando(texto, hoje) {
   const v = validarSaidaDaIa({
     ...SAIDA_VAZIA, legivel: true, tipoDocumento: "OUTRO", intencao: "CONSULTAR", consulta: c, confianca: "ALTA",
     competencia: p?.competencia ?? null, periodoInicio: p?.periodoInicio ?? null, periodoFim: p?.periodoFim ?? null,
+    // "nas duas empresas", "todas as lojas": cada unidade AUTORIZADA da pessoa, separada (o motor nunca soma empresas diferentes).
+    todasUnidades: / (as |nas |das )?(duas|ambas) (empresas|unidades|lojas)| (todas|ambas) as (unidades|lojas|empresas)| nas duas /.test(` ${t} `),
     justificativa: "comando simples (sem IA)",
   });
   return v.ok ? { saida: v.saida, soPeriodo: !c } : null;
@@ -101,7 +107,10 @@ const NAO_E_PERGUNTA = ["paguei", "pagamos", "pague", "pagar ", "transfir", "reg
 const VAZIAS = new Set(["mova", "me", "a", "o", "as", "os", "da", "do", "das", "dos", "de", "na", "no", "em", "um", "uma", "conta", "contas", "boleto", "fatura",
   "explica", "explique", "explicar", "detalha", "detalhe", "detalhar", "fala", "fale", "falar", "mais", "sobre", "ja", "foi", "esta", "ta", "paga", "pago", "quitada", "quitado",
   "por", "que", "porque", "pq", "qual", "motivo", "vencida", "vencido", "aberta", "aberto", "atrasada", "atrasado", "pendente", "valor", "reais", "r", "para", "pra",
-  "essa", "esta", "aquela", "referente", "ainda", "nao", "sim", "voce", "pode", "poderia", "favor", "ok", "mes", "e", "ai"]);
+  "essa", "esta", "aquela", "referente", "ainda", "nao", "sim", "voce", "pode", "poderia", "favor", "ok", "mes", "e", "ai",
+  // pronomes/fillers de conversa ("detalha melhor isso", "me explica de onde saiu esse valor"): sem nome de conta, vai à IA com o contexto
+  "isso", "isto", "esse", "desse", "disso", "dessa", "melhor", "onde", "saiu", "veio", "tudo", "pessoal", "gente",
+  "aumento", "aumentou", "despesa", "despesas", "gasto", "gastos", "custo", "custos", "nas", "nos", "variacao", "diferenca"]);
 
 /** "R$ 1.234,56" / "1234,56" / "R$ 12" ⇒ centavos; null se não houver valor. */
 function valorCitado(bruto) {
@@ -130,3 +139,35 @@ export function interpretarPerguntaDeConta(texto, hoje) {
   return v.ok ? { saida: v.saida, soPeriodo: false } : null;
 }
 const competencia_ = (data) => data.slice(0, 7);
+
+// ------------------------------------------------------------------------------------------------------------------
+// CONTINUIDADE DA CONVERSA sem IA (custo zero). Perguntas de acompanhamento curtas e inequívocas, que só fazem sentido com a
+// consulta ANTERIOR da mesma pessoa na mesma conversa ("só as vencidas", "agora por fornecedor", "nas duas"). O recorte
+// (período) vem do contexto curto que o próprio MOVA guardou — nunca de texto do usuário. A unidade NÃO é decidida aqui: segue
+// a regra determinística do motor (resolverUnidade), então o histórico jamais amplia o que a pessoa pode ver.
+const FAMILIA_CONTAS = Object.freeze(["CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "CONTAS_VENCIDAS", "MAIORES_CONTAS_ABERTAS", "CONTAS_PARCIAIS", "FORNECEDORES_COM_PENDENCIAS", "CONTAS_SEM_COMPROVANTE"]);
+
+/** Saída validada (mesmo formato da IA) que repete a consulta da conversa, com o mesmo período. null se o contexto não valida. */
+export function saidaDeContinuacao(consulta, conversa, extra = {}) {
+  const r = conversa?.contexto && typeof conversa.contexto === "object" ? conversa.contexto : {};
+  const v = validarSaidaDaIa({
+    ...SAIDA_VAZIA, legivel: true, tipoDocumento: "OUTRO", intencao: "CONSULTAR", consulta, confianca: "ALTA",
+    competencia: r.competencia ?? null, periodoInicio: r.periodoInicio ?? null, periodoFim: r.periodoFim ?? null,
+    favorecido: r.favorecido ?? null, categoriaSugerida: r.categoriaSugerida ?? null,
+    justificativa: "continuação da conversa (sem IA)", ...extra,
+  });
+  return v.ok ? v.saida : null;
+}
+
+/** @returns {object|null} saída validada para a pergunta de acompanhamento, ou null (segue o fluxo normal, inclusive IA). */
+export function interpretarSeguimento(texto, conversa) {
+  const bruto = String(texto ?? "").trim();
+  if (!conversa?.consulta || !bruto || bruto.length > 60 || /\d/.test(bruto)) return null;
+  const t = sem(bruto.replace(/^\s*@?mova[\s,!.:-]*/i, ""));
+  if (NAO_E_COMANDO.some((x) => t.includes(x))) return null;
+  const familiaContas = FAMILIA_CONTAS.includes(conversa.consulta);
+  if (familiaContas && /^ (e )?(so|apenas|somente) (as |os )?(vencid|atrasad)[a-z]* $/.test(t)) return saidaDeContinuacao("CONTAS_VENCIDAS", conversa);
+  if (familiaContas && /^ (e )?(agora )?(por|pelos|por cada) fornecedor(es)? $/.test(t)) return saidaDeContinuacao("FORNECEDORES_COM_PENDENCIAS", conversa);
+  if (/^ (e )?(nas|em|para|pras) (as )?(duas|ambas)( empresas| unidades| lojas)? $/.test(t) || /^ (e )?(nas|nos) dois $/.test(t)) return saidaDeContinuacao(conversa.consulta, conversa, { todasUnidades: true });
+  return null;
+}

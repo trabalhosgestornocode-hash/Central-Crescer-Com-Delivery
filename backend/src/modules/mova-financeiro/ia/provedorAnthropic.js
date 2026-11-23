@@ -73,7 +73,9 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
       const dados = [texto, transcricao ? `[transcrição do áudio]\n${transcricao}` : null, contexto.mensagemCitada ? `[mensagem respondida]\n${contexto.mensagemCitada}` : null].filter(Boolean).join("\n\n");
       const entrada = montarEntradaDoModelo({ texto: dados, tipo, mime: midia?.mime ?? null });
       const referencia = relogio().toISOString().slice(0, 10);
-      const system = `${entrada.instrucoes}\nDATA DE REFERÊNCIA (hoje): ${referencia}. Unidades possíveis: ${(contexto.unidades ?? []).join("; ") || "não informadas"}.`;
+      const cv = contexto.conversa;
+      const linhaConversa = cv?.consulta ? `\nCONTEXTO DA CONVERSA (sistema; última pergunta desta pessoa): consulta=${cv.consulta}; unidade=${cv.unidade ?? "-"}; período=${cv.periodo ?? "-"}.` : "";
+      const system = `${entrada.instrucoes}\nDATA DE REFERÊNCIA (hoje): ${referencia}. Unidades possíveis: ${(contexto.unidades ?? []).join("; ") || "não informadas"}.${linhaConversa}`;
       let resposta;
       try {
         resposta = await cliente.beta.messages.create({

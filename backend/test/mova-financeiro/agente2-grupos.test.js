@@ -55,13 +55,14 @@ t("A2-05 continuidade: logo depois da resposta, 'e a semana que vem?' sem o nome
   const s = await cenario();
   await s.conta("2026-10-21", 45000);
   await s.enviar(gw({ texto: "MOVA contas a pagar da semana da beta" }));
-  await s.enviar(gw({ texto: "e da alfa?" })); // continuidade pela janela; sem comando ⇒ vai à IA (simulada)
+  await s.enviar(gw({ texto: "e da alfa?" })); // 24/11: acompanhamento de unidade é resolvido sem IA (mesma consulta e período)
+  assert.equal((await s.ultima()).unidadeId, ALFA);
   const r = await s.enviar(gw({ texto: "e a semana que vem?" }));
   assert.equal(r.status, "ENFILEIRADO");
   const h = await s.ultima();
-  assert.deepEqual([h.motivo.split(":")[0], h.interpretacao], ["CONTAS_VENCENDO", "CONTINUIDADE"]); // a Beta não tem contas: "sem dados", nunca zero inventado
-  // A unidade veio da conversa em andamento DESTA pessoa (a última consulta foi da Beta).
-  assert.equal(h.unidadeId, BETA);
+  assert.deepEqual([h.motivo.split(":")[0], h.interpretacao], ["CONTAS_VENCENDO", "CONTINUIDADE"]);
+  // A unidade veio da conversa em andamento DESTA pessoa (a última consulta foi da Alfa, que ela mesma pediu).
+  assert.equal(h.unidadeId, ALFA);
   // Outra pessoa sem conversa ativa e sem chamar o MOVA continua ignorada.
   assert.equal((await s.enviar(gw({ texto: "e a semana que vem?", de: LID }))).motivo, "NAO_ACIONADO");
 });
