@@ -1,5 +1,5 @@
 // 23/11/2026 — Entregadores Próprios reformulado (Resumo: cabeçalho → indicadores da semana → acumulado → tabela) e aba
-// "Cadastro de entregadores". As fixtures são SINTÉTICAS e saem do núcleo real: backend/scripts/fv2/fixturesEntregadores.mjs.
+// "Informações dos entregadores" (sem cadastro paralelo). As fixtures são SINTÉTICAS e saem do núcleo real: backend/scripts/fv2/fixturesEntregadores.mjs.
 // Rodar: node --test frontend/test/financeiroV2EntregadoresRedesenho.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -60,54 +60,77 @@ test("R5: estados vazios informativos", () => {
   assert.match(tela(semFonte), /Sem dados do Foody para esta semana/);
 });
 
-test("C1: aba de cadastro lista oficiais, situação de envio, número mascarado e histórico", () => {
-  const h = tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: CADASTRO }));
-  assert.match(h, /aria-selected="true"[^>]*>Cadastro de entregadores|Cadastro de entregadores<\/h2>/);
-  assert.ok(!h.includes('class="filtros'), "a aba de cadastro não mostra o seletor de semana");
-  assert.equal((h.match(/data-cad-linha/g) ?? []).length, 3);
-  assert.match(h, /Apto a receber/);
-  assert.match(h, /Inativo/, "Carla desativada");
-  assert.match(h, /Sem WhatsApp/, "Bruno sem cadastro");
-  assert.match(h, /Histórico \(2\)/);
-  assert.match(h, /número trocado/);
-  assert.ok(!/\d{10,}/.test(h.replace(/data-[a-z-]+="[^"]*"/g, "")), "nenhum número completo na tela");
+const info = (c = CADASTRO, extra = {}, r = FECHADA) => tela(r, { aba: "informacoes" }, ctx({ cadastro: c, ...extra }));
+const linha = (h, nome) => h.split('<li class="ent-info"').find((x) => x.includes(`<strong>${nome}</strong>`)) ?? "";
+
+test("I1: 'Informações dos entregadores' lista os entregadores CONHECIDOS (fechamentos + Foody sem fechamento), sem cadastro de entregador", () => {
+  const h = info();
+  assert.match(h, /Informações dos entregadores<\/h2>/);
+  assert.ok(!/Cadastro de entregadores|Cadastrar WhatsApp|>Cadastrar</.test(h), "nenhum fluxo de criar entregador");
+  assert.ok(!h.includes('class="filtros'), "sem seletor de semana nesta aba");
+  assert.equal((h.match(/data-cad-linha/g) ?? []).length, 5, "Ana, Ana (homônima), Bruno, Carla e Dani");
+  assert.match(linha(h, "Dani Sintética"), /Identificado no Foody · sem fechamento/, "entregador só da semana 16–22/11 já aparece");
+  assert.match(linha(h, "Dani Sintética"), /Nenhum fechamento oficial ainda: nenhuma conta foi criada/);
+  assert.equal((h.match(/Nome repetido/g) ?? []).length, 2, "homônimos sinalizados, nunca juntados");
 });
 
-test("C2: formulários certos por situação (editar, reativar, cadastrar) e rotas do MOVA", () => {
-  const h = tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: CADASTRO }));
-  assert.match(h, /data-acao-mova="\/api\/fv2\/acoes\/mova\/entregador-alterar"/);
-  assert.match(h, /data-acao-mova-botao="\/api\/fv2\/acoes\/mova\/entregador-revogar" data-entregador="ana"/);
-  assert.match(h, /data-acao-mova="\/api\/fv2\/acoes\/mova\/entregador-reativar"><input type="hidden" name="entregador" value="carla">/);
-  assert.match(h, /data-acao-mova="\/api\/fv2\/acoes\/mova\/entregador">[\s\S]*value="bruno"/);
-  assert.match(h, /type="reset" class="botao">Cancelar/);
+test("I2: seções por entregador (dados e contato, fechamentos, notas e pagamentos, histórico) e situação do contato", () => {
+  const ana = linha(info(), "Ana Sintética");
+  for (const t of ["Dados e contato", "Semanas e fechamentos", "Notas fiscais e pagamentos", "Histórico de alterações"]) assert.ok(ana.includes(`<h3>${t}</h3>`), t);
+  assert.match(ana, /Apto a receber/);
+  assert.match(ana, /09\/11\/2026 · fechada/);
+  assert.match(ana, /23\/11\/2026 · sem fechamento/, "semana só com atividade do Foody não aparece como fechada");
+  assert.match(ana, /<dt>Unidade<\/dt><dd>Loja Sintética<\/dd>/);
+  assert.match(ana, /data-detalhe="entregador-pessoa:ana"/, "reutiliza o painel oficial de notas/fechamentos/pagamentos");
+  assert.match(ana, /número trocado/);
+  assert.match(linha(info(), "Carla Sintética"), /Contato desativado/);
+  assert.match(linha(info(), "Bruno Sintético"), /Sem WhatsApp/);
+  assert.ok(!/\d{10,}/.test(info().replace(/data-[a-z-]+="[^"]*"/g, "")), "nenhum número completo na tela");
+});
+
+test("I3: WhatsApp como atributo: adicionar, editar (salvar/cancelar), desativar só o contato e reativar", () => {
+  const h = info();
+  assert.match(linha(h, "Bruno Sintético"), /data-acao-mova="\/api\/fv2\/acoes\/mova\/entregador">[\s\S]*value="bruno"[\s\S]*>Adicionar WhatsApp</);
+  assert.match(linha(h, "Dani Sintética"), />Adicionar WhatsApp</, "pode receber número antes do fechamento");
+  const ana = linha(h, "Ana Sintética");
+  assert.match(ana, /entregador-alterar/); assert.match(ana, />Salvar</); assert.match(ana, /type="reset" class="botao">Cancelar/);
+  assert.match(ana, /data-acao-mova-botao="\/api\/fv2\/acoes\/mova\/entregador-revogar" data-entregador="ana">Desativar contato para mensagens/);
+  assert.match(ana, /não desativa o entregador no Financeiro/);
+  assert.match(linha(h, "Carla Sintética"), /entregador-reativar"><input type="hidden" name="entregador" value="carla">/);
   assert.match(h, /data-cad-busca/); assert.match(h, /data-cad-situacao/);
 });
 
-test("C3: sem permissão de configurar só consulta; unidade fora do MOVA não oferece cadastro", () => {
-  const leitura = tela(FECHADA, { aba: "cadastro" }, ctx({ permissoes: ["financeiro_v2.registrar"], cadastro: CADASTRO }));
+test("I4: sem permissão de configurar só consulta; unidade fora do MOVA lista os entregadores sem oferecer WhatsApp", () => {
+  const leitura = info(CADASTRO, { permissoes: ["financeiro_v2.ver", "financeiro_v2.registrar"] });
   assert.ok(!leitura.includes("data-acao-mova="));
   assert.match(leitura, /exige a permissão de configurar/);
-  const fora = tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: { ...CADASTRO, dados: { ...CADASTRO.dados, unidadeAtendida: false } } }));
+  const fora = info({ ...CADASTRO, dados: { ...CADASTRO.dados, unidadeAtendida: false } });
   assert.ok(!fora.includes("data-acao-mova="));
+  assert.equal((fora.match(/data-cad-linha/g) ?? []).length, 5);
   assert.match(fora, /ainda não é atendida pelo MOVA/);
 });
 
-test("C4: cadastro carregando, com erro e sem entregadores", () => {
-  assert.match(tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: null })), /Carregando o cadastro/);
-  assert.match(tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: { erro: "O MOVA não está ativo agora." } })), /O MOVA não está ativo agora/);
-  assert.match(tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: { dados: { cadastros: [], unidadeAtendida: true }, oficiais: { itens: [] } } })), /O cadastro aparece depois do primeiro fechamento semanal/);
+test("I5: MOVA fora do ar: os entregadores continuam listados (pela consulta da semana); só o WhatsApp fica indisponível", () => {
+  const h = info({ erro: "O MOVA não está ativo agora." }, {}, AGUARDANDO);
+  assert.match(h, /O MOVA não está ativo agora\. Os entregadores continuam listados/);
+  assert.ok((h.match(/data-cad-linha/g) ?? []).length >= 3);
+  assert.match(h, /MOVA indisponível/);
+  assert.ok(!h.includes("data-acao-mova="));
+  assert.match(info(null), /Carregando as informações dos entregadores/);
+  assert.match(info({ dados: { cadastros: [], unidadeAtendida: true }, oficiais: { itens: [] } }), /aparecem assim que o Foody registrar entregas/);
 });
 
-test("C5: textos vindos do servidor são escapados", () => {
+test("I6: textos vindos do servidor são escapados", () => {
   const mal = { ...CADASTRO, dados: { ...CADASTRO.dados, cadastros: [{ ...CADASTRO.dados.cadastros[0], observacoes: "<script>x</script>" }] } };
-  const h = tela(FECHADA, { aba: "cadastro" }, ctx({ cadastro: mal }));
+  const h = info(mal);
   assert.ok(!h.includes("<script>x</script>"));
   assert.match(h, /&lt;script&gt;/);
 });
 
-test("app.js: cadastro só com a aba aberta e corpo só com os campos que cada rota aceita", () => {
+test("app.js: informações só com a aba aberta; corpo só com os campos que cada rota aceita; lista não some sem o MOVA", () => {
   const app = readFileSync(new URL("../financeiro-v2/app.js", import.meta.url), "utf8");
-  assert.match(app, /aba !== "cadastro"\) return null/);
+  assert.match(app, /aba !== "informacoes"\) return null/);
   assert.match(app, /"\/api\/fv2\/acoes\/mova\/entregador-revogar": \["entregador"\]/);
+  assert.match(app, /oficiais: ro\.ok \? ro\.dados : null/);
   assert.ok(!/CAMPOS_MOVA[\s\S]{0,400}"confirmar"/.test(app.slice(app.indexOf("const CAMPOS_MOVA"), app.indexOf("const CAMPOS_MOVA") + 400)));
 });

@@ -2,7 +2,7 @@
 // servidor → HTML escapado. Nenhuma conta de dinheiro acontece aqui.
 import { dataBR, esc, moeda } from "./formatar.js";
 
-const ABAS = [["resumo", "Resumo"], ["entregadores", "Entregadores"], ["cadastro", "Cadastro de entregadores"], ["fechamento", "Fechamento semanal"], ["extras", "Serviços extras"], ["notas", "Notas fiscais"], ["pagamentos", "Pagamentos"], ["historico", "Histórico e conferências"]];
+const ABAS = [["resumo", "Resumo"], ["entregadores", "Entregadores"], ["informacoes", "Informações dos entregadores"], ["fechamento", "Fechamento semanal"], ["extras", "Serviços extras"], ["notas", "Notas fiscais"], ["pagamentos", "Pagamentos"], ["historico", "Histórico e conferências"]];
 const DOC = Object.freeze({
   AGUARDANDO_NF: ["Aguardando nota fiscal", "alerta"], NF_RECEBIDA: ["Nota fiscal recebida", "info"], NF_EM_CONFERENCIA: ["Nota fiscal em conferência", "info"],
   NF_APROVADA: ["Nota fiscal aprovada", "ok"], NF_REJEITADA: ["Nota fiscal rejeitada", "erro"], LIBERADO_PAGAMENTO: ["Liberado para pagamento", "ok"],
@@ -115,7 +115,7 @@ function cabecalhoOperacional(r, ctx) {
   const acoes = [
     fechavel ? '<button type="button" class="botao botao--primario" data-aba-canal="fechamento">Fechar semana</button>' : "",
     w?.aguardandoNota?.quantidade || w?.emAnalise?.quantidade ? '<button type="button" class="botao" data-aba-canal="notas">Notas fiscais</button>' : "",
-    '<button type="button" class="botao" data-aba-canal="cadastro">Cadastro de entregadores</button>',
+    '<button type="button" class="botao" data-aba-canal="informacoes">Informações dos entregadores</button>',
   ].join("");
   const aviso = s.situacao === "AGUARDANDO_FECHAMENTO"
     ? `<p class="aviso aviso--alerta">Semana encerrada <strong>sem fechamento oficial</strong>. Os valores abaixo são da apuração do Foody e ainda podem mudar; nenhuma conta foi criada.${fechavel ? " Use “Fechar semana” para gerar as contas a pagar." : " Peça a quem tem permissão de registrar para fechar a semana."}</p>`
@@ -185,57 +185,78 @@ ${f ? `<button type="button" class="botao-link" data-detalhe="entregador:${esc(r
 <div class="tabela-rolavel"><table class="tabela tabela--cartoes ent-tabela"><caption class="sr">Entregadores da semana ${esc(s.rotulo)}</caption><thead><tr><th scope="col" class="esquerda">Entregador</th><th scope="col">Entregas</th><th scope="col">Taxas</th><th scope="col">Extras</th><th scope="col">Total devido</th><th scope="col">Nota fiscal</th><th scope="col">Conferência</th><th scope="col">Liberação</th><th scope="col">Pagamento</th><th scope="col">Ações</th></tr></thead><tbody>${corpo}</tbody></table></div></section>`;
 }
 
-// ------------------------------------------------------------------ 23/11: Cadastro de entregadores (fonte única com o MOVA)
-const ENVIO = Object.freeze({ APTO: ["Apto a receber", "ok"], AGUARDANDO_ATUALIZACAO: ["Atualizando no MOVA", "info"], NUMERO_DA_EQUIPE: ["Número da equipe", "erro"], INATIVO: ["Inativo", "neutro"], SEM_CADASTRO: ["Sem WhatsApp", "alerta"] });
-const MOTIVO = Object.freeze({ TROCA_DE_NUMERO: "número trocado", EDICAO: "cadastro editado", DESATIVADO: "desativado" });
+// ------------------------------------------------------------------ 23/11: Informações dos entregadores (sem cadastro paralelo)
+// Os entregadores JÁ EXISTEM no Financeiro (Foody + fechamentos): aqui só se organizam e atualizam as informações deles.
+// O WhatsApp é um atributo do entregador (fonte única com o MOVA); notas, fechamentos e pagamentos abrem o painel oficial.
+const ENVIO = Object.freeze({ APTO: ["Apto a receber", "ok"], AGUARDANDO_ATUALIZACAO: ["Atualizando no MOVA", "info"], NUMERO_DA_EQUIPE: ["Número da equipe", "erro"], INATIVO: ["Contato desativado", "neutro"], SEM_CADASTRO: ["Sem WhatsApp", "alerta"], MOVA_INDISPONIVEL: ["MOVA indisponível", "neutro"] });
+const MOTIVO = Object.freeze({ TROCA_DE_NUMERO: "número trocado", EDICAO: "dados editados", DESATIVADO: "contato desativado" });
 const quando = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : "—");
 
+/** Entregadores conhecidos: a lista do servidor (fechamentos + Foody em aberto) ou, sem ela, os que já estão na tela. */
+function conhecidosDaTela(c, r) {
+  if (c?.oficiais?.itens) return c.oficiais.itens;
+  const por = new Map();
+  for (const f of r?.fechamentos ?? []) if (!por.has(f.entregador.chave)) por.set(f.entregador.chave, { chave: f.entregador.chave, nome: f.entregador.nome, ultimaSemana: f.semanaInicio, ultimaAtividade: f.semanaInicio, semanas: [f.semanaInicio], semanasFechadas: 1, listaFechadas: [f.semanaInicio], origem: "FECHAMENTO" });
+  for (const e of r?.entregadores ?? []) if (!por.has(e.chave)) por.set(e.chave, { chave: e.chave, nome: e.nome, ultimaSemana: null, ultimaAtividade: r.semana?.inicio ?? null, semanas: [], semanasFechadas: 0, origem: "FOODY_SEM_FECHAMENTO" });
+  return [...por.values()].sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+}
+
 /**
- * Aba do cadastro. `c` = { dados: GET /mova/entregadores, oficiais: GET /mova/entregadores-oficiais } ou { erro }.
- * Os números nunca chegam completos à tela (…1234): o completo só é digitado.
+ * Aba "Informações dos entregadores". `c` = { dados: GET /mova/entregadores, oficiais: GET /mova/entregadores-oficiais } ou
+ * { erro } (MOVA fora: a lista continua, só o WhatsApp fica indisponível). Números sempre mascarados (…1234).
  */
-export function abaCadastro(c, ctx = {}) {
-  if (!c) return `<section class="card">${nada("Carregando o cadastro…")}</section>`;
-  if (c.erro) return `<section class="card"><h2>Cadastro de entregadores</h2><p class="aviso aviso--erro">${esc(c.erro)}</p></section>`;
+export function abaInformacoes(c, ctx = {}, r = null) {
+  if (!c) return `<section class="card">${nada("Carregando as informações dos entregadores…")}</section>`;
   const d = c.dados ?? {};
-  const pode = tem(ctx.permissoes, "configurar") && d.unidadeAtendida !== false;
+  const movaOk = !c.erro;
+  const pode = movaOk && tem(ctx.permissoes, "configurar") && d.unidadeAtendida !== false;
   const porChave = new Map();
   for (const x of d.cadastros ?? []) porChave.set(x.chave, [...(porChave.get(x.chave) ?? []), x]);
-  const oficiais = c.oficiais?.itens ?? [];
-  const pessoas = [...oficiais.map((o) => ({ chave: o.chave, oficial: o.nome, ultimaSemana: o.ultimaSemana })),
-    ...[...porChave.keys()].filter((k) => !oficiais.some((o) => o.chave === k)).map((k) => ({ chave: k, oficial: porChave.get(k)[0].nome ?? k, ultimaSemana: null }))];
+  const conhecidos = conhecidosDaTela(c, r);
+  const pessoas = [...conhecidos, ...[...porChave.keys()].filter((k) => !conhecidos.some((o) => o.chave === k))
+    .map((k) => ({ chave: k, nome: porChave.get(k)[0].nome ?? k, semanas: [], semanasFechadas: 0, origem: "SO_CONTATO" }))];
+  const unidade = esc(ctx.unidadeNome || "esta unidade");
   const linhas = pessoas.map((p) => {
     const h = porChave.get(p.chave) ?? [];
     const vig = h.find((x) => x.ativo) ?? null;
     const ultimo = h[0] ?? null;
-    const sit = vig ? vig.envio ?? "AGUARDANDO_ATUALIZACAO" : ultimo ? "INATIVO" : "SEM_CADASTRO";
+    const sit = !movaOk ? "MOVA_INDISPONIVEL" : vig ? vig.envio ?? "AGUARDANDO_ATUALIZACAO" : ultimo ? "INATIVO" : "SEM_CADASTRO";
     const campos = (x) => `<input type="hidden" name="entregador" value="${esc(p.chave)}">
-<label>WhatsApp ${vig ? '<span class="nota">(deixe em branco para manter)</span>' : ""}<input name="telefone" type="tel" inputmode="tel" autocomplete="off" placeholder="(85) 9XXXX-XXXX" ${vig ? "" : "required"}></label>
-<label>Nome de exibição <input name="nome" maxlength="60" value="${esc(x?.nome ?? p.oficial ?? "")}"></label>
+<label>WhatsApp ${vig ? '<span class="nota">(em branco mantém o atual)</span>' : ""}<input name="telefone" type="tel" inputmode="tel" autocomplete="off" placeholder="(85) 9XXXX-XXXX" ${vig ? "" : "required"}></label>
+<label>Nome de exibição <input name="nome" maxlength="60" value="${esc(x?.nome ?? p.nome ?? "")}"></label>
 <label class="ent-cad__obs">Observações operacionais <textarea name="observacoes" maxlength="500" rows="2">${esc(x?.observacoes ?? "")}</textarea></label>`;
     const formulario = !pode ? "" : vig
-      ? `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador-alterar">${campos(vig)}<div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Salvar</button><button type="reset" class="botao">Cancelar</button><button type="button" class="botao botao--perigo" data-acao-mova-botao="/api/fv2/acoes/mova/entregador-revogar" data-entregador="${esc(p.chave)}">Desativar contato</button></div><p class="resultado-acao" role="status"></p></form>`
+      ? `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador-alterar">${campos(vig)}<div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Salvar</button><button type="reset" class="botao">Cancelar</button><button type="button" class="botao botao--perigo" data-acao-mova-botao="/api/fv2/acoes/mova/entregador-revogar" data-entregador="${esc(p.chave)}">Desativar contato para mensagens</button></div><p class="nota">Desativar o contato não desativa o entregador no Financeiro.</p><p class="resultado-acao" role="status"></p></form>`
       : ultimo
-        ? `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador-reativar"><input type="hidden" name="entregador" value="${esc(p.chave)}"><p class="nota">Contato inativo (último número ${esc(ultimo.telefone)}). Reativar usa o mesmo número; para outro número, reative e edite.</p><div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Reativar contato</button></div><p class="resultado-acao" role="status"></p></form>`
-        : `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador">${campos(null)}<div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Cadastrar WhatsApp</button><button type="reset" class="botao">Cancelar</button></div><p class="resultado-acao" role="status"></p></form>`;
-    const historico = h.length ? `<details class="ent-cad__hist"><summary>Histórico (${h.length})</summary><ol>${h.map((x) => `<li><span>${esc(x.telefone)}${x.nome ? ` · ${esc(x.nome)}` : ""}</span><span class="nota">${x.ativo ? `vigente desde ${esc(quando(x.criadoEm))}` : `${esc(quando(x.criadoEm))} → ${esc(quando(x.revogadoEm))} · ${esc(MOTIVO[x.motivoRevogacao] ?? "encerrado")}`}</span></li>`).join("")}</ol></details>` : "";
-    return `<tr data-cad-linha data-nome="${esc(`${p.oficial ?? ""} ${vig?.nome ?? ""}`.toLowerCase())}" data-situacao="${esc(sit)}">
-<td data-rotulo="Entregador" class="esquerda"><strong>${esc(p.oficial ?? p.chave)}</strong>${vig?.nome && vig.nome !== p.oficial ? `<br><span class="nota">exibido como ${esc(vig.nome)}</span>` : ""}${p.ultimaSemana ? `<br><span class="nota">último fechamento: semana de ${esc(dataBR(p.ultimaSemana))}</span>` : ""}</td>
-<td data-rotulo="WhatsApp">${vig ? `<code>${esc(vig.telefone)}</code>` : "—"}</td><td data-rotulo="Situação">${selo(ENVIO, sit)}</td>
-<td data-rotulo="Observações">${vig?.observacoes ? esc(vig.observacoes) : '<span class="nota">—</span>'}</td><td data-rotulo="Atualizado em">${esc(quando(vig?.criadoEm ?? ultimo?.revogadoEm))}</td>
-<td data-rotulo="Ações" class="esquerda">${formulario || historico ? `<details class="ent-cad__editar"><summary>${pode ? (vig ? "Editar" : ultimo ? "Reativar" : "Cadastrar") : "Ver histórico"}</summary>${formulario}${historico}</details>` : "—"}</td></tr>`;
+        ? `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador-reativar"><input type="hidden" name="entregador" value="${esc(p.chave)}"><p class="nota">Contato desativado (último número ${esc(ultimo.telefone)}). Reativar usa o mesmo número; para outro, reative e edite.</p><div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Reativar contato</button></div><p class="resultado-acao" role="status"></p></form>`
+        : `<form class="ent-cad__form" data-acao-mova="/api/fv2/acoes/mova/entregador">${campos(null)}<div class="ent-cad__botoes"><button type="submit" class="botao botao--primario">Adicionar WhatsApp</button><button type="reset" class="botao">Cancelar</button></div><p class="resultado-acao" role="status"></p></form>`;
+    const semanas = (p.semanas ?? []).slice(0, 6);
+    const historico = h.length ? `<ol class="ent-info__hist">${h.map((x) => `<li><span>${esc(x.telefone)}${x.nome ? ` · ${esc(x.nome)}` : ""}</span><span class="nota">${x.ativo ? `vigente desde ${esc(quando(x.criadoEm))}` : `${esc(quando(x.criadoEm))} → ${esc(quando(x.revogadoEm))} · ${esc(MOTIVO[x.motivoRevogacao] ?? "encerrado")}`}</span></li>`).join("")}</ol>` : '<p class="nota">Nenhuma alteração de contato registrada.</p>';
+    const origem = p.origem === "FOODY_SEM_FECHAMENTO" ? '<span class="selo selo--info">Identificado no Foody · sem fechamento</span>' : p.origem === "SO_CONTATO" ? '<span class="selo selo--alerta">Sem atividade recente</span>' : "";
+    return `<li class="ent-info" data-cad-linha data-nome="${esc(`${p.nome ?? ""} ${vig?.nome ?? ""}`.toLowerCase())}" data-situacao="${esc(sit)}">
+<details class="ent-info__item"><summary class="ent-info__resumo"><span class="ent-info__nome"><strong>${esc(p.nome ?? p.chave)}</strong>${vig?.nome && vig.nome !== p.nome ? `<span class="nota">exibido como ${esc(vig.nome)}</span>` : ""}${p.nomeRepetido ? '<span class="selo selo--alerta" title="Outro entregador tem o mesmo nome; confira antes de editar">Nome repetido</span>' : ""}</span>
+<span class="ent-info__contato">${vig ? `<code>${esc(vig.telefone)}</code>` : '<span class="nota">sem número</span>'}</span>${selo(ENVIO, sit)}${origem}</summary>
+<div class="ent-info__corpo">
+<section class="ent-info__secao"><h3>Dados e contato</h3><dl class="ent-info__dados"><div><dt>Unidade</dt><dd>${unidade}</dd></div><div><dt>Nome no Financeiro/Foody</dt><dd>${esc(p.nome ?? p.chave)}</dd></div><div><dt>Nome de exibição</dt><dd>${esc(vig?.nome ?? "—")}</dd></div><div><dt>WhatsApp</dt><dd>${vig ? esc(vig.telefone) : "—"}</dd></div><div><dt>Observações</dt><dd>${esc(vig?.observacoes ?? "—")}</dd></div><div><dt>Atualizado em</dt><dd>${esc(quando(vig?.criadoEm ?? ultimo?.revogadoEm))}</dd></div></dl>${formulario}</section>
+<section class="ent-info__secao"><h3>Semanas e fechamentos</h3>${semanas.length ? `<ul class="ent-info__semanas">${semanas.map((s) => (p.listaFechadas ?? []).includes(s) ? `<li class="ent-info__semana--fechada">${esc(dataBR(s))} · fechada</li>` : `<li>${esc(dataBR(s))} · sem fechamento</li>`).join("")}</ul>` : '<p class="nota">Ainda sem semana registrada.</p>'}<p class="nota">${p.semanasFechadas ? `${p.semanasFechadas} semana(s) com fechamento oficial.` : "Nenhum fechamento oficial ainda: nenhuma conta foi criada."}</p></section>
+<section class="ent-info__secao"><h3>Notas fiscais e pagamentos</h3><p class="nota">Situação das notas, valores fechados e pagos e o histórico financeiro ficam no painel oficial do entregador.</p>${p.semanasFechadas ? `<button type="button" class="botao" data-detalhe="entregador-pessoa:${esc(p.chave)}">Abrir notas, fechamentos e pagamentos</button>` : ""}</section>
+<section class="ent-info__secao"><h3>Histórico de alterações</h3>${historico}</section>
+</div></details></li>`;
   }).join("");
-  const aptos = linhas ? (d.cadastros ?? []).filter((x) => x.ativo && x.envio === "APTO").length : 0;
-  const avisoUnidade = d.unidadeAtendida === false ? '<p class="aviso aviso--alerta">Esta unidade ainda não é atendida pelo MOVA: os entregadores aparecem aqui, mas o WhatsApp só pode ser cadastrado quando a unidade for configurada no MOVA (com autorização do proprietário).</p>' : "";
-  const avisoPermissao = !tem(ctx.permissoes, "configurar") ? '<p class="nota">Você pode consultar. Cadastrar ou alterar exige a permissão de configurar.</p>' : "";
-  return `<section class="card ent-cad"><div class="card-topo"><h2>Cadastro de entregadores</h2><span class="nota">${aptos} apto(s) a receber mensagens</span></div>
-<p class="nota">Um cadastro por entregador oficial (o mesmo do Financeiro e do Foody). O número vale na hora para o MOVA e é conferido no próprio WhatsApp antes do primeiro envio. Não pedimos CPF, Pix nem outros dados sensíveis. Desativar não apaga fechamentos nem pagamentos.</p>
-${avisoUnidade}${avisoPermissao}
+  const aptos = (d.cadastros ?? []).filter((x) => x.ativo && x.envio === "APTO").length;
+  const avisos = [
+    !movaOk ? `<p class="aviso aviso--alerta">${esc(c.erro)} Os entregadores continuam listados; só o WhatsApp fica indisponível.</p>` : "",
+    movaOk && d.unidadeAtendida === false ? '<p class="aviso aviso--alerta">Esta unidade ainda não é atendida pelo MOVA: o WhatsApp só pode ser informado depois que a unidade for configurada no MOVA (com autorização do proprietário).</p>' : "",
+    movaOk && !tem(ctx.permissoes, "configurar") ? '<p class="nota">Você pode consultar. Alterar o WhatsApp exige a permissão de configurar.</p>' : "",
+  ].join("");
+  return `<section class="card ent-cad"><div class="card-topo"><h2>Informações dos entregadores</h2><span class="nota">${pessoas.length} entregador(es) · ${aptos} apto(s) a receber mensagens</span></div>
+<p class="nota">Os entregadores vêm do próprio Financeiro (Foody e fechamentos semanais): nada é cadastrado à mão. Aqui você mantém o WhatsApp, o nome de exibição e as observações. Um número alterado vale para o MOVA em até 1 minuto e o antigo deixa de receber. Não pedimos CPF, Pix nem outros dados sensíveis.</p>
+${avisos}
 <div class="ent-cad__filtros" role="search"><label>Pesquisar <input type="search" data-cad-busca placeholder="Nome do entregador"></label>
-<label>Situação <select data-cad-situacao><option value="">Todas</option>${Object.entries(ENVIO).map(([k, [t]]) => `<option value="${k}">${esc(t)}</option>`).join("")}</select></label>
+<label>Contato <select data-cad-situacao><option value="">Todos</option>${Object.entries(ENVIO).filter(([k]) => k !== "MOVA_INDISPONIVEL").map(([k, [t]]) => `<option value="${k}">${esc(t)}</option>`).join("")}</select></label>
 <span class="nota">Unidade: use o seletor de unidade no topo.</span></div>
-${linhas ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes ent-tabela"><caption class="sr">Entregadores e contatos</caption><thead><tr><th scope="col" class="esquerda">Entregador</th><th scope="col">WhatsApp</th><th scope="col">Situação</th><th scope="col">Observações</th><th scope="col">Atualizado em</th><th scope="col" class="esquerda">Ações</th></tr></thead><tbody>${linhas}</tbody></table></div><p class="nota" data-cad-vazio hidden>Nenhum entregador com esse filtro.</p>`
-    : nada("Nenhum entregador nos fechamentos oficiais desta unidade ainda. O cadastro aparece depois do primeiro fechamento semanal.")}</section>`;
+${linhas ? `<ul class="ent-info__lista" aria-label="Entregadores da unidade">${linhas}</ul><p class="nota" data-cad-vazio hidden>Nenhum entregador com esse filtro.</p>`
+    : nada("Nenhum entregador identificado ainda nesta unidade. Eles aparecem assim que o Foody registrar entregas (antes mesmo do fechamento semanal).")}</section>`;
 }
 
 /** Tela principal. `f.aba` escolhe a seção; os dados vêm prontos do servidor. */
@@ -300,14 +321,14 @@ export function entregadoresProprios(r, f = {}, ctx = {}) {
   const corpo = {
     resumo: () => `${cabecalhoOperacional(r, ctx)}${indicadoresDoResumo(r)}${tabelaOperacional(r)}`,
     entregadores: () => `<section class="ent-cards" aria-label="Entregadores">${r.entregadores.length ? r.entregadores.map(cardEntregador).join("") : nada("Nenhum entregador com entregas nesta unidade.")}</section>`,
-    cadastro: () => abaCadastro(ctx.cadastro, ctx),
+    informacoes: () => abaInformacoes(ctx.cadastro, ctx, r),
     fechamento: () => abaFechamento(r, ctx),
     extras: () => abaExtras(r, ctx),
     notas: () => `${r.cofreDisponivel ? "" : '<p class="aviso aviso--alerta">O envio de arquivos está desligado até o cofre privado ser ativado. A obrigação continua visível e bloqueada para pagamento.</p>'}<section class="card"><h2>Notas fiscais pendentes</h2>${tabela(notas, "Nenhuma nota pendente neste filtro.")}</section>`,
     pagamentos: () => `<section class="card"><h2>Pagamentos</h2><p class="nota">A baixa acontece em Contas a Pagar, pela saída identificada no extrato bancário. Chegar a quarta-feira nunca marca a conta como paga.</p>${tabela(r.fechamentos, "Nenhuma obrigação neste filtro.")}</section>`,
     historico: () => `<section class="card"><h2>Semanas processadas</h2>${r.semanas.some((s) => !s.semRegistro) ? `<ul class="lista-simples">${r.semanas.filter((s) => !s.semRegistro).map((s) => `<li><span>Semana ${esc(s.rotulo)}${s.origem ? ` · ${s.origem === "AUTOMATICA" ? "fechamento automático" : "fechamento manual"}` : ""}${s.pendencias ? ` · ${s.pendencias} pendência(s)` : ""}${s.divergenciasAbertas ? ` · ${s.divergenciasAbertas} alteração(ões) sem decisão` : ""}</span>${selo(SEMANA, s.situacao)}</li>`).join("")}</ul>` : nada("Nenhuma semana processada ainda.")}</section><section class="card"><h2>Todos os fechamentos</h2>${tabela(r.fechamentos, "Nenhum fechamento neste filtro.")}</section>`,
   }[aba]();
-  return `<header class="cabecalho"><div><h1>Entregadores Próprios</h1><p class="subtitulo">${ctx.unidadeNome ? `${esc(ctx.unidadeNome)} · ` : ""}Acompanhe a semana, confira as notas e libere o pagamento de quarta-feira.</p></div></header>${nav}${aba === "cadastro" ? "" : filtros(r, f)}${corpo}`;
+  return `<header class="cabecalho"><div><h1>Entregadores Próprios</h1><p class="subtitulo">${ctx.unidadeNome ? `${esc(ctx.unidadeNome)} · ` : ""}Acompanhe a semana, confira as notas e libere o pagamento de quarta-feira.</p></div></header>${nav}${aba === "informacoes" ? "" : filtros(r, f)}${corpo}`;
 }
 
 const fechar = (t) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(t)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar">×</button></div>`;

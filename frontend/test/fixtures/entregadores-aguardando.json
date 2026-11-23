@@ -79,9 +79,9 @@
   "divergencias": []
  },
  "indicadores": {
-  "acumuladoSemanaCentavos": 8500,
-  "entregadoresAtivos": 3,
-  "entregas": 12,
+  "acumuladoSemanaCentavos": 9900,
+  "entregadoresAtivos": 5,
+  "entregas": 14,
   "proximaQuarta": {
    "data": "2026-11-25",
    "quantidade": 0,
@@ -118,6 +118,22 @@
    ],
    "aPagarCentavos": 5850,
    "aguardandoNota": 3
+  },
+  {
+   "chave": "ana-2",
+   "nome": "Ana Sintética",
+   "referencia": null,
+   "valorSemanaCentavos": 700,
+   "entregasSemana": 1,
+   "porDia": [
+    {
+     "data": "2026-11-16",
+     "entregas": 1,
+     "valorCentavos": 700
+    }
+   ],
+   "aPagarCentavos": 0,
+   "aguardandoNota": 0
   },
   {
    "chave": "bruno",
@@ -185,11 +201,27 @@
    ],
    "aPagarCentavos": 11250,
    "aguardandoNota": 3
+  },
+  {
+   "chave": "dani",
+   "nome": "Dani Sintética",
+   "referencia": null,
+   "valorSemanaCentavos": 700,
+   "entregasSemana": 1,
+   "porDia": [
+    {
+     "data": "2026-11-16",
+     "entregas": 1,
+     "valorCentavos": 700
+    }
+   ],
+   "aPagarCentavos": 0,
+   "aguardandoNota": 0
   }
  ],
  "fechamentos": [
   {
-   "id": "8df29572-8674-4ee4-92f7-f24ba75b0580",
+   "id": "a192ec88-c6eb-484f-9225-c3c8bb5cf159",
    "semanaInicio": "2026-11-09",
    "semanaFim": "2026-11-15",
    "rotuloSemana": "09 a 15/11/2026",
@@ -206,7 +238,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "844141ef-5feb-4e3d-81b0-45624c4edf4e",
+   "obrigacaoId": "d19c2e04-ec57-449d-817a-4b15b3eeac9e",
    "saldoCentavos": 1950,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -224,7 +256,7 @@
    ]
   },
   {
-   "id": "63d790e3-21bb-49a9-b39b-007926edf7fb",
+   "id": "80c4ca12-71c5-4ea5-a60a-4d372f943f67",
    "semanaInicio": "2026-11-09",
    "semanaFim": "2026-11-15",
    "rotuloSemana": "09 a 15/11/2026",
@@ -241,14 +273,14 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "NF_RECEBIDA",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "5980af21-6bab-4e1f-afa0-9300911f8a6d",
+   "obrigacaoId": "99dd7c3c-f296-4687-a657-7ec2da7ff26b",
    "saldoCentavos": 2800,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
    "duplicidade": null,
    "contaManual": null,
    "notaVigente": {
-    "documentoId": "67a8f51f-1de3-418d-993e-bb0ae5186dc9",
+    "documentoId": "7077021f-c575-4a21-828e-8c8776c5a5d8",
     "enviadaEm": "2026-11-23T12:00:00.000Z",
     "enviadaPor": "cccccccc-0000-4000-8000-000000000001",
     "vigente": true,
@@ -276,7 +308,7 @@
    ]
   },
   {
-   "id": "10a3b372-ea78-4d10-920d-5717c64360f6",
+   "id": "eb3214d4-6758-4634-b753-96e7d9e8c401",
    "semanaInicio": "2026-11-09",
    "semanaFim": "2026-11-15",
    "rotuloSemana": "09 a 15/11/2026",
@@ -293,7 +325,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "5b74f732-2b6a-4f77-a2df-6b4abf0acc15",
+   "obrigacaoId": "13b8fa66-17f8-43ac-96d3-dc1328bf4aa4",
    "saldoCentavos": 3750,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -311,7 +343,7 @@
    ]
   },
   {
-   "id": "9a4014b1-b7cf-440e-af6a-7503ff9b4d70",
+   "id": "c3eb060a-0587-4f3e-a0bd-99c7d2b22ab8",
    "semanaInicio": "2026-11-02",
    "semanaFim": "2026-11-08",
    "rotuloSemana": "02 a 08/11/2026",
@@ -328,7 +360,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "9ba6abc9-2f1d-400d-a419-27d03ee7c588",
+   "obrigacaoId": "ab432e2b-0726-4855-a1be-c57af9a25f80",
    "saldoCentavos": 1950,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -346,7 +378,7 @@
    ]
   },
   {
-   "id": "6137d979-983c-487f-8d67-ef77efcc3985",
+   "id": "27bfa692-a97c-4dc7-8ea0-a077fe5e2bbf",
    "semanaInicio": "2026-11-02",
    "semanaFim": "2026-11-08",
    "rotuloSemana": "02 a 08/11/2026",
@@ -363,7 +395,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "d3ec8f1a-36c3-4c62-b2f6-403af753425b",
+   "obrigacaoId": "08c28c29-1442-4875-95c8-b8a59bac4e68",
    "saldoCentavos": 2800,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -381,7 +413,7 @@
    ]
   },
   {
-   "id": "6bff7b97-8b0a-426e-ae52-01599f71b4d8",
+   "id": "e5f3ab6f-7a60-4402-923e-223dba433b03",
    "semanaInicio": "2026-11-02",
    "semanaFim": "2026-11-08",
    "rotuloSemana": "02 a 08/11/2026",
@@ -398,7 +430,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "fe567425-cbe3-4348-b3df-bd8323ede86e",
+   "obrigacaoId": "b1d21272-8c28-49d7-b84d-9ba3512644ba",
    "saldoCentavos": 3750,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -416,7 +448,7 @@
    ]
   },
   {
-   "id": "24058829-27d8-4498-afb8-e3ebf78b2423",
+   "id": "81296cac-681f-4a24-b506-1d576580f358",
    "semanaInicio": "2026-10-26",
    "semanaFim": "2026-11-01",
    "rotuloSemana": "26/10 a 01/11/2026",
@@ -433,7 +465,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "4d95b8a0-2866-459e-9e31-e20c80755ff5",
+   "obrigacaoId": "1ce8ee4c-9797-437d-9a6f-b54fc4346ccc",
    "saldoCentavos": 1950,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -451,7 +483,7 @@
    ]
   },
   {
-   "id": "4ea467d5-42dc-4946-b4d1-33e0a212d385",
+   "id": "6f3f1c5a-192c-4c3c-9e44-3ae16b721e1c",
    "semanaInicio": "2026-10-26",
    "semanaFim": "2026-11-01",
    "rotuloSemana": "26/10 a 01/11/2026",
@@ -468,7 +500,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "e30a4dd6-c909-4f17-b955-1574c1553d6c",
+   "obrigacaoId": "50125e07-c829-4551-80b7-61b25189051a",
    "saldoCentavos": 2800,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -486,7 +518,7 @@
    ]
   },
   {
-   "id": "9f1854f2-3385-4210-9210-a4c1b35d0a06",
+   "id": "8008ce98-d804-4afb-bb82-557835e90b61",
    "semanaInicio": "2026-10-26",
    "semanaFim": "2026-11-01",
    "rotuloSemana": "26/10 a 01/11/2026",
@@ -503,7 +535,7 @@
    "ajustesCentavos": 0,
    "situacaoDocumental": "AGUARDANDO_NF",
    "situacaoPagamento": "VENCIDO",
-   "obrigacaoId": "0f1c6358-4108-482e-8f71-3df443b982ac",
+   "obrigacaoId": "574b6a54-386d-4c2d-9210-348ed866e2ce",
    "saldoCentavos": 3750,
    "pagoCentavos": 0,
    "impedimentoDocumental": true,
@@ -561,7 +593,7 @@
  ],
  "extras": [
   {
-   "id": "b79a220b-0fcc-4b77-aec0-ae68e288f60f",
+   "id": "31b8bfd2-2d68-4d56-af78-d280ea90c328",
    "entregador": {
     "chave": "ana",
     "nome": "Ana Sintética"
@@ -574,7 +606,7 @@
    "situacao": "PENDENTE",
    "pagoCentavos": 0,
    "saldoCentavos": 2500,
-   "obrigacaoId": "b2af2d4d-7175-4908-a92e-9fd2d3db4dc5",
+   "obrigacaoId": "94ddd776-366c-4ae8-97fe-70910464e5cc",
    "movimentacaoId": null,
    "meioPagamento": null,
    "origem": "CONTA_NOVA",
@@ -583,11 +615,11 @@
   }
  ],
  "resumoSemana": {
-  "taxasFoodyCentavos": 8500,
+  "taxasFoodyCentavos": 9900,
   "extrasCentavos": 0,
-  "totalDevidoCentavos": 8500,
+  "totalDevidoCentavos": 9900,
   "totalPagoCentavos": 0,
-  "saldoAbertoCentavos": 8500,
+  "saldoAbertoCentavos": 9900,
   "aguardandoVinculoCentavos": 0,
   "pendenciasDocumentais": 0,
   "porEntregador": [
@@ -602,6 +634,18 @@
     "totalDevidoCentavos": 1950,
     "totalPagoCentavos": 0,
     "saldoAbertoCentavos": 1950
+   },
+   {
+    "chave": "ana-2",
+    "nome": "Ana Sintética",
+    "taxasCentavos": 700,
+    "taxasPagasCentavos": 0,
+    "extrasCentavos": 0,
+    "extrasPagosCentavos": 0,
+    "aguardandoVinculoCentavos": 0,
+    "totalDevidoCentavos": 700,
+    "totalPagoCentavos": 0,
+    "saldoAbertoCentavos": 700
    },
    {
     "chave": "bruno",
@@ -626,16 +670,28 @@
     "totalDevidoCentavos": 3750,
     "totalPagoCentavos": 0,
     "saldoAbertoCentavos": 3750
+   },
+   {
+    "chave": "dani",
+    "nome": "Dani Sintética",
+    "taxasCentavos": 700,
+    "taxasPagasCentavos": 0,
+    "extrasCentavos": 0,
+    "extrasPagosCentavos": 0,
+    "aguardandoVinculoCentavos": 0,
+    "totalDevidoCentavos": 700,
+    "totalPagoCentavos": 0,
+    "saldoAbertoCentavos": 700
    }
   ]
  },
  "indicadoresDaSemana": {
   "semanaInicio": "2026-11-16",
   "provisoria": true,
-  "entregadores": 3,
-  "devidoCentavos": 8500,
+  "entregadores": 5,
+  "devidoCentavos": 9900,
   "pagoCentavos": 0,
-  "saldoCentavos": 8500,
+  "saldoCentavos": 9900,
   "aguardandoNota": {
    "quantidade": 0,
    "valorCentavos": 0

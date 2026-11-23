@@ -205,9 +205,9 @@ function consultaDoCalendario() {
   const canal = estado.rota === "saipos" ? { presencial: "BALCAO", anota: "ANOTA_AI" }[estado.filtros.saipos?.aba] : estado.rota === "swf" && !["importacoes", "sangrias"].includes(estado.filtros.swf?.aba) ? "BALCAO" : estado.rota === "ifood" && estado.filtros.ifood?.aba !== "importacoes" ? "IFOOD" : estado.rota === "noventa-e-nove-food" && estado.filtros["noventa-e-nove-food"]?.aba !== "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null;
   return canal ? `/api/fv2/calendario-faturamento?${qs({ competencia: undefined, canal, mes: estado.competencia })}` : null;
 }
-/** 23/11 — cadastro de entregadores: só com a aba "Cadastro" aberta. Mesma fonte de contatos do MOVA (duas leituras). */
+/** 23/11 — Informações dos entregadores: só com a aba aberta. Mesma fonte de contatos do MOVA (duas leituras). */
 function consultasDoCadastro() {
-  if (estado.rota !== "entregadores-proprios" || estado.filtros["entregadores-proprios"]?.aba !== "cadastro") return null;
+  if (estado.rota !== "entregadores-proprios" || estado.filtros["entregadores-proprios"]?.aba !== "informacoes") return null;
   return [`/api/fv2/mova/entregadores?${qs({ competencia: undefined })}`, `/api/fv2/mova/entregadores-oficiais?${qs({ competencia: undefined })}`];
 }
 /** Fase 11 — importações do canal da tela, só quando a aba "Importações" está aberta (SAIPOS, iFood ou 99Food). */
@@ -390,8 +390,9 @@ async function carregar() {
   if (doCadastro) {
     const [rc, ro] = await doCadastro;
     if (rc === null || ro === null) return;
-    estado.cadEnt = rc.ok ? { dados: rc.dados, oficiais: ro.ok ? ro.dados : { itens: [] } }
-      : { erro: rc.status === 503 ? "O MOVA não está ativo agora: o cadastro de WhatsApp fica disponível quando ele voltar." : rc.mensagem || "Não foi possível carregar o cadastro de entregadores." };
+    // Sem a lista do servidor, a tela usa os entregadores que já vieram na consulta da semana (nunca some ninguém).
+    estado.cadEnt = rc.ok ? { dados: rc.dados, oficiais: ro.ok ? ro.dados : null }
+      : { erro: rc.status === 503 ? "O MOVA não está ativo agora." : rc.mensagem || "Não foi possível consultar os contatos no MOVA.", oficiais: ro.ok ? ro.dados : null };
   }
   if (dasImportacoes) {
     const ri = await dasImportacoes;
@@ -879,7 +880,7 @@ document.addEventListener("change", (e) => {
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });
-// 23/11: ações do cadastro de entregadores (rotas do MOVA: só os campos que cada uma aceita; sem "confirmar"/"unidade").
+// 23/11: ações do WhatsApp dos entregadores (rotas do MOVA: só os campos que cada uma aceita; sem "confirmar"/"unidade").
 const CAMPOS_MOVA = Object.freeze({
   "/api/fv2/acoes/mova/entregador": ["entregador", "telefone", "nome", "observacoes"],
   "/api/fv2/acoes/mova/entregador-alterar": ["entregador", "telefone", "nome", "observacoes"],
@@ -910,7 +911,7 @@ document.addEventListener("click", (e) => {
   if (globalThis.confirm && !globalThis.confirm("Desativar este contato? O entregador deixa de receber mensagens; fechamentos, pagamentos e o histórico continuam.")) return;
   executarAcaoMova(b.dataset.acaoMovaBotao, { entregador: b.dataset.entregador }, b.closest("form")?.querySelector(".resultado-acao"), b);
 });
-/** Pesquisa e filtro do cadastro: só esconde linhas (os dados já estão na tela). */
+/** Pesquisa e filtro das informações dos entregadores: só esconde linhas (os dados já estão na tela). */
 function filtrarCadastro() {
   const busca = (document.querySelector("[data-cad-busca]")?.value ?? "").trim().toLowerCase();
   const sit = document.querySelector("[data-cad-situacao]")?.value ?? "";

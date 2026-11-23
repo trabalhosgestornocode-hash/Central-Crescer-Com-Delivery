@@ -6,12 +6,15 @@ import { fileURLToPath } from "node:url";
 import { criarCofreMemoria, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { somarDias } from "../../src/modules/financeiro-v2/dominio/tempo.js";
 import { ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, ctx } from "../../test/financeiro-v2/helpers/cenario.js";
+import { entregadoresConhecidos } from "../../src/modules/fv2-integracao/movaRotas.js";
 
 const SEMANAS = ["2026-10-26", "2026-11-02", "2026-11-09"];
 const NOMES = [["ana", "Ana Sintética"], ["bruno", "Bruno Sintético"], ["carla", "Carla Sintética"]];
 const entrega = (id, chave, nome, data, centavos) => ({ id: `pedido:${id}`, tipo: "ENTREGA", entregadorChave: chave, entregadorNome: nome, data, numeroPedido: String(id), situacao: "Entregue", valorCentavos: centavos, elegivel: true, emRevisao: false });
 const fonte = { apurar: async (p) => ({ disponivel: true, dias: Array.from({ length: 7 }, (_, i) => ({ data: somarDias(p.inicio, i), fonte: "foody", provisorio: false, aberto: false, triagem: 0 })),
-  entregas: NOMES.flatMap(([k, n], j) => Array.from({ length: 3 + j }, (_, i) => entrega(`${p.inicio}-${k}-${i}`, k, n, somarDias(p.inicio, i % 7), 650 + 50 * j))) }) };
+  entregas: [...NOMES.flatMap(([k, n], j) => Array.from({ length: 3 + j }, (_, i) => entrega(`${p.inicio}-${k}-${i}`, k, n, somarDias(p.inicio, i % 7), 650 + 50 * j))),
+    // 16–22/11 (encerrada, sem fechamento): Dani só aparece aqui; "Ana Sintética" homônima com OUTRA chave (nunca juntar)
+    ...(p.inicio === "2026-11-16" ? [entrega(`${p.inicio}-dani`, "dani", "Dani Sintética", p.inicio, 700), entrega(`${p.inicio}-ana2`, "ana-2", "Ana Sintética", p.inicio, 700)] : [])] }) };
 const estado = { agora: "2026-11-23T12:00:00.000Z" };
 const cofre = criarCofreMemoria();
 const n = criarNucleoFinanceiro({ repositorio: criarRepositorioMemoria(), escoposAutorizados: ESCOPOS_PADRAO, relogio: () => new Date(estado.agora), cofre, entregadores: { fonte, inicioDaOperacao: SEMANAS[0], cofreDeNotas: cofre } });
@@ -31,7 +34,7 @@ const cadastro = {
     { id: "2", chave: "ana", telefone: "…0099", nome: "Ana", observacoes: null, ativo: false, criadoEm: "2026-11-20T09:00:00.000Z", revogadoEm: "2026-11-23T09:00:00.000Z", motivoRevogacao: "TROCA_DE_NUMERO" },
     { id: "3", chave: "carla", telefone: "…0033", nome: "Carla Sintética", observacoes: null, ativo: false, criadoEm: "2026-11-21T09:00:00.000Z", revogadoEm: "2026-11-22T09:00:00.000Z", motivoRevogacao: "DESATIVADO" },
   ] },
-  oficiais: { itens: NOMES.map(([k, nome]) => ({ chave: k, nome, ultimaSemana: "2026-11-09" })) },
+  oficiais: { itens: await entregadoresConhecidos({ ctx: c, nucleo: n }) },
 };
 const dir = join(dirname(fileURLToPath(import.meta.url)), "../../../frontend/test/fixtures");
 mkdirSync(dir, { recursive: true });

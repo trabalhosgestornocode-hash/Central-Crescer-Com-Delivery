@@ -25,7 +25,7 @@
 //   GET  /api/mova/automacoes            automações da unidade (ver)
 //   POST /acoes/mova/automacao           ligar/desligar e horário (configurar)
 //   POST /acoes/mova/automacao-pausa     pausar/retomar uma automação (configurar)
-//   GET  /api/mova/entregadores-oficiais entregadores dos fechamentos OFICIAIS da unidade (para o cadastro; leitura com a sessão) (ver)
+//   GET  /api/mova/entregadores-oficiais entregadores CONHECIDOS da unidade: fechamentos oficiais + Foody das semanas em aberto (ver)
 //   POST /acoes/mova/entregador          cadastrar entregador OFICIAL + número WhatsApp (configurar; a chave é conferida no Financeiro)
 //   POST /acoes/mova/entregador-revogar  revogar o cadastro (configurar; o histórico fica)
 //   Agente 2 — Central de pendências e documentos recebidos SEM IA (nada escreve no Financeiro):
@@ -55,14 +55,50 @@ function exigirCadastroDeEntregador(ctx, mova) {
   if (!mova.cfg.unidades.some((u) => u.unidadeId === ctx.unidadeId && u.organizacaoId === ctx.organizacaoId)) throw recusa(409, "UNIDADE_FORA_DO_MOVA", "Esta unidade ainda não é atendida pelo MOVA: o cadastro de WhatsApp dos entregadores fica disponível quando ela for configurada.");
   if (typeof mova.armazenamento.entregadores?.cadastrar !== "function") throw recusa(503, "CADASTRO_INDISPONIVEL", "Cadastro de entregadores indisponível.");
 }
+/**
+ * 23/11 — ENTREGADORES CONHECIDOS da unidade (nunca cadastrados à mão): os dos fechamentos oficiais + os que o Foody já
+ * identificou na semana atual e nas semanas encerradas ainda sem fechamento (mesma chave que o fechamento vai usar — o
+ * fechamento posterior cai no MESMO entregador, sem duplicar). Só leitura; nenhuma obrigação é criada.
+ */
+const normalizarNome = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export async function entregadoresConhecidos({ ctx, nucleo, semanasAbertas = 2 }) {
+  if (typeof nucleo?.consultarEntregadoresProprios !== "function") throw recusa(503, "FINANCEIRO_INDISPONIVEL", "Financeiro indisponível.");
+  const r = await nucleo.consultarEntregadoresProprios(ctx, {});
+  const porChave = new Map();
+  const somar = (chave, nome, semana, fechado) => {
+    if (!chave) return;
+    const x = porChave.get(chave) ?? { chave, nome: nome ?? chave, semanas: new Set(), semanasFechadas: new Set() };
+    if (semana) x.semanas.add(semana);
+    if (fechado && semana) { x.semanasFechadas.add(semana); x.nome = nome ?? x.nome; }
+    porChave.set(chave, x);
+  };
+  for (const f of r.fechamentos ?? []) somar(f.entregador?.chave, f.entregador?.nome, f.semanaInicio, true);
+  const abertas = [r];
+  for (const s of (r.semanas ?? []).filter((x) => x.semRegistro).slice(0, semanasAbertas)) abertas.push(await nucleo.consultarEntregadoresProprios(ctx, { semana: s.inicio }));
+  for (const a of abertas) if (a.semana?.situacao !== "CONSOLIDADA") for (const e of a.entregadores ?? []) if ((e.entregasSemana ?? 0) > 0 || e.valorSemanaCentavos > 0) somar(e.chave, e.nome, a.semana.inicio, false);
+  const itens = [...porChave.values()].map((x) => {
+    const semanas = [...x.semanas].sort().reverse();
+    const fechadas = [...x.semanasFechadas].sort().reverse();
+    return { chave: x.chave, nome: x.nome, ultimaSemana: fechadas[0] ?? null, ultimaAtividade: semanas[0] ?? null, semanas: semanas.slice(0, 12), semanasFechadas: fechadas.length, listaFechadas: fechadas.slice(0, 12),
+      origem: fechadas.length ? "FECHAMENTO" : "FOODY_SEM_FECHAMENTO" };
+  });
+  // Nomes iguais com chaves diferentes: nunca juntar; sinalizar para conferência humana.
+  const porNome = new Map();
+  for (const i of itens) porNome.set(normalizarNome(i.nome), [...(porNome.get(normalizarNome(i.nome)) ?? []), i.chave]);
+  for (const i of itens) i.nomeRepetido = (porNome.get(normalizarNome(i.nome))?.length ?? 0) > 1;
+  return itens.sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR") || a.chave.localeCompare(b2.chave));
+}
 async function entregadorOficial({ ctx, nucleo, chave }) {
   let oficial;
   try { oficial = await nucleo.consultarEntregador(ctx, { entregador: chave }); } catch (e) {
     if (e?.codigo === "FV2_NAO_ENCONTRADO") oficial = null; else throw e;
   }
   const f = (oficial?.fechamentos ?? []).find((x) => x.entregador?.chave === chave);
-  if (!f) throw recusa(404, "ENTREGADOR_NAO_ENCONTRADO", "Entregador não encontrado no Financeiro desta unidade (use o entregador dos fechamentos oficiais).");
-  return f;
+  if (f) return f;
+  // Antes do fechamento: entregador já identificado pelo Foody nesta unidade (mesma chave do fechamento futuro).
+  const conhecido = typeof nucleo?.consultarEntregadoresProprios === "function" ? (await entregadoresConhecidos({ ctx, nucleo })).find((x) => x.chave === chave) : null;
+  if (conhecido) return { entregador: { chave: conhecido.chave, nome: conhecido.nome }, semanaInicio: conhecido.ultimaAtividade, origem: conhecido.origem };
+  throw recusa(404, "ENTREGADOR_NAO_ENCONTRADO", "Entregador não encontrado no Financeiro desta unidade (nem nos fechamentos, nem no Foody das semanas em aberto).");
 }
 function exigirNumeroForaDaEquipe(mova, tel) {
   const daEquipe = mova.cfg.gruposAutorizados.some((g) => !g.entregador && (g.participantes ?? []).some((p) => (p.telefones ?? []).includes(tel.telefoneE164)));
@@ -198,11 +234,7 @@ export const CONSULTAS_MOVA = Object.freeze({
   },
   "/mova/entregadores-oficiais": async ({ ctx, nucleo }) => {
     exigirVer(ctx);
-    if (typeof nucleo?.consultarEntregadoresProprios !== "function") throw recusa(503, "FINANCEIRO_INDISPONIVEL", "Financeiro indisponível.");
-    const r = await nucleo.consultarEntregadoresProprios(ctx, {});
-    const porChave = new Map();
-    for (const f of r.fechamentos ?? []) if (f.entregador?.chave && !porChave.has(f.entregador.chave)) porChave.set(f.entregador.chave, { chave: f.entregador.chave, nome: f.entregador.nome ?? f.entregador.chave, ultimaSemana: f.semanaInicio });
-    return { itens: [...porChave.values()].sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR")) };
+    return { itens: await entregadoresConhecidos({ ctx, nucleo }) };
   },
   // Agente 2 — Frente E: Central de Operações (contagens reais; IA = consumo registrado no orçamento).
   "/mova/visao-geral": async ({ ctx, mova, orcamento, controle, params }) => {

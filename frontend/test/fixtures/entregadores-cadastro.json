@@ -45,17 +45,91 @@
    {
     "chave": "ana",
     "nome": "Ana Sintética",
-    "ultimaSemana": "2026-11-09"
+    "ultimaSemana": "2026-11-09",
+    "ultimaAtividade": "2026-11-23",
+    "semanas": [
+     "2026-11-23",
+     "2026-11-16",
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "semanasFechadas": 3,
+    "listaFechadas": [
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "origem": "FECHAMENTO",
+    "nomeRepetido": true
+   },
+   {
+    "chave": "ana-2",
+    "nome": "Ana Sintética",
+    "ultimaSemana": null,
+    "ultimaAtividade": "2026-11-16",
+    "semanas": [
+     "2026-11-16"
+    ],
+    "semanasFechadas": 0,
+    "listaFechadas": [],
+    "origem": "FOODY_SEM_FECHAMENTO",
+    "nomeRepetido": true
    },
    {
     "chave": "bruno",
     "nome": "Bruno Sintético",
-    "ultimaSemana": "2026-11-09"
+    "ultimaSemana": "2026-11-09",
+    "ultimaAtividade": "2026-11-23",
+    "semanas": [
+     "2026-11-23",
+     "2026-11-16",
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "semanasFechadas": 3,
+    "listaFechadas": [
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "origem": "FECHAMENTO",
+    "nomeRepetido": false
    },
    {
     "chave": "carla",
     "nome": "Carla Sintética",
-    "ultimaSemana": "2026-11-09"
+    "ultimaSemana": "2026-11-09",
+    "ultimaAtividade": "2026-11-23",
+    "semanas": [
+     "2026-11-23",
+     "2026-11-16",
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "semanasFechadas": 3,
+    "listaFechadas": [
+     "2026-11-09",
+     "2026-11-02",
+     "2026-10-26"
+    ],
+    "origem": "FECHAMENTO",
+    "nomeRepetido": false
+   },
+   {
+    "chave": "dani",
+    "nome": "Dani Sintética",
+    "ultimaSemana": null,
+    "ultimaAtividade": "2026-11-16",
+    "semanas": [
+     "2026-11-16"
+    ],
+    "semanasFechadas": 0,
+    "listaFechadas": [],
+    "origem": "FOODY_SEM_FECHAMENTO",
+    "nomeRepetido": false
    }
   ]
  }

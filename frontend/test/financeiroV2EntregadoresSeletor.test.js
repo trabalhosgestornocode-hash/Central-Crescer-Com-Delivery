@@ -45,6 +45,7 @@ test("seletor: depois do fechamento OFICIAL, 16–22/11 vira 'Fechada' sem sumir
 test("seletor: CSS dá largura ao campo e mostra a linha completa no desktop e no celular", () => {
   const css = readFileSync(new URL("../financeiro-v2/fv2.css", import.meta.url), "utf8");
   assert.match(css, /\.filtros-locais \.ent-filtro-semana \{ grid-column: span 2; \}/);
+  assert.match(css, /data-filtro-local="entregadores-proprios"\] select[^{]*\{ width: 100%; min-width: 0; \}/);
   assert.match(css, /\.ent-semana-escolhida \{ grid-column: 1 \/ -1;[^}]*overflow-wrap: anywhere/);
   assert.match(css, /\.filtros-locais \.caixa-marcar, \.filtros-locais \.ent-filtro-semana \{ grid-column: 1 \/ -1; \}/);
 });
