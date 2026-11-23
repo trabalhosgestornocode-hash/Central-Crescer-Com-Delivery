@@ -70,6 +70,7 @@ export function validarConfiguracao(c) {
     const documentos = (Array.isArray(u.documentos) ? u.documentos : []).map(normalizarDocumento).filter(Boolean);
     return Object.freeze({
       organizacaoId: u.organizacaoId.toLowerCase(), unidadeId: u.unidadeId.toLowerCase(), nome: u.nome.trim(),
+      empresa: typeof u.empresa === "string" && u.empresa.trim() ? u.empresa.trim().slice(0, 120) : null,
       apelidos: Object.freeze([...new Set(apelidos)]), documentos: Object.freeze(documentos), fontes: validarFontes(u.fontes, i),
     });
   });

@@ -61,7 +61,7 @@ async function cenario({ concessao = [ACAO.VER, ACAO.ENVIAR_DOCUMENTO] } = {}) {
 
 t("A2-E1 segunda 09:00: cada entregador recebe SÓ o próprio fechamento no privado; uma vez só; pausada não envia", async () => {
   const s = await cenario();
-  assert.deepEqual(await s.mova.entregadores.rotina(), { semanais: 0, cobrancas: 0, pulados: [] }, "sem automação ligada nada sai");
+  assert.deepEqual(await s.mova.entregadores.rotina(), { semanais: 0, cobrancas: 0, pulados: [], avisos: 0, relatorios: 0 }, "sem automação ligada nada sai");
   await s.ligar(AUTOMACAO.SEMANAL);
   const r = await s.mova.entregadores.rotina();
   assert.equal(r.semanais, 2);

@@ -146,6 +146,7 @@ export const PROMPT_DO_EXTRATOR = [
   "Perguntas sobre dados bancários, pessoas, salários, senhas = consulta DADO_RESTRITO. Explique em 'justificativa' por que classificou assim, em NO MÁXIMO 12 palavras.",
   "Mensagem SÓ DE TEXTO (sem documento): tipoDocumento = OUTRO; pagamento já feito = INFORMAR_PAGAMENTO (dataPagamento); conta/boleto a vencer = REGISTRAR_CONTA (vencimento). categoriaSugerida em MAIÚSCULAS_COM_SUBLINHADO (ex.: ENERGIA_ELETRICA, ALUGUEL, INSUMOS). Receita recebida = natureza RECEITA.",
   "Nunca presuma data que não foi dita: sem data na mensagem, a data fica null e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
+  "Nota fiscal de serviço (NFS-e): tipoDocumento NOTA_FISCAL; favorecido = prestador/emitente; pagador = tomador; documentoDestinatario = CNPJ/CPF do tomador; identificadorDocumento = número da nota; competencia = mês de competência; valorCentavos = valor dos serviços.",
   "Comprovante (Pix, TED, boleto pago): pagador = quem pagou; favorecido = quem recebeu; instituicao = banco; idTransacao = ID/E2E/autenticação exatamente como impresso (sem espaços).",
   "situacaoTransacao = o que o comprovante IMPRIME: CONCLUIDA (efetivado/realizado/concluído), AGENDADA (agendamento), PENDENTE (em processamento), CANCELADA; sem indicação clara = NAO_IDENTIFICADA. Nunca afirme que o documento é autêntico.",
   "Contas já vencidas e não pagas = consulta CONTAS_VENCIDAS; fechamento/pagamento semanal dos entregadores = FECHAMENTO_ENTREGADORES.",

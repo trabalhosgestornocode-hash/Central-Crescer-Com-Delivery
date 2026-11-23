@@ -13,8 +13,14 @@ export const ABAS_CENTRAL = Object.freeze([
   { id: "automacoes", rotulo: "Automações" },
   { id: "seguranca", rotulo: "Segurança e Autonomia" },
 ]);
-const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores"], automacoes: ["automacoes"], seguranca: ["politicas"] };
-const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Cobrança da nota fiscal" };
+const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores", "entregadores-oficiais"], automacoes: ["automacoes"], seguranca: ["politicas"] };
+const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Cobrança da nota fiscal",
+  ENTREGADORES_RELATORIO: "Relatório de quarta no grupo da unidade", ENTREGADORES_AVISO_GRUPO: "Aviso de liberação no grupo da unidade" };
+// Horários padrão (decisão do proprietário, 23/11/2026; fuso America/Fortaleza): segunda 10h, quarta 8h.
+// Rotas que, se falharem, não derrubam a aba (o cadastro some e o resto continua).
+const OPCIONAIS = new Set(["entregadores-oficiais"]);
+const HORARIO_PADRAO = { ENTREGADORES_SEMANAL: "10:00", ENTREGADORES_RELATORIO: "08:00", ENTREGADORES_COBRANCA: "09:00", ENTREGADORES_AVISO_GRUPO: "00:00" };
+const CONFERENCIA_NOTA = { CONFERE: ["Confere", "ok"], DIVERGENTE: ["Divergente", "erro"], INCONCLUSIVA: ["Em análise", "alerta"] };
 const NIVEL = { SOMENTE_PROPOR: ["Só propor", "neutro"], APLICAR_COM_CONFIRMACAO: ["Com confirmação", "alerta"], APLICAR_AUTOMATICO: ["Automático", "info"] };
 const ESTADO_OP = { EXECUTANDO: ["Executando", "info"], EXECUTADA: ["Executada", "ok"], FALHOU: ["Falhou", "erro"], REVERTIDA: ["Revertida", "neutro"] };
 const POLITICA = { PRIVADO_RESTRITO: "Privado restrito", GRUPO_FINANCEIRO: "Grupo financeiro", OPERACIONAL: "Operacional (sem valores)" };
@@ -49,8 +55,8 @@ export function criarCentral({ ui, ler, enviar }) {
     const rotas = ROTAS[aba] ?? [];
     cache.set(aba, { carregando: true });
     const r = await Promise.all(rotas.map((x) => ler(`/api/fv2/mova/${x}`)));
-    const erro = r.find((x) => !x.ok);
-    cache.set(aba, erro ? { erro: erro.dados?.mensagem ?? "Não foi possível carregar." } : { dados: Object.fromEntries(rotas.map((x, i) => [x, r[i].dados])) });
+    const erro = r.find((x, i) => !x.ok && !OPCIONAIS.has(rotas[i]));
+    cache.set(aba, erro ? { erro: erro.dados?.mensagem ?? "Não foi possível carregar." } : { dados: Object.fromEntries(rotas.map((x, i) => [x, r[i].ok ? r[i].dados : null])) });
   }
   const invalidar = () => cache.clear();
 
@@ -120,15 +126,27 @@ export function criarCentral({ ui, ler, enviar }) {
     ];
   }
 
-  function entregadores({ entregadores: e }) {
+  function entregadores({ entregadores: e, "entregadores-oficiais": of }, pode) {
+    const ativos = new Set((e.cadastros ?? []).filter((x) => x.ativo).map((x) => x.chave));
+    const livres = (of?.itens ?? []).filter((x) => !ativos.has(x.chave));
+    const cadastro = pode?.configurar ? cartao("Cadastrar entregador",
+      el("p", { classe: "cf-dica", texto: "Escolha o entregador dos fechamentos oficiais e informe o número WhatsApp dele. Não é preciso aceite do entregador. O cadastro passa a valer quando o MOVA reiniciar; antes do primeiro envio o número é conferido no próprio WhatsApp." }),
+      livres.length ? el("form", { classe: "cf-form", "data-form": "entregador" },
+        el("label", {}, "Entregador ", el("select", { name: "entregador" }, ...livres.map((x) => el("option", { value: x.chave, texto: x.nome })))),
+        el("label", {}, "WhatsApp ", el("input", { name: "telefone", type: "tel", placeholder: "(85) 9XXXX-XXXX", autocomplete: "off" })),
+        botao("Cadastrar", { "data-acao": "central-entregador", type: "button" })) : vazio("Todos os entregadores dos fechamentos já estão cadastrados.")) : null;
     return [
+      cadastro,
+      (e.cadastros ?? []).length ? cartao("Cadastros", tabela(["Entregador", "Telefone", "Situação", ""], e.cadastros.map((x) => ({ id: `${x.chave}|${x.criadoEm}`, celulas: [x.nome ?? x.chave, el("code", { texto: x.telefone }),
+        selo(x.ativo ? ["Ativo", "ok"] : ["Revogado", "neutro"]), x.ativo && pode?.configurar ? botao("Revogar", { "data-acao": "central-entregador-revogar", "data-entregador": x.chave }) : "—"] })), "Cadastros")) : null,
       cartao("Entregadores autorizados no WhatsApp",
         el("p", { classe: "cf-dica", texto: `Fluxo ${e.ligado ? "ligado" : "desligado"}. O fechamento, a nota e a liberação são os da tela de Entregadores do Financeiro; aqui só o que passou pelo WhatsApp.` }),
         e.itens.length ? tabela(["Entregador", "Telefone", "Conversa"], e.itens.map((x) => ({ id: x.chave, celulas: [x.nome ?? x.chave, el("code", { texto: x.telefone }), x.conversa === "ATIVA" ? selo(["Ativa", "ok"]) : selo(["Número da equipe", "alerta"])] })), "Entregadores") : vazio("Nenhum entregador cadastrado para o WhatsApp nesta unidade.")),
-      cartao("Notas recebidas", e.notas.length ? tabela(["Recebida", "Entregador", "Semana", "Situação", "Motivo"], e.notas.map((n) => ({ id: n.id, celulas: [horaBr(n.criadaEm), n.entregador, dataBr(n.semanaInicio),
+      cartao("Notas recebidas", e.notas.length ? tabela(["Recebida", "Entregador", "Semana", "Conferência", "Situação", "Motivo"], e.notas.map((n) => ({ id: n.id, celulas: [horaBr(n.criadaEm), n.entregador, dataBr(n.semanaInicio),
+        n.conferencia ? selo(CONFERENCIA_NOTA[n.conferencia] ?? [n.conferencia, "neutro"]) : "—",
         selo(n.estado === "ANEXADA" ? ["Anexada", "ok"] : n.estado === "RECUSADA" ? ["Recusada", "erro"] : ["Pendente de anexo", "alerta"]), n.motivo ? el("code", { texto: n.motivo }) : "—"] })), "Notas") : vazio("Nenhuma nota recebida.")),
       cartao("Mensagens enviadas pela rotina", e.envios.length ? tabela(["Quando", "Entregador", "Tipo", "Semana"], e.envios.map((x) => ({ id: x.chave, celulas: [horaBr(x.criadoEm), x.entregador, x.tipo === "SEMANAL" ? "Fechamento da semana" : x.tipo === "COBRANCA_NOTA" ? "Cobrança da nota" : x.tipo, dataBr(x.semanaInicio)] })), "Envios") : vazio("Nenhuma mensagem enviada.")),
-    ];
+    ].filter(Boolean);
   }
 
   function automacoes({ automacoes: a }, pode) {
@@ -139,9 +157,9 @@ export function criarCentral({ ui, ler, enviar }) {
         const x = porNome.get(nome);
         const situacao = !x || !x.ativa ? ["Desligada", "neutro"] : x.pausadaEm ? ["Pausada", "alerta"] : ["Ativa", "ok"];
         const acoes = pode.configurar ? el("span", {},
-          botao(x?.ativa ? "Desligar" : "Ligar", { "data-acao": "central-automacao", "data-nome": nome, "data-ativa": String(!x?.ativa), "data-horario": x?.horario ?? "09:00" }),
+          botao(x?.ativa ? "Desligar" : "Ligar", { "data-acao": "central-automacao", "data-nome": nome, "data-ativa": String(!x?.ativa), "data-horario": x?.horario ?? HORARIO_PADRAO[nome] ?? "09:00" }),
           x?.ativa ? botao(x.pausadaEm ? "Retomar" : "Pausar", { "data-acao": "central-pausa", "data-nome": nome, "data-pausar": String(!x.pausadaEm) }) : null) : "—";
-        return { id: nome, celulas: [rotulo, selo(situacao), x?.horario ?? "09:00", x?.ultimaExecucao ? horaBr(x.ultimaExecucao) : "—", acoes] };
+        return { id: nome, celulas: [rotulo, selo(situacao), x?.horario ?? HORARIO_PADRAO[nome] ?? "09:00", x?.ultimaExecucao ? horaBr(x.ultimaExecucao) : "—", acoes] };
       }), "Automações"))];
   }
 
@@ -298,6 +316,15 @@ export function criarCentral({ ui, ler, enviar }) {
       const justificativa = globalThis.prompt?.("Justificativa da reversão (mínimo 10 caracteres; fica na auditoria):")?.trim() ?? "";
       if (!justificativa) return null;
       r = await enviar("/api/fv2/acoes/mova/reverter-operacao", { operacaoId: b.dataset.operacao, justificativa });
+    } else if (acao === "central-entregador") {
+      const v = Object.fromEntries(new FormData(b.closest("form")).entries());
+      if (!v.entregador || !String(v.telefone ?? "").replace(/\D/g, "")) return { ok: false, texto: "Escolha o entregador e informe o número." };
+      r = await enviar("/api/fv2/acoes/mova/entregador", { entregador: v.entregador, telefone: v.telefone });
+      invalidar();
+      return r.ok ? { ok: true, texto: "Entregador cadastrado. Passa a valer quando o MOVA reiniciar." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    } else if (acao === "central-entregador-revogar") {
+      if (globalThis.confirm && !globalThis.confirm("Revogar o cadastro deste entregador? O histórico fica.")) return null;
+      r = await enviar("/api/fv2/acoes/mova/entregador-revogar", { entregador: b.dataset.entregador });
     } else if (acao === "central-automacao") {
       r = await enviar("/api/fv2/acoes/mova/automacao", { nome: b.dataset.nome, ativa: b.dataset.ativa === "true", horario: b.dataset.horario });
     } else if (acao === "central-pausa") {

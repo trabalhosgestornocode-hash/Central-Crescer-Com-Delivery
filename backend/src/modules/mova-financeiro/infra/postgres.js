@@ -45,7 +45,7 @@ const linhaProposta = (r) => r && Object.freeze({
 });
 
 const linhaNota = (r) => r && Object.freeze({ id: r.id, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, semanaInicio: dia(r.semana_inicio), sha256: r.sha256,
-  eventoId: r.evento_id, estado: r.estado, motivo: r.motivo, documentoId: r.documento_id, situacaoDocumental: r.situacao_documental, criadaEm: r.criada_em.toISOString() });
+  eventoId: r.evento_id, estado: r.estado, motivo: r.motivo, documentoId: r.documento_id, situacaoDocumental: r.situacao_documental, conferencia: r.conferencia ?? null, leitura: r.leitura ?? null, criadaEm: r.criada_em.toISOString() });
 const linhaAutomacao = (r) => r ? Object.freeze({ nome: r.nome, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, ativa: r.ativa, horario: r.horario,
   pausadaEm: r.pausada_em?.toISOString() ?? null, pausadaPor: r.pausada_por, motivo: r.motivo, ultimaExecucao: r.ultima_execucao?.toISOString() ?? null }) : null;
 /**
@@ -301,8 +301,29 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q(`update mova.nota_entregador set estado = $2, motivo = $3, documento_id = $4, situacao_documental = $5, atualizada_em = now() where id = $1 and estado = 'PENDENTE_ANEXO'`, [id, estado, motivo, documentoId, situacaoDocumental]);
         return r.rowCount === 1;
       },
+      /** 23/11: resultado da leitura e da conferência da nota (sem o arquivo; só os campos conferidos). */
+      async registrarLeitura(id, { leitura, conferencia }) {
+        await q("update mova.nota_entregador set leitura = $2, conferencia = $3, atualizada_em = now() where id = $1", [id, leitura ? JSON.stringify(leitura) : null, conferencia]);
+      },
       async listar(escopo) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
+      },
+    }),
+    // 23/11: cadastro simples pelo gestor (a chave já foi conferida no Financeiro pela rota). Revogar = ativo false, nunca apagar.
+    entregadores: Object.freeze({
+      async cadastrar(e) {
+        try {
+          const r = await q(`insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por) values ($1,$2,$3,$4,$5,'{}',$6,$7) returning id`,
+            [e.organizacaoId, e.unidadeId, e.chave, e.telefoneE164, e.privado, e.nome ?? null, e.cadastradoPor ?? null]);
+          return { id: r.rows[0].id };
+        } catch (erro) { if (erro?.code === "23505") return { conflito: true }; throw erro; }
+      },
+      async revogar({ organizacaoId, unidadeId, chave }) {
+        return (await q("update mova.entregador_autorizado set ativo = false, revogado_em = now() where organizacao_id = $1 and unidade_id = $2 and chave = $3 and ativo", [organizacaoId, unidadeId, chave])).rowCount;
+      },
+      async listar(escopo) {
+        return (await q("select chave, telefone_e164, nome, ativo, criado_em, revogado_em from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 300", [escopo.organizacaoId, escopo.unidadeId]))
+          .rows.map((r) => ({ chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, ativo: r.ativo, criadoEm: r.criado_em.toISOString(), revogadoEm: r.revogado_em?.toISOString() ?? null }));
       },
     }),
     enviosEntregador: Object.freeze({
@@ -574,7 +595,8 @@ export async function instalarConfiguracao(pool, cfg, { instanciaId = "principal
     }
     // Agente 2 — Frente D: a lista ATIVA de entregadores passa a ser exatamente a informada (quem saiu é REVOGADO, nunca apagado).
     if (Array.isArray(cfg.entregadores)) {
-      const ativos = (await tx("select id, unidade_id, chave, telefone_e164, privado, ids, nome from mova.entregador_autorizado where ativo for update")).rows;
+      // 23/11: cadastros feitos pelo gestor na Central (cadastrado_por) só saem pela revogação da própria Central.
+      const ativos = (await tx("select id, unidade_id, chave, telefone_e164, privado, ids, nome from mova.entregador_autorizado where ativo and cadastrado_por is null for update")).rows;
       const igual = (r, e) => r.unidade_id === e.unidadeId && r.chave === e.chave && r.telefone_e164 === e.telefoneE164 && r.privado === e.privado && JSON.stringify([...r.ids].sort()) === JSON.stringify([...e.ids].sort()) && (r.nome ?? null) === (e.nome ?? null);
       const lista = cfg.entregadores.filter((e) => e.ativo);
       for (const r of ativos) if (!lista.some((e) => igual(r, e))) await tx("update mova.entregador_autorizado set ativo = false, revogado_em = now() where id = $1", [r.id]);
@@ -597,7 +619,7 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   const participantes = (await q(`select p.* from mova.participante_autorizado p join mova.grupo_autorizado g using (grupo_jid) where p.ativo and ${filtro} order by p.criado_em`, [modo])).rows;
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
-  for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
+  for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
   // Agente 2 — Frente D: entregadores autorizados (só OPERACAO); as conversas deles nascem em validarConfiguracao.
   const entregadores = modo === "OPERACAO" ? (await q("select * from mova.entregador_autorizado where ativo order by criado_em")).rows
     .map((r) => ({ organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, chave: r.chave, telefoneE164: r.telefone_e164, privado: r.privado, ids: r.ids, nome: r.nome })) : [];
