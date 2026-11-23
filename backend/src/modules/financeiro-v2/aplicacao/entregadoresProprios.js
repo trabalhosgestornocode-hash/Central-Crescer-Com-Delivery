@@ -472,7 +472,8 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         const f = await obterFechamento(tx, cx, e.inicio, e.entregador);
         const outros = (await listarFechamentos(tx, cx)).filter((x) => x.id !== f.id);
         const chave = leitura?.chaveAcesso ?? null;
-        const repetida = outros.some((x) => (x.dados.notas ?? []).some((n) => n.vigente && (n.documentoId === envio.documento.id || (chave && n.leitura?.chaveAcesso === chave) || (dadosFiscais.numero && n.numero === dadosFiscais.numero && n.emitente === dadosFiscais.emitente))));
+        // 23/11: nota REJEITADA (ex.: anexada por engano em outra semana) não bloqueia o uso na semana certa; o arquivo continua guardado.
+        const repetida = outros.some((x) => (x.dados.notas ?? []).some((n) => n.vigente && n.situacao !== DOC.NF_REJEITADA && (n.documentoId === envio.documento.id || (chave && n.leitura?.chaveAcesso === chave) || (dadosFiscais.numero && n.numero === dadosFiscais.numero && n.emitente === dadosFiscais.emitente))));
         if (repetida) falhar(CODIGO.OPERACAO_INVALIDA, "Esta nota fiscal já está vinculada a outra semana ou entregador.", { motivo: "NOTA_DUPLICADA" });
         const notas = (f.dados.notas ?? []).map((n) => ({ ...n, vigente: false, substituidaEm: n.vigente ? b.agora() : n.substituidaEm ?? null }));
         const recebida = exigirTransicao(f.situacaoDocumental, DOC.NF_RECEBIDA);
