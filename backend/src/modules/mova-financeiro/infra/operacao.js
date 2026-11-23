@@ -5,7 +5,7 @@
 // Orçamento: antes de CADA chamada à IA reserva-se um valor fixo numa transação que trava a linha do orçamento e confere
 // chamadas e custo acumulados (o menor limite atingido vence). Se o processo cair, a reserva continua contando. Depois da
 // resposta, a reserva é acertada com o uso real. Banco indisponível = NENHUMA chamada (não dá para verificar o consumo).
-import { ErroDeIa } from "../ia/provedorAnthropic.js";
+import { ErroDeIa, ehFalhaTransitoriaDeIa } from "../ia/provedorAnthropic.js";
 
 export const CHAVES_DE_CONTROLE = Object.freeze(["recebimento", "processamento", "ia", "envio"]);
 
@@ -109,7 +109,16 @@ export async function aplicarTeto(cliente, req, teto) {
     output_config: { ...(req.output_config ?? {}), ...(teto.esforco ? { effort: teto.esforco } : {}) } };
   let n;
   try { n = (await cliente.beta.messages.countTokens({ model: ajustado.model, system: ajustado.system, messages: ajustado.messages, output_config: ajustado.output_config, ...(ajustado.thinking ? { thinking: ajustado.thinking } : {}) })).input_tokens; }
-  catch { throw new ErroDeIa("IA_TETO_CONTAGEM_INDISPONIVEL"); }
+  catch (e) {
+    // A causa REAL não pode ser engolida (23/11: um comprovante legível virou "foto ilegível" sem rastro). Instabilidade da API
+    // (429/5xx/conexão) volta como o erro original → o provedor a trata como transitória e a fila tenta de novo; 4xx vira código
+    // próprio. Nenhum conteúdo do documento entra no código: só status HTTP e nome do erro.
+    if (ehFalhaTransitoriaDeIa(e)) throw e;
+    const status = Number(e?.status);
+    const erro = new ErroDeIa(status === 400 || status === 413 ? "IA_TETO_MIDIA_INVALIDA" : status === 401 || status === 403 ? "IA_SEM_AUTORIZACAO" : "IA_TETO_CONTAGEM_INDISPONIVEL");
+    erro.detalhe = `contagem:http_${Number.isInteger(status) ? status : "sem_resposta"}:${String(e?.name ?? "Erro").slice(0, 40)}`;
+    throw erro;
+  }
   if (!Number.isFinite(n) || n > teto.maxEntrada) throw new ErroDeIa("IA_TETO_ENTRADA_EXCEDIDA");
   return ajustado;
 }
