@@ -75,3 +75,26 @@ test("encaminhador: cada privado autorizado vira evento da PRÓPRIA conversa; ou
   await Promise.all(enc.aoMensagens([repetida], { socket: s }));
   assert.equal(enviados.filter((p) => p.mensagemId === repetida.key.id).length, 1);
 });
+
+test("9º dígito (23/11): cadastro 55DD9XXXXXXXX e conta antiga com JID 55DDXXXXXXXX ⇒ autorizado, entrega no canônico e a conversa volta pelo número cadastrado", async () => {
+  const C = "5586900000777"; const CANON = "558600000777"; const D = "5586900000888";
+  // C: o WhatsApp responde com o JID antigo (sem o 9). D: o WhatsApp não confirma (fail-closed). E: resposta incoerente.
+  const s = { onWhatsApp: async (d) => (d === C ? [{ exists: true, jid: jid(CANON), lid: null }] : d === D ? [] : [{ exists: true, jid: jid("558611112222"), lid: null }]) };
+  const v = criarVerificadorDeContatos({ telefonesE164: [`+${C}`, `+${D}`, "+5586900000999"] });
+  assert.equal(await v.jidAutorizadoParaEnvio(jid(C), s), true, "número cadastrado, confirmado pelo WhatsApp");
+  assert.equal(await v.jidAutorizadoParaEnvio(jid(CANON), s), true, "o canônico também");
+  const ident = await v.identidadeDoDestino(jid(C), s);
+  assert.equal(ident.jid, jid(CANON), "entrega no endereço que o WhatsApp devolveu");
+  assert.equal(ident.cadastrado, jid(C));
+  assert.equal(await v.jidAutorizadoParaEnvio(jid(D), s), false, "não confirmado continua recusado");
+  assert.equal(await v.jidAutorizadoParaEnvio(jid("5586900000999"), s), false, "resposta incoerente continua recusada");
+  assert.equal(await v.jidAutorizadoParaEnvio(jid("5586900000555"), s), false, "fora da lista continua recusado");
+  // Resposta do entregador chega pelo JID antigo ⇒ evento na conversa do NÚMERO CADASTRADO (a do backend).
+  const enviados = [];
+  const enc = criarEncaminhadorMova({ grupos: [G], notificar: async (p) => enviados.push(p), contatoHomologacao: v });
+  await Promise.all(enc.aoMensagens([msg({ remoteJid: jid(CANON) })], { socket: s }));
+  assert.equal(enviados[0]?.telefoneE164, `+${C}`, "telefone do cadastro");
+  assert.equal(enviados.length, 1);
+  assert.equal(enviados[0].grupoId, jid(C));
+  assert.equal(enviados[0].participanteId, jid(C));
+});
