@@ -5,6 +5,7 @@
 //   node scripts/fv2-banco-teste.mjs estado     mostra se está ligado e onde
 //   node scripts/fv2-banco-teste.mjs parar      desliga o servidor (os dados ficam)
 //   node scripts/fv2-banco-teste.mjs derrubar   desliga ABRUPTAMENTE (modo imediato, como uma queda); os dados ficam
+//   node scripts/fv2-banco-teste.mjs limpar     apaga os bancos descartáveis ÓRFÃOS (de execuções que travaram); mantém modelo e controle
 //   node scripts/fv2-banco-teste.mjs destruir   desliga e APAGA a pasta do ambiente (só ela)
 //
 // O que este script faz e NÃO faz:
@@ -165,6 +166,18 @@ async function principal() {
     if (ligado()) rodar("pg_ctl", ["stop", "-D", DADOS, "-m", "immediate", "-w"]);
     return dizer("Servidor derrubado (modo imediato); os dados ficam na pasta:", PASTA);
   }
+  // 17B: varre bancos descartáveis ÓRFÃOS (de execuções que travaram) sem destruir o ambiente. Mantém o modelo atual e o controle.
+  if (comando === "limpar") {
+    exigirPastaPropria();
+    if (!ligado()) return parar("servidor desligado (rode: iniciar).");
+    const a = lerAmbiente();
+    const controle = await abrirPoolSeguro(a.urlAdmin, a.marcador, { max: 1 });
+    const { rows } = await controle.query("select datname from pg_database where datname ~ '^fv2_teste_[a-z0-9_]+$' and datname !~ '^fv2_teste_modelo_' and datname <> 'fv2_teste_controle' and datname <> $1", [a.bancoModelo ?? ""]);
+    let n = 0;
+    for (const { datname } of rows) { await controle.query(`drop database if exists ${datname} with (force)`).then(() => { n += 1; }).catch(() => {}); }
+    await controle.end();
+    return dizer(`Bancos descartáveis apagados: ${n} de ${rows.length}.`);
+  }
   if (comando === "destruir") {
     if (!existsSync(PASTA)) return dizer("Nada a destruir.");
     exigirPastaPropria();
@@ -172,7 +185,7 @@ async function principal() {
     rmSync(PASTA, { recursive: true, force: true });
     return dizer("Ambiente isolado apagado:", PASTA);
   }
-  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | derrubar | destruir");
+  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | derrubar | limpar | destruir");
 }
 
 principal().catch((e) => parar(e?.message ?? String(e)));
