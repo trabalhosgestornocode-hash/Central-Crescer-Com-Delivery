@@ -27,7 +27,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaU
 import { interpretarComando } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, classificarCasamento, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
@@ -428,6 +428,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
         pagador: saida.pagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        // 23/11: evidências bancárias do comprovante para a conciliação (nunca confirmam compensação): banco do recebedor, data e hora impressas, valor.
+        instituicaoDestino: saida.instituicaoDestino ?? null, horaTransacao: saida.horaTransacao ?? null, dataPagamento: saida.dataPagamento ?? null, valorCentavos: saida.valorCentavos ?? null,
         // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).
         situacaoTransacao: saida.situacaoTransacao ?? null, incertezas: saida.incertezas ?? [],
         comprovante: evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO" ? avaliarComprovante(saida, { hoje: hoje() }) : null,
@@ -502,7 +504,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const porId = (id) => abertas.find((t) => t.id === id) ?? null;
       if (desf.desfecho === DESFECHO.NAO_ENTENDI) return perguntar(ctx, pend, RESPOSTA.naoEntendiDivergencia(), "RESPOSTA_NAO_ENTENDIDA");
       if (desf.desfecho === DESFECHO.NOVA) forcarNova = true;
-      else {
+      else if (pend.tipo === TIPO_DIVERGENCIA.SEMELHANTE && pend.candidatas[0]?.situacao === "PAGA") {
+        // "É o mesmo pagamento?" — sim: nada novo; o registro existente é informado (nunca segunda despesa, baixa ou saída).
+        const existente = (await porta.contasAPagarTodas(escopo)).find((t) => t.id === pend.candidatas[0].id) ?? null;
+        await marcarDocumento(evento, escopo, null, saida);
+        return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "PAGAMENTO_IGUAL_JA_REGISTRADO", escopo, resposta: existente ? RESPOSTA.pagamentoJaRegistrado(existente) : RESPOSTA.duplicado(null), injecao });
+      } else {
         contaEscolhida = porId(desf.desfecho === DESFECHO.ESCOLHER ? pend.candidatas[desf.indice]?.id : pend.candidatas[0]?.id);
         if (!contaEscolhida) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONTA_NAO_ESTA_MAIS_ABERTA", escopo, resposta: RESPOSTA.faltaInformacao(["qual conta este comprovante paga (ela mudou desde a pergunta; reenvie o comprovante)"]), injecao });
         if (desf.desfecho === DESFECHO.PARCIAL) parcialConfirmado = true;
@@ -516,7 +523,13 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
             datas: { competencia: contaEscolhida.competencia, caixa: saida.dataPagamento, vencimento: contaEscolhida.vencimento },
             comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: contaEscolhida.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
               juros: { valorCentavos: juros, principalCentavos: contaEscolhida.saldoCentavos, confirmadoPor: esclarecimento.participanteId } },
-          }, (p) => RESPOSTA.jurosAguardandoFinanceiro(p, contaEscolhida, juros));
+          }, (p) => RESPOSTA.jurosAguardandoFinanceiro(p, contaEscolhida, juros), {
+            // Com as chaves, a política JUROS_DOCUMENTAL (limite = encargo máximo) e a ação `registrar_juros`: registra encargo + pagamento por comprovante.
+            posCriacao: execucao?.registrarJuros ? async (p) => {
+              const r = await execucao.aposJuros(p, escopo);
+              return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.pagoComJuros(p, r.resultado) } : r;
+            } : null,
+          });
         }
       }
     }
@@ -544,7 +557,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
       }
     }
-    // Nenhuma conta do favorecido (ou a pessoa disse "outra compra"): compra NOVA.
+    // Nenhuma conta do favorecido (ou a pessoa disse "outra compra"): compra NOVA — mas a AUSÊNCIA de conta do mesmo favorecido não é,
+    // sozinha, prova de compra nova: antes, procura o mesmo pagamento já registrado e conta aberta de outro fornecedor com o mesmo valor.
+    if (!forcarNova && !esclarecimento?.divergencia) {
+      const semelhantes = buscarSemelhantes({ todas: await porta.contasAPagarTodas(escopo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
+      if (semelhantes.length) {
+        const [primeiro] = semelhantes;
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.SEMELHANTE, valorCentavos: valor, candidatas: [{ id: primeiro.conta.id, situacao: primeiro.situacao }] },
+          primeiro.situacao === "PAGA" ? RESPOSTA.perguntaSemelhantePaga(primeiro.conta) : RESPOSTA.perguntaSemelhanteAberta(primeiro.conta), "POSSIVEL_COMPRA_JA_REGISTRADA");
+      }
+    }
     // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
     // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
     const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;

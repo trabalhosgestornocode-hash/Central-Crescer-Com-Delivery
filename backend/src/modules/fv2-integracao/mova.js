@@ -96,6 +96,7 @@ export function lerConfiguracaoMova(env) {
   if ((autonomia || escrita) && !operacao) contradicoes.push("AUTONOMIA_FORA_DA_OPERACAO");
   if (escrita && !autonomia) contradicoes.push("ESCRITA_SEM_AUTONOMIA");
   if (sim(env.MOVA_OPERACAO_CRIAR_DESPESAS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) contradicoes.push("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE");
+  if (sim(env.MOVA_OPERACAO_REGISTRAR_JUROS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) contradicoes.push("REGISTRAR_JUROS_SEM_PAGAMENTO_POR_COMPROVANTE");
   if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) contradicoes.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
   // Agente 2 — Frente D: entregadores no privado (só OPERACAO) e a rotina semanal (exige os entregadores).
   const entregadores = sim(env.MOVA_ENTREGADORES);
@@ -135,6 +136,8 @@ export function lerConfiguracaoMova(env) {
       pagamentoPorComprovante: sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE),
       // 23/11: criar a conta a pagar de despesa sem conta prévia (exige o pagamento por comprovante; padrão DESLIGADA).
       criarDespesas: sim(env.MOVA_OPERACAO_CRIAR_DESPESAS),
+      // 23/11: registrar juros/multa confirmados junto com o pagamento por comprovante (exige o pagamento por comprovante; padrão DESLIGADA).
+      registrarJuros: sim(env.MOVA_OPERACAO_REGISTRAR_JUROS),
       // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
       // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
       iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
@@ -238,7 +241,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),

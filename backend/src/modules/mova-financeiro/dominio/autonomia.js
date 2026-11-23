@@ -30,9 +30,11 @@ export const OPERACAO = Object.freeze({
   // 23/11: despesa SEM conta prévia, paga por comprovante — registra a conta a pagar (ação estreita registrar_obrigacao) e o
   // pagamento por comprovante na mesma rotina. Mesmas exigências do comprovante que a BAIXA_DOCUMENTAL; política própria.
   DESPESA_DOCUMENTAL: "DESPESA_DOCUMENTAL",
+  // 23/11: pagamento por comprovante COM juros/multa confirmados pela pessoa. O limite da política é o ENCARGO máximo por pagamento.
+  JUROS_DOCUMENTAL: "JUROS_DOCUMENTAL",
 });
 /** Operações decididas pelo COMPROVANTE (sem saída do extrato): mesmas exigências e anti-fracionamento. */
-const DOCUMENTAIS = new Set(["BAIXA_DOCUMENTAL", "DESPESA_DOCUMENTAL"]);
+const DOCUMENTAIS = new Set(["BAIXA_DOCUMENTAL", "DESPESA_DOCUMENTAL", "JUROS_DOCUMENTAL"]);
 const SEMPRE_PROIBIDAS = new Set(["PAGAMENTO_BANCARIO", "EXCLUSAO", "ESTORNO", "TRANSFERENCIA"]);
 /** Operações que liquidam (mexem em caixa): exigem a saída do extrato conferida para qualquer APLICAR_*. */
 const LIQUIDAM = new Set([OPERACAO.BAIXA_POR_EXTRATO, OPERACAO.DESPESA_PAGA]);

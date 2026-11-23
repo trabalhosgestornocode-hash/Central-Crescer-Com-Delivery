@@ -41,6 +41,10 @@ export const ACAO = Object.freeze({
   // Agente 2 (23/11) — registrar CONTA A PAGAR a partir de documento (uma parcela, despesa, com documento). Separada de
   // `registrar` (que também cria movimentação, receita, contas...). Nenhuma concessão anterior a recebe (migração 0030).
   REGISTRAR_OBRIGACAO: "financeiro_v2.registrar_obrigacao",
+  // 23/11 — registrar o ENCARGO (juros/multa) de uma conta a pagar JUNTO com o pagamento por comprovante. Estreita: só vale em
+  // conjunto com `baixar_por_comprovante`, só quita a conta, com teto de 10% do valor da conta e a categoria oficial de juros e
+  // multas. NÃO é `corrigir` (que altera qualquer título). Nenhuma concessão anterior a recebe (migração 0031).
+  REGISTRAR_JUROS: "financeiro_v2.registrar_juros",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql
--- Novas: 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql
+-- Novas: 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -19,6 +19,7 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0009_mova_baixa_documental.sql' and sha256 = 'b690cafc5aedd8e5bc553ca886690de5d6e61bc88b0f3c95881a725b9a3f2754') then raise exception 'MOVA atualização: 0009_mova_baixa_documental.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0010_mova_despesa_documental.sql') then raise exception 'MOVA atualização: 0010_mova_despesa_documental.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0011_mova_entregadores_rotina.sql') then raise exception 'MOVA atualização: 0011_mova_entregadores_rotina.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0012_mova_juros_documental.sql') then raise exception 'MOVA atualização: 0012_mova_juros_documental.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0010_mova_despesa_documental.sql (arquivo f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c)
@@ -61,3 +62,17 @@ alter table mova.entregador_envio add constraint entregador_envio_tipo_check che
 alter table mova.automacao drop constraint automacao_nome_check;
 alter table mova.automacao add constraint automacao_nome_check check (nome in ('ENTREGADORES_SEMANAL', 'ENTREGADORES_COBRANCA', 'RECONFERENCIA_EXTRATO', 'ENTREGADORES_RELATORIO', 'ENTREGADORES_AVISO_GRUPO'));
 insert into mova.mova_migracao (nome, sha256) values ('0011_mova_entregadores_rotina.sql', 'ff74849e1f40ea2f799ee3c8a5a5be8562bfebf9ecdbde59d6c9e24c3d2ee0ca');
+
+-- ------------------------------------------------------------------------- 0012_mova_juros_documental.sql (arquivo eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba)
+-- MOVA (23/11/2026): operação JUROS_DOCUMENTAL — pagamento por comprovante COM juros/multa confirmados pela pessoa (ação estreita
+-- `registrar_juros` do Financeiro, migração 0031). O limite da política é o ENCARGO máximo por pagamento.
+--
+-- Só amplia a lista fechada de operações das políticas e das execuções. Nenhuma política é semeada: sem política cadastrada
+-- o MOVA só PROPÕE (o Financeiro aplica o pagamento com juros na Central).
+alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
+alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL'));
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL'));
+insert into mova.mova_migracao (nome, sha256) values ('0012_mova_juros_documental.sql', 'eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba');

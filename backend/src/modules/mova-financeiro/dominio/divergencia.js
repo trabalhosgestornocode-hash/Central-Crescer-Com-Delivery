@@ -8,8 +8,8 @@
 // objetiva resolve e a conversa continua sem segunda confirmação. A IA não decide nada aqui: respostas são interpretadas
 // por regras determinísticas.
 
-export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS" });
-export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA: "NOVA", ESCOLHER: "ESCOLHER", NAO_ENTENDI: "NAO_ENTENDI" });
+export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE" });
+export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA: "NOVA", ESCOLHER: "ESCOLHER", MESMA: "MESMA", NAO_ENTENDI: "NAO_ENTENDI" });
 export const MAX_CANDIDATAS_NA_PERGUNTA = 5;
 
 export const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
@@ -45,6 +45,12 @@ export function interpretarResposta(texto, pendencia) {
   if (pendencia.tipo === TIPO_DIVERGENCIA.VARIAS) {
     if (numero && Number(numero[1]) <= pendencia.candidatas.length) return { desfecho: DESFECHO.ESCOLHER, indice: Number(numero[1]) - 1 };
     if (PALAVRA_NOVA.test(t) || NAO.test(t)) return { desfecho: DESFECHO.NOVA };
+    return { desfecho: DESFECHO.NAO_ENTENDI };
+  }
+  // "É o mesmo pagamento/conta?": aqui a palavra "compra" NÃO significa compra nova ("é a mesma compra"). Só negação ou "outra/nova" cria despesa.
+  if (pendencia.tipo === TIPO_DIVERGENCIA.SEMELHANTE) {
+    if (/\b(nao|outra|outro|nova|novo|diferente|avulsa|nenhuma)\b/.test(t)) return { desfecho: DESFECHO.NOVA };
+    if (SIM.test(t) || /^(sim|s|isso|mesmo|mesma|e o mesmo|e a mesma|ja foi|ja esta)\b/.test(t) || (numero && numero[1] === "1")) return { desfecho: DESFECHO.MESMA };
     return { desfecho: DESFECHO.NAO_ENTENDI };
   }
   if (PALAVRA_NOVA.test(t) && !PALAVRA_JUROS.test(t) && !PALAVRA_PARCIAL.test(t)) return { desfecho: DESFECHO.NOVA };
@@ -99,4 +105,33 @@ export function escolherCategoria({ categorias, categoriaSugerida, legenda }) {
   const casadas = lancaveis.filter((c) => { const n = normalizar(c.nome); return [...alvos].some((a) => n.includes(a)); });
   const unicas = [...new Map(casadas.map((c) => [c.codigo, c])).values()];
   return unicas.length === 1 ? unicas[0].codigo : null;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// "Sem conta do mesmo favorecido" NÃO é prova de compra nova: antes de criar a despesa, o MOVA procura a mesma obrigação já
+// PAGA (mesmo fornecedor, mesmo valor, data próxima) e conta ABERTA de OUTRO fornecedor com o mesmo valor (descrição parecida
+// ou vencimento próximo). Achou ⇒ UMA pergunta objetiva; não achou ⇒ compra nova segue sem confirmação.
+const PALAVRAS_FRACAS = new Set(["para", "pela", "pelo", "pagamento", "compra", "compras", "comprovante", "loja", "unidade", "mova", "conta", "boleto", "nota", "fiscal", "ltda", "alfa", "beta"]);
+const palavrasUteis = (t) => new Set(normalizar(t).split(" ").filter((w) => w.length >= 4 && !PALAVRAS_FRACAS.has(w)));
+const dias = (d) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? Date.parse(`${d.slice(0, 10)}T00:00:00Z`) / 86400000 : null);
+export const JANELA_PAGAMENTO_IGUAL_DIAS = 10;
+export const JANELA_CONTA_PARECIDA_DIAS = 7;
+/**
+ * @returns {Array<{situacao:"PAGA"|"ABERTA", conta:object, motivo:string}>} candidatos em ordem de força (paga igual primeiro).
+ */
+export function buscarSemelhantes({ todas, valorCentavos, favorecido, legenda, dataPagamento, compativel }) {
+  const uteis = new Set([...palavrasUteis(legenda), ...palavrasUteis(favorecido)]);
+  const alvo = dias(dataPagamento);
+  const perto = (t, janela) => { const d = dias(t.vencimento) ?? dias(t.dataEmissao); return alvo === null || d === null || Math.abs(d - alvo) <= janela; };
+  const achados = [];
+  for (const t of todas ?? []) {
+    if (t.situacao === "CANCELADA" || t.situacao === "CANCELADO") continue;
+    const quitada = t.situacao === "QUITADA" || t.situacao === "QUITADO" || t.saldoCentavos === 0;
+    if (quitada && t.valorOriginalCentavos === valorCentavos && compativel(t) && perto(t, JANELA_PAGAMENTO_IGUAL_DIAS)) achados.push({ situacao: "PAGA", conta: t, motivo: "PAGAMENTO_IGUAL_JA_REGISTRADO" });
+    else if (!quitada && !compativel(t) && t.saldoCentavos === valorCentavos) {
+      const mesmaDescricao = [...palavrasUteis(t.descricao)].some((w) => uteis.has(w));
+      if (mesmaDescricao || perto(t, JANELA_CONTA_PARECIDA_DIAS)) achados.push({ situacao: "ABERTA", conta: t, motivo: mesmaDescricao ? "DESCRICAO_PARECIDA" : "MESMO_VALOR_E_DATA_PROXIMA" });
+    }
+  }
+  return achados.sort((a, b) => (a.situacao === b.situacao ? 0 : a.situacao === "PAGA" ? -1 : 1));
 }

@@ -30,6 +30,8 @@ async function autonomo({ responder, politica = {}, concessao = CONCESSAO } = {}
         concessoes: criarConcessoesMemoria(concessao ? [{ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: ALFA, acoes: concessao }] : []) }),
     }),
   });
+  // Com o Financeiro v2 no PostgreSQL (FV2_REPOSITORIO=postgres), o BANCO confere a sessão: a identidade operacional precisa da concessão gravada.
+  if (process.env.FV2_REPOSITORIO === "postgres" && concessao) await s.m.nucleo.concederAcesso(s.c(ORG, ALFA), { usuarioId: OPERADOR, acoes: concessao, justificativa: "Identidade operacional do MOVA (sintético)." });
   if (politica) await s.mova.armazenamento.politicas.criar(POLITICA(politica), { criadaPor: HUMANO });
   const cx = s.c(ORG, ALFA);
   const registros = (unidade, tipo) => s.m.nucleo.consultarRegistros(s.c(ORG, unidade), { tipo });
