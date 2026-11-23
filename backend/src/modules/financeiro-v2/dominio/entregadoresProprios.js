@@ -34,6 +34,37 @@ export function exigirSegunda(data, campo = "inicio") {
 export const semanaEncerrada = (inicio, hoje) => hoje > somarDias(inicio, 6);
 export const diasDaSemana = (inicio) => Array.from({ length: 7 }, (_, i) => somarDias(inicio, i));
 
+/**
+ * Semanas do SELETOR (23/11/2026). Antes, só as semanas com registro de fechamento apareciam: uma semana encerrada e ainda
+ * NÃO fechada (ex.: 16 a 22/11) sumia da lista. Agora:
+ *   - semanas com registro (CONSOLIDADA ou PENDENTE), em ordem decrescente;
+ *   - semanas ENCERRADAS sem registro entre a PRIMEIRA semana com registro DESTA unidade e a última
+ *     semana encerrada ⇒ AGUARDANDO_FECHAMENTO, com `semRegistro: true`. Nunca viram "fechadas" por existir dado do Foody:
+ *     a base operacional é conferida ao selecionar (apuração e pendências da própria semana);
+ *   - a semana atual NÃO entra aqui (a tela a mostra à parte, como provisória).
+ * Limite de segurança: no máximo `maxLacunas` semanas sem registro (as mais recentes).
+ */
+export function semanasDoSeletor({ registros = [], hoje, maxLacunas = 12 }) {
+  const atual = inicioDaSemana(exigirData(hoje, "hoje"));
+  const ultimaEncerrada = somarDias(atual, -7);
+  const porInicio = new Map(registros.filter((s) => s.semanaInicio < atual).map((s) => [s.semanaInicio, s]));
+  const conhecidas = [...porInicio.keys()].sort(); // unidade sem nenhum fechamento: nada é deduzido
+  const lacunas = [];
+  if (conhecidas.length) for (let d = ultimaEncerrada; d >= conhecidas[0] && lacunas.length < maxLacunas; d = somarDias(d, -7)) if (!porInicio.has(d)) lacunas.push(d);
+  const lista = [
+    ...[...porInicio.values()].map((s) => ({ inicio: s.semanaInicio, situacao: s.situacao, semRegistro: false, registro: s })),
+    ...lacunas.map((inicio) => ({ inicio, situacao: SITUACAO_SEMANA.AGUARDANDO_FECHAMENTO, semRegistro: true, registro: null })),
+  ];
+  return lista.sort((a, b) => b.inicio.localeCompare(a.inicio)).map((s) => ({ ...s, rotulo: rotuloDaSemana(s.inicio) }));
+}
+
+/** Semana inicial da tela: a semana oficialmente FECHADA mais recente; sem nenhuma, a semana atual. */
+export function semanaInicialDaTela({ registros = [], hoje }) {
+  const atual = inicioDaSemana(exigirData(hoje, "hoje"));
+  const fechadas = registros.filter((s) => s.situacao === SITUACAO_SEMANA.CONSOLIDADA && s.semanaInicio < atual).map((s) => s.semanaInicio).sort();
+  return fechadas.at(-1) ?? atual;
+}
+
 const curta = (d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`;
 /** "02 a 08/11/2026" (mesmo mês) ou "28/09 a 04/10/2026" (virada de mês) ou "28/12/2026 a 03/01/2027" (virada de ano). */
 export function rotuloDaSemana(inicio, fim = somarDias(inicio, 6)) {

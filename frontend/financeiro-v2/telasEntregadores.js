@@ -11,6 +11,8 @@ const PAG = Object.freeze({ SEM_CONTA: ["Sem conta a pagar", "alerta"], A_PAGAR:
 const SEMANA = Object.freeze({ EM_ANDAMENTO: ["Semana em andamento: valores provisórios", "info"], AGUARDANDO_FECHAMENTO: ["Semana encerrada: aguardando fechamento", "alerta"], PENDENTE: ["Fechamento pendente", "alerta"], CONSOLIDADA: ["Semana encerrada: valores consolidados", "ok"] });
 const TIPO_ITEM = Object.freeze({ ENTREGA: "Entrega", ENTREGA_MANUAL: "Entrega manual", TAXA_ADICIONAL: "Taxa adicional", MOVIMENTACAO_OPERACIONAL: "Movimentação operacional", AJUSTE: "Ajuste" });
 const DECISAO = Object.freeze({ MANTER: "Manter o valor fechado", AJUSTAR_CONTA: "Ajustar a conta em aberto", CONTA_COMPLEMENTAR: "Gerar conta complementar", COMPENSAR_FUTURO: "Compensar em fechamento futuro" });
+// 23/11: o seletor mostra também a semana encerrada SEM fechamento (antes ela sumia). "Aguardando fechamento" ≠ fechada.
+const ROTULO_NO_SELETOR = Object.freeze({ CONSOLIDADA: " · fechada", PENDENTE: " · fechamento pendente", AGUARDANDO_FECHAMENTO: " · aguardando fechamento" });
 const selo = (mapa, k) => { const [t, c] = mapa[k] ?? [k, "neutro"]; return `<span class="selo selo--${c}">${esc(t)}</span>`; };
 const valor = (c) => `<span class="valor">${esc(moeda(c))}</span>`;
 const tem = (p, a) => (p ?? []).includes(`financeiro_v2.${a}`);
@@ -30,7 +32,7 @@ const justificativa = (obrigatoria = true) => `<label>Justificativa <input name=
 const indicador = (titulo, conteudo, nota) => `<div class="card card--sec"><h3>${esc(titulo)}</h3><p>${conteudo}</p><p class="nota">${esc(nota)}</p></div>`;
 
 function filtros(r, f) {
-  const semanas = [{ inicio: r.semanaAtual.inicio, rotulo: `Semana atual (${curta(r.semanaAtual.inicio)} a ${curta(r.semanaAtual.fim)})` }, ...r.semanas.filter((s) => s.inicio !== r.semanaAtual.inicio).map((s) => ({ inicio: s.inicio, rotulo: s.rotulo }))];
+  const semanas = [{ inicio: r.semanaAtual.inicio, rotulo: `Semana atual (${curta(r.semanaAtual.inicio)} a ${curta(r.semanaAtual.fim)})` }, ...r.semanas.filter((s) => s.inicio !== r.semanaAtual.inicio).map((s) => ({ inicio: s.inicio, rotulo: `${s.rotulo}${ROTULO_NO_SELETOR[s.situacao] ?? ""}` }))];
   if (!semanas.some((s) => s.inicio === r.semana.inicio)) semanas.push({ inicio: r.semana.inicio, rotulo: r.semana.rotulo });
   const op = (v, t, a) => `<option value="${esc(v)}"${v === (a ?? "") ? " selected" : ""}>${esc(t)}</option>`;
   return `<form class="filtros-locais" data-filtro-local="entregadores-proprios" aria-label="Filtros de entregadores">
@@ -169,7 +171,7 @@ ${indicador("Pago", valor(i.pagoCentavos), "Baixado pelo extrato bancário")}</s
     extras: () => abaExtras(r, ctx),
     notas: () => `${r.cofreDisponivel ? "" : '<p class="aviso aviso--alerta">O envio de arquivos está desligado até o cofre privado ser ativado. A obrigação continua visível e bloqueada para pagamento.</p>'}<section class="card"><h2>Notas fiscais pendentes</h2>${tabela(notas, "Nenhuma nota pendente neste filtro.")}</section>`,
     pagamentos: () => `<section class="card"><h2>Pagamentos</h2><p class="nota">A baixa acontece em Contas a Pagar, pela saída identificada no extrato bancário. Chegar a quarta-feira nunca marca a conta como paga.</p>${tabela(r.fechamentos, "Nenhuma obrigação neste filtro.")}</section>`,
-    historico: () => `<section class="card"><h2>Semanas processadas</h2>${r.semanas.length ? `<ul class="lista-simples">${r.semanas.map((s) => `<li><span>Semana ${esc(s.rotulo)}${s.origem ? ` · ${s.origem === "AUTOMATICA" ? "fechamento automático" : "fechamento manual"}` : ""}${s.pendencias ? ` · ${s.pendencias} pendência(s)` : ""}${s.divergenciasAbertas ? ` · ${s.divergenciasAbertas} alteração(ões) sem decisão` : ""}</span>${selo(SEMANA, s.situacao)}</li>`).join("")}</ul>` : nada("Nenhuma semana processada ainda.")}</section><section class="card"><h2>Todos os fechamentos</h2>${tabela(r.fechamentos, "Nenhum fechamento neste filtro.")}</section>`,
+    historico: () => `<section class="card"><h2>Semanas processadas</h2>${r.semanas.some((s) => !s.semRegistro) ? `<ul class="lista-simples">${r.semanas.filter((s) => !s.semRegistro).map((s) => `<li><span>Semana ${esc(s.rotulo)}${s.origem ? ` · ${s.origem === "AUTOMATICA" ? "fechamento automático" : "fechamento manual"}` : ""}${s.pendencias ? ` · ${s.pendencias} pendência(s)` : ""}${s.divergenciasAbertas ? ` · ${s.divergenciasAbertas} alteração(ões) sem decisão` : ""}</span>${selo(SEMANA, s.situacao)}</li>`).join("")}</ul>` : nada("Nenhuma semana processada ainda.")}</section><section class="card"><h2>Todos os fechamentos</h2>${tabela(r.fechamentos, "Nenhum fechamento neste filtro.")}</section>`,
   }[aba]();
   return `<header class="cabecalho"><div><h1>Entregadores Próprios</h1><p class="subtitulo">Acompanhe a semana, confira as notas e libere o pagamento de quarta-feira.</p></div></header>${nav}${filtros(r, f)}${corpo}`;
 }

@@ -13,7 +13,7 @@ import { somarLista } from "../dominio/dinheiro.js";
 import {
   CATEGORIA_ENTREGADORES, CODIGO_PENDENCIA, DECISAO_DIVERGENCIA, DECISAO_DUPLICIDADE, FUSO_OPERACIONAL, SITUACAO_DOCUMENTAL as DOC, SITUACAO_PAGAMENTO, SITUACAO_SEMANA,
   chaveDaSemana, chaveDeRegistro, chaveDoFechamento, compararComFechamento, competenciaDaSemana, consolidar, contasManuaisCandidatas, contasManuaisSemEntregador, descricaoDaConta, exigirSegunda, exigirTransicao,
-  idExternoDaConta, pastaDoDocumento, pendenciaDeContasManuais, pendenciasDaApuracao, rotuloDaSemana, semanaDe, semanaEncerrada, situacaoDoPagamento,
+  idExternoDaConta, pastaDoDocumento, pendenciaDeContasManuais, pendenciasDaApuracao, rotuloDaSemana, semanaDe, semanaEncerrada, semanaInicialDaTela, semanasDoSeletor, situacaoDoPagamento,
 } from "../dominio/entregadoresProprios.js";
 import { diaDaSemana, exigirData, hojeEm, somarDias } from "../dominio/tempo.js";
 import { exigirTexto, exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
@@ -249,11 +249,17 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
   return {
     /** Painel único da área: indicadores, cards, fechamentos, notas, pagamentos e histórico. Tudo calculado aqui. */
     async consultarEntregadoresProprios(ctx, e = {}) {
-      semCamposDesconhecidos(e, ["semana", "mes", "entregador", "situacao"], "filtro");
+      semCamposDesconhecidos(e, ["semana", "mes", "entregador", "situacao", "selecao"], "filtro");
       const cx0 = contexto(ctx);
       const dia = hoje();
       const atual = semanaDe(dia);
-      const selecionada = semanaDe(e.semana || atual.inicio);
+      // 23/11: sem semana escolhida e com `selecao: "ULTIMA_FECHADA"` (a tela), abre na última semana oficialmente fechada.
+      // Sem `selecao` (MOVA e demais chamadas), continua na semana atual.
+      if (e.selecao !== undefined && e.selecao !== "ULTIMA_FECHADA") falhar(CODIGO.ENTRADA_INVALIDA, "Seleção de semana inválida.", { campo: "selecao" });
+      const inicial = !e.semana && e.selecao === "ULTIMA_FECHADA"
+        ? semanaInicialDaTela({ registros: await b.consultar(ctx, (cx, tx) => tx.listar(cx, TIPO.SEMANA_ENTREGADORES)), hoje: dia })
+        : atual.inicio;
+      const selecionada = semanaDe(e.semana || inicial);
       const apuracao = await apurar(cx0, selecionada.inicio);
       return b.consultar(ctx, async (cx, tx) => {
         const fechamentos = await listarFechamentos(tx, cx);
@@ -299,7 +305,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
             pagoCentavos: somarLista(filtrados, (f) => f.pagoCentavos),
           },
           entregadores: [...cards.values()].sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR")), fechamentos: filtrados,
-          semanas: semanas.map((s) => ({ inicio: s.semanaInicio, rotulo: rotuloDaSemana(s.semanaInicio), situacao: s.situacao, pendencias: s.dados.pendencias?.length ?? 0, divergenciasAbertas: (s.dados.divergencias ?? []).filter((d) => d.situacao === "ABERTA").length, origem: s.dados.origem ?? s.dados.ultimaExecucao?.origem ?? null })).sort((a, b2) => b2.inicio.localeCompare(a.inicio)),
+          semanas: semanasDoSeletor({ registros: semanas, hoje: dia }).map(({ registro: s, ...x }) => (s ? { ...x, pendencias: s.dados.pendencias?.length ?? 0, divergenciasAbertas: (s.dados.divergencias ?? []).filter((d) => d.situacao === "ABERTA").length, origem: s.dados.origem ?? s.dados.ultimaExecucao?.origem ?? null } : { ...x, pendencias: null, divergenciasAbertas: 0, origem: null })),
           extras, resumoSemana, origensDeExtra, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes,
         };
       });
