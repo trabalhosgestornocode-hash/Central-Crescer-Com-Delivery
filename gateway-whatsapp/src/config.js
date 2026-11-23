@@ -135,6 +135,10 @@ export const config = {
   movaGruposJid: String(process.env.WHATSAPP_MOVA_GRUPOS_JID ?? "").trim(),
   // Envio das respostas do MOVA: chave SEPARADA do recebimento. Ausente ⇒ desligado (o backend guarda as respostas sem enviar).
   movaEnvioHabilitado: /^(1|true)$/i.test(String(process.env.WHATSAPP_MOVA_ENVIO_HABILITADO ?? "").trim()),
+  // 23/11: redistribuição ÚNICA (por processo) da chave de remetente de UM grupo do MOVA. Só vale se o JID estiver na lista
+  // fechada movaGrupos. Apaga apenas a memória de "quem já recebeu a chave" desse grupo (o mesmo que o Baileys faz num retry);
+  // credenciais, sessões privadas e outros grupos ficam intactos. Ausente ⇒ nada.
+  movaRedistribuirChaveGrupo: String(process.env.WHATSAPP_MOVA_REDISTRIBUIR_CHAVE_GRUPO ?? "").trim() || null,
   // Agente 2: transporte de SAÍDA das respostas do MOVA. RELE (padrão, homologação): o Gateway busca no relé. DIRETO (produção):
   // o backend entrega direto em /internal/mova/messages e a consulta ao relé fica desligada.
   movaSaidaModo: String(process.env.WHATSAPP_MOVA_SAIDA_MODO ?? "").trim().toUpperCase() || "RELE",
