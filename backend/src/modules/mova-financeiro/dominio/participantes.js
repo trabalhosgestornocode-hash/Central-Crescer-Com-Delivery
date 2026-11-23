@@ -128,7 +128,7 @@ export const algumaUnidadePermite = (participante, teste) => (participante?.unid
  * Conversas privadas DERIVADAS (modo OPERACAO): uma por pessoa com destino privado, com as unidades que ela tem nos grupos e o
  * perfil de CADA unidade (estar em dois grupos não soma poder: na mesma unidade com dois perfis, fica o menos amplo).
  */
-export function conversasPrivadasDerivadas(grupos) {
+export function conversasPrivadasDerivadas(grupos, semGrupo = []) {
   const ORDEM = [PERFIL.OPERACIONAL, PERFIL.CONSULTA, PERFIL.FINANCEIRO];
   const menosAmplo = (a, b) => {
     if (!a) return b;
@@ -137,8 +137,9 @@ export function conversasPrivadasDerivadas(grupos) {
     return ORDEM[Math.min(ORDEM.indexOf(a), ORDEM.indexOf(b))];
   };
   const porJid = new Map();
-  for (const g of grupos) {
-    if (!g.grupoId.endsWith("@g.us") || g.acesso !== ACESSO.LISTA) continue;
+  // 24/11: as listas de participantes das unidades SEM grupo entram como fontes (mesma regra: perfil por unidade, o menos amplo).
+  const fontes = [...grupos.filter((g) => g.grupoId.endsWith("@g.us") && g.acesso === ACESSO.LISTA), ...semGrupo.map((s) => ({ participantes: s.participantes }))];
+  for (const g of fontes) {
     for (const p of g.participantes) {
       const jid = destinoPrivado(p, p.ids.find((x) => JID_PRIVADO.test(x)) ?? null);
       if (!jid) continue;

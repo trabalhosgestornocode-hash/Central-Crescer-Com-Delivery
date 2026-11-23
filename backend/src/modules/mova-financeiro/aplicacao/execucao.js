@@ -28,7 +28,9 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+  // 24/11: conta a pagar NOVA a partir de boleto/nota (e o vínculo da nota com a conta existente) só com a chave própria.
+  const contasLigadas = Boolean(criarContas);
   // 23/11: criar a conta a pagar (despesa sem conta prévia) só com as DUAS chaves: pagamento por comprovante e criação de despesas.
   const despesasLigadas = Boolean(pagamentoPorComprovante && criarDespesas);
   // 23/11: registrar juros/multa junto com o pagamento por comprovante só com as DUAS chaves (pagamento por comprovante + juros).
@@ -381,6 +383,101 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
+  /** Executa UMA operação de escrita da proposta com reserva idempotente, trava da proposta e auditoria (padrão das demais). */
+  async function executarComReserva({ operacao, proposta, escopo, politicaId, passos }) {
+    const { reserva, repetida } = await reservar(operacao, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, politicaId, operacional);
+    if (repetida) return repetida.ok ? { ok: true, repetida: true, resultado: repetida.operacao?.resultado } : { ok: false, motivo: repetida.motivo };
+    const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
+    if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ok: false, motivo: "PROPOSTA_JA_DECIDIDA" }; }
+    try {
+      const resultado = await passos();
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
+      const op = await a.operacoes.concluir(reserva.id, resultado);
+      await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
+        dados: { operacao, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId: resultado.obrigacaoId ?? null, movimentacaoId: null } });
+      return { ok: true, resultado, operacao: op };
+    } catch (erro) {
+      const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "AGUARDANDO_REVISAO");
+      await a.operacoes.falhar(reserva.id, codigo);
+      await a.auditoria.registrar({ acao: "OPERACAO_FALHOU", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id, dados: { operacao, codigo, detalhes: erro?.detalhes ?? null } });
+      registrar({ tipo: "MOVA_OPERACAO_FALHOU", codigo });
+      return { ok: false, motivo: codigo, detalhes: erro?.detalhes ?? null };
+    }
+  }
+
+  /** Anexa o documento da proposta (boleto/nota) ao cofre do Financeiro, ligado à conta a pagar (idempotente pelo conteúdo). */
+  async function anexarDocumento({ proposta, escopo, obrigacaoId, executor = operacional }) {
+    const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
+    if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_DOCUMENTO");
+    const mime = proposta.evidencia.mime;
+    const tipo = proposta.leitura?.tipoDocumento === "NOTA_FISCAL" ? "NOTA_FISCAL" : "BOLETO";
+    return executor.chamar("enviarEvidencia", escopo, {
+      arquivo: { conteudo: bytes, nome: `${tipo === "NOTA_FISCAL" ? "nota" : "boleto"}-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime }, tipo,
+      descricao: `${tipo === "NOTA_FISCAL" ? "Nota fiscal" : "Boleto"} recebido pelo MOVA (proposta ${curto(proposta.id)})`, competencia: proposta.datas?.competencia ?? null,
+      vinculo: { registroTipo: "OBRIGACAO", registroId: obrigacaoId },
+    });
+  }
+
+  /**
+   * 24/11 — CONTA A PAGAR NOVA a partir de BOLETO/NOTA (proposta NOVA_OBRIGACAO com arquivo). Com a chave MOVA_OPERACAO_CRIAR_CONTAS,
+   * a política CONTA_A_PAGAR automática da unidade e a identidade operacional com `registrar_obrigacao` + `enviar_documento`:
+   * registra a conta pelo serviço oficial (uma parcela, fonte MOVA:<proposta> — idempotente) e anexa o documento. A conta fica
+   * EM ABERTO (aparece no Contas a Pagar e no calendário oficial); nenhuma baixa sem comprovante de pagamento.
+   * Fica como PROPOSTA (encaminhada à Central) quando falta fornecedor, categoria definida, competência, vencimento ou documento.
+   */
+  async function aposContaNova(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    if (proposta.tipo !== "NOVA_OBRIGACAO" || !proposta.evidencia) return { ...base, motivos: ["SEM_DOCUMENTO"] };
+    const e = proposta.comando?.entrada;
+    const faltas = [
+      ...(proposta.competenciaPendente || !e?.competencia ? ["COMPETENCIA_PENDENTE"] : []),
+      ...(!proposta.leitura?.favorecido ? ["FORNECEDOR_NAO_IDENTIFICADO"] : []),
+      ...(proposta.categoriaDefinida !== true ? ["CATEGORIA_A_CLASSIFICAR"] : []),
+      ...(!e?.vencimento ? ["VENCIMENTO_AUSENTE"] : []),
+    ];
+    if (faltas.length) return { ...base, motivos: faltas };
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.CONTA_A_PAGAR, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
+    if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    for (const op of ["registrarObrigacaoDocumental", "enviarEvidencia"]) if (!(await operacional.pode(op, escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const ob = await operacional.chamar("registrarObrigacaoDocumental", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      const obrigacao = ob.obrigacoes[0];
+      const doc = await anexarDocumento({ proposta, escopo, obrigacaoId: obrigacao.id });
+      return { obrigacaoId: obrigacao.id, documentoId: doc.documento.id, contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: e.categoria ?? null,
+        vencimento: e.vencimento, competencia: e.competencia, favorecido: proposta.leitura?.favorecido ?? null, situacaoConta: "ABERTA" };
+    } });
+    return r.ok ? { ...r0, situacao: "CONTA_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
+   * 24/11 — NOTA FISCAL de uma conta JÁ registrada (proposta VINCULO_DE_DOCUMENTO): só ANEXA a nota à conta (nenhum valor muda,
+   * nenhuma despesa nova). Automática com a chave MOVA_OPERACAO_CRIAR_CONTAS, a política ANEXAR_DOCUMENTO e `enviar_documento`.
+   */
+  async function aposVinculoDeDocumento(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    const obrigacaoId = proposta.comando?.entrada?.obrigacaoId;
+    if (proposta.tipo !== "VINCULO_DE_DOCUMENTO" || !proposta.evidencia || !obrigacaoId) return { ...base, motivos: ["SEM_DOCUMENTO"] };
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.ANEXAR_DOCUMENTO, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
+    if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode("enviarEvidencia", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao: OPERACAO.ANEXAR_DOCUMENTO, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const doc = await anexarDocumento({ proposta, escopo, obrigacaoId });
+      return { obrigacaoId, documentoId: doc.documento.id };
+    } });
+    return r.ok ? { ...r0, situacao: "DOCUMENTO_VINCULADO", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
   /** Reconferência: propostas de baixa ainda sem extrato conferido (o extrato pode ter chegado depois do comprovante). */
   async function reconferirPendentes(escopo) {
     const pendentes = (await a.propostas.listar(escopo)).filter((p) => p.estado === "AGUARDANDO_REVISAO" && p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao !== "CONFERIDA");
@@ -389,5 +486,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, aposDespesaNova, aposJuros, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

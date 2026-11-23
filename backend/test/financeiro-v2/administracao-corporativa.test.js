@@ -33,6 +33,7 @@ const CONTA_B = "eeeeeeee-0000-4000-8000-0000000000c7"; // outra empresa
 const PESSOA_B = "eeeeeeee-0000-4000-8000-0000000000a7";
 const ESCOPOS = [{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_A, unidadeId: UNI_A2 }, { organizacaoId: ORG_B, unidadeId: UNI_B }];
 const J = "Justificativa sintética com mais de vinte caracteres.";
+const OPERADOR_MOVA = "eeeeeeee-0000-4000-8000-0000000000f1"; // identidade operacional do MOVA (sintética)
 
 const provedor = verificadorHs256(SEGREDO_SINTETICO);
 const obterUsuario = async (t) => { const p = provedor(t); return p && p.exp * 1000 > Date.now() ? { id: p.sub } : null; };
@@ -85,6 +86,8 @@ async function montar() {
   app.use((req, _res, next) => { const s = JSON.parse(req.header("x-teste-sessao") ?? "null"); if (s) Object.assign(req, s); next(); });
   app.use("/corp", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, provisionamentoHabilitado: true, dependencias: deps }));
   app.use("/semescrita", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: false, dependencias: deps }));
+  app.use("/movaop", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: deps, movaIdentidadeOperacional: OPERADOR_MOVA }));
+  app.use("/movaleitura", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: deps, movaIdentidadeOperacional: "00000000-0000-4000-8000-00000000a0a0" }));
   const servidor = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
   fechar.push(() => servidor.close());
   amb = { url: `http://127.0.0.1:${servidor.address().port}`, poolAut, dono, corporativo };
@@ -309,4 +312,31 @@ test("0023 — a empresa sem administrador corporativo só ganha o primeiro pelo
   // histórico de liberação e de administradores é imutável
   await assert.rejects(dono.query("update financeiro_v2.fv2_administrador_corporativo_historico set ator = ator"), (e) => e.code === "FV042");
   assert.ok(poolAut);
+});
+
+test("24/11 — identidade OPERACIONAL do MOVA pelo administrador corporativo autenticado: só ações estreitas, por unidade, beneficiário fixo, auditoria; revogação independente", pular, async () => {
+  const { dono, corporativo } = await montar();
+  // o administrador corporativo ATIVO neste ponto da sequência (os testes anteriores trocam administradores)
+  const [conta, pessoa] = (await corporativo.ehAdministrador({ organizacaoId: ORG_A, contaId: ADMIN })) ? [ADMIN, PESSOA_ADMIN] : [ADMIN2, PESSOA_ADMIN2];
+  assert.ok(await corporativo.ehAdministrador({ organizacaoId: ORG_A, contaId: conta }));
+  const mova = (corpo, o = {}) => chamar("movaop", "/corporativo/mova-operacional", { conta, pessoa, metodo: "POST", corpo: { justificativa: J, ...corpo }, ...o });
+  const acoesDe = async (u) => (await dono.query("select acoes, situacao from financeiro_v2.fv2_concessao where usuario_id = $1 and unidade_id = $2", [OPERADOR_MOVA, u])).rows[0] ?? null;
+  // concede na Saci (com juros) e na North (sem juros)
+  assert.equal((await mova({ unidade: UNI_A, acao: "CONCEDER", juros: true })).status, 200);
+  assert.equal((await mova({ unidade: UNI_A2, acao: "CONCEDER" })).status, 200);
+  assert.deepEqual([...(await acoesDe(UNI_A)).acoes].sort(), ["financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_juros", "financeiro_v2.registrar_obrigacao", "financeiro_v2.ver"]);
+  assert.deepEqual([...(await acoesDe(UNI_A2)).acoes].sort(), ["financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_obrigacao", "financeiro_v2.ver"]);
+  // o formulário não escolhe beneficiário nem ações
+  assert.equal((await mova({ unidade: UNI_A, acao: "CONCEDER", usuario: PESSOA_OP })).status, 400);
+  assert.equal((await mova({ unidade: UNI_A, acao: "CONCEDER", acoes: ["financeiro_v2.registrar"] })).status, 400);
+  // quem não é administrador corporativo, outra empresa e identidade de leitura: recusados
+  assert.equal(motivo(await mova({ unidade: UNI_A, acao: "CONCEDER" }, { conta: CONTA_OP, pessoa: PESSOA_OP })), "SEM_AUTORIDADE_ADMINISTRATIVA");
+  assert.equal((await mova({ unidade: UNI_B, acao: "CONCEDER" })).corpo.codigo, "UNIDADE_FORA_DA_EMPRESA");
+  assert.equal((await chamar("movaleitura", "/corporativo/mova-operacional", { conta, pessoa, metodo: "POST", corpo: { unidade: UNI_A, acao: "CONCEDER", justificativa: J } })).corpo.codigo, "IDENTIDADE_OPERACIONAL_NAO_CONFIGURADA");
+  // revoga SÓ a North
+  assert.equal((await mova({ unidade: UNI_A2, acao: "REVOGAR" })).status, 200);
+  assert.deepEqual([(await acoesDe(UNI_A2)).situacao, (await acoesDe(UNI_A)).situacao], ["REVOGADA", "ATIVA"]);
+  // auditoria com o administrador como ator (nunca uma conta técnica)
+  const aud = (await dono.query("select ator, operacao from financeiro_v2.fv2_auditoria_concessao where usuario_alvo = $1 order by seq", [OPERADOR_MOVA])).rows;
+  assert.deepEqual(aud.map((a) => [a.ator, a.operacao]), [[pessoa, "CONCESSAO"], [pessoa, "CONCESSAO"], [pessoa, "REVOGACAO"]]);
 });

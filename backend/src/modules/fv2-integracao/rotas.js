@@ -55,7 +55,7 @@ function responderErro(res, e, registrar) {
  * @param {() => {repositorio:object, adaptador:object, vinculos:object, relogio?:Function}} p.dependencias
  * @param {(evento:object)=>void} [p.registrar]
  */
-export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {}, mova = null }) {
+export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {}, mova = null, movaIdentidadeOperacional = null }) {
   const r = Router();
   // doc 37: importar SEM GUARDAR o arquivo — ele vive só na memória do processo (30 min) entre a prévia e a confirmação.
   const cofreTemporario = criarCofreTemporario();
@@ -439,6 +439,35 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const r1 = await corporativo.conceder({ organizacaoId: s.organizacaoId, unidadeId, perfilId, acoes: NIVEIS[b.nivel], atorContaId: s.contaId, atorPerfilId: s.perfilId, justificativa });
         registrar({ tipo: "ACESSO_FINANCEIRO_ALTERADO", unidadeId, pessoa: perfilId, nivel: b.nivel, ator: s.contaId });
         return { ok: true, ...r1 };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
+  });
+
+  // 24/11 — IDENTIDADE OPERACIONAL do MOVA: o administrador financeiro CORPORATIVO, autenticado (mesma sessão e mesma função do
+  // banco que concede às pessoas, com auditoria ADMINISTRACAO_CORPORATIVA), concede ou revoga, UMA unidade por vez, só as ações
+  // ESTREITAS do MOVA. O beneficiário NÃO vem do formulário: é a identidade configurada no servidor (MOVA_IDENTIDADE_OPERACIONAL),
+  // nunca a de leitura do MOVA, a técnica de entregadores ou quem age. Nenhuma ação ampla (registrar, corrigir, aplicar…).
+  const IDENTIDADES_TECNICAS = ["00000000-0000-4000-8000-00000000a0a0", "00000000-0000-4000-8000-00000000e7e9", "00000000-0000-4000-8000-0000000b0075"];
+  const ACOES_MOVA_OPERACIONAL = [ACAO.VER, ACAO.ENVIAR_DOCUMENTO, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.REGISTRAR_OBRIGACAO];
+  r.post("/corporativo/mova-operacional", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      semCamposAlemDe(b, ["unidade", "acao", "juros", "justificativa"]);
+      const unidadeId = idMin(b.unidade);
+      if (!unidadeId || !["CONCEDER", "REVOGAR"].includes(b.acao) || (b.juros !== undefined && typeof b.juros !== "boolean")) throw recusa(400, "ENTRADA_INVALIDA", "Informe a unidade e se concede ou revoga.");
+      const identidade = idMin(movaIdentidadeOperacional);
+      if (!identidade || IDENTIDADES_TECNICAS.includes(identidade)) throw recusa(409, "IDENTIDADE_OPERACIONAL_NAO_CONFIGURADA", "A identidade operacional do MOVA não está configurada neste servidor.");
+      const justificativa = justificativaDe(b);
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const { administracao, corporativo } = obter();
+        if (!(await administracao.unidadesDaEmpresa({ organizacaoId: s.organizacaoId })).some((u) => u.unidadeId === unidadeId)) throw recusa(403, "UNIDADE_FORA_DA_EMPRESA", "Unidade fora desta empresa.");
+        if ([s.contaId, s.perfilId].map(idMin).includes(identidade)) throw recusa(400, "AUTOCONCESSAO", "Ninguém concede o próprio acesso.");
+        const acoes = b.acao === "REVOGAR" ? [] : [...ACOES_MOVA_OPERACIONAL, ...(b.juros === true ? [ACAO.REGISTRAR_JUROS] : [])];
+        const r1 = await corporativo.conceder({ organizacaoId: s.organizacaoId, unidadeId, perfilId: identidade, acoes, atorContaId: s.contaId, atorPerfilId: s.perfilId, justificativa });
+        registrar({ tipo: "MOVA_OPERACIONAL_ALTERADO", unidadeId, acao: b.acao, juros: b.juros === true, ator: s.contaId });
+        return { ok: true, acoes, ...r1 };
       }, FINALIDADE_DO_GATEWAY.LIBERACAO);
       return res.json(corpo);
     } catch (e) { return responderErro(res, e, registrar); }

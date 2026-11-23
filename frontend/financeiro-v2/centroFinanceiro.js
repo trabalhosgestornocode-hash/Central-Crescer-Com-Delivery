@@ -25,7 +25,7 @@ const ABAS = [
 ];
 const DECISAO = { PROPOSTA: ["Proposta criada", "info"], PEDIR_INFORMACAO: ["Aguardando informação", "alerta"], DUPLICADO: ["Duplicado", "neutro"], BLOQUEADO: ["Bloqueado", "erro"], IGNORADO: ["Ignorado", "neutro"], FALHA_LEITURA: ["Falha de leitura", "alerta"], CONSULTA: ["Consulta", "info"], ORIENTACAO: ["Orientação", "neutro"], RELACIONADA: ["Esclarecimento", "info"] };
 const ESTADO = { AGUARDANDO_REVISAO: ["Aguardando revisão", "alerta"], APLICANDO: ["Aplicando", "info"], APLICADA: ["Aplicada", "ok"], REJEITADA: ["Rejeitada", "neutro"] };
-const TIPO_PROPOSTA = { DESPESA_PAGA: "Despesa paga", NOVA_OBRIGACAO: "Nova conta a pagar", BAIXA_DE_OBRIGACAO: "Baixa de conta existente", SOLICITACAO_DE_REVISAO: "Pedido de revisão" };
+const TIPO_PROPOSTA = { DESPESA_PAGA: "Despesa paga", NOVA_OBRIGACAO: "Nova conta a pagar", BAIXA_DE_OBRIGACAO: "Baixa de conta existente", SOLICITACAO_DE_REVISAO: "Pedido de revisão", VINCULO_DE_DOCUMENTO: "Nota de conta já registrada" };
 const INTENCAO_LIDA = { INFORMAR_PAGAMENTO: "Pagamento feito", REGISTRAR_CONTA: "Conta a pagar", CONSULTAR: "Consulta", INFORMAR_TRANSFERENCIA: "Transferência", PEDIR_CORRECAO: "Pedido de correção", PEDIR_CLASSIFICACAO: "Pedido de classificação", OUTRA: "Outra", DESCONHECIDA: "Não identificada" };
 /** 15A (V-3): decisão de duplicidade aponta a proposta original (só o id; mesma unidade, filtrado no servidor). */
 /** 15A: competência nunca presumida — sem ela (e sem revisão), não dá para aplicar. */
