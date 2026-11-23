@@ -14,6 +14,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const PRIVADO = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 const AGUARDANDO = ["AGUARDANDO_NF", "NF_REJEITADA"];
 const LID = /^[0-9]{5,30}@lid$/;
+/** 23/11: a nota pode chegar em PDF ou em imagem (foto/print legível); o anexo oficial do Financeiro aceita os três. */
+export const MIMES_DA_NOTA = Object.freeze(["application/pdf", "image/jpeg", "image/png"]);
+export const EXTENSAO_DA_NOTA = Object.freeze({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" });
 export const PERFIL_ENTREGADOR = "ENTREGADOR";
 
 /** Lista fechada: { unidadeId, chave (do fechamento), telefoneE164, privado (jid), nome? }. Telefone único POR UNIDADE. */
@@ -42,11 +45,20 @@ export function validarEntregadores(lista = []) {
 export function conversasDosEntregadores(entregadores, { ocupados = new Set() } = {}) {
   const porJid = new Map();
   for (const e of entregadores) if (e.ativo) porJid.set(e.privado, [...(porJid.get(e.privado) ?? []), e]);
-  return [...porJid.entries()].filter(([jid, lista]) => lista.length === 1 && !ocupados.has(jid)).map(([jid, [e]]) => Object.freeze({
-    grupoId: jid, unidades: Object.freeze([e.unidadeId]), acesso: "LISTA", privada: true, derivada: true, consultasNoGrupo: Object.freeze([]),
-    entregador: Object.freeze({ chave: e.chave, unidadeId: e.unidadeId, nome: e.nome }),
-    participantes: Object.freeze([Object.freeze({ ids: Object.freeze([jid, ...e.ids]), telefones: Object.freeze([e.telefoneE164]), perfil: PERFIL_ENTREGADOR, unidades: Object.freeze([e.unidadeId]), privado: jid, nome: e.nome })]),
-  }));
+  // 23/11: o MESMO entregador (mesmo número) em DUAS empresas (ex.: Açaí e Subway) tem UMA conversa com as duas unidades e
+  // um vínculo por unidade (`entregadores`). Antes a conversa era descartada e ele não recebia nada em nenhuma das duas.
+  // Cada vínculo continua sendo da sua unidade: fechamento, obrigação, nota e envio nunca se misturam.
+  const umaPorUnidade = (lista) => new Set(lista.map((e) => e.unidadeId)).size === lista.length && new Set(lista.map((e) => e.telefoneE164)).size === 1;
+  return [...porJid.entries()].filter(([jid, lista]) => umaPorUnidade(lista) && !ocupados.has(jid)).map(([jid, lista]) => {
+    const vinculos = Object.freeze(lista.map((e) => Object.freeze({ chave: e.chave, unidadeId: e.unidadeId, nome: e.nome })));
+    const unidades = Object.freeze(lista.map((e) => e.unidadeId));
+    const ids = [...new Set(lista.flatMap((e) => e.ids))];
+    return Object.freeze({
+      grupoId: jid, unidades, acesso: "LISTA", privada: true, derivada: true, consultasNoGrupo: Object.freeze([]),
+      entregador: vinculos[0], entregadores: vinculos,
+      participantes: Object.freeze([Object.freeze({ ids: Object.freeze([jid, ...ids]), telefones: Object.freeze([lista[0].telefoneE164]), perfil: PERFIL_ENTREGADOR, unidades, privado: jid, nome: lista[0].nome })]),
+    });
+  });
 }
 
 /** Quem é o entregador desta conversa privada (por JID ou telefone verificado). Ambíguo ou desconhecido ⇒ null. */
@@ -106,7 +118,7 @@ export function mensagemCobrancaNota(f, hoje) {
 export function pendenciaDeNota({ entregador, fechamento, midia, recebidoEm = null }) {
   if (!entregador || !fechamento) return { ok: false, motivo: "ENTREGADOR_OU_SEMANA_DESCONHECIDOS" };
   if (fechamento.entregador?.chave !== entregador.chave) return { ok: false, motivo: "FECHAMENTO_DE_OUTRO_ENTREGADOR" };
-  if (!midia || midia.mime !== "application/pdf") return { ok: false, motivo: "NOTA_PRECISA_SER_PDF" };
+  if (!midia || !MIMES_DA_NOTA.includes(midia.mime)) return { ok: false, motivo: "NOTA_PRECISA_SER_PDF" };
   if (fechamento.situacaoDocumental === "LIBERADO_PAGAMENTO") return { ok: false, motivo: "PAGAMENTO_JA_LIBERADO" };
   if (fechamento.duplicidade) return { ok: false, motivo: "SEMANA_COM_DUPLICIDADE" };
   return {
@@ -227,4 +239,76 @@ export function relatorioDeQuarta({ unidade, empresa = null, fechamentos, notas 
     `Total pendente: ${reais(soma(pendente))}`,
     `Total pago: ${reais(soma(grupos.PAGO))}`,
   ].join("\n");
+}
+
+// ── 23/11/2026: entregador nas DUAS empresas — a nota vai para a obrigação certa, e a gerência de cada uma é avisada ────────
+
+const termos = (s) => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+/** Palavras que identificam a unidade numa legenda: apelidos e a 1ª palavra própria do nome/empresa (ex.: "acai", "subway"). */
+function marcasDaUnidade(u) {
+  const marcas = new Set();
+  for (const a of u?.apelidos ?? []) { const t = termos(a).join(" "); if (t.length >= 3) marcas.add(t); }
+  for (const n of [u?.nome, u?.empresa]) { const t = termos(n).find((p) => p.length >= 4); if (t) marcas.add(t); }
+  return marcas;
+}
+/** Unidades citadas no texto (legenda da nota). Só vale marca EXCLUSIVA de uma unidade, como palavra inteira ("saci" não decide). */
+export function unidadesCitadas(texto, unidades) {
+  const palavras = ` ${termos(texto).join(" ")} `;
+  const tem = (m) => palavras.includes(` ${m} `);
+  return unidades.filter((u) => [...marcasDaUnidade(u)].some((m) => tem(m) && !unidades.some((o) => o !== u && marcasDaUnidade(o).has(m))));
+}
+
+/**
+ * Qual obrigação recebe a nota quando o entregador tem fechamento aguardando nota em MAIS DE UMA empresa.
+ * `candidatos`: [{ unidade:{unidadeId,nome,empresa,apelidos}, cnpj, fechamento }] (só semanas aguardando nota, sem duplicidade).
+ * Ordem de evidência (nunca "a primeira unidade"): 1) a legenda cita uma empresa; 2) só uma aguarda nota; 3) o tomador lido
+ * (CNPJ, depois nome); 4) o valor lido igual a um único fechamento. Sem evidência suficiente ⇒ { ambigua: true } (perguntar).
+ */
+export function escolherObrigacaoDaNota({ candidatos, legenda = "", leitura = null }) {
+  if (!candidatos.length) return Object.freeze({ nenhuma: true });
+  const citadas = unidadesCitadas(legenda, candidatos.map((c) => c.unidade));
+  if (citadas.length === 1) {
+    const r = candidatos.filter((c) => c.unidade.unidadeId === citadas[0].unidadeId);
+    return r.length === 1 ? Object.freeze({ escolhida: r[0], por: "LEGENDA" }) : Object.freeze({ nenhuma: true });
+  }
+  if (candidatos.length === 1) return Object.freeze({ escolhida: candidatos[0], por: "UNICA_AGUARDANDO_NOTA" });
+  if (leitura) {
+    const doc = soDigitos(leitura.documentoDestinatario);
+    if (doc.length === 14) { const r = candidatos.filter((c) => c.cnpj && soDigitos(c.cnpj) === doc); if (r.length === 1) return Object.freeze({ escolhida: r[0], por: "CNPJ_DO_TOMADOR" }); }
+    if (leitura.pagador) {
+      const pelaMarca = unidadesCitadas(leitura.pagador, candidatos.map((c) => c.unidade)).map((u) => u.unidadeId);
+      const r = candidatos.filter((c) => pelaMarca.includes(c.unidade.unidadeId) || nomesConferem(leitura.pagador, c.unidade.empresa) || nomesConferem(leitura.pagador, c.unidade.nome));
+      if (r.length === 1) return Object.freeze({ escolhida: r[0], por: "NOME_DO_TOMADOR" });
+    }
+    if (Number.isSafeInteger(leitura.valorCentavos)) { const r = candidatos.filter((c) => c.fechamento.valorCentavos === leitura.valorCentavos); if (r.length === 1) return Object.freeze({ escolhida: r[0], por: "VALOR" }); }
+  }
+  return Object.freeze({ ambigua: true });
+}
+
+/** Pergunta ao entregador quando a nota pode ser de mais de uma empresa (nada é anexado até ele dizer). */
+export function perguntaDeEmpresaDaNota(candidatos) {
+  const nomes = candidatos.map((c) => `${c.unidade.empresa ?? c.unidade.nome} (semana ${dataBr(c.fechamento.semanaInicio)}, ${reais(c.fechamento.valorCentavos)})`);
+  const exemplo = candidatos[candidatos.length - 1]?.unidade;
+  return `Recebi o arquivo, mas você tem demonstrativos aguardando nota em mais de uma empresa: ${nomes.join(" e ")}. Envie a nota de novo escrevendo na mensagem de qual empresa ela é (por exemplo: "${exemplo?.apelidos?.[0] ?? exemplo?.nome ?? ""}").`;
+}
+
+/**
+ * Avisos no GRUPO da gerência da unidade (sem valores e sem dados fiscais: só quem, a semana e a situação).
+ * "Envio aceito" = a mensagem entrou na saída do MOVA rumo ao Gateway; a confirmação de entrega no aparelho não é medida.
+ */
+export function avisoDeDemonstrativo(f, { empresa = null, unidade = null } = {}, { falhou = false } = {}) {
+  const quem = primeiroNome(f.entregador?.nome) || "entregador";
+  const semana = `semana de ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`;
+  // Só depois do retorno do WhatsApp: "aceito" = o WhatsApp recebeu a mensagem do MOVA (a leitura no aparelho não é medida).
+  return falhou
+    ? `⚠️ ${empresa ?? unidade ?? "Unidade"} — O demonstrativo de ${quem} (${semana}) NÃO foi entregue pelo WhatsApp. O financeiro precisa conferir o contato.`
+    : `📨 ${empresa ?? unidade ?? "Unidade"} — Demonstrativo enviado para ${quem}, referente à ${semana} (aceito pelo WhatsApp). Aguardando nota fiscal.`;
+}
+const RESULTADO_NO_GRUPO = Object.freeze({
+  CONFERE: "Conferência concluída: valor correspondente ao fechamento.",
+  DIVERGENTE: "Conferência com divergência: pendente de revisão do financeiro.",
+  INCONCLUSIVA: "Conferência inconclusiva: pendente de revisão do financeiro.",
+});
+export function avisoDeNotaRecebida(f, resultado, { empresa = null, unidade = null } = {}) {
+  return `📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}. ${RESULTADO_NO_GRUPO[resultado] ?? "Aguardando conferência do financeiro."}`;
 }

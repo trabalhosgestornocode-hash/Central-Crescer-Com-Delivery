@@ -212,6 +212,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     enviosEntregador: Object.freeze({
       async registrar(e) { if (envios.has(e.chave)) return false; envios.set(e.chave, Object.freeze({ ...e, criadoEm: relogio().toISOString() })); return true; },
       async listar(escopo) { return [...envios.values()].filter((e) => e.organizacaoId === escopo.organizacaoId && e.unidadeId === escopo.unidadeId).reverse(); },
+      async vincularResposta(chave, respostaId) { const e = envios.get(chave); if (!e || e.respostaId) return false; envios.set(chave, Object.freeze({ ...e, respostaId })); return true; },
     }),
     automacoes: Object.freeze({
       async obter(nome, unidadeId) { const x = automacoes.get(`${nome}|${unidadeId}`); return x ? Object.freeze({ ...x }) : null; },
@@ -231,7 +232,11 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */
-      async enfileirar(resposta) { saida.push(Object.freeze({ estado: "PENDENTE", ...resposta })); },
+      async enfileirar(resposta) { const id = `resposta-${saida.length + 1}`; saida.push({ id, estado: "PENDENTE", criadaEm: relogio().toISOString(), ...resposta }); return id; },
+      async marcarEnviada(id, providerMessageId) { const r = saida.find((x) => x.id === id); if (r) Object.assign(r, { estado: "ENVIADA", providerMessageId }); },
+      async marcarFalhaDeEnvio(id, codigo, { final }) { const r = saida.find((x) => x.id === id); if (r) Object.assign(r, { estado: final ? "FALHOU" : "PENDENTE", ultimoErro: codigo }); },
+      async situacoes(ids) { return new Map(saida.filter((r) => ids.includes(r.id)).map((r) => [r.id, { estado: r.estado, erro: r.ultimoErro ?? null }])); },
+      async paraDestinoEntre(grupoId, de, ate) { return saida.filter((r) => r.grupoId === grupoId && r.criadaEm >= de && r.criadaEm <= ate).map((r) => r.id); },
       async listar() { return [...saida]; },
       async ehRespostaPropria(mensagemId) { return saida.some((r) => r.providerMessageId && r.providerMessageId === mensagemId); },
     }),

@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { after } from "node:test";
 import { ACAO, criarRepositorioPostgres } from "../../../src/modules/financeiro-v2/index.js";
-import { abrirPoolSeguro, fixarSearchPathDoBanco, lerAmbiente, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
+import { abrirPoolSeguro, fixarSearchPathDoBanco, lerAmbiente, listarMigracoes, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
 
 export const EM_POSTGRES = process.env.FV2_REPOSITORIO === "postgres";
 const EXIGIR = process.env.FV2_EXIGIR_BANCO === "1" || EM_POSTGRES;
@@ -22,6 +22,12 @@ export function ambiente() {
     if (!a) carregado = { disponivel: false, motivo: "ambiente local não iniciado (rode: node scripts/fv2-banco-teste.mjs iniciar)" };
     else if (!a.bancoModelo) carregado = { disponivel: false, motivo: "banco-modelo ausente (rode: node scripts/fv2-banco-teste.mjs iniciar)" };
     else carregado = { disponivel: true, ...a };
+    // 23/11: modelo criado ANTES de uma migração nova (ex.: 0031) faz dezenas de testes falharem por "sem concessão" —
+    // falso alarme de segurança. Modelo desatualizado é erro explícito (nunca pula em silêncio): rode `iniciar` de novo.
+    if (carregado.disponivel) {
+      const faltam = listarMigracoes().filter((m) => !String(a.migracoes ?? "").split("|").includes(`${m.nome}:${m.sha256}`)).map((m) => m.nome);
+      if (faltam.length) throw new Error(`Financeiro v2: banco-modelo de teste DESATUALIZADO (sem ${faltam.join(", ")}). Rode: node scripts/fv2-banco-teste.mjs iniciar`);
+    }
   }
   if (!carregado.disponivel && EXIGIR) throw new Error(`Financeiro v2: banco de teste exigido, mas ${carregado.motivo}.`);
   return carregado;

@@ -368,8 +368,13 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return r.rowCount === 1;
       },
       async listar(escopo) {
-        return (await q(`select chave, entregador, tipo, semana_inicio, criado_em from mova.entregador_envio where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 200`, [escopo.organizacaoId, escopo.unidadeId]))
-          .rows.map((r) => ({ chave: r.chave, entregador: r.entregador, tipo: r.tipo, semanaInicio: dia(r.semana_inicio), criadoEm: r.criado_em.toISOString() }));
+        return (await q(`select * from mova.entregador_envio where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 200`, [escopo.organizacaoId, escopo.unidadeId]))
+          .rows.map((r) => ({ chave: r.chave, entregador: r.entregador, tipo: r.tipo, semanaInicio: dia(r.semana_inicio), criadoEm: r.criado_em.toISOString(), respostaId: r.resposta_id ?? null }));
+      },
+      /** 23/11 (0016): liga o envio à mensagem privada que ele gerou (uma vez só). Sem a 0016 ⇒ false, sem erro. */
+      async vincularResposta(chave, respostaId) {
+        try { return (await q("update mova.entregador_envio set resposta_id = $2 where chave = $1 and resposta_id is null", [chave, respostaId])).rowCount === 1; }
+        catch (e) { if (e?.code === "42703") return false; throw e; }
       },
     }),
     automacoes: Object.freeze({
@@ -411,7 +416,15 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
     }),
     saida: Object.freeze({
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
-        await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4)", [grupoId, respostaA, eventoId, texto]);
+        return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
+      },
+      /** 23/11 (0016): situação de entrega de mensagens (id → { estado, erro }) e a mensagem para um destino numa janela de tempo. */
+      async situacoes(ids) {
+        if (!ids.length) return new Map();
+        return new Map((await q("select id, estado, ultimo_erro from mova.resposta where id = any($1::uuid[])", [ids])).rows.map((r) => [r.id, { estado: r.estado, erro: r.ultimo_erro }]));
+      },
+      async paraDestinoEntre(grupoId, de, ate) {
+        return (await q("select id from mova.resposta where grupo_jid = $1 and criada_em between $2::timestamptz and $3::timestamptz order by seq", [grupoId, de, ate])).rows.map((r) => r.id);
       },
       async listar() {
         return (await q("select grupo_jid as \"grupoId\", resposta_a as \"respostaA\", texto, estado from mova.resposta order by seq")).rows;

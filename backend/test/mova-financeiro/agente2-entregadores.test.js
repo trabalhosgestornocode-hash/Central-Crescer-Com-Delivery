@@ -43,7 +43,8 @@ test("A2-D4 nota recebida: vira pendência de anexo (sem escrita); recusa outro 
   const pdf = { mime: "application/pdf", referencia: "mova/evidencias/sint-1", sha256: "a".repeat(64) };
   assert.equal(pendenciaDeNota({ entregador: outro, fechamento: F(), midia: pdf }).motivo, "FECHAMENTO_DE_OUTRO_ENTREGADOR");
   const dono = LISTA[0];
-  assert.equal(pendenciaDeNota({ entregador: dono, fechamento: F(), midia: { ...pdf, mime: "image/jpeg" } }).motivo, "NOTA_PRECISA_SER_PDF");
+  assert.equal(pendenciaDeNota({ entregador: dono, fechamento: F(), midia: { ...pdf, mime: "image/jpeg" } }).ok, true, "23/11: foto da nota também vale");
+  assert.equal(pendenciaDeNota({ entregador: dono, fechamento: F(), midia: { ...pdf, mime: "audio/ogg" } }).motivo, "NOTA_PRECISA_SER_PDF");
   assert.equal(pendenciaDeNota({ entregador: dono, fechamento: F({ situacaoDocumental: "LIBERADO_PAGAMENTO" }), midia: pdf }).motivo, "PAGAMENTO_JA_LIBERADO");
   const r = pendenciaDeNota({ entregador: dono, fechamento: F(), midia: pdf, recebidoEm: "2026-10-12T10:00:00Z" });
   assert.equal(r.ok, true);
