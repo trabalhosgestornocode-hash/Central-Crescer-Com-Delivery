@@ -20,7 +20,7 @@ const MOTIVOS = {
 };
 const mensagem = (r) => MOTIVOS[r.motivo] ?? MOTIVOS[r.erro] ?? estadoDoErro(r).mensagem ?? r.mensagem;
 let contexto = null;
-const nomeNivel = { CONSULTA: "Consulta", OPERADOR: "Operador", FINANCEIRO: "Financeiro", NENHUM: "Sem acesso", PERSONALIZADO: "Personalizado" };
+const nomeNivel = { CONSULTA: "Consulta", OPERADOR: "Operador", FINANCEIRO: "Financeiro", COMPLETO: "Completo", NENHUM: "Sem acesso", PERSONALIZADO: "Personalizado" };
 
 async function carregar() {
   const r = await criarConsultor().consultar("/api/fv2/corporativo/contexto");
