@@ -32,6 +32,10 @@ export const RESPOSTA = Object.freeze({
   relatoRepetido: (propostaId) => `Já existe uma proposta igual aguardando revisão (${curto(propostaId)}). Não criei outra. Se for um novo lançamento, diga o que muda (data ou valor).`,
   falhaInterpretacao: () => "Não consegui interpretar a mensagem agora. Reenvie com o valor, a unidade e o que aconteceu, em uma frase curta. Nada foi registrado.",
   falhaLeitura: () => "Não consegui ler este documento. Envie uma foto mais nítida ou o PDF original. Nada foi registrado.",
+  // Falhas TÉCNICAS de leitura (não dizem que a foto é ruim): cada causa com sua orientação.
+  falhaTecnicaDeLeitura: () => "Recebi o documento, mas a leitura automática teve um problema técnico agora (o documento não está ilegível). Reenvie em alguns minutos ou envie ao Financeiro. Nada foi registrado.",
+  documentoPesadoParaLeitura: () => "Este arquivo é grande ou complexo demais para a leitura automática. Envie uma foto menor ou o PDF original. Nada foi registrado.",
+  documentoNaoIdentificado: () => "Li o arquivo, mas não consegui identificar os dados com segurança. Ele não foi lançado: envie ao Financeiro para conferência. Nada foi registrado.",
   duplicado: (propostaId) => `Este documento já foi recebido antes${propostaId ? ` (proposta ${curto(propostaId)})` : ""}. Não criei nada novo.`,
   obrigacaoJaExiste: (t) => `Já existe conta a pagar igual (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Não criei nada novo.`,
   competenciaFechada: (comp) => `A competência ${comp} está em fechamento ou fechada. Não proponho lançamentos nela; fale com o responsável pelo fechamento.`,

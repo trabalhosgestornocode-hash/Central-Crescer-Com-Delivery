@@ -14,7 +14,7 @@ export const ABAS_CENTRAL = Object.freeze([
   { id: "seguranca", rotulo: "Segurança e Autonomia" },
 ]);
 const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores", "entregadores-oficiais"], automacoes: ["automacoes"], seguranca: ["politicas"] };
-const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Cobrança da nota fiscal",
+const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Lembrete de terça (nota pendente)",
   ENTREGADORES_RELATORIO: "Relatório de quarta no grupo da unidade", ENTREGADORES_AVISO_GRUPO: "Aviso de liberação no grupo da unidade" };
 // Horários padrão (decisão do proprietário, 23/11/2026; fuso America/Fortaleza): segunda 10h, quarta 8h.
 // Rotas que, se falharem, não derrubam a aba (o cadastro some e o resto continua).

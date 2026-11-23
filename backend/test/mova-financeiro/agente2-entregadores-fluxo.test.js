@@ -116,7 +116,9 @@ t("A2-E3 NFS-e em PDF no privado: anexo OFICIAL pela identidade operacional (só
   await s.enviar(gw({ texto: null, de: MAURICIO, grupo: MAURICIO, doc: PDF }));
   assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["DUPLICADO", "NOTA_JA_RECEBIDA"]);
   assert.equal(s.escritas().length, 1);
-  await s.ligar(AUTOMACAO.COBRANCA); // cobrança no mesmo dia: só quem ainda não mandou (Rafael)
+  await s.ligar(AUTOMACAO.COBRANCA);
+  assert.equal((await s.mova.entregadores.rotina()).cobrancas, 0, "23/11: segunda-feira não cobra (lembrete só na terça)");
+  s.estado.agora = "2026-11-10T13:00:00.000Z"; // terça 10h em Fortaleza: só quem ainda não mandou (Rafael)
   assert.equal((await s.mova.entregadores.rotina()).cobrancas, 1);
   assert.deepEqual((await s.saida()).filter((x) => /Lembrete/.test(x.texto)).map((x) => x.destino), [RAFAEL]);
   assert.equal((await s.mova.entregadores.rotina()).cobrancas, 0, "uma cobrança por dia");
