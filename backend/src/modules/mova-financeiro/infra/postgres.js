@@ -656,6 +656,12 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
+  // 23/11 (0014): unidade atendida SEM grupo — só na OPERACAO; a do grupo prevalece. Não cria conversa nenhuma.
+  if (modo === "OPERACAO") {
+    for (const u of (await q("select * from mova.unidade_sem_grupo where ativo order by nome")).rows) {
+      if (!porId.has(u.unidade_id)) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes, semGrupo: true });
+    }
+  }
   // Agente 2 — Frente D: entregadores autorizados (só OPERACAO); as conversas deles nascem em validarConfiguracao.
   const entregadores = modo === "OPERACAO" ? (await q("select * from mova.entregador_autorizado where ativo order by criado_em")).rows
     .filter((r) => porId.has(r.unidade_id)) // 23/11: unidade fora do MOVA (sem grupo) não derruba a montagem; a rota já recusa

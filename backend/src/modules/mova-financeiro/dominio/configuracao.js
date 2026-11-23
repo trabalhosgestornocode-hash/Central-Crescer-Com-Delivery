@@ -72,6 +72,8 @@ export function validarConfiguracao(c) {
       organizacaoId: u.organizacaoId.toLowerCase(), unidadeId: u.unidadeId.toLowerCase(), nome: u.nome.trim(),
       empresa: typeof u.empresa === "string" && u.empresa.trim() ? u.empresa.trim().slice(0, 120) : null,
       apelidos: Object.freeze([...new Set(apelidos)]), documentos: Object.freeze(documentos), fontes: validarFontes(u.fontes, i),
+      // 23/11 (0014): unidade atendida SEM grupo (só OPERACAO). Nunca aparece em grupo; não gera conversa.
+      ...(u.semGrupo === true ? { semGrupo: true } : {}),
     });
   });
   exigir(new Set(unidades.map((u) => u.unidadeId)).size === unidades.length, "unidades.duplicadas");
@@ -101,6 +103,7 @@ export function validarConfiguracao(c) {
     return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
   exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
+  exigir(unidades.every((u) => !u.semGrupo || (operacao && !grupos.some((g) => g.unidades.includes(u.unidadeId)))), "unidades.semGrupo");
   // OPERACAO: as conversas privadas nascem da lista de participantes (nunca cadastradas à parte).
   // Uma conversa privada nunca mistura ORGANIZAÇÕES: a pessoa em grupos de duas empresas fica sem conversa privada derivada
   // (a resposta com valores não sai no grupo e ela é orientada a falar com o administrador). Isolamento antes de conveniência.
