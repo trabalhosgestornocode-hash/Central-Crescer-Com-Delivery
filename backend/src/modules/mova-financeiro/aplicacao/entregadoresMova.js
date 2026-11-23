@@ -176,6 +176,9 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
           }
           if (fazCobranca) {
             for (const f of await lerFechamentos(ent)) {
+              // 23/11: só a semana do ciclo atual (a encerrada mais recente). Ligar a automação depois NÃO cobra semanas
+              // antigas de uma vez: as pendências anteriores ficam para a equipe, na Central.
+              if (f.semanaInicio < inicioFechado) { if (precisaCobrarNota(f, dia)) resumo.pulados.push("COBRANCA_DE_SEMANA_ANTIGA"); continue; }
               if (!precisaCobrarNota(f, dia)) continue;
               if (await enviarUmaVez({ ent, tipo: "COBRANCA_NOTA", semanaInicio: f.semanaInicio, chave: `COBRANCA|${unidadeId}|${ent.chave}|${f.semanaInicio}|${dia}`, texto: mensagemCobrancaNota(f, dia) })) resumo.cobrancas += 1;
             }

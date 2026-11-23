@@ -72,6 +72,8 @@ export function validarConfiguracao(c) {
       organizacaoId: u.organizacaoId.toLowerCase(), unidadeId: u.unidadeId.toLowerCase(), nome: u.nome.trim(),
       empresa: typeof u.empresa === "string" && u.empresa.trim() ? u.empresa.trim().slice(0, 120) : null,
       apelidos: Object.freeze([...new Set(apelidos)]), documentos: Object.freeze(documentos), fontes: validarFontes(u.fontes, i),
+      // 23/11 (0014): unidade atendida SEM grupo (só OPERACAO). Nunca aparece em grupo; não gera conversa.
+      ...(u.semGrupo === true ? { semGrupo: true } : {}),
     });
   });
   exigir(new Set(unidades.map((u) => u.unidadeId)).size === unidades.length, "unidades.duplicadas");
@@ -101,6 +103,7 @@ export function validarConfiguracao(c) {
     return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
   exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
+  exigir(unidades.every((u) => !u.semGrupo || (operacao && !grupos.some((g) => g.unidades.includes(u.unidadeId)))), "unidades.semGrupo");
   // OPERACAO: as conversas privadas nascem da lista de participantes (nunca cadastradas à parte).
   // Uma conversa privada nunca mistura ORGANIZAÇÕES: a pessoa em grupos de duas empresas fica sem conversa privada derivada
   // (a resposta com valores não sai no grupo e ela é orientada a falar com o administrador). Isolamento antes de conveniência.
@@ -115,6 +118,36 @@ export function validarConfiguracao(c) {
   const dosEntregadores = conversasDosEntregadores(entregadores, { ocupados });
   return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
     gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores });
+}
+
+/**
+ * 23/11: CONFIGURAÇÃO VIVA. Antes, o cadastro de um entregador só valia depois de reiniciar o MOVA: a lista e as conversas
+ * privadas dele eram montadas uma vez, na subida. Agora só ESSA parte é trocada em funcionamento — mesma validação
+ * (validarConfiguracao) e só se TODO o resto (unidades, grupos, participantes) estiver idêntico; qualquer outra mudança
+ * continua exigindo reinício. Quem lê `cfg.gruposAutorizados` / `cfg.entregadores` passa a ver a lista nova na hora; o número
+ * antigo sai da lista de conversas (e dos destinos do envio) no mesmo instante.
+ */
+export function configuracaoViva(inicial, { recarregar = null, validadeMs = 60_000, relogio = () => Date.now() } = {}) {
+  let atual = inicial;
+  let lidoEm = relogio();
+  const semEntregadores = (c) => JSON.stringify({ ...c, entregadores: null, gruposAutorizados: c.gruposAutorizados.filter((g) => !g.entregador) });
+  function trocarEntregadores(nova) {
+    if (semEntregadores(nova) !== semEntregadores(atual)) return { trocado: false, motivo: "OUTRAS_MUDANCAS_EXIGEM_REINICIO" };
+    const mudou = JSON.stringify(nova.entregadores) !== JSON.stringify(atual.entregadores);
+    atual = nova;
+    return { trocado: mudou };
+  }
+  const viva = {};
+  for (const k of Object.keys(inicial)) Object.defineProperty(viva, k, { enumerable: true, get: () => atual[k] });
+  /** Relê a lista do banco (forçado, ou se a leitura passou da validade). Falha de leitura mantém a lista atual. */
+  Object.defineProperty(viva, "recarregarEntregadores", { enumerable: false, value: async ({ forcar = false } = {}) => {
+    if (!recarregar) return { trocado: false, motivo: "SEM_RECARGA" };
+    if (!forcar && relogio() - lidoEm < validadeMs) return { trocado: false, motivo: "DENTRO_DA_VALIDADE" };
+    lidoEm = relogio();
+    return trocarEntregadores(await recarregar());
+  } });
+  Object.defineProperty(viva, "trocarEntregadores", { enumerable: false, value: trocarEntregadores });
+  return Object.freeze(viva);
 }
 
 export const grupoAutorizado = (cfg, grupoId) => cfg.gruposAutorizados.find((g) => g.grupoId === grupoId) ?? null;

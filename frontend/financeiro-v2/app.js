@@ -57,6 +57,7 @@ const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
 const consultorCalendario = criarConsultor();
 const consultorImportacoes = criarConsultor();
+const consultorCadastro = criarConsultor(); // 23/11: Entregadores Próprios → Cadastro (fonte única com o MOVA)
 // Consulta da tela adiantada na plataforma (sai junto com a da sessão): consultor próprio, para uma não abortar a outra.
 const consultorAdiantado = criarConsultor();
 // Fontes de faturamento da unidade (decidem menu e canais): consultor próprio, para sair junto com a sessão sem abortar nada.
@@ -204,6 +205,11 @@ function consultaDoCalendario() {
   const canal = estado.rota === "saipos" ? { presencial: "BALCAO", anota: "ANOTA_AI" }[estado.filtros.saipos?.aba] : estado.rota === "swf" && !["importacoes", "sangrias"].includes(estado.filtros.swf?.aba) ? "BALCAO" : estado.rota === "ifood" && estado.filtros.ifood?.aba !== "importacoes" ? "IFOOD" : estado.rota === "noventa-e-nove-food" && estado.filtros["noventa-e-nove-food"]?.aba !== "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null;
   return canal ? `/api/fv2/calendario-faturamento?${qs({ competencia: undefined, canal, mes: estado.competencia })}` : null;
 }
+/** 23/11 — Informações dos entregadores: só com a aba aberta. Mesma fonte de contatos do MOVA (duas leituras). */
+function consultasDoCadastro() {
+  if (estado.rota !== "entregadores-proprios" || estado.filtros["entregadores-proprios"]?.aba !== "informacoes") return null;
+  return [`/api/fv2/mova/entregadores?${qs({ competencia: undefined })}`, `/api/fv2/mova/entregadores-oficiais?${qs({ competencia: undefined })}`];
+}
 /** Fase 11 — importações do canal da tela, só quando a aba "Importações" está aberta (SAIPOS, iFood ou 99Food). */
 function consultaDasImportacoes() {
   const canal = { saipos: estado.filtros.saipos?.aba === "importacoes" ? "SAIPOS" : null, swf: estado.filtros.swf?.aba === "importacoes" ? "SWF" : null, ifood: estado.filtros.ifood?.aba === "importacoes" ? "IFOOD" : null,
@@ -279,7 +285,7 @@ function desenhar(dados) {
   const f = estado.filtros[estado.rota] ?? {};
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
-    case "entregadores-proprios": return ent.entregadoresProprios(dados, f, { permissoes: permissoesDaUnidade() });
+    case "entregadores-proprios": return ent.entregadoresProprios(dados, f, { permissoes: permissoesDaUnidade(), unidadeNome: nomeUnidade(), cadastro: estado.cadEnt });
     case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade(), ...contextoDoCalendario(), ...contextoDasImportacoes(), abrirProvisorio: estado.filtros.saipos?.foco === "provisorio" });
     case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade(), filtro: estado.filtros["operadoras-taxas"] ?? {} });
     case "swf": return can.swf(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
@@ -358,6 +364,8 @@ async function carregar() {
   const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
   const urlDasImportacoes = consultaDasImportacoes();
   const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
+  const urlsDoCadastro = consultasDoCadastro();
+  const doCadastro = urlsDoCadastro ? Promise.all(urlsDoCadastro.map((u) => consultorCadastro.consultar(u, cabecalhos()))) : null;
   const urlDaRota = consultaDaRota();
   const modulosDaTela = garantir(...(MODULOS_DA_ROTA[estado.rota] ?? [])); // em paralelo com a consulta
   let r;
@@ -378,6 +386,14 @@ async function carregar() {
   }
   estado.calCanal = null;
   estado.impCanal = null;
+  estado.cadEnt = null;
+  if (doCadastro) {
+    const [rc, ro] = await doCadastro;
+    if (rc === null || ro === null) return;
+    // Sem a lista do servidor, a tela usa os entregadores que já vieram na consulta da semana (nunca some ninguém).
+    estado.cadEnt = rc.ok ? { dados: rc.dados, oficiais: ro.ok ? ro.dados : null }
+      : { erro: rc.status === 503 ? "O MOVA não está ativo agora." : rc.mensagem || "Não foi possível consultar os contatos no MOVA.", oficiais: ro.ok ? ro.dados : null };
+  }
   if (dasImportacoes) {
     const ri = await dasImportacoes;
     if (ri === null) return;
@@ -864,6 +880,50 @@ document.addEventListener("change", (e) => {
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });
+// 23/11: ações do WhatsApp dos entregadores (rotas do MOVA: só os campos que cada uma aceita; sem "confirmar"/"unidade").
+const CAMPOS_MOVA = Object.freeze({
+  "/api/fv2/acoes/mova/entregador": ["entregador", "telefone", "nome", "observacoes"],
+  "/api/fv2/acoes/mova/entregador-alterar": ["entregador", "telefone", "nome", "observacoes"],
+  "/api/fv2/acoes/mova/entregador-revogar": ["entregador"],
+  "/api/fv2/acoes/mova/entregador-reativar": ["entregador"],
+});
+const VIGENCIA = { IMEDIATA: "Vale agora para o MOVA.", APOS_REINICIO_DO_MOVA: "Passa a valer quando o MOVA reiniciar.", NO_PROXIMO_MINUTO: "Passa a valer em até 1 minuto." };
+async function executarAcaoMova(url, dados, saida, botao) {
+  const campos = CAMPOS_MOVA[url];
+  if (!campos) return;
+  const corpo = Object.fromEntries(campos.filter((k) => k in dados && !(k === "telefone" && !String(dados[k]).trim() && url.endsWith("-alterar"))).map((k) => [k, String(dados[k])]));
+  if (botao) botao.disabled = true;
+  if (saida) { saida.dataset.estado = "enviando"; saida.textContent = "Salvando…"; }
+  const r = await enviar(url, corpo, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
+  if (ehSessaoExpirada(r)) { sessaoExpirada(r); return; }
+  if (!r.ok) { if (botao) botao.disabled = false; if (saida) { saida.dataset.estado = "erro"; saida.textContent = r.mensagem || "Não foi possível salvar."; } return; }
+  if (saida) { saida.dataset.estado = "ok"; saida.textContent = r.dados?.alterado === false ? "Nada mudou." : `Salvo. ${VIGENCIA[r.dados?.vigencia] ?? ""}`; }
+  invalidarCache();
+  setTimeout(() => carregar(), 600);
+}
+document.addEventListener("submit", (e) => {
+  const fm = e.target.closest?.("form[data-acao-mova]");
+  if (fm) { e.preventDefault(); executarAcaoMova(fm.dataset.acaoMova, Object.fromEntries(new FormData(fm).entries()), fm.querySelector(".resultado-acao"), fm.querySelector('button[type="submit"]')); }
+});
+document.addEventListener("click", (e) => {
+  const b = e.target.closest?.("[data-acao-mova-botao]");
+  if (!b) return;
+  if (globalThis.confirm && !globalThis.confirm("Desativar este contato? O entregador deixa de receber mensagens; fechamentos, pagamentos e o histórico continuam.")) return;
+  executarAcaoMova(b.dataset.acaoMovaBotao, { entregador: b.dataset.entregador }, b.closest("form")?.querySelector(".resultado-acao"), b);
+});
+/** Pesquisa e filtro das informações dos entregadores: só esconde linhas (os dados já estão na tela). */
+function filtrarCadastro() {
+  const busca = (document.querySelector("[data-cad-busca]")?.value ?? "").trim().toLowerCase();
+  const sit = document.querySelector("[data-cad-situacao]")?.value ?? "";
+  let vistos = 0;
+  for (const tr of document.querySelectorAll("[data-cad-linha]")) {
+    const ok = (!busca || tr.dataset.nome.includes(busca)) && (!sit || tr.dataset.situacao === sit);
+    tr.hidden = !ok; if (ok) vistos += 1;
+  }
+  const vazio = document.querySelector("[data-cad-vazio]"); if (vazio) vazio.hidden = vistos > 0;
+}
+document.addEventListener("input", (e) => { if (e.target.matches?.("[data-cad-busca]")) filtrarCadastro(); });
+document.addEventListener("change", (e) => { if (e.target.matches?.("[data-cad-situacao]")) filtrarCadastro(); });
 document.addEventListener("submit", (e) => {
   e.preventDefault();
   const acao = e.target.closest("[data-acao]");

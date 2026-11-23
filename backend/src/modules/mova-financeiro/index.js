@@ -16,7 +16,7 @@ import { criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPost
 export { CONTRATO_EVENTO_VERSAO, validarEvento, chaveDoDocumento } from "./contratos/evento.js";
 export { CONTRATO_MOVA_VERSAO, normalizarGatewayMova } from "./adaptadores/gatewayBaileys.js";
 export { normalizarBaileys } from "./adaptadores/baileys.js";
-export { validarConfiguracao, requisitosCompletos, SITUACAO_FONTES, ehConversaPrivada } from "./dominio/configuracao.js";
+export { validarConfiguracao, configuracaoViva, requisitosCompletos, SITUACAO_FONTES, ehConversaPrivada } from "./dominio/configuracao.js";
 export { RESULTADO_UNIDADE, resolverUnidade } from "./dominio/unidade.js";
 export { ACESSO, CAPACIDADES, CONSULTAS_SEM_VALORES, JANELA_CONTINUIDADE_MS, PERFIL, chamaPeloNome, participanteAutorizado } from "./dominio/participantes.js";
 export { interpretarComando } from "./aplicacao/comandos.js";
@@ -50,7 +50,8 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
 export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false }) {
-  const cfg = validarConfiguracao(configuracao);
+  // 23/11: configuração VIVA (lista de entregadores recarregável) já vem validada: é usada como está, senão a recarga não chegaria aqui.
+  const cfg = typeof configuracao?.recarregarEntregadores === "function" ? configuracao : validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));

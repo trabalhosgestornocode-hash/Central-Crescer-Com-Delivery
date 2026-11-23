@@ -25,7 +25,7 @@
 //   GET  /api/mova/automacoes            automações da unidade (ver)
 //   POST /acoes/mova/automacao           ligar/desligar e horário (configurar)
 //   POST /acoes/mova/automacao-pausa     pausar/retomar uma automação (configurar)
-//   GET  /api/mova/entregadores-oficiais entregadores dos fechamentos OFICIAIS da unidade (para o cadastro; leitura com a sessão) (ver)
+//   GET  /api/mova/entregadores-oficiais entregadores CONHECIDOS da unidade: fechamentos oficiais + Foody das semanas em aberto (ver)
 //   POST /acoes/mova/entregador          cadastrar entregador OFICIAL + número WhatsApp (configurar; a chave é conferida no Financeiro)
 //   POST /acoes/mova/entregador-revogar  revogar o cadastro (configurar; o histórico fica)
 //   Agente 2 — Central de pendências e documentos recebidos SEM IA (nada escreve no Financeiro):
@@ -42,6 +42,75 @@ import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, conta
 import { normalizarTelefoneBr } from "../mova-financeiro/dominio/entregadores.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
+// ------------------------------------------------------------------ cadastro dos entregadores (23/11)
+const textoCurto = (v, max) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : null);
+function chaveDoEntregador(b) {
+  const chave = typeof b.entregador === "string" ? b.entregador.trim() : "";
+  if (!chave || chave.length > 200) throw recusa(400, "PARAMETRO_INVALIDO", "Informe o entregador do Financeiro.");
+  return chave;
+}
+/** Só quem pode configurar, só em unidade ATENDIDA pelo MOVA (unidade fora dele derrubaria a montagem) e com o cadastro disponível. */
+function exigirCadastroDeEntregador(ctx, mova) {
+  exigirConfigurar(ctx);
+  if (!mova.cfg.unidades.some((u) => u.unidadeId === ctx.unidadeId && u.organizacaoId === ctx.organizacaoId)) throw recusa(409, "UNIDADE_FORA_DO_MOVA", "Esta unidade ainda não é atendida pelo MOVA: o cadastro de WhatsApp dos entregadores fica disponível quando ela for configurada.");
+  if (typeof mova.armazenamento.entregadores?.cadastrar !== "function") throw recusa(503, "CADASTRO_INDISPONIVEL", "Cadastro de entregadores indisponível.");
+}
+/**
+ * 23/11 — ENTREGADORES CONHECIDOS da unidade (nunca cadastrados à mão): os dos fechamentos oficiais + os que o Foody já
+ * identificou na semana atual e nas semanas encerradas ainda sem fechamento (mesma chave que o fechamento vai usar — o
+ * fechamento posterior cai no MESMO entregador, sem duplicar). Só leitura; nenhuma obrigação é criada.
+ */
+const normalizarNome = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export async function entregadoresConhecidos({ ctx, nucleo, semanasAbertas = 2 }) {
+  if (typeof nucleo?.consultarEntregadoresProprios !== "function") throw recusa(503, "FINANCEIRO_INDISPONIVEL", "Financeiro indisponível.");
+  const r = await nucleo.consultarEntregadoresProprios(ctx, {});
+  const porChave = new Map();
+  const somar = (chave, nome, semana, fechado) => {
+    if (!chave) return;
+    const x = porChave.get(chave) ?? { chave, nome: nome ?? chave, semanas: new Set(), semanasFechadas: new Set() };
+    if (semana) x.semanas.add(semana);
+    if (fechado && semana) { x.semanasFechadas.add(semana); x.nome = nome ?? x.nome; }
+    porChave.set(chave, x);
+  };
+  for (const f of r.fechamentos ?? []) somar(f.entregador?.chave, f.entregador?.nome, f.semanaInicio, true);
+  const abertas = [r];
+  for (const s of (r.semanas ?? []).filter((x) => x.semRegistro).slice(0, semanasAbertas)) abertas.push(await nucleo.consultarEntregadoresProprios(ctx, { semana: s.inicio }));
+  for (const a of abertas) if (a.semana?.situacao !== "CONSOLIDADA") for (const e of a.entregadores ?? []) if ((e.entregasSemana ?? 0) > 0 || e.valorSemanaCentavos > 0) somar(e.chave, e.nome, a.semana.inicio, false);
+  const itens = [...porChave.values()].map((x) => {
+    const semanas = [...x.semanas].sort().reverse();
+    const fechadas = [...x.semanasFechadas].sort().reverse();
+    return { chave: x.chave, nome: x.nome, ultimaSemana: fechadas[0] ?? null, ultimaAtividade: semanas[0] ?? null, semanas: semanas.slice(0, 12), semanasFechadas: fechadas.length, listaFechadas: fechadas.slice(0, 12),
+      origem: fechadas.length ? "FECHAMENTO" : "FOODY_SEM_FECHAMENTO" };
+  });
+  // Nomes iguais com chaves diferentes: nunca juntar; sinalizar para conferência humana.
+  const porNome = new Map();
+  for (const i of itens) porNome.set(normalizarNome(i.nome), [...(porNome.get(normalizarNome(i.nome)) ?? []), i.chave]);
+  for (const i of itens) i.nomeRepetido = (porNome.get(normalizarNome(i.nome))?.length ?? 0) > 1;
+  return itens.sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR") || a.chave.localeCompare(b2.chave));
+}
+async function entregadorOficial({ ctx, nucleo, chave }) {
+  let oficial;
+  try { oficial = await nucleo.consultarEntregador(ctx, { entregador: chave }); } catch (e) {
+    if (e?.codigo === "FV2_NAO_ENCONTRADO") oficial = null; else throw e;
+  }
+  const f = (oficial?.fechamentos ?? []).find((x) => x.entregador?.chave === chave);
+  if (f) return f;
+  // Antes do fechamento: entregador já identificado pelo Foody nesta unidade (mesma chave do fechamento futuro).
+  const conhecido = typeof nucleo?.consultarEntregadoresProprios === "function" ? (await entregadoresConhecidos({ ctx, nucleo })).find((x) => x.chave === chave) : null;
+  if (conhecido) return { entregador: { chave: conhecido.chave, nome: conhecido.nome }, semanaInicio: conhecido.ultimaAtividade, origem: conhecido.origem };
+  throw recusa(404, "ENTREGADOR_NAO_ENCONTRADO", "Entregador não encontrado no Financeiro desta unidade (nem nos fechamentos, nem no Foody das semanas em aberto).");
+}
+function exigirNumeroForaDaEquipe(mova, tel) {
+  const daEquipe = mova.cfg.gruposAutorizados.some((g) => !g.entregador && (g.participantes ?? []).some((p) => (p.telefones ?? []).includes(tel.telefoneE164)));
+  if (daEquipe) throw recusa(409, "NUMERO_DA_EQUIPE", "Esse número já é de alguém da equipe financeira; não pode ser cadastrado como entregador.");
+}
+/** Aplica o cadastro na configuração viva do MOVA na hora (sem reinício). Sem configuração viva: vale no próximo reinício. */
+async function vigenciaApos(mova) {
+  if (typeof mova.cfg.recarregarEntregadores !== "function") return "APOS_REINICIO_DO_MOVA";
+  try { const r = await mova.cfg.recarregarEntregadores({ forcar: true }); return r.motivo === "OUTRAS_MUDANCAS_EXIGEM_REINICIO" ? "APOS_REINICIO_DO_MOVA" : "IMEDIATA"; }
+  catch { return "NO_PROXIMO_MINUTO"; } // a recarga periódica tenta de novo
+}
+
 const STATUS = { BAIXA_CONFERIDA_COM_EXTRATO: 409, EXTRATO_NAO_CONFERIDO: 409, OPERACAO_NAO_REVERSIVEL: 409, OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const escopo = (ctx) => ({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
@@ -152,18 +221,20 @@ export const CONSULTAS_MOVA = Object.freeze({
     return {
       ligado: Boolean(mova.entregadores),
       itens: lista.map((e) => ({ chave: e.chave, nome: e.nome, telefone: `…${e.telefoneE164.slice(-4)}`, conversa: comConversa.has(e.privado) ? "ATIVA" : "NUMERO_DA_EQUIPE" })),
-      cadastros: a.entregadores ? await a.entregadores.listar(escopo(ctx)) : [],
+      // 23/11: unidade atendida pelo MOVA? (sem isso o cadastro de WhatsApp fica indisponível) e, por cadastro, se está APTO a
+      // receber: ativo, já na configuração viva do MOVA e com conversa própria (número que é da equipe nunca recebe).
+      unidadeAtendida: mova.cfg.unidades.some((u) => u.unidadeId === ctx.unidadeId && u.organizacaoId === ctx.organizacaoId),
+      cadastros: a.entregadores ? (await a.entregadores.listar(escopo(ctx))).map((c) => {
+        const vigente = c.ativo ? lista.find((e) => e.chave === c.chave && `…${e.telefoneE164.slice(-4)}` === c.telefone) : null;
+        return { ...c, envio: !c.ativo ? "INATIVO" : !vigente ? "AGUARDANDO_ATUALIZACAO" : comConversa.has(vigente.privado) ? "APTO" : "NUMERO_DA_EQUIPE" };
+      }) : [],
       notas: a.notasEntregador ? (await a.notasEntregador.listar(escopo(ctx))).map(({ leitura, ...n }) => n) : [],
       envios: a.enviosEntregador ? await a.enviosEntregador.listar(escopo(ctx)) : [],
     };
   },
   "/mova/entregadores-oficiais": async ({ ctx, nucleo }) => {
     exigirVer(ctx);
-    if (typeof nucleo?.consultarEntregadoresProprios !== "function") throw recusa(503, "FINANCEIRO_INDISPONIVEL", "Financeiro indisponível.");
-    const r = await nucleo.consultarEntregadoresProprios(ctx, {});
-    const porChave = new Map();
-    for (const f of r.fechamentos ?? []) if (f.entregador?.chave && !porChave.has(f.entregador.chave)) porChave.set(f.entregador.chave, { chave: f.entregador.chave, nome: f.entregador.nome ?? f.entregador.chave, ultimaSemana: f.semanaInicio });
-    return { itens: [...porChave.values()].sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR")) };
+    return { itens: await entregadoresConhecidos({ ctx, nucleo }) };
   },
   // Agente 2 — Frente E: Central de Operações (contagens reais; IA = consumo registrado no orçamento).
   "/mova/visao-geral": async ({ ctx, mova, orcamento, controle, params }) => {
@@ -273,40 +344,67 @@ export const ACOES_MOVA = Object.freeze({
       await mova.armazenamento.auditoria.registrar({ acao: "AUTOMACAO_DEFINIDA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: b.nome, dados: { unidadeId: ctx.unidadeId, ativa: b.ativa, horario: r.horario } });
       return r;
     } },
-  // 23/11: cadastro simples. O gestor informa o entregador (chave do fechamento OFICIAL desta unidade) e o número WhatsApp.
-  // Sem aceite do entregador (mensagem administrativa). Conferências: a chave existe no Financeiro da unidade da sessão; o número é
-  // brasileiro válido, não é de alguém da equipe e não está com outro entregador ativo da unidade. Vale a partir do próximo reinício
-  // do MOVA (a lista é carregada na montagem); o envio ainda confere o número no próprio WhatsApp (Gateway, sem confirmação não envia).
-  "/mova/entregador": { campos: ["entregador", "telefone", "nome"], escreveNoFinanceiro: false,
+  // 23/11: CADASTRO DOS ENTREGADORES — fonte ÚNICA de contatos (mova.entregador_autorizado), usada pelo Financeiro (Entregadores
+  // Próprios → Cadastro) e pelo MOVA. O gestor escolhe o entregador OFICIAL (chave dos fechamentos desta unidade) e informa o
+  // WhatsApp; sem aceite (mensagem administrativa). Conferências: unidade atendida pelo MOVA; chave no Financeiro da unidade da
+  // sessão; número brasileiro válido, não é da equipe e não está com outro entregador ativo. Nada é apagado: trocar/editar/
+  // desativar encerra a linha vigente (quem, quando, por quê). Passa a valer NA HORA (configuração viva); antes do 1º envio o
+  // Gateway ainda confere o número no próprio WhatsApp. O número completo só entra: toda saída é mascarada (…1234).
+  "/mova/entregador": { campos: ["entregador", "telefone", "nome", "observacoes"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, nucleo, b }) => {
-      exigirConfigurar(ctx);
-      const chave = typeof b.entregador === "string" ? b.entregador.trim() : "";
+      exigirCadastroDeEntregador(ctx, mova);
+      const chave = chaveDoEntregador(b);
       const tel = normalizarTelefoneBr(b.telefone);
-      if (!chave || chave.length > 200 || !tel) throw recusa(400, "PARAMETRO_INVALIDO", "Informe o entregador do Financeiro e um número WhatsApp brasileiro válido (DDD + número).");
-      if (typeof mova.armazenamento.entregadores?.cadastrar !== "function") throw recusa(503, "CADASTRO_INDISPONIVEL", "Cadastro de entregadores indisponível.");
-      let oficial;
-      try { oficial = await nucleo.consultarEntregador(ctx, { entregador: chave }); } catch (e) {
-        if (e?.codigo === "FV2_NAO_ENCONTRADO") oficial = null; else throw e;
-      }
-      const f = (oficial?.fechamentos ?? []).find((x) => x.entregador?.chave === chave);
-      if (!f) throw recusa(404, "ENTREGADOR_NAO_ENCONTRADO", "Entregador não encontrado no Financeiro desta unidade (use o entregador dos fechamentos oficiais).");
-      const daEquipe = mova.cfg.gruposAutorizados.some((g) => !g.entregador && (g.participantes ?? []).some((p) => (p.telefones ?? []).includes(tel.telefoneE164)));
-      if (daEquipe) throw recusa(409, "NUMERO_DA_EQUIPE", "Esse número já é de alguém da equipe financeira; não pode ser cadastrado como entregador.");
-      const nome = (typeof b.nome === "string" && b.nome.trim() ? b.nome.trim() : f.entregador.nome ?? "").slice(0, 60) || null;
-      const r = await mova.armazenamento.entregadores.cadastrar({ ...escopo(ctx), chave, telefoneE164: tel.telefoneE164, privado: tel.privado, nome, cadastradoPor: ctx.usuarioId });
-      if (r.conflito) throw recusa(409, "ENTREGADOR_OU_NUMERO_JA_CADASTRADO", "Esse entregador ou esse número já está cadastrado (ativo) nesta unidade. Revogue antes de trocar.");
+      if (!tel) throw recusa(400, "PARAMETRO_INVALIDO", "Informe um número WhatsApp brasileiro válido (DDD + número).");
+      const f = await entregadorOficial({ ctx, nucleo, chave });
+      exigirNumeroForaDaEquipe(mova, tel);
+      const nome = textoCurto(b.nome, 60) ?? (f.entregador.nome ?? "").slice(0, 60) ?? null;
+      const r = await mova.armazenamento.entregadores.cadastrar({ ...escopo(ctx), chave, telefoneE164: tel.telefoneE164, privado: tel.privado, nome: nome || null, observacoes: textoCurto(b.observacoes, 500), cadastradoPor: ctx.usuarioId });
+      if (r.conflito) throw recusa(409, "ENTREGADOR_OU_NUMERO_JA_CADASTRADO", "Esse entregador ou esse número já está cadastrado (ativo) nesta unidade. Para trocar, edite o cadastro.");
       await mova.armazenamento.auditoria.registrar({ acao: "ENTREGADOR_CADASTRADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: chave, dados: { unidadeId: ctx.unidadeId, telefone: `…${tel.telefoneE164.slice(-4)}` } });
-      return { entregador: chave, nome, telefone: `…${tel.telefoneE164.slice(-4)}`, vigencia: "APOS_REINICIO_DO_MOVA" };
+      return { entregador: chave, nome, telefone: `…${tel.telefoneE164.slice(-4)}`, vigencia: await vigenciaApos(mova) };
+    } },
+  "/mova/entregador-alterar": { campos: ["entregador", "telefone", "nome", "observacoes"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirCadastroDeEntregador(ctx, mova);
+      const chave = chaveDoEntregador(b);
+      const mudancas = {};
+      if (b.telefone !== undefined && b.telefone !== "") {
+        const tel = normalizarTelefoneBr(b.telefone);
+        if (!tel) throw recusa(400, "PARAMETRO_INVALIDO", "Informe um número WhatsApp brasileiro válido (DDD + número).");
+        exigirNumeroForaDaEquipe(mova, tel);
+        Object.assign(mudancas, { telefoneE164: tel.telefoneE164, privado: tel.privado });
+      }
+      if (b.nome !== undefined) mudancas.nome = textoCurto(b.nome, 60);
+      if (b.observacoes !== undefined) mudancas.observacoes = textoCurto(b.observacoes, 500);
+      if (!Object.keys(mudancas).length) throw recusa(400, "PARAMETRO_INVALIDO", "Nada para alterar.");
+      const r = await mova.armazenamento.entregadores.alterar({ ...escopo(ctx), chave, por: ctx.usuarioId, mudancas });
+      if (r.naoEncontrado) throw recusa(404, "ENTREGADOR_NAO_CADASTRADO", "Entregador sem cadastro ativo nesta unidade.");
+      if (r.conflito) throw recusa(409, "NUMERO_JA_CADASTRADO", "Esse número já está com outro entregador ativo nesta unidade.");
+      if (r.semMudanca) return { entregador: chave, alterado: false };
+      await mova.armazenamento.auditoria.registrar({ acao: r.motivo === "TROCA_DE_NUMERO" ? "ENTREGADOR_NUMERO_TROCADO" : "ENTREGADOR_EDITADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: chave,
+        dados: { unidadeId: ctx.unidadeId, anterior: r.anterior, atual: r.atual, campos: Object.keys(mudancas).filter((k) => k !== "privado") } });
+      return { entregador: chave, alterado: true, motivo: r.motivo, telefone: r.atual, vigencia: await vigenciaApos(mova) };
     } },
   "/mova/entregador-revogar": { campos: ["entregador"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, b }) => {
-      exigirConfigurar(ctx);
-      const chave = typeof b.entregador === "string" ? b.entregador.trim() : "";
-      if (!chave) throw recusa(400, "PARAMETRO_INVALIDO", "Informe o entregador.");
-      const n = await mova.armazenamento.entregadores.revogar({ ...escopo(ctx), chave });
+      exigirCadastroDeEntregador(ctx, mova);
+      const chave = chaveDoEntregador(b);
+      const n = await mova.armazenamento.entregadores.revogar({ ...escopo(ctx), chave, por: ctx.usuarioId, motivo: "DESATIVADO" });
       if (!n) throw recusa(404, "ENTREGADOR_NAO_CADASTRADO", "Entregador não cadastrado (ativo) nesta unidade.");
       await mova.armazenamento.auditoria.registrar({ acao: "ENTREGADOR_REVOGADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: chave, dados: { unidadeId: ctx.unidadeId } });
-      return { entregador: chave, revogado: true, vigencia: "APOS_REINICIO_DO_MOVA" };
+      return { entregador: chave, revogado: true, vigencia: await vigenciaApos(mova) };
+    } },
+  "/mova/entregador-reativar": { campos: ["entregador"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, nucleo, b }) => {
+      exigirCadastroDeEntregador(ctx, mova);
+      const chave = chaveDoEntregador(b);
+      await entregadorOficial({ ctx, nucleo, chave }); // continua sendo entregador desta unidade?
+      const r = await mova.armazenamento.entregadores.reativar({ ...escopo(ctx), chave, por: ctx.usuarioId });
+      if (r.naoEncontrado) throw recusa(404, "ENTREGADOR_NAO_CADASTRADO", "Este entregador nunca foi cadastrado nesta unidade.");
+      if (r.conflito) throw recusa(409, "ENTREGADOR_OU_NUMERO_JA_CADASTRADO", "O entregador já está ativo, ou o número dele agora é de outro entregador ativo.");
+      await mova.armazenamento.auditoria.registrar({ acao: "ENTREGADOR_REATIVADO", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: chave, dados: { unidadeId: ctx.unidadeId, telefone: r.telefone } });
+      return { entregador: chave, reativado: true, telefone: r.telefone, vigencia: await vigenciaApos(mova) };
     } },
   "/mova/automacao-pausa": { campos: ["nome", "pausar", "motivo"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, b }) => {

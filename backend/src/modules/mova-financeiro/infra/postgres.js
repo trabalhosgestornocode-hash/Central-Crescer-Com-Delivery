@@ -24,6 +24,10 @@ function consultar(pool) {
   };
 }
 
+/** Linha do cadastro de entregador para a tela: telefone SEMPRE mascarado (o número completo só entra, nunca sai). */
+const linhaCadastro = (r) => ({ id: r.id, chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, observacoes: r.observacoes ?? null, ativo: r.ativo,
+  criadoEm: r.criado_em.toISOString(), cadastradoPor: r.cadastrado_por ?? null, verificadoEm: r.verificado_em?.toISOString() ?? null,
+  revogadoEm: r.revogado_em?.toISOString() ?? null, revogadoPor: r.revogado_por ?? null, motivoRevogacao: r.motivo_revogacao ?? null });
 async function emTransacao(pool, fn) {
   let cliente;
   try { cliente = await pool.connect(); } catch (e) { if (ehFalhaDeConexao(e)) throw new ErroTransitorio("BANCO_INDISPONIVEL"); throw e; }
@@ -309,21 +313,53 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
       },
     }),
-    // 23/11: cadastro simples pelo gestor (a chave já foi conferida no Financeiro pela rota). Revogar = ativo false, nunca apagar.
+    // 23/11: cadastro pelo gestor (a chave já foi conferida no Financeiro pela rota). FONTE ÚNICA dos contatos (Financeiro e MOVA).
+    // Nada é apagado: alterar/desativar ENCERRA a linha vigente (quem, quando, por quê) e, se for o caso, abre outra (histórico).
     entregadores: Object.freeze({
       async cadastrar(e) {
         try {
-          const r = await q(`insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por) values ($1,$2,$3,$4,$5,'{}',$6,$7) returning id`,
-            [e.organizacaoId, e.unidadeId, e.chave, e.telefoneE164, e.privado, e.nome ?? null, e.cadastradoPor ?? null]);
+          const r = await q(`insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por, observacoes) values ($1,$2,$3,$4,$5,'{}',$6,$7,$8) returning id`,
+            [e.organizacaoId, e.unidadeId, e.chave, e.telefoneE164, e.privado, e.nome ?? null, e.cadastradoPor ?? null, e.observacoes ?? null]);
           return { id: r.rows[0].id };
         } catch (erro) { if (erro?.code === "23505") return { conflito: true }; throw erro; }
       },
-      async revogar({ organizacaoId, unidadeId, chave }) {
-        return (await q("update mova.entregador_autorizado set ativo = false, revogado_em = now() where organizacao_id = $1 and unidade_id = $2 and chave = $3 and ativo", [organizacaoId, unidadeId, chave])).rowCount;
+      async revogar({ organizacaoId, unidadeId, chave, por = null, motivo = "DESATIVADO" }) {
+        return (await q("update mova.entregador_autorizado set ativo = false, revogado_em = now(), revogado_por = $4, motivo_revogacao = $5 where organizacao_id = $1 and unidade_id = $2 and chave = $3 and ativo",
+          [organizacaoId, unidadeId, chave, por, motivo])).rowCount;
+      },
+      /** Troca número/nome/observação: encerra a linha vigente e abre a nova NA MESMA transação (conflito ⇒ nada muda). */
+      async alterar({ organizacaoId, unidadeId, chave, por, mudancas }) {
+        try {
+          return await emTransacao(pool, async (tx) => {
+            await tx("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.entregador:${unidadeId}:${chave}`]);
+            const [v] = (await tx("select * from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 and chave = $3 and ativo", [organizacaoId, unidadeId, chave])).rows;
+            if (!v) return { naoEncontrado: true };
+            const nova = { telefoneE164: mudancas.telefoneE164 ?? v.telefone_e164, privado: mudancas.privado ?? v.privado, nome: mudancas.nome !== undefined ? mudancas.nome : v.nome, observacoes: mudancas.observacoes !== undefined ? mudancas.observacoes : v.observacoes };
+            if (nova.telefoneE164 === v.telefone_e164 && nova.nome === v.nome && nova.observacoes === v.observacoes) return { semMudanca: true };
+            const motivo = nova.telefoneE164 !== v.telefone_e164 ? "TROCA_DE_NUMERO" : "EDICAO";
+            await tx("update mova.entregador_autorizado set ativo = false, revogado_em = now(), revogado_por = $2, motivo_revogacao = $3 where id = $1", [v.id, por, motivo]);
+            const r = await tx(`insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por, observacoes) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
+              [organizacaoId, unidadeId, chave, nova.telefoneE164, nova.privado, motivo === "TROCA_DE_NUMERO" ? [] : v.ids, nova.nome, por, nova.observacoes]);
+            return { id: r.rows[0].id, motivo, anterior: `…${v.telefone_e164.slice(-4)}`, atual: `…${nova.telefoneE164.slice(-4)}` };
+          });
+        } catch (erro) { if (erro?.code === "23505") return { conflito: true }; throw erro; }
+      },
+      /** Reativa o ÚLTIMO cadastro encerrado do entregador (mesmo número, nome e observação), numa linha nova. */
+      async reativar({ organizacaoId, unidadeId, chave, por }) {
+        try {
+          return await emTransacao(pool, async (tx) => {
+            await tx("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.entregador:${unidadeId}:${chave}`]);
+            if ((await tx("select 1 from mova.entregador_autorizado where unidade_id = $1 and chave = $2 and ativo", [unidadeId, chave])).rowCount) return { conflito: true };
+            const [u] = (await tx("select * from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 and chave = $3 order by criado_em desc limit 1", [organizacaoId, unidadeId, chave])).rows;
+            if (!u) return { naoEncontrado: true };
+            const r = await tx(`insert into mova.entregador_autorizado (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por, observacoes) values ($1,$2,$3,$4,$5,'{}',$6,$7,$8) returning id`,
+              [organizacaoId, unidadeId, chave, u.telefone_e164, u.privado, u.nome, por, u.observacoes]);
+            return { id: r.rows[0].id, telefone: `…${u.telefone_e164.slice(-4)}` };
+          });
+        } catch (erro) { if (erro?.code === "23505") return { conflito: true }; throw erro; }
       },
       async listar(escopo) {
-        return (await q("select chave, telefone_e164, nome, ativo, criado_em, revogado_em from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 300", [escopo.organizacaoId, escopo.unidadeId]))
-          .rows.map((r) => ({ chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, ativo: r.ativo, criadoEm: r.criado_em.toISOString(), revogadoEm: r.revogado_em?.toISOString() ?? null }));
+        return (await q("select * from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 500", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaCadastro);
       },
     }),
     enviosEntregador: Object.freeze({
@@ -625,8 +661,15 @@ export async function carregarConfiguracao(pool, { identidadeServico, modo = "SI
   const unidades = (await q(`select gu.* from mova.grupo_unidade gu join mova.grupo_autorizado g using (grupo_jid) where ${filtro} order by gu.nome`, [modo])).rows;
   const porId = new Map();
   for (const u of unidades) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes });
+  // 23/11 (0014): unidade atendida SEM grupo — só na OPERACAO; a do grupo prevalece. Não cria conversa nenhuma.
+  if (modo === "OPERACAO") {
+    for (const u of (await q("select * from mova.unidade_sem_grupo where ativo order by nome")).rows) {
+      if (!porId.has(u.unidade_id)) porId.set(u.unidade_id, { organizacaoId: u.organizacao_id, unidadeId: u.unidade_id, nome: u.nome, empresa: u.empresa ?? null, apelidos: u.apelidos, documentos: u.documentos, fontes: u.fontes, semGrupo: true });
+    }
+  }
   // Agente 2 — Frente D: entregadores autorizados (só OPERACAO); as conversas deles nascem em validarConfiguracao.
   const entregadores = modo === "OPERACAO" ? (await q("select * from mova.entregador_autorizado where ativo order by criado_em")).rows
+    .filter((r) => porId.has(r.unidade_id)) // 23/11: unidade fora do MOVA (sem grupo) não derruba a montagem; a rota já recusa
     .map((r) => ({ organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, chave: r.chave, telefoneE164: r.telefone_e164, privado: r.privado, ids: r.ids, nome: r.nome })) : [];
   return {
     modo, identidadeServico, entregadores,
