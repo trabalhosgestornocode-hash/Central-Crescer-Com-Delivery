@@ -85,7 +85,7 @@ const descer = (nivel) => ORDEM[Math.max(1, ORDEM.indexOf(nivel) - 1)];
  * @param {{situacao:string, candidatas?:number}|null} [p.conciliacao]  resultado de conferirComExtrato
  * @returns {{nivel:string, motivos:string[], politicaId:string|null}}
  */
-export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId, valorCentavos, hoje, conciliacao = null, comprovante = null }) {
+export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId, valorCentavos, hoje, conciliacao = null, comprovante = null, acumuladoCentavos = 0 }) {
   if (SEMPRE_PROIBIDAS.has(operacao) || !Object.values(OPERACAO).includes(operacao)) return { nivel: NIVEL.PROIBIDO, motivos: ["OPERACAO_PROIBIDA"], politicaId: null };
   const vigente = (x) => !x.revogadaEm && x.vigenteDe <= hoje && (!x.vigenteAte || hoje <= x.vigenteAte);
   const daOperacao = politicas.filter((x) => x.operacao === operacao && x.organizacaoId === organizacaoId && vigente(x));
@@ -96,6 +96,11 @@ export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId
   const motivos = [];
   if (nivel !== NIVEL.SOMENTE_PROPOR && !(Number.isSafeInteger(valorCentavos) && valorCentavos > 0)) { nivel = NIVEL.SOMENTE_PROPOR; motivos.push("VALOR_INVALIDO"); }
   if (nivel !== NIVEL.SOMENTE_PROPOR && valorCentavos > pol.limiteCentavos) { nivel = descer(nivel); motivos.push("ACIMA_DO_LIMITE"); }
+  // Execução 17: o limite vale POR PAGAMENTO e não pode ser contornado dividindo um pagamento em vários comprovantes. O que já foi
+  // baixado por comprovante na MESMA conta (ou ao MESMO favorecido em poucos dias) soma; passou do limite ⇒ confirmação humana.
+  if (operacao === OPERACAO.BAIXA_DOCUMENTAL && nivel === NIVEL.APLICAR_AUTOMATICO && acumuladoCentavos > 0 && valorCentavos + acumuladoCentavos > pol.limiteCentavos) {
+    nivel = NIVEL.APLICAR_COM_CONFIRMACAO; motivos.push("POSSIVEL_FRACIONAMENTO");
+  }
   if (LIQUIDAM.has(operacao) && nivel !== NIVEL.SOMENTE_PROPOR && conciliacao?.situacao !== "CONFERIDA") {
     nivel = NIVEL.SOMENTE_PROPOR; motivos.push(conciliacao?.situacao === "AMBIGUA" ? "EXTRATO_AMBIGUO" : "SEM_EXTRATO_CONFERIDO");
   }

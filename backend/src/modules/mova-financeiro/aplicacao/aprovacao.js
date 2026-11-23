@@ -105,7 +105,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
       }
       // Execução 17: com comprovante (arquivo da proposta), pagamento POR COMPROVANTE — nenhuma saída bancária nova.
-      const porComprovante = ["BAIXA_DE_OBRIGACAO", "DESPESA_PAGA"].includes(p.tipo) && Boolean(p.evidencia?.referencia) && Boolean(execucao);
+      const porComprovante = ["BAIXA_DE_OBRIGACAO", "DESPESA_PAGA"].includes(p.tipo) && Boolean(p.evidencia?.referencia) && execucao?.pagamentoPorComprovante === true;
       if (porComprovante) await exigir(ctx, [ACAO.BAIXAR_POR_COMPROVANTE, ACAO.ENVIAR_DOCUMENTO]);
       if (porComprovante && p.tipo === "BAIXA_DE_OBRIGACAO") {
         const r = await execucao.pagarPorComprovante({ proposta: p, escopo: esc, nivel: NIVEL.APLICAR_COM_CONFIRMACAO, politicaId: p.autonomiaDocumental?.politicaId ?? null, executor: executorDaPessoa({ nucleo, ctx }) });

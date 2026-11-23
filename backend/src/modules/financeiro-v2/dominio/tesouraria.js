@@ -667,6 +667,12 @@ export function fluxoDeCaixa(d, hoje, filtro) {
       porNatureza: porNatureza(previstos), itens: previstos,
     },
     semPrevisao: { quantidade: semPrevisao.length, saldoCentavos: somarLista(semPrevisao, (i) => i.saldoCentavos), itens: semPrevisao },
+    // Execução 17: pago POR COMPROVANTE e ainda sem a saída do extrato. NÃO entra no realizado nem no saldo (nenhuma saída
+    // fictícia); é informado à parte para o caixa não parecer maior do que é. Some quando o extrato concilia a mesma baixa.
+    pagosPorComprovanteSemExtrato: (() => {
+      const l = (p.liquidacoes ?? []).filter((q) => q.situacao !== SITUACAO_LIQUIDACAO.ESTORNADA && !q.movimentacaoId && q.alvoTipo === TIPO.OBRIGACAO);
+      return { quantidade: l.length, totalCentavos: somarLista(l, (q) => validoDaLiquidacao(q)) };
+    })(),
     projecao: {
       aplicavel: fim >= hoje, saldoBaseCentavos: saldoAtualCentavos, ate: fim,
       saldoProjetadoCentavos: fim >= hoje && saldoAtualCentavos !== null ? somar(saldoAtualCentavos, variacaoPrevista) : null,

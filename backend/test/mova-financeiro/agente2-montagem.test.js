@@ -80,3 +80,18 @@ test("A2-M5 entregadores e rotina: desligados por padrão; só na OPERACAO; roti
   assert.equal(n, "Y");
   r.parar(); falha.parar();
 });
+
+test("Execução 17 — chaves novas: pagamento por comprovante DESLIGADO por padrão; IA do piloto lê SÓ arquivos (padrão) e texto solto não gasta orçamento", async () => {
+  const cfg = lerConfiguracaoMova({ ...BASE });
+  assert.equal(cfg.pagamentoPorComprovante, false);
+  assert.equal(cfg.iaSomenteDocumentos, true);
+  assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE: "1" }).pagamentoPorComprovante, true);
+  assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_IA_SOMENTE_DOCUMENTOS: "0" }).iaSomenteDocumentos, false);
+  const { extratorSoDeDocumentos } = await import("../../src/modules/fv2-integracao/mova.js");
+  let chamadas = 0;
+  const e = extratorSoDeDocumentos({ async extrair() { chamadas++; return { ok: true }; } });
+  await assert.rejects(e.extrair({ texto: "quanto tenho a pagar?", midia: null }), (x) => x.codigo === "IA_DESLIGADA");
+  assert.equal(chamadas, 0, "texto não chega à IA");
+  await e.extrair({ texto: null, midia: { mime: "application/pdf", referencia: "r" } });
+  assert.equal(chamadas, 1, "arquivo chega à IA");
+});

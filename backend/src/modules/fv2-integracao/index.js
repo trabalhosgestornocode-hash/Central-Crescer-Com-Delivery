@@ -12,7 +12,8 @@
 //   FV2_HOMOLOGACAO_HABILITADA=1  (opcional) só depois da matriz 24a aprovada; homologar exige ainda 2º fator recente
 import { AsyncLocalStorage } from "node:async_hooks";
 import pg from "pg";
-import { criarAdaptadorDaPlataforma, criarAdministracaoCorporativaPostgres, criarNucleoFinanceiro, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
+import { criarAdaptadorDaPlataforma, criarAdministracaoCorporativaPostgres, criarConcessoesDoRepositorio, criarNucleoFinanceiro, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
+import { criarOperacionalMova } from "./operacionalMova.js";
 import { criarClienteDoGateway } from "./clienteGateway.js";
 import { criarAutoridadeCoLocalizada } from "./autoridadeCoLocalizada.js";
 import { criarMfaPeloProvedor } from "./mfaPeloProvedor.js";
@@ -89,7 +90,9 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     const vinculos = criarVinculosDaPlataforma(supabase);
     const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
     const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
-    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, comAutomacaoMova: (fn) => automacao.run({ referencia: "automacao:mova" }, fn), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
+    return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, comAutomacaoMova: (fn) => automacao.run({ referencia: "automacao:mova" }, fn),
+      // Execução 17: identidade OPERACIONAL do MOVA (só usada com MOVA_OPERACAO_ESCRITA=1; sessão própria, concessão no banco).
+      operacionalMova: criarOperacionalMova({ repositorio, rodar: (fn) => automacao.run({ referencia: "automacao:mova-operacional" }, fn), criarNucleoFinanceiro, criarConcessoesDoRepositorio }), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
   };
   const dependencias = () => (compartilhadas ??= montar());
   dependenciasDaPlataforma = dependencias;

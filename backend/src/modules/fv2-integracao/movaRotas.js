@@ -238,8 +238,11 @@ export const ACOES_MOVA = Object.freeze({
   // Execução 17: a pessoa (vincular_pagamento) liga a saída do extrato ao pagamento JÁ registrado por comprovante. O núcleo
   // confere valor, data (tolerância), saída livre e idempotência; nada de segunda baixa, saída ou despesa.
   "/mova/conciliar-comprovante": { campos: ["liquidacaoId", "movimentacaoId", "versaoMovimentacao"], escreveNoFinanceiro: true,
-    fazer: ({ ctx, nucleo, b }) => nucleo.conciliarPagamentoPorComprovante(ctx, { liquidacaoId: b.liquidacaoId, movimentacaoId: b.movimentacaoId, versaoMovimentacao: b.versaoMovimentacao,
-      justificativa: "Conciliação conferida na Central de Operações MOVA (saída do extrato × pagamento por comprovante).", confirmar: true }) },
+    fazer: async ({ ctx, mova, nucleo, b }) => {
+      if (!mova.pagamentoPorComprovante) throw recusa(403, "PAGAMENTO_POR_COMPROVANTE_DESLIGADO", "Pagamento por comprovante ainda não foi ativado.");
+      return nucleo.conciliarPagamentoPorComprovante(ctx, { liquidacaoId: b.liquidacaoId, movimentacaoId: b.movimentacaoId, versaoMovimentacao: b.versaoMovimentacao,
+      justificativa: "Conciliação conferida na Central de Operações MOVA (saída do extrato × pagamento por comprovante).", confirmar: true });
+    } },
   "/mova/confirmar-baixa-extrato": { campos: ["propostaId"], escreveNoFinanceiro: true,
     fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.confirmarBaixaPorExtrato(ctx, { propostaId: b.propostaId }, { nucleo }) },
   "/mova/reverter-operacao": { campos: ["operacaoId", "justificativa"], escreveNoFinanceiro: true,

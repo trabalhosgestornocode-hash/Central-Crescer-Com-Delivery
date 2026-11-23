@@ -130,7 +130,11 @@ export function lerConfiguracaoMova(env) {
     recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: operacao ? env.MOVA_OPERACAO_MARCADOR : homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
-      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), recebimentoDocumental: sim(env.MOVA_OPERACAO_DOCUMENTOS_SEM_IA), comandosDeterministicos: true, autonomia, escrita, entregadores, rotinaEntregadores,
+      somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), recebimentoDocumental: sim(env.MOVA_OPERACAO_DOCUMENTOS_SEM_IA), comandosDeterministicos: true, autonomia, escrita,
+      pagamentoPorComprovante: sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE),
+      // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
+      // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
+      iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
       identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
     // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
     envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null, respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
@@ -183,6 +187,8 @@ export async function exigirBancoDaOperacao(pool, marcador) {
 
 /** Extrator quando a IA está DESLIGADA: nada vai a provedor externo; o evento falha com código claro (não é transitório). */
 export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object.assign(new Error("IA_DESLIGADA"), { codigo: "IA_DESLIGADA" }); } });
+/** Piloto documental: a IA só recebe mensagens COM arquivo; texto solto segue como se a IA estivesse desligada (sem custo). */
+export const extratorSoDeDocumentos = (extrator) => Object.freeze({ async extrair(e) { return e?.midia ? extrator.extrair(e) : EXTRATOR_DESLIGADO.extrair(e); } });
 
 /**
  * Monta o MOVA sobre o pool do schema `mova` e o repositório do Financeiro. Testável: tudo injetável.
@@ -213,9 +219,10 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const orcamento = criarOrcamentoIa({ pool });
   let mova = null;
   const obterEvidencia = (ref) => mova.evidencias.obter(ref);
-  const extrator = cfg.ia && criarClienteIa
+  const extratorIa = cfg.ia && criarClienteIa
     ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio, ...(cfg.modeloIa ? { modelo: cfg.modeloIa } : {}) })
     : EXTRATOR_DESLIGADO;
+  const extrator = extratorIa !== EXTRATOR_DESLIGADO && cfg.iaSomenteDocumentos === true ? extratorSoDeDocumentos(extratorIa) : extratorIa;
   // 15A: respostas naturais — desligadas por padrão; exigem IA ligada e passam pelo MESMO orçamento/teto do extrator.
   const redator = cfg.ia && cfg.respostasNaturais && criarClienteIa
     ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
@@ -228,7 +235,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),

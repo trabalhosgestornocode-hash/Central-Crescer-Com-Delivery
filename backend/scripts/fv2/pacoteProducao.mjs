@@ -425,7 +425,7 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
  * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
  * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
  */
-export const BASE_INSTALADA = "0027"; // produção conferida em 21/11 (0027 aplicada em 18/11)
+export const BASE_INSTALADA = "0028"; // produção conferida em 22/11 (28 migrações com o mesmo hash do Git; 0028 aplicada)
 export function atualizar(base = BASE_INSTALADA) {
   const ms = listarMigracoes();
   const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);

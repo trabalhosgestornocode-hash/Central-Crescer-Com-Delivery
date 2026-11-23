@@ -3,7 +3,8 @@
 // enviarEvidencia), banco do MOVA no PostgreSQL local isolado, IA SIMULADA. Tudo sintético; nada sai para o WhatsApp.
 import assert from "node:assert/strict";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { FINANCEIRO, ALFA, FIN, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
+import { FINANCEIRO, ALFA, BETA, FIN, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
+import { decidirAutonomia } from "../../src/modules/mova-financeiro/dominio/autonomia.js";
 import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.js";
 import { avaliarComprovante } from "../../src/modules/mova-financeiro/dominio/comprovante.js";
 import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
@@ -21,13 +22,13 @@ const POLITICA = (x = {}) => ({ operacao: "BAIXA_DOCUMENTAL", organizacaoId: ORG
 const ESCRITA = ["financeiro_v2.ver", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.vincular_pagamento"];
 const ESCRITAS = ["enviarEvidencia", "registrarPagamentoPorComprovante", "conciliarPagamentoPorComprovante", "vincularPagamentoDoExtrato", "pagarContaAPagar", "registrarMovimentacao"];
 
-async function documental({ responder = () => PIX(), concessao = ESCRITA, valorConta = 40000, politica = null, extratoAutomatico = false, falhar = null } = {}) {
+async function documental({ responder = () => PIX(), concessao = ESCRITA, valorConta = 40000, politica = null, extratoAutomatico = false, falhar = null, ligado = true } = {}) {
   const s = await cenario({
     responder,
     extras: ({ nucleo }) => {
       const nucleoOp = falhar ? { ...nucleo, [falhar.op]: async (...a) => { if (falhar.vezes-- > 0) throw new Error("Financeiro indisponível (sintético)"); return nucleo[falhar.op](...a); } } : nucleo;
       return {
-        autonomia: true,
+        autonomia: true, pagamentoPorComprovante: ligado,
         operacional: criarPortaOperacional({ nucleo: nucleoOp, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: "eeeeeeee-0000-4000-8000-0000000000a2",
           concessoes: criarConcessoesMemoria(concessao ? [{ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: ALFA, acoes: concessao }] : []) }),
       };
@@ -260,4 +261,64 @@ t("A2-D14 Central: linha do tempo do documento (pago por comprovante ≠ concili
   assert.deepEqual([sit(lt).PAGAMENTO, sit(lt).EXTRATO, sit(lt).CONCILIACAO], ["FEITO", "FEITO", "FEITO"]);
   assert.deepEqual([(await s.saidas()).length, (await s.liquidacoes()).length], [1, 1]);
   assert.equal((await consultar("/mova/pagamentos-a-conciliar")).itens.length, 0);
+});
+
+// ------------------------------------------------------------------ política aprovada: R$ 1.000,00 por pagamento, só a unidade
+const LIMITE_APROVADO = { limiteCentavos: 100000 };
+
+t("A2-D15 política aprovada (R$ 1.000,00 por pagamento): R$ 1.000,00 exato é automático; R$ 1.000,01 vai para aprovação humana", async () => {
+  const s = await documental({ politica: LIMITE_APROVADO, valorConta: 100000, responder: () => PIX({ valorCentavos: 100000 }) });
+  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D15a") }));
+  assert.equal((await s.ultima()).conciliacao, "PAGO_POR_COMPROVANTE");
+  const s2 = await documental({ politica: LIMITE_APROVADO, valorConta: 100001, responder: () => PIX({ valorCentavos: 100001 }) });
+  await s2.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D15b") }));
+  const [p] = await s2.propostas();
+  assert.deepEqual([p.autonomiaDocumental.nivel, p.autonomiaDocumental.motivos.includes("ACIMA_DO_LIMITE")], ["APLICAR_COM_CONFIRMACAO", true]);
+  assert.equal(s2.escritas().length, 0);
+});
+
+t("A2-D16 FRACIONAMENTO: dividir um pagamento em comprovantes menores não contorna o limite (mesma conta e mesmo favorecido em poucos dias)", async () => {
+  // Mesma conta de R$ 1.500,00 paga em R$ 800,00 + R$ 700,00: o 1º é automático; o 2º somaria R$ 1.500,00 ⇒ confirmação humana.
+  let i = 0;
+  const partes = [PIX({ valorCentavos: 80000, idTransacao: "E0000000020261010SINTFRAC0001" }), PIX({ valorCentavos: 70000, idTransacao: "E0000000020261010SINTFRAC0002" })];
+  const s = await documental({ politica: LIMITE_APROVADO, valorConta: 150000, responder: () => partes[Math.min(i++, 1)] });
+  await s.enviar(gw({ texto: "MOVA comprovante da alfa (parte 1)", doc: pdf("D16a") }));
+  assert.equal((await s.ultima()).conciliacao, "PAGO_POR_COMPROVANTE");
+  await s.enviar(gw({ texto: "MOVA comprovante da alfa (parte 2)", doc: pdf("D16b") }));
+  const segunda = (await s.propostas()).find((p) => p.valorCentavos === 70000);
+  assert.deepEqual([segunda.autonomiaDocumental.nivel, segunda.autonomiaDocumental.motivos.includes("POSSIVEL_FRACIONAMENTO")], ["APLICAR_COM_CONFIRMACAO", true]);
+  assert.equal(s.escritas().filter((x) => x.nome === "registrarPagamentoPorComprovante").length, 1, "só a 1ª parte foi baixada sozinha");
+  assert.equal((await s.titulo()).saldoCentavos, 70000);
+});
+
+t("A2-D17 política só da unidade: outra unidade (ou a empresa) não herda a baixa documental automática", async () => {
+  const s = await documental({ politica: { ...LIMITE_APROVADO, unidadeId: BETA } });
+  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D17") }));
+  assert.equal((await s.ultima()).decisao, "PROPOSTA");
+  const [p] = await s.propostas();
+  assert.deepEqual(p.autonomiaDocumental.motivos, ["SEM_POLITICA"]);
+  assert.equal(s.escritas().length, 0);
+});
+
+t("A2-D18 arquivo SUSPEITO, Pix agendado e comprovante duplicado nunca recebem baixa automática, mesmo dentro do limite", () => {
+  const pol = { id: "p1", ...POLITICA(LIMITE_APROVADO) };
+  const decidir = (comprovante, extra = {}) => decidirAutonomia({ politicas: [pol], operacao: "BAIXA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, valorCentavos: 40000, hoje: "2026-10-15", conciliacao: { situacao: "AGUARDANDO_EXTRATO" }, comprovante, ...extra });
+  assert.equal(decidir(avaliarComprovante(PIX(), { hoje: "2026-10-15" })).nivel, "APLICAR_AUTOMATICO");
+  for (const c of [avaliarComprovante(PIX(), { hoje: "2026-10-15", integridadeOk: false }), avaliarComprovante(PIX({ situacaoTransacao: "AGENDADA" }), { hoje: "2026-10-15" }), avaliarComprovante(PIX(), { hoje: "2026-10-15", duplicado: true })]) {
+    assert.equal(decidir(c).nivel, "SOMENTE_PROPOR", c.situacao);
+  }
+  assert.equal(decidir(avaliarComprovante(PIX(), { hoje: "2026-10-15" }), { conciliacao: { situacao: "AMBIGUA" } }).nivel, "SOMENTE_PROPOR", "ambíguo");
+  assert.equal(decidir(avaliarComprovante(PIX(), { hoje: "2026-10-15" }), { acumuladoCentavos: 70000 }).nivel, "APLICAR_COM_CONFIRMACAO", "fracionamento");
+});
+
+t("A2-D19 chave MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE DESLIGADA (estado depois do merge): nada é pago por comprovante — nem pela política, nem pela Central", async () => {
+  const s = await documental({ politica: { limiteCentavos: 100000 }, ligado: false });
+  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D19") }));
+  assert.equal((await s.ultima()).decisao, "PROPOSTA");
+  assert.equal(s.escritas().length, 0);
+  assert.equal(s.mova.pagamentoPorComprovante, false);
+  assert.deepEqual(await s.mova.execucao.conciliarPendentes(s.escopo), []);
+  const { ACOES_MOVA } = await import("../../src/modules/fv2-integracao/movaRotas.js");
+  await assert.rejects(ACOES_MOVA["/mova/conciliar-comprovante"].fazer({ ctx: ctx(ORG, ALFA, TODAS, HUMANO), mova: s.mova, nucleo: s.m.nucleo, b: { liquidacaoId: "x", movimentacaoId: "y", versaoMovimentacao: 1 } }), /ainda não foi ativado/);
+  assert.equal((await s.titulo()).saldoCentavos, 40000);
 });

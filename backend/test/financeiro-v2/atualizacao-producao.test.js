@@ -14,9 +14,10 @@ import { abrirPool, ambiente, motivoParaPular } from "./helpers/postgres.js";
 
 const PULAR = motivoParaPular();
 const raiz = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
-const BASE = "0027"; // última migração já aplicada em produção (conferida por nome e hash contra o Git; 0027 em 18/11)
+const BASE = "0028"; // última migração já aplicada em produção (conferida por nome e hash contra o Git em 22/11: 28 migrações)
+const N_BASE = Number(BASE);
 
-test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
+test("atualizar.sql: da base de produção (0028) para 0029 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
   const a = ambiente();
   const controle = await abrirPool(a.urlAdmin, { max: 1 });
   const banco = `fv2_teste_ensaio_${randomBytes(4).toString("hex")}`;
@@ -28,7 +29,7 @@ test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição
     // 1) Banco no estado de produção: só as migrações até a BASE.
     for (const m of listarMigracoes().filter((x) => x.nome.slice(0, 4) <= BASE)) copyFileSync(join(raiz, "database", "financeiro-v2", "migracoes", m.nome), join(temp, m.nome));
     const aplicadas = await aplicarMigracoes(pool, { pasta: temp, papel: "fv2_teste_migrador" });
-    assert.equal(aplicadas.length, 27);
+    assert.equal(aplicadas.length, N_BASE);
 
     // 2) Dados sintéticos "de produção" (sem gatilhos de histórico; as restrições CHECK continuam valendo).
     const ORG = randomUUID(); const UNI = randomUUID(); const AUTOR = randomUUID();
@@ -60,7 +61,7 @@ test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição
         (select count(*) from financeiro_v2.fv2_lancamento)::int lancamentos, (select count(*) from financeiro_v2.fv2_pagamento_venda)::int pagamentos,
         (select count(*) from financeiro_v2.fv2_migracao)::int migracoes`)).rows[0];
     const antes = await fotografia();
-    assert.deepEqual([antes.vendas, antes.bruto, antes.migracoes], [4, 40000, 27]);
+    assert.deepEqual([antes.vendas, antes.bruto, antes.migracoes], [4, 40000, N_BASE]);
     const checksAntes = (await pool.query("select conname from pg_constraint where conrelid = 'financeiro_v2.fv2_venda'::regclass and contype = 'c' and conname !~ '^fv2_venda_canal' order by 1")).rows.map((r) => r.conname);
     assert.ok(checksAntes.includes("fv2_venda_fonte_sistema_check"));
 
@@ -75,7 +76,7 @@ test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição
     // 4) Nenhum dado mudou; nenhuma restrição que não devia mudar sumiu.
     const depois = await fotografia();
     assert.deepEqual({ ...depois, migracoes: antes.migracoes }, antes, "vendas, valores, lançamentos e pagamentos idênticos");
-    assert.equal(depois.migracoes, 28);
+    assert.equal(depois.migracoes, listarMigracoes().length);
     const checksDepois = (await pool.query("select conname from pg_constraint where conrelid = 'financeiro_v2.fv2_venda'::regclass and contype = 'c' and conname !~ '^fv2_venda_canal' order by 1")).rows.map((r) => r.conname);
     assert.deepEqual(checksDepois, checksAntes, "a CHECK de origem da venda (fonte_sistema) continua");
 
@@ -106,9 +107,21 @@ test("atualizar.sql: de 0027 para 0028 sem mexer em dado, sem perder restrição
             or has_table_privilege('fv2_leitor_mova', c.oid, 'delete') or has_table_privilege('fv2_leitor_mova', c.oid, 'truncate')))::int escrita`)).rows[0];
     assert.deepEqual(leitor, { papel: 1, sessao_mova: true, app_abre: false, leitor_abre_alheia: false, escrita: 0 });
 
+    // 0029 (pagamento por comprovante): liquidação sem saída SÓ com origem COMPROVANTE + documento; gatilho próprio; nova ação.
+    const pc = (await pool.query(`select
+        (select is_nullable from information_schema.columns where table_schema = 'financeiro_v2' and table_name = 'fv2_liquidacao' and column_name = 'movimentacao_id') nulo,
+        (select pg_get_constraintdef(oid) from pg_constraint where conname = 'fv2_liquidacao_sem_movimentacao') regra,
+        (select count(*) from pg_trigger where tgname = 'fv2_liquidacao_por_comprovante' and not tgisinternal)::int gatilho,
+        (select pg_get_constraintdef(oid) from pg_constraint where conname = 'fv2_concessao_acoes_lista') acoes`)).rows[0];
+    assert.equal(pc.nulo, "YES");
+    assert.match(pc.regra, /COMPROVANTE/);
+    assert.match(pc.regra, /documentoId/);
+    assert.equal(pc.gatilho, 1);
+    assert.match(pc.acoes, /baixar_por_comprovante/);
+
     // 6) Repetir o pacote é recusado antes de mudar qualquer coisa.
     const antesDeRepetir = await fotografia();
-    await assert.rejects(aplicar(), /esperado 27/);
+    await assert.rejects(aplicar(), new RegExp(`esperado ${N_BASE}`));
     assert.deepEqual(await fotografia(), antesDeRepetir, "repetir o pacote não altera nada");
   } finally {
     await pool.end().catch(() => {});

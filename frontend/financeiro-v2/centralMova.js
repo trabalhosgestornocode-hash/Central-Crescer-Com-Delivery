@@ -153,12 +153,14 @@ export function criarCentral({ ui, ler, enviar }) {
           selo(NIVEL[x.nivel] ?? [x.nivel, "neutro"]), reais(x.limiteCentavos), `${dataBr(x.vigenteDe)}${x.vigenteAte ? ` a ${dataBr(x.vigenteAte)}` : ""}`, x.responsavel,
           x.revogadaEm ? selo(["Revogada", "neutro"]) : pode.configurar ? botao("Revogar", { "data-acao": "central-revogar", "data-politica": x.id }, true) : "—"] })), "Políticas") : vazio("Nenhuma política: o MOVA só propõe."),
         pode.configurar ? el("form", { classe: "cf-form", "data-form": "politica", "data-unidade": pode.unidadeId },
+          el("label", {}, "Operação ", el("select", { name: "operacao" }, el("option", { value: "BAIXA_POR_EXTRATO", texto: "Baixa pelo extrato (saída já importada)" }),
+            el("option", { value: "BAIXA_DOCUMENTAL", texto: "Pagamento por comprovante (conciliação pendente)" }))),
           el("label", {}, "Nível ", el("select", { name: "nivel" }, Object.entries(NIVEL).map(([k, [r]]) => el("option", { value: k, texto: r })))),
           el("label", {}, "Limite (R$) ", el("input", { name: "limite", inputmode: "decimal", required: "" })),
           el("label", {}, "Responsável ", el("input", { name: "responsavel", maxlength: "120", required: "" })),
           el("label", {}, "Motivo ", el("input", { name: "motivo", minlength: "10", maxlength: "500", required: "" })),
           el("label", {}, "Vigente a partir de ", el("input", { name: "vigenteDe", type: "date", required: "" })),
-          botao("Criar política desta unidade (baixa pelo extrato)", { "data-acao": "central-politica" })) : null),
+          botao("Criar política desta unidade", { "data-acao": "central-politica" })) : null),
       cartao("Interruptores e orçamento de IA", el("p", { texto: "Desligar recebimento, processamento, IA ou envio — e a suspensão geral — fica na aba Processamento, com efeito imediato." })),
     ];
   }
@@ -309,7 +311,8 @@ export function criarCentral({ ui, ler, enviar }) {
       const limite = Math.round(Number(String(v.limite).replace(/\./g, "").replace(",", ".")) * 100);
       if (!Number.isSafeInteger(limite) || limite < 0) return { ok: false, texto: "Limite inválido." };
       if (!f.dataset.unidade) return { ok: false, texto: "Unidade da sessão indisponível." };
-      r = await enviar("/api/fv2/acoes/mova/politica", { operacao: "BAIXA_POR_EXTRATO", unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
+      if (!["BAIXA_POR_EXTRATO", "BAIXA_DOCUMENTAL"].includes(v.operacao)) return { ok: false, texto: "Operação inválida." };
+      r = await enviar("/api/fv2/acoes/mova/politica", { operacao: v.operacao, unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
     } else if (acao === "central-confirmar-baixa") {
       r = await enviar("/api/fv2/acoes/mova/confirmar-baixa-extrato", { propostaId: b.dataset.proposta });
     } else return null;

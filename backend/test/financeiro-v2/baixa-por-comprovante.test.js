@@ -153,3 +153,84 @@ test("banco — quem só baixa por comprovante não cria saída, despesa nem bai
   assert.equal(saidas.find((x) => x.id === mov.id).alocadoCentavos, 40000);
   void forn;
 });
+
+// ------------------------------------------------------------------------------------------- revisão final do PR #179
+/** Retrato dos números que o pagamento NÃO pode distorcer: DRE (competência), saídas de caixa, saldos e fluxo. */
+async function numeros(n, c) {
+  const ind = async (indicador) => (await n.consultarComposicao(c, { indicador, competencia: OUT })).totalCentavos;
+  const fluxo = await n.consultarFluxoDeCaixa(c, { inicio: "2026-10-01", fim: "2026-10-31" });
+  const caixa = await n.consultarCaixaEBancos(c, { inicio: "2026-10-01", fim: "2026-10-31" });
+  return { despesas: await ind("DESPESAS"), resultado: await ind("RESULTADO_ECONOMICO"), saidasDeCaixa: await ind("SAIDAS_DE_CAIXA"), aPagar: await ind("SALDO_A_PAGAR"),
+    fluxoSaidas: fluxo.realizado.saidasCentavos, semExtrato: fluxo.pagosPorComprovanteSemExtrato, caixaSaidas: caixa.consolidado.saidasCentavos };
+}
+const extrato = async (x, idExterno, data = "2026-10-10", valor = 40000) =>
+  (await x.n.registrarMovimentacao(x.c, saida(x.banco.id, valor, { dataEfetiva: data, fonte: { sistema: "UNICRED", idExterno } }))).movimentacao;
+const conciliar = (x, liq, mov) => x.n.conciliarPagamentoPorComprovante(x.c, { liquidacaoId: liq.id, movimentacaoId: mov.id, versaoMovimentacao: mov.versao, justificativa: "Extrato confere com o comprovante (sintético).", confirmar: true });
+
+test("PC-5 ciclo completo, extrato POSTERIOR: despesa na DRE UMA vez (na conta); o comprovante não mexe em caixa nem saldo; o extrato move o caixa UMA vez; conciliar não reconhece nada de novo", async () => {
+  const x = await manutencao();
+  const n0 = await numeros(x.n, x.c);
+  assert.deepEqual([n0.despesas, n0.resultado, n0.aPagar, n0.saidasDeCaixa, n0.fluxoSaidas], [40000, -40000, 40000, 0, 0]);
+  const r = await pagar(x.n, x.c, x.conta, x.doc);
+  const n1 = await numeros(x.n, x.c);
+  assert.deepEqual([n1.despesas, n1.resultado, n1.aPagar], [40000, -40000, 0], "DRE igual; só o saldo a pagar caiu");
+  assert.deepEqual([n1.saidasDeCaixa, n1.fluxoSaidas, n1.caixaSaidas], [0, 0, 0], "nenhuma saída fictícia no caixa, no fluxo ou no saldo");
+  assert.deepEqual(n1.semExtrato, { quantidade: 1, totalCentavos: 40000 }, "informado à parte: pago por comprovante sem extrato");
+  const mov = await extrato(x, "EXT-SINT-PC5", "2026-10-11");
+  const n2 = await numeros(x.n, x.c);
+  assert.deepEqual([n2.despesas, n2.saidasDeCaixa, n2.fluxoSaidas, n2.caixaSaidas], [40000, 40000, 40000, 40000], "o extrato move o caixa uma vez");
+  await conciliar(x, r.liquidacao, mov);
+  const n3 = await numeros(x.n, x.c);
+  assert.deepEqual({ ...n3, semExtrato: null }, { ...n2, semExtrato: null }, "conciliar não reconhece custo, despesa, saída ou pagamento de novo");
+  assert.deepEqual(n3.semExtrato, { quantidade: 0, totalCentavos: 0 });
+  assert.deepEqual(await retrato(x.n, x.c), { saidas: 1, liquidacoes: 1, despesas: 1 });
+});
+
+test("PC-6 extrato ANTERIOR ao comprovante: (a) vincular a saída já importada paga E concilia — comprovante depois não paga de novo; (b) pagar por comprovante com a saída já no extrato e conciliar chega aos mesmos números", async () => {
+  const a = await manutencao();
+  const movA = await extrato(a, "EXT-SINT-PC6A");
+  await a.n.vincularPagamentoDoExtrato(a.c, { movimentacaoId: movA.id, versaoMovimentacao: movA.versao, alocacoes: [{ obrigacaoId: a.conta.id, valorCentavos: 40000 }], documentoId: a.doc.id, justificativa: "Saída do extrato com comprovante (sintético).", confirmar: true });
+  let t = await detalhe(a.n, a.c, a.conta);
+  assert.deepEqual([t.situacaoPagamento, t.situacaoConciliacao], ["PAGO", "CONCILIADO_COM_EXTRATO"]);
+  await rejeita(pagar(a.n, a.c, a.conta, await comprovante(a), { idTransacao: "E0000000020261010SINTMANUT402" }), CODIGO.LIQUIDACAO_EXCEDE_SALDO);
+  const na = await numeros(a.n, a.c);
+  const b = await manutencao();
+  const movB = await extrato(b, "EXT-SINT-PC6B");
+  const r = await pagar(b.n, b.c, b.conta, b.doc);
+  const [pend] = (await b.n.consultarPagamentosPorComprovanteAConciliar(b.c)).itens;
+  assert.deepEqual([pend.situacao, pend.candidatas[0].movimentacaoId], ["CANDIDATA_UNICA", movB.id]);
+  await conciliar(b, r.liquidacao, movB);
+  t = await detalhe(b.n, b.c, b.conta);
+  assert.deepEqual([t.situacaoPagamento, t.situacaoConciliacao], ["PAGO_POR_COMPROVANTE", "CONCILIADO_COM_EXTRATO"]);
+  const nb = await numeros(b.n, b.c);
+  assert.deepEqual({ ...nb, semExtrato: null }, { ...na, semExtrato: null }, "os dois caminhos chegam aos mesmos números");
+  for (const x of [a, b]) assert.deepEqual(await retrato(x.n, x.c), { saidas: 1, liquidacoes: 1, despesas: 1 });
+});
+
+test("PC-7 reversão controlada: estorno do pago por comprovante já conciliado devolve o saldo e libera a saída; DRE e caixa intactos; pagar de novo com outro comprovante funciona", async () => {
+  const x = await manutencao();
+  const r = await pagar(x.n, x.c, x.conta, x.doc);
+  const mov = await extrato(x, "EXT-SINT-PC7");
+  await conciliar(x, r.liquidacao, mov);
+  await x.n.estornarLiquidacao(x.c, { liquidacaoId: r.liquidacao.id, justificativa: "Pagamento revisado pelo responsável (sintético)." });
+  const t = await detalhe(x.n, x.c, x.conta);
+  assert.deepEqual([t.situacaoPagamento, t.saldoCentavos], ["EM_ABERTO", 40000]);
+  const m2 = (await x.n.consultarRegistros(x.c, { tipo: "MOVIMENTACAO" })).find((m) => m.id === mov.id);
+  assert.equal(m2.alocadoCentavos, 0, "a saída do extrato volta a ficar livre");
+  const nn = await numeros(x.n, x.c);
+  assert.deepEqual([nn.despesas, nn.aPagar, nn.saidasDeCaixa], [40000, 40000, 40000], "DRE e caixa intactos; a conta volta a ficar em aberto");
+  const r2 = await pagar(x.n, x.c, x.conta, await comprovante(x), { idTransacao: "E0000000020261010SINTMANUT401" });
+  assert.equal(r2.repetido, false);
+  assert.equal((await detalhe(x.n, x.c, x.conta)).situacaoPagamento, "PAGO_POR_COMPROVANTE");
+});
+
+test("PC-8 concorrência: processamentos simultâneos do mesmo comprovante (e do mesmo id de transação em arquivos diferentes) geram UMA baixa", async () => {
+  const x = await manutencao();
+  const outro = await comprovante(x);
+  const rs = await Promise.allSettled([pagar(x.n, x.c, x.conta, x.doc), pagar(x.n, x.c, x.conta, x.doc), pagar(x.n, x.c, x.conta, outro)]);
+  const ok = rs.filter((y) => y.status === "fulfilled").map((y) => y.value);
+  assert.equal(ok.filter((y) => !y.repetido).length, 1, "uma única baixa criada");
+  for (const y of rs.filter((z) => z.status === "rejected")) assert.ok(["CONFLITO_IDEMPOTENCIA", "LIQUIDACAO_EXCEDE_SALDO", "CONFLITO_DE_VERSAO", "CONCORRENCIA"].some((k) => String(y.reason?.codigo).includes(k)), String(y.reason?.codigo ?? y.reason));
+  assert.equal((await x.n.consultarRegistros(x.c, { tipo: "LIQUIDACAO" })).length, 1);
+  assert.equal((await detalhe(x.n, x.c, x.conta)).saldoCentavos, 0);
+});

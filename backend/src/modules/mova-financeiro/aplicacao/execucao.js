@@ -19,13 +19,16 @@ import { NIVEL, OPERACAO, conferirComExtrato, decidirAutonomia, validarPolitica 
 import { avaliarComprovante } from "../dominio/comprovante.js";
 import { ErroDeExecucao } from "./portaOperacional.js";
 
+/** Janela (dias) em que pagamentos ao mesmo favorecido somam para o limite da baixa documental (anti-fracionamento). */
+export const JANELA_FRACIONAMENTO_DIAS = 3;
+
 const curto = (id) => String(id ?? "").slice(0, 8);
 const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" };
 
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   // Leituras do Financeiro SEMPRE com a identidade de leitura do MOVA (o escopo pode vir da Central, sem usuário).
   const lendo = (escopo) => ({ organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, usuarioId: identidadeLeitura });
@@ -167,7 +170,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       justificativa: `Pago por comprovante pelo MOVA (${nivel === NIVEL.APLICAR_AUTOMATICO ? "política de baixa documental" : "confirmado por responsável"}); conciliação com o extrato pendente.`,
       confirmar: true,
     });
-    return { obrigacaoId, movimentacaoId: null, documentoId: doc.documento.id, liquidacaoIds: [r.liquidacao.id], repetidoNoFinanceiro: Boolean(r.repetido),
+    return { obrigacaoId, movimentacaoId: null, documentoId: doc.documento.id, liquidacaoIds: [r.liquidacao.id], repetidoNoFinanceiro: Boolean(r.repetido), favorecido: proposta.leitura?.favorecido ?? null,
       parcial: proposta.parcial === true, dataPagamento, saldoDepoisCentavos: r.titulo?.saldoCentavos ?? null, situacaoPagamento: "PAGO_POR_COMPROVANTE", conciliacao: "CONCILIACAO_PENDENTE" };
   }
 
@@ -194,7 +197,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     });
     const base = { situacao: conciliacao.situacao, nivel: decisao.nivel, motivos: decisao.motivos, movimentacaoId: conciliacao.movimentacaoId };
     // Execução 17: sem a saída no extrato (ainda), a baixa DOCUMENTAL pode registrar o pagamento pelo comprovante.
-    if (conciliacao.situacao === "AGUARDANDO_EXTRATO" && proposta.evidencia) return documental(anotada ?? proposta, escopo, base);
+    // Execução 17: pagamento por comprovante só com a chave própria (MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE); desligada, fica como antes.
+    if (pagamentoPorComprovante && conciliacao.situacao === "AGUARDANDO_EXTRATO" && proposta.evidencia) return documental(anotada ?? proposta, escopo, base);
     if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return base;
     if (!operacional) return { ...base, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
     if (!(await operacional.pode("vincularPagamentoDoExtrato", escopo)) || !(await operacional.pode("enviarEvidencia", escopo))) return { ...base, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
@@ -202,10 +206,29 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return r.ok ? { ...base, situacao: "EXECUTADA", resultado: r.resultado } : { ...base, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
   }
 
+  /**
+   * Anti-fracionamento: soma do que o MOVA já baixou por comprovante (operações executadas, não revertidas) na MESMA conta ou ao
+   * MESMO favorecido com data de pagamento a até JANELA_FRACIONAMENTO_DIAS. Determinístico; não lê o Financeiro.
+   */
+  async function acumuladoDocumental(escopo, proposta) {
+    if (!a.operacoes?.listar) return 0;
+    const norm = (s) => (typeof s === "string" ? s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() : "");
+    const dia = (d) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? Date.parse(`${d.slice(0, 10)}T00:00:00Z`) / 86400000 : null);
+    const conta = proposta.comando?.entrada?.obrigacaoId ?? null;
+    const fav = norm(proposta.leitura?.favorecido);
+    const data = dia(proposta.leitura?.dataPagamento ?? proposta.comando?.entrada?.dataEfetiva ?? null);
+    return (await a.operacoes.listar(escopo))
+      .filter((o) => o.operacao === OPERACAO.BAIXA_DOCUMENTAL && o.estado === "EXECUTADA" && o.propostaId !== proposta.id)
+      .filter((o) => (conta && o.resultado?.obrigacaoId === conta)
+        || (fav && norm(o.resultado?.favorecido) === fav && data !== null && dia(o.resultado?.dataPagamento) !== null && Math.abs(dia(o.resultado.dataPagamento) - data) <= JANELA_FRACIONAMENTO_DIAS))
+      .reduce((s, o) => s + (Number.isSafeInteger(o.valorCentavos) ? o.valorCentavos : 0), 0);
+  }
+
   async function documental(proposta, escopo, base) {
     const comprovante = comprovanteDa(proposta);
     const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.BAIXA_DOCUMENTAL, organizacaoId: escopo.organizacaoId,
-      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje(), conciliacao: { situacao: base.situacao }, comprovante });
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje(), conciliacao: { situacao: base.situacao }, comprovante,
+      acumuladoCentavos: await acumuladoDocumental(escopo, proposta) });
     await a.propostas.anotar(escopo, proposta.id, { autonomiaDocumental: decisao, comprovante });
     const doc = { ...base, nivelDocumental: decisao.nivel, motivosDocumentais: decisao.motivos, comprovante: comprovante?.situacao ?? null };
     if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return doc;
@@ -221,6 +244,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * tiver a concessão. Ambíguo ou sem extrato: fica na Central para o financeiro. Nunca cria segunda baixa ou saída.
    */
   async function conciliarPendentes(escopo) {
+    if (!pagamentoPorComprovante) return [];
     const r = await porta.ler("consultarPagamentosPorComprovanteAConciliar", lendo(escopo), {});
     const resultados = [];
     for (const item of r.itens ?? []) {
@@ -254,5 +278,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, reconferirPendentes, conciliarPendentes, operacional });
 }
