@@ -38,3 +38,33 @@
 - Fora desta entrega (próximas etapas): fornecedor × mês ("quanto pagamos para esse fornecedor no mês passado"), "por que essa despesa aumentou" (comparativo de competências), entregadores sem nota (ferramenta nova), respostas redigidas pelo Haiku com validação (redator) e comparação entre unidades com escopo explícito. Cada uma exige ferramenta nova do catálogo fechado.
 - Homologação com conversas reais autorizadas: pendente (precisa do usuário no WhatsApp).
 - Nenhum merge, deploy, mudança de permissão, de teto ou do Gateway.
+
+---
+
+## 5. Fase 2 (24/11/2026, mesma branch) — ferramentas de conversa e validação com a API real
+
+**Novas consultas (catálogo fechado, só leitura, por unidade autorizada)** — `aplicacao/ferramentasConversa.js`:
+
+| Pergunta | Consulta | Observação |
+|---|---|---|
+| Quanto pagamos ao fornecedor X no mês passado? | `PAGAMENTOS_A_FORNECEDOR` | soma só pagamentos registrados no período; diz "registrado ≠ conciliado" e o que segue em aberto; nome ambíguo pede o nome completo |
+| Quanto gastamos com a categoria Y? / como estão as despesas? | `DESPESAS_POR_CATEGORIA` | categoria por código **ou nome**; sem categoria = ranking; por competência (não é caixa) |
+| Por que a despesa aumentou? | `COMPARATIVO_DE_DESPESAS` | competência × anterior; onde mais mudou (categoria ou fornecedor); **só fatos, sem afirmar causa**; avisa mês em andamento |
+| Quais entregadores não enviaram nota? | `ENTREGADORES_SEM_NOTA` | contagem para todos; **nomes só com detalhe** (FINANCEIRO); nunca valor por pessoa |
+| Quanto falta pagar aos entregadores? | `FECHAMENTO_ENTREGADORES` (já existia) | |
+| Pagamentos aguardando conciliação / contas hoje, amanhã, semana / vencidas | `PAGAMENTOS_A_CONCILIAR`, `CONTAS_VENCENDO`, `CONTAS_VENCIDAS` (já existiam) | |
+| Despesas do Açaí e da Subway | qualquer consulta + "nas duas": cada unidade/empresa **separada**, nunca somada | |
+
+**Conversa**: o filtro (fornecedor/categoria) e o período acompanham as perguntas seguintes ("e este mês?", "e na Subway?", "só as vencidas"). Perguntas de **análise** ("por que aumentou", "comparado ao mês passado", "gastamos com…") deixaram de cair em palavra-chave (antes "despesa" virava DRE) e vão à IA quando liberada; sem IA o MOVA diz a limitação (nada inventado).
+
+**Teto**: inalterado (US$ 10 fixo no código). Com o orçamento esgotado o texto livre recebe o aviso de pausa e os comandos determinísticos continuam (teste FI-03).
+
+### Validação real (Claude Haiku 5.5, dados fictícios, teto do script 12 chamadas / US$ 0,25)
+`node scripts/mova/validacaoConversaReal.mjs` (com `MOVA_ENV_ARQUIVO`): **8/8** cenários — pergunta determinística (0 IA), "e na beta?" (0 IA), fornecedor no mês passado (1 IA, R$ 1.000,00 correto), "e este mês?" mantendo o fornecedor (0 IA), "por que aumentou" (1 IA; o Financeiro mostrou que **caiu** 65% e o MOVA disse a verdade), tentativa de acessar outra empresa (bloqueada, 0 IA), saudação (0 IA), "paga essa conta" (1 IA → bloqueado). 3 chamadas, ~4,9 mil tokens de entrada e ~370 de saída cada; custo conservador (tabela US$ 4/20 por milhão) ≈ **US$ 0,027 por chamada** ⇒ o teto de US$ 10 comporta ≈ 370 perguntas livres; saudações, comandos e acompanhamentos não gastam.
+
+### Checklist para ativar em produção (nada disto foi feito)
+1. Merge do PR + deploy do backend (Render).
+2. Aplicar a migração MOVA **0017** (aditiva; reversão `recuperacao/reverter-0017.sql`; `atualizar.sql` já regenerado) — sem ela, continuidade de **período/filtro** não persiste (o motor falha ao gravar o contexto).
+3. Render: `MOVA_IA_SOMENTE_DOCUMENTOS=0` (hoje padrão `true`). Pré-requisitos já existentes: `MOVA_IA_HABILITADA=1`, `ANTHROPIC_API_KEY`, orçamento em `mova.orcamento_ia`.
+4. Homologar com conversas reais da gerência (grupo/privado autorizados) e acompanhar `MOVA_IA_LEITURA` (latência/falhas) e `mova.consumo_ia`.
+5. Reversão imediata: `MOVA_IA_SOMENTE_DOCUMENTOS=1` ou desligar "ia" em `mova.controle`.
