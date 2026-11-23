@@ -52,10 +52,19 @@ e não liga chave. Cada passo de ativação abaixo exige aprovação específica
      (`REQUISITOS_FINANCEIROS_INCOMPLETOS`).
 3. Concessão "ver" da identidade de leitura do MOVA na Subway (`pacoteProducao.mjs --mova-concessao … --alem-de …`) e
    `MOVA_OPERACAO_UNIDADES` com as duas unidades. Reiniciar o MOVA.
-4. Escrita (só quando aprovada): identidade operacional própria (`MOVA_IDENTIDADE_OPERACIONAL`, `MOVA_OPERACAO_ESCRITA=1`) com
-   concessão **por unidade**: `ver`, `enviar_documento`, `baixar_por_comprovante`, `registrar_obrigacao` (e `registrar_juros` se
-   aprovado). Ainda não existe gerador revisado para essa concessão: criar antes de ativar. Políticas por operação e por
-   unidade, cadastradas na Central, com os limites reais de cada empresa.
+4. Escrita (só quando aprovada): identidade operacional PRÓPRIA (`MOVA_IDENTIDADE_OPERACIONAL`, `MOVA_OPERACAO_ESCRITA=1`) com concessão
+   **por unidade** pelo gerador revisado:
+   - conceder ou alterar: `node scripts/fv2/pacoteProducao.mjs --mova-operacional <empresa> <unidade> --identidade <uuid> --acoes financeiro_v2.ver,financeiro_v2.enviar_documento,financeiro_v2.baixar_por_comprovante,financeiro_v2.registrar_obrigacao[,financeiro_v2.registrar_juros] --concedido-por <uuid> --justificativa "…"`;
+   - revogar: `--mova-operacional-revogar`.
+   O gerador recusa:
+   - ação ampla (registrar, corrigir, cancelar, aplicar, conceder…) e lista sem `ver`;
+   - a identidade de leitura, a de entregadores e o executor técnico;
+   - identidade que já tenha ação ampla em qualquer unidade.
+   Ele confere também as migrações 0030/0031, grava histórico e revoga cada unidade de forma independente (testado no
+   PostgreSQL real: `test/financeiro-v2/mova-identidade-operacional-sql.test.js`).
+   Políticas pelo kit `scripts/mova/politicasDaUnidade.mjs`:
+   - nível e limite **explícitos** por operação e por unidade; não há padrão nem "ilimitado";
+   - reaplicar troca a política vigente; `--revogar-todas` desliga a autonomia da unidade.
 5. `MOVA_OPERACAO_CRIAR_CONTAS=1` para boletos e notas.
 6. Homologação real nas duas unidades: um comprovante pago pela conta de cada empresa, um boleto e uma nota, com acompanhamento.
 

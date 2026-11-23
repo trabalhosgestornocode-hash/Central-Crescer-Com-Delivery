@@ -324,3 +324,72 @@ t("MU-20 nenhuma transferência ou pagamento bancário real: o MOVA só usa as a
   assert.deepEqual([(await s.saidas(ORG, ALFA)).length, (await s.saidas(ORG_X, XIS)).length], [0, 0], "nenhuma saída bancária");
   assert.equal(await (async () => (await s.m.nucleo.detalharContaAPagar(s.c(ORG_X, XIS), { id: (await s.contas(ORG_X, XIS))[0].id })).titulo.saldoCentavos)(), 0, "o boleto foi baixado pelo comprovante, sem saída");
 });
+
+// ------------------------------------------------------------------ homologação: casos complementares (24/11, missão final)
+t("H-3 boleto do ALFA (empresa ORG): conta em aberto na Alfa, no Contas a Pagar oficial (fornecedor, valor, vencimento, documento) e nada na Xis", async () => {
+  const s = await multi({ responder: () => BOLETO({ pagador: "ALFA PRODUTOS", favorecido: "Laticínios Sintéticos", valorCentavos: 78900 }) });
+  await s.enviar(s.privado({ texto: "MOVA boleto do leite", doc: pdf("H3") }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).unidadeId], ["EXECUTADO", ALFA]);
+  const cap = await s.m.nucleo.consultarContasAPagar(s.c(ORG, ALFA), {});
+  const item = cap.itens.find((x) => x.fornecedor?.nome === "Laticínios Sintéticos");
+  assert.deepEqual([item.valorOriginalCentavos, item.saldoCentavos, item.vencimento, item.situacao !== "PAGO", item.pendencias.includes("SEM_DOCUMENTO")], [78900, 78900, "2026-10-28", true, false]);
+  assert.equal((await s.contas(ORG_X, XIS)).length, 0);
+});
+
+t("H-11 despesa de valor ELEVADO acima da política: vira proposta (encaminhada), nada registrado; dentro da política: executa", async () => {
+  const s = await multi({ responder: () => PIX({ pagador: "MP", favorecido: "Equipamentos Sintéticos", valorCentavos: 2_500_000 }) });
+  await s.enviar(s.privado({ texto: "MOVA forno novo", doc: pdf("H11") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.unidadeId], ["PROPOSTA", XIS], "R$ 25.000 > limite sintético de R$ 20.000: confirmação humana");
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
+  const [p] = await s.propostas(ORG_X, XIS);
+  assert.ok((p.autonomiaDocumental?.motivos ?? []).includes("ACIMA_DO_LIMITE"));
+});
+
+t("H-17 conciliação PENDENTE registrada: o pagamento por comprovante aparece nos 'a conciliar' do Financeiro, sem saída bancária", async () => {
+  const s = await multi({ responder: () => PIX({ pagador: "ALFA PRODUTOS", favorecido: "Doceria Sintética" }) });
+  await s.enviar(s.privado({ texto: "MOVA brownies", doc: pdf("H17") }));
+  const r = await s.m.nucleo.consultarPagamentosPorComprovanteAConciliar(s.c(ORG, ALFA));
+  assert.equal(r.itens.length, 1);
+  assert.deepEqual([r.itens[0].valorCentavos, r.itens[0].dataPagamento, Boolean(r.itens[0].documentoId), Boolean(r.itens[0].idTransacao)], [10800, "2026-10-10", true, true]);
+  assert.equal((await s.saidas(ORG, ALFA)).length, 0);
+});
+
+// ------------------------------------------------------------------ kit de políticas (no banco real do MOVA)
+import { MIGRACOES, criarBancoMova, descartarBancoMova } from "./helpers/banco.js";
+import { sqlPoliticasDaUnidade, sqlRevogarPoliticasDaUnidade } from "../../scripts/mova/politicasDaUnidade.mjs";
+import { validarPolitica } from "../../src/modules/mova-financeiro/dominio/autonomia.js";
+
+test("POL-0 kit de políticas: limite explícito obrigatório (sem padrão nem ilimitado), operação desconhecida recusada", () => {
+  const base = { organizacaoId: ORG_X, unidadeId: XIS, criadaPor: HUMANO, responsavel: "Proprietário Sintético", motivo: "Política sintética aprovada para o teste", vigenteDe: "2026-11-24" };
+  assert.throws(() => sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "CONTA_A_PAGAR", nivel: "APLICAR_AUTOMATICO", limiteCentavos: NaN }] }), /Limite explícito/);
+  assert.throws(() => sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "PAGAMENTO_BANCARIO", nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100 }] }), /operacao/);
+  assert.throws(() => sqlPoliticasDaUnidade({ ...base, politicas: [] }), /ao menos uma/);
+  assert.match(sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "CONTA_A_PAGAR", nivel: "APLICAR_AUTOMATICO", limiteCentavos: 2_000_000 }] }), /0015_mova_pagadores_multiunidade\.sql/);
+});
+
+t("POL-1 kit aplicado no banco do MOVA: cinco políticas por operação; reaplicar troca (revoga a anterior, uma vigente por operação); revogar todas", async () => {
+  const banco = await criarBancoMova();
+  try {
+    // como em produção: o instalador registra as migrações aplicadas (o helper de teste só executa os arquivos)
+    await banco.pool.query("create table if not exists mova.mova_migracao (nome text primary key, sha256 text not null, aplicada_em timestamptz not null default now())");
+    for (const m of MIGRACOES) await banco.pool.query("insert into mova.mova_migracao (nome, sha256) values ($1, 'teste') on conflict do nothing", [m]);
+    await banco.pool.query(`insert into mova.unidade_sem_grupo (unidade_id, organizacao_id, nome, motivo, ativo) values ($1, $2, 'Loja Xis', 'Cadastro sintético para o teste de políticas', true)`, [XIS, ORG_X]);
+    const politicas = [["CONTA_A_PAGAR", 2_000_000], ["DESPESA_DOCUMENTAL", 300_000], ["BAIXA_DOCUMENTAL", 2_000_000], ["ANEXAR_DOCUMENTO", 2_000_000], ["JUROS_DOCUMENTAL", 5_000]]
+      .map(([operacao, limiteCentavos]) => ({ operacao, nivel: "APLICAR_AUTOMATICO", limiteCentavos }));
+    const base = { organizacaoId: ORG_X, unidadeId: XIS, criadaPor: HUMANO, responsavel: "Proprietário Sintético", motivo: "Política sintética aprovada para o teste", vigenteDe: "2026-11-24" };
+    await banco.pool.query(sqlPoliticasDaUnidade({ ...base, politicas }));
+    await banco.pool.query(sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "DESPESA_DOCUMENTAL", nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 500_000 }] }));
+    const { rows } = await banco.pool.query("select operacao, nivel, limite_centavos::int l, revogada_em is null vigente from mova.politica_autonomia order by operacao, criada_em");
+    const vigentes = rows.filter((r) => r.vigente);
+    assert.equal(vigentes.length, 5, "uma vigente por operação");
+    assert.deepEqual(vigentes.find((r) => r.operacao === "DESPESA_DOCUMENTAL"), { operacao: "DESPESA_DOCUMENTAL", nivel: "APLICAR_COM_CONFIRMACAO", l: 500_000, vigente: true });
+    assert.equal(rows.length, 6, "a anterior ficou no histórico (revogada)");
+    // o armazenamento do MOVA lê e o domínio aceita cada política
+    const { criarArmazenamentoPostgres } = await import("../../src/modules/mova-financeiro/index.js");
+    for (const p of await criarArmazenamentoPostgres({ pool: banco.pool }).politicas.listar(ORG_X)) validarPolitica(p);
+    await banco.pool.query(sqlRevogarPoliticasDaUnidade({ organizacaoId: ORG_X, unidadeId: XIS, revogadaPor: HUMANO }));
+    assert.equal(Number((await banco.pool.query("select count(*) n from mova.politica_autonomia where revogada_em is null")).rows[0].n), 0);
+    assert.equal(Number((await banco.pool.query("select count(*) n from mova.auditoria where acao in ('POLITICAS_DA_UNIDADE','POLITICAS_REVOGADAS')")).rows[0].n), 3);
+  } finally { await descartarBancoMova(banco); }
+});
