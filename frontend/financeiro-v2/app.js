@@ -223,7 +223,7 @@ function consultaDaRota() {
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
-    case "entregadores-proprios": return `/api/fv2/entregadores?${qs({ competencia: undefined, semana: f.semana, mes: f.mes, entregador: f.entregador, situacao: f.situacao })}`;
+    case "entregadores-proprios": return `/api/fv2/entregadores?${qs({ competencia: undefined, semana: f.semana, selecao: f.semana ? undefined : "ULTIMA_FECHADA", mes: f.mes, entregador: f.entregador, situacao: f.situacao })}`;
     case "saipos": {
       // Período da área SAIPOS: o escolhido; senão o mês da competência (até a data-base, se for o mês corrente).
       if (f.competenciaBase !== estado.competencia || !f.inicio || !f.fim) {
