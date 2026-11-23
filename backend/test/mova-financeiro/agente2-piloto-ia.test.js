@@ -117,3 +117,17 @@ test("criação de despesas — chave própria, desligada por padrão e só com 
   assert.notEqual(lerConfiguracaoMova(base).criarDespesas, true, "desligada por padrão");
   assert.ok(lerConfiguracaoMova({ ...base, MOVA_OPERACAO_CRIAR_DESPESAS: "1" }).contradicoes.includes("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE"));
 });
+
+test("piloto IA — teto TOTAL de US$ 10,00 no código: configurar mais no banco não amplia; consumo anterior conta", { skip: pular }, async () => {
+  const { TETO_TOTAL_IA_MICROUSD } = await import("../../src/modules/mova-financeiro/infra/operacao.js");
+  assert.equal(TETO_TOTAL_IA_MICROUSD, 10_000_000);
+  const b = await banco();
+  try {
+    await b.pool.query("update mova.orcamento_ia set limite_chamadas = 1000, limite_custo_microusd = 50000000, reserva_microusd = 20000");
+    await b.pool.query("insert into mova.consumo_ia (estado, custo_microusd) values ('CONCLUIDA', 9990000)"); // consumo histórico preservado
+    const orc = criarOrcamentoIa({ pool: b.pool });
+    await assert.rejects(pedir(clienteComOrcamento(fakeCliente(), { orcamento: orc })), (e) => e.codigo === "ORCAMENTO_ESGOTADO", "9,99 + 0,02 > 10,00");
+    const r = await orc.resumo();
+    assert.deepEqual([r.limiteUsd, r.custoUsd], [10, 9.99], "limite efetivo = teto do código; consumo histórico não zera");
+  } finally { await descartarBancoMova(b); }
+});

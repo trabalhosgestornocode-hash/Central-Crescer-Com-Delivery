@@ -60,7 +60,9 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
         const o = (await cli.query("select limite_chamadas, limite_custo_microusd, reserva_microusd from mova.orcamento_ia where id")).rows[0];
         if (!o) throw new ErroDeIa("ORCAMENTO_INDISPONIVEL");
         const u = (await cli.query("select count(*)::int as n, coalesce(sum(custo_microusd), 0)::bigint as c from mova.consumo_ia")).rows[0];
-        if (u.n >= o.limite_chamadas || Number(u.c) + Number(o.reserva_microusd) > Number(o.limite_custo_microusd)) throw new ErroDeIa("ORCAMENTO_ESGOTADO");
+        // Teto TOTAL fixo no código (US$ 10,00, decisão do proprietário 23/11): o banco pode configurar menos, nunca mais.
+        const limite = Math.min(Number(o.limite_custo_microusd), TETO_TOTAL_IA_MICROUSD);
+        if (u.n >= o.limite_chamadas || Number(u.c) + Number(o.reserva_microusd) > limite) throw new ErroDeIa("ORCAMENTO_ESGOTADO");
         const id = (await cli.query("insert into mova.consumo_ia (estado, custo_microusd) values ('RESERVADA', $1) returning id", [o.reserva_microusd])).rows[0].id;
         await cli.query("commit");
         return id;
@@ -80,7 +82,7 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
     async resumo() {
       const o = (await pool.query("select limite_chamadas, limite_custo_microusd from mova.orcamento_ia where id")).rows[0];
       const u = (await pool.query("select count(*)::int as n, coalesce(sum(custo_microusd),0)::bigint as c, coalesce(sum(entrada),0)::bigint as e, coalesce(sum(saida),0)::bigint as s from mova.consumo_ia")).rows[0];
-      return { chamadas: u.n, limiteChamadas: o.limite_chamadas, custoUsd: Number(u.c) / 1e6, limiteUsd: Number(o.limite_custo_microusd) / 1e6, tokensEntrada: Number(u.e), tokensSaida: Number(u.s) };
+      return { chamadas: u.n, limiteChamadas: o.limite_chamadas, custoUsd: Number(u.c) / 1e6, limiteUsd: Math.min(Number(o.limite_custo_microusd), TETO_TOTAL_IA_MICROUSD) / 1e6, tokensEntrada: Number(u.e), tokensSaida: Number(u.s) };
     },
   });
 }
@@ -94,6 +96,8 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
  */
 const BLOCOS_CONTAVEIS = new Set(["text", "image", "document"]);
 /** Falha COM resposta HTTP da API (4xx/5xx): a requisição não foi faturada. Sem resposta (tempo esgotado, conexão caída): pode ter sido. */
+/** Teto TOTAL acumulado de IA (US$ 10,00 em micro-dólares). Não reinicia: o consumo é a soma de mova.consumo_ia. */
+export const TETO_TOTAL_IA_MICROUSD = 10_000_000;
 export const falhaComRespostaDaApi = (e) => Number.isInteger(Number(e?.status)) && Number(e.status) >= 400;
 export async function aplicarTeto(cliente, req, teto) {
   if (!teto) return req;

@@ -152,3 +152,45 @@ t("A2-H8 política REVOGADA vale na hora; unidade NÃO autorizada (BETA, políti
   const d = decidirAutonomia({ politicas: [{ ...POLITICA(), id: "x" }], operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: BETA, valorCentavos: 35000, hoje: "2026-10-10" });
   assert.deepEqual(d.motivos, ["SEM_POLITICA"]);
 });
+
+const COM_EXTRATO = [...CRIAR, "financeiro_v2.vincular_pagamento"];
+async function comExtrato(s) {
+  await s.mova.armazenamento.politicas.criar({ ...POLITICA(), operacao: "BAIXA_POR_EXTRATO", motivo: "Conciliação automática de saídas do extrato conferidas (sintético)" }, { criadaPor: HUMANO });
+  const banco = await s.m.nucleo.configurarContaFinanceira(s.cx, { tipo: "BANCARIA", nome: `Banco Sintético ${Math.random().toString(16).slice(2, 8)}`, instituicao: "Banco Teste" });
+  return async (valor = 35000, data = "2026-10-10") => (await s.m.nucleo.registrarMovimentacao(s.cx, { contaId: banco.id, dataEfetiva: data, sentido: "SAIDA", valorCentavos: valor, natureza: "PAGAMENTO",
+    fonte: { sistema: "UNICRED", idExterno: `EXT-${Math.random().toString(16).slice(2, 10)}` } })).movimentacao;
+}
+
+t("A2-H9 extrato DEPOIS: a despesa nova paga por comprovante é conciliada com a saída — uma saída, uma baixa, uma despesa", async () => {
+  const s = await despesa({ concessao: COM_EXTRATO });
+  const saidaDoExtrato = await comExtrato(s);
+  await s.enviar(gw({ texto: "MOVA paguei o gás da alfa", doc: pdf("H9") }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  const mov = await saidaDoExtrato();
+  const [k] = await s.mova.execucao.conciliarPendentes(s.escopo);
+  assert.deepEqual([k.situacao, k.movimentacaoId], ["CONCILIADO_COM_EXTRATO", mov.id]);
+  const [conta] = await s.contas();
+  const t1 = (await s.m.nucleo.detalharContaAPagar(s.cx, { id: conta.id })).titulo;
+  assert.deepEqual([t1.situacaoPagamento, t1.situacaoConciliacao], ["PAGO_POR_COMPROVANTE", "CONCILIADO_COM_EXTRATO"]);
+  assert.deepEqual([(await s.saidas()).length, (await s.liquidacoes()).length, (await s.despesas()).length], [1, 1, 1]);
+});
+
+t("A2-H10 extrato ANTES: a saída já importada não vira 2ª despesa; o comprovante cria a conta, paga sem nova saída e a conciliação liga à saída existente", async () => {
+  const s = await despesa({ concessao: COM_EXTRATO });
+  const saidaDoExtrato = await comExtrato(s);
+  const mov = await saidaDoExtrato();
+  await s.enviar(gw({ texto: "MOVA paguei o gás da alfa", doc: pdf("H10") }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  const [k] = await s.mova.execucao.conciliarPendentes(s.escopo);
+  assert.deepEqual([k.situacao, k.movimentacaoId], ["CONCILIADO_COM_EXTRATO", mov.id]);
+  assert.deepEqual([(await s.saidas()).length, (await s.liquidacoes()).length, (await s.despesas()).length, (await s.contas()).length], [1, 1, 1, 1]);
+});
+
+t("A2-H11 orçamento de IA ESGOTADO: o comprovante não é lido e nada é gravado (sem conta, sem baixa)", async () => {
+  const { ErroDeIa } = await import("../../src/modules/mova-financeiro/index.js");
+  assert.equal(typeof ErroDeIa, "function");
+  const s = await despesa({ responder: () => { throw new ErroDeIa("ORCAMENTO_ESGOTADO"); } });
+  await s.enviar(gw({ texto: "MOVA paguei o gás da alfa", doc: pdf("H11") })).catch(() => {});
+  assert.notEqual((await s.ultima())?.decisao, "EXECUTADO");
+  assert.deepEqual([s.escritas().length, (await s.contas()).length, (await s.liquidacoes()).length], [0, 0, 0]);
+});
