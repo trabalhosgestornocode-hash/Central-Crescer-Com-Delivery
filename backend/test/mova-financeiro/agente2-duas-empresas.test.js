@@ -10,6 +10,7 @@ import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 import { AUTOMACAO, criarMova, criarPortaOperacional, instalarConfiguracao, validarConfiguracao } from "../../src/modules/mova-financeiro/index.js";
 import { ALFA, CONFIG, DUAS_EMPRESAS, ESCOPOS, FIN, FINANCEIRO, GRUPO, GRUPO_X, ORG, ORG_X, XIS, base, gw, t } from "./helpers/operacao.js";
 import { criarBancoMova, descartarBancoMova } from "./helpers/banco.js";
+import { sqlReenfileirarFalhas } from "../../scripts/mova/reenfileirarFalhas.mjs";
 
 const ANTIGA = "2026-10-26", SEG = "2026-11-02";
 const SEGUNDA_14H = "2026-11-09T17:00:00.000Z"; // 14:00 em Brasília/Fortaleza
@@ -82,7 +83,13 @@ async function cenario({ semGrupoSubway = false, leitura = () => NOTA(), antigaC
   const anexos = () => chamadas.filter((c) => c.nome === "anexarDocumentoDoEntregador");
   const ligar = async (nomes, unidades = [ALFA, XIS]) => { for (const u of unidades) for (const nome of nomes) await mova.armazenamento.automacoes.definir({ nome, organizacaoId: u === ALFA ? ORG : ORG_X, unidadeId: u, ativa: true, horario: "14:00" }); };
   const nota = (texto, x) => { const g = gw({ texto, de: CARLOS, grupo: CARLOS, doc: PDF(x) }); return g; };
-  return { estado, real, mova, enviar, saida, ultima, fechamento, contas, anexos, ligar, nota, leituras, banco };
+  // Simula o RETORNO do Gateway para as mensagens privadas na fila: aceitas (ENVIADA) ou recusadas (FALHOU) por destino.
+  const gateway = async ({ recusar = [] } = {}) => {
+    const r = (await banco.pool.query("select id, grupo_jid from mova.resposta where estado = 'PENDENTE' and grupo_jid like '%@s.whatsapp.net'")).rows;
+    for (const x of r) recusar.includes(x.grupo_jid) ? await mova.armazenamento.saida.marcarFalhaDeEnvio(x.id, "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED", { final: true }) : await mova.armazenamento.saida.marcarEnviada(x.id, `prov-${x.id}`);
+    return r.length;
+  };
+  return { estado, real, mova, enviar, saida, ultima, fechamento, contas, anexos, ligar, nota, leituras, banco, gateway };
 }
 
 t("H1 segunda 14h: Açaí e Subway enviam cada uma o SEU demonstrativo; o entregador das duas recebe DOIS, separados; nada da semana antiga; aviso só no grupo da própria unidade", async () => {
@@ -91,7 +98,10 @@ t("H1 segunda 14h: Açaí e Subway enviam cada uma o SEU demonstrativo; o entreg
   await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
   const r = await s.mova.entregadores.rotina();
   assert.equal(r.semanais, 4, "Carlos×2 (uma por empresa), Ana (Açaí) e Bia (Subway)");
-  assert.equal(r.avisos, 4, "um aviso por envio, cada um no grupo da sua unidade");
+  assert.equal(r.avisos, 0, "nenhum aviso antes do retorno do WhatsApp");
+  assert.equal(await s.gateway({ recusar: [BIA] }), 4, "o Gateway aceita Carlos×2 e Ana; recusa Bia");
+  const r2 = await s.mova.entregadores.rotina();
+  assert.deepEqual([r2.semanais, r2.avisos], [0, 4], "um aviso por entregador, cada um no grupo da sua unidade (3 enviados + 1 falha)");
   const out = await s.saida();
   const doCarlos = out.filter((x) => x.destino === CARLOS).map((x) => x.texto);
   assert.equal(doCarlos.length, 2);
@@ -104,9 +114,10 @@ t("H1 segunda 14h: Açaí e Subway enviam cada uma o SEU demonstrativo; o entreg
   assert.ok(!out.some((x) => /26\/10\/2026/.test(x.texto)), "a semana antiga (também fechada) não é enviada");
   const noGrupoAcai = out.filter((x) => x.destino === GRUPO).map((x) => x.texto), noGrupoSubway = out.filter((x) => x.destino === GRUPO_X).map((x) => x.texto);
   assert.equal(noGrupoAcai.length, 2);
-  assert.ok(noGrupoAcai.every((x) => /^📨 Açaí Sintético Ltda — Demonstrativo da semana 02\/11\/2026 a 08\/11\/2026 encaminhado ao WhatsApp de (Carlos|Ana).*envio aceito pelo MOVA; confirmação de entrega não disponível\). Aguardando nota fiscal\.$/.test(x)));
+  assert.ok(noGrupoAcai.every((x) => /^📨 Açaí Sintético Ltda — Demonstrativo enviado para (Carlos|Ana), referente à semana de 02\/11\/2026 a 08\/11\/2026 \(aceito pelo WhatsApp\)\. Aguardando nota fiscal\.$/.test(x)));
   assert.equal(noGrupoSubway.length, 2);
-  assert.ok(noGrupoSubway.every((x) => /^📨 Subway Sintética Ltda — .*(Carlos|Bia)/.test(x)));
+  assert.ok(noGrupoSubway.some((x) => /^📨 Subway Sintética Ltda — Demonstrativo enviado para Carlos/.test(x)));
+  assert.ok(noGrupoSubway.some((x) => /^⚠️ Subway Sintética Ltda — O demonstrativo de Bia .*NÃO foi entregue pelo WhatsApp/.test(x)), "falha também é avisada");
   assert.ok(![...noGrupoAcai, ...noGrupoSubway].some((x) => /R\$|\d+,\d{2}/.test(x)), "aviso no grupo sem valores");
   const again = await s.mova.entregadores.rotina();
   assert.deepEqual([again.semanais, again.avisos], [0, 0], "idempotente: nada repetido");
@@ -179,6 +190,9 @@ t("H6 Subway SEM grupo da gerência: os envios privados da Subway saem mesmo ass
   await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
   const r = await s.mova.entregadores.rotina();
   assert.equal(r.semanais, 4);
+  await s.gateway();
+  await s.mova.entregadores.rotina();
+  await s.mova.entregadores.rotina(); // a pendência é registrada UMA vez, não a cada passada
   const out = await s.saida();
   assert.ok(out.some((x) => x.destino === BIA && /Subway Sintética Ltda/.test(x.texto)), "Bia (só Subway) recebeu");
   assert.equal(out.filter((x) => x.destino === CARLOS).length, 2);
@@ -196,4 +210,29 @@ t("H7 entregador pergunta no privado: vê os DOIS fechamentos em seções separa
   assert.match(a, /Açaí Sintético Ltda[\s\S]*R\$ 15,00/);
   assert.match(b, /Subway Sintética Ltda[\s\S]*R\$ 23,00/);
   assert.doesNotMatch(r.texto, /38,00/, "nunca somados");
+});
+
+t("H8 caso de 23/11: envio feito ANTES da 0016 (sem vínculo) recusado pelo Gateway e depois reenfileirado — avisa a falha uma vez e, aceito, o envio uma vez; semana antiga nunca", async () => {
+  const s = await cenario();
+  await s.ligar([AUTOMACAO.SEMANAL], [ALFA]);
+  await s.mova.entregadores.rotina();
+  await s.banco.pool.query("update mova.entregador_envio set resposta_id = null"); // como em produção (código anterior)
+  await s.gateway({ recusar: [CARLOS, ANA] });
+  await s.ligar([AUTOMACAO.AVISO_GRUPO], [ALFA]);
+  assert.equal((await s.mova.entregadores.rotina()).avisos, 2, "as duas falhas avisadas");
+  assert.equal((await s.mova.entregadores.rotina()).avisos, 0, "uma vez só");
+  // reenfileiradas (kit de reenvio, depois de corrigir a lista do Gateway) e aceitas
+  const kit = sqlReenfileirarFalhas({ erro: "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED", de: "2000-01-01T00:00:00Z", ate: "2000-01-01T12:00:00Z", esperadas: 2, ator: "teste", motivo: "GATEWAY_SEM_PRIVADOS" });
+  const c = await s.banco.pool.connect();
+  try { await assert.rejects(c.query(kit), /esperadas 2 mensagens, encontradas 0/, "fora da janela: nada é feito"); await c.query("rollback"); } finally { c.release(); }
+  const { rows: [j] } = await s.banco.pool.query("select min(criada_em) - interval '1 minute' de, max(criada_em) + interval '1 minute' ate from mova.resposta where estado = 'FALHOU'");
+  await s.banco.pool.query(sqlReenfileirarFalhas({ erro: "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED", de: j.de.toISOString(), ate: j.ate.toISOString(), esperadas: 2, ator: "teste", motivo: "GATEWAY_SEM_PRIVADOS" }));
+  assert.equal((await s.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'RESPOSTAS_REENFILEIRADAS'")).rows[0].n, 1);
+  await s.gateway();
+  assert.equal((await s.mova.entregadores.rotina()).avisos, 2, "agora os dois 'enviado'");
+  const g = (await s.saida()).filter((x) => x.destino === GRUPO).map((x) => x.texto);
+  assert.equal(g.filter((x) => x.startsWith("⚠️")).length, 2);
+  assert.equal(g.filter((x) => x.startsWith("📨")).length, 2);
+  assert.equal((await s.saida()).filter((x) => x.destino === CARLOS || x.destino === ANA).length, 2, "nenhum demonstrativo duplicado");
+  assert.ok(!g.some((x) => /26\/10/.test(x)));
 });

@@ -53,12 +53,16 @@ alter table mova.operacao_executada add constraint operacao_executada_operacao_c
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL'));
 insert into mova.mova_migracao (nome, sha256) values ('0012_mova_juros_documental.sql', 'eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba');
 
--- ------------------------------------------------------------------------- 0016_mova_avisos_entregadores.sql (arquivo 3463280e2004756ca430625773c40d964a7f4152bc2bf4ff601569b0c80f3f8f)
+-- ------------------------------------------------------------------------- 0016_mova_avisos_entregadores.sql (arquivo 76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc)
 -- MOVA — 23/11/2026: avisos à GERÊNCIA no grupo da própria unidade, depois de cada envio privado de demonstrativo
 -- (AVISO_DEMONSTRATIVO) e de cada nota fiscal recebida e conferida (AVISO_NOTA_RECEBIDA). Só amplia a lista fechada de
 -- tipos de mova.entregador_envio (a chave única continua impedindo repetição). Nenhuma automação é ligada aqui: os avisos
 -- só saem com ENTREGADORES_AVISO_GRUPO ativa na unidade e grupo exclusivo dela (sem grupo ⇒ pendente, nunca outro grupo).
 -- (0015 é reservada ao PR #191.)
+-- O aviso do demonstrativo só sai DEPOIS que o WhatsApp aceitou a mensagem privada (estado ENVIADA da mova.resposta): o envio
+-- guarda o id da mensagem que gerou (resposta_id). O app só pode preencher esse vínculo uma vez (coluna nula ⇒ id).
 alter table mova.entregador_envio drop constraint entregador_envio_tipo_check;
 alter table mova.entregador_envio add constraint entregador_envio_tipo_check check (tipo in ('SEMANAL', 'COBRANCA_NOTA', 'NOTA_RECEBIDA', 'AVISO_LIBERACAO', 'RELATORIO_QUARTA', 'AVISO_DEMONSTRATIVO', 'AVISO_NOTA_RECEBIDA'));
-insert into mova.mova_migracao (nome, sha256) values ('0016_mova_avisos_entregadores.sql', '3463280e2004756ca430625773c40d964a7f4152bc2bf4ff601569b0c80f3f8f');
+alter table mova.entregador_envio add column resposta_id uuid references mova.resposta (id);
+grant update (resposta_id) on mova.entregador_envio to mova_app;
+insert into mova.mova_migracao (nome, sha256) values ('0016_mova_avisos_entregadores.sql', '76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc');

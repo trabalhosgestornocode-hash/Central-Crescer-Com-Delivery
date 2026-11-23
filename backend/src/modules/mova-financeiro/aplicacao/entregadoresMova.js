@@ -177,7 +177,11 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     if (!auto || !auto.ativa || auto.pausadaEm) return false;
     const grupo = grupoDaUnidade(unidadeId);
     if (!grupo) {
-      await a.auditoria.registrar({ acao: "AVISO_GRUPO_PENDENTE", atorTipo: "SISTEMA", alvo: unidadeId, dados: { tipo, semana: semanaInicio, motivo: "SEM_GRUPO_DA_UNIDADE" } });
+      // Pendente UMA vez (marca sem mensagem); se o grupo da unidade for configurado, o aviso ainda sai pela chave original.
+      try {
+        if (await enviarUmaVez({ unidadeId, tipo, semanaInicio, entregador, chave: `PENDENTE|${chave}`.slice(0, 300), texto: null }))
+          await a.auditoria.registrar({ acao: "AVISO_GRUPO_PENDENTE", atorTipo: "SISTEMA", alvo: unidadeId, dados: { tipo, semana: semanaInicio, motivo: "SEM_GRUPO_DA_UNIDADE" } });
+      } catch (e) { registrar({ tipo: "MOVA_AVISO_GRUPO_FALHOU", codigo: e?.code ?? e?.codigo ?? "ERRO" }); }
       return false;
     }
     try {
@@ -194,7 +198,11 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
   async function enviarUmaVez({ ent = null, destino = null, unidadeId = null, tipo, semanaInicio, chave, texto, entregador = null }) {
     const u = unidadeDe(unidadeId ?? ent.unidadeId);
     if (!(await a.enviosEntregador.registrar({ chave, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, entregador: entregador ?? ent?.chave ?? "-", tipo, semanaInicio }))) return false;
-    if (texto !== null) await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
+    if (texto !== null) {
+      const respostaId = await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
+      // 23/11: o aviso à gerência espera o retorno do WhatsApp desta mensagem (ENVIADA ou FALHOU) — ver confirmarEnvios.
+      if (tipo === "SEMANAL" && respostaId && typeof a.enviosEntregador.vincularResposta === "function") await a.enviosEntregador.vincularResposta(chave, respostaId);
+    }
     return true;
   }
   const notasDaUnidade = async (escopo) => new Map((await a.notasEntregador.listar(escopo)).map((n) => [`${n.entregador}|${n.semanaInicio}`, n]));
@@ -230,10 +238,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
             try { f = await porta.ler("detalharFechamentoDoEntregador", escopoDe(unidadeId), { inicio: inicioFechado, entregador: ent.chave }); } catch (e) { if (!naoEncontrado(e)) throw e; }
             const texto = f && f.entregador?.chave === ent.chave ? mensagemSemanal(f, rotulo) : null;
             if (!texto) resumo.pulados.push("SEM_FECHAMENTO");
-            else if (await enviarUmaVez({ ent, tipo: "SEMANAL", semanaInicio: inicioFechado, chave: `SEMANAL|${unidadeId}|${ent.chave}|${inicioFechado}`, texto })) {
-              resumo.semanais += 1;
-              if (AGUARDANDO.includes(f.situacaoDocumental) && await avisarNoGrupo({ unidadeId, tipo: "AVISO_DEMONSTRATIVO", semanaInicio: inicioFechado, entregador: ent.chave, chave: `AVISO_DEMONSTRATIVO|${unidadeId}|${ent.chave}|${inicioFechado}`, texto: avisoDeDemonstrativo(f, rotulo) })) resumo.avisos = (resumo.avisos ?? 0) + 1;
-            }
+            else if (await enviarUmaVez({ ent, tipo: "SEMANAL", semanaInicio: inicioFechado, chave: `SEMANAL|${unidadeId}|${ent.chave}|${inicioFechado}`, texto })) resumo.semanais += 1;
           }
           if (fazCobranca) {
             for (const f of await lerFechamentos(ent)) {
@@ -252,8 +257,46 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       if (fazSemanal) await a.automacoes.marcarExecucao(AUTOMACAO.SEMANAL, unidadeId, agora.toISOString());
       if (fazCobranca) await a.automacoes.marcarExecucao(AUTOMACAO.COBRANCA, unidadeId, agora.toISOString());
     }
+    await confirmarEnvios({ dia, semana, resumo });
     await rotinaDoGrupo({ agora, dia, hora, semana, resumo });
     return resumo;
+  }
+
+  /**
+   * 23/11: um aviso no grupo da gerência POR ENTREGADOR, só depois do retorno do WhatsApp da mensagem privada da semana
+   * corrente (a que fechou na segunda): aceita ⇒ "enviado"; recusada ⇒ "não entregue". Cada aviso sai uma vez (chave);
+   * semanas anteriores nunca são anunciadas. Envio sem vínculo (anterior à 0016) é achado pela mensagem ao mesmo destino
+   * registrada no mesmo minuto — só quando há exatamente uma.
+   */
+  async function confirmarEnvios({ dia, semana, resumo }) {
+    if (typeof a.saida.situacoes !== "function") return;
+    const inicio = somarDias(dia, -7 - ((semana + 6) % 7));
+    const porChave = new Map((cfg.entregadores ?? []).filter((e) => e.ativo).map((e) => [`${e.unidadeId}|${e.chave}`, e]));
+    for (const u of cfg.unidades) {
+      const auto = await a.automacoes.obter(AUTOMACAO.AVISO_GRUPO, u.unidadeId);
+      if (!auto || !auto.ativa || auto.pausadaEm) continue;
+      const envios = (await a.enviosEntregador.listar(escopoDe(u.unidadeId))).filter((e) => e.tipo === "SEMANAL" && e.semanaInicio === inicio);
+      const pares = [];
+      for (const e of envios) {
+        const ent = porChave.get(`${u.unidadeId}|${e.entregador}`);
+        let id = e.respostaId ?? null;
+        if (!id && ent && typeof a.saida.paraDestinoEntre === "function") {
+          const t = Date.parse(e.criadoEm);
+          const ids = await a.saida.paraDestinoEntre(ent.privado, new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString());
+          if (ids.length === 1) id = ids[0];
+        }
+        if (id) pares.push({ e, ent, id });
+      }
+      const sit = await a.saida.situacoes(pares.map((p) => p.id));
+      for (const { e, ent, id } of pares) {
+        const estado = sit.get(id)?.estado;
+        if (estado !== "ENVIADA" && estado !== "FALHOU") continue; // ainda na fila: confere na próxima passada
+        const f = { semanaInicio: e.semanaInicio, semanaFim: somarDias(e.semanaInicio, 6), entregador: { nome: ent?.nome ?? e.entregador } };
+        const falhou = estado === "FALHOU";
+        const chave = falhou ? `AVISO_DEMONSTRATIVO_FALHA|${u.unidadeId}|${e.entregador}|${e.semanaInicio}|${id}` : `AVISO_DEMONSTRATIVO|${u.unidadeId}|${e.entregador}|${e.semanaInicio}`;
+        if (await avisarNoGrupo({ unidadeId: u.unidadeId, tipo: "AVISO_DEMONSTRATIVO", semanaInicio: e.semanaInicio, entregador: e.entregador, chave, texto: avisoDeDemonstrativo(f, rotuloDe(u.unidadeId), { falhou }) })) resumo.avisos += 1;
+      }
+    }
   }
 
   /** Aviso de liberação e relatório de quarta no GRUPO financeiro da unidade (só unidades com grupo exclusivo). */

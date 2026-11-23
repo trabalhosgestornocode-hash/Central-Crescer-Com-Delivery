@@ -296,8 +296,13 @@ export function perguntaDeEmpresaDaNota(candidatos) {
  * Avisos no GRUPO da gerência da unidade (sem valores e sem dados fiscais: só quem, a semana e a situação).
  * "Envio aceito" = a mensagem entrou na saída do MOVA rumo ao Gateway; a confirmação de entrega no aparelho não é medida.
  */
-export function avisoDeDemonstrativo(f, { empresa = null, unidade = null } = {}) {
-  return `📨 ${empresa ?? unidade ?? "Unidade"} — Demonstrativo da semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)} encaminhado ao WhatsApp de ${primeiroNome(f.entregador?.nome) || "entregador"} (envio aceito pelo MOVA; confirmação de entrega não disponível). Aguardando nota fiscal.`;
+export function avisoDeDemonstrativo(f, { empresa = null, unidade = null } = {}, { falhou = false } = {}) {
+  const quem = primeiroNome(f.entregador?.nome) || "entregador";
+  const semana = `semana de ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`;
+  // Só depois do retorno do WhatsApp: "aceito" = o WhatsApp recebeu a mensagem do MOVA (a leitura no aparelho não é medida).
+  return falhou
+    ? `⚠️ ${empresa ?? unidade ?? "Unidade"} — O demonstrativo de ${quem} (${semana}) NÃO foi entregue pelo WhatsApp. O financeiro precisa conferir o contato.`
+    : `📨 ${empresa ?? unidade ?? "Unidade"} — Demonstrativo enviado para ${quem}, referente à ${semana} (aceito pelo WhatsApp). Aguardando nota fiscal.`;
 }
 const RESULTADO_NO_GRUPO = Object.freeze({
   CONFERE: "Conferência concluída: valor correspondente ao fechamento.",
