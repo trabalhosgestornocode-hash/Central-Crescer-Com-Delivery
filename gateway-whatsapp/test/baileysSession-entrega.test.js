@@ -191,3 +191,73 @@ test("23/11 grupo do MOVA: aceite/rejeição do servidor e entrega/leitura/retry
   const start = linhas.find((l) => l.evento === "grupo.send_start");
   assert.equal(start.participantes, 2);
 });
+
+test("23/11 redistribuição da chave do grupo: UMA vez, só no grupo configurado e autorizado; outros grupos e demais chaves intactos; log sem material", async () => {
+  const G = "120363000000000001@g.us", OUTRO = "120363000000000002@g.us";
+  const store = {
+    "sender-key-memory": { [G]: { "111122223333:0@lid": true, "444455556666:3@lid": true }, [OUTRO]: { "777788889999:0@lid": true } },
+    session: { "5511912345678.0": "SEGREDO-SESSAO" }, "sender-key": { x: "SEGREDO-CHAVE" },
+  };
+  const keys = {
+    async get(tipo, ids) { const o = {}; for (const i of ids) if (store[tipo]?.[i] !== undefined) o[i] = store[tipo][i]; return o; },
+    async set(d) { for (const t of Object.keys(d)) for (const i of Object.keys(d[t])) { store[t] ??= {}; if (d[t][i] === null) delete store[t][i]; else store[t][i] = d[t][i]; } },
+  };
+  const fabricaSocket = fabricaFalsa();
+  const sessao = criarSessaoBaileys({
+    authAdapter: authFalso(), backendClient: backendFalso(), fabricaSocket, DisconnectReasonLoggedOut: 401, leaseManager: leaseFalso(),
+    config: { reconnect: { baseMs: 10, tetoMs: 40 }, heartbeatMs: 1_000_000, providerInstanceId: "t", gatewayVersion: "0", movaEnvioHabilitado: true,
+      movaGrupos: [G, OUTRO], movaRedistribuirChaveGrupo: G },
+  });
+  await sessao.conectar();
+  const socket = fabricaSocket.criados[0];
+  socket.authState = { keys };
+  socket.groupMetadata = mock.fn(async (jid) => ({ id: jid, subject: "Grupo", participants: [{ id: "5511999990000@s.whatsapp.net" }, { id: "111122223333@lid" }, { id: "444455556666@lid" }], size: 3 }));
+  // Simula o Baileys: marca na memória todo aparelho do grupo que ainda não tinha a chave.
+  socket.sendMessage = mock.fn(async (jid, _c, { messageId }) => {
+    const m = (await keys.get("sender-key-memory", [jid]))[jid] ?? {};
+    await keys.set({ "sender-key-memory": { [jid]: { ...m, "111122223333:0@lid": true, "444455556666:3@lid": true, "444455556666:0@lid": true } } });
+    return { key: { id: messageId } };
+  });
+  socket.ev.emit("connection.update", { connection: "open" });
+  socket.ev.emit("creds.update", { registered: true });
+  await new Promise((r) => setImmediate(r));
+  const linhas = await capturandoLogs(async () => {
+    await sessao.enviarGrupoMova({ grupoJid: G, texto: CONTEUDO_SECRETO, correlationId: "t1" });
+    await sessao.enviarGrupoMova({ grupoJid: G, texto: CONTEUDO_SECRETO, correlationId: "t2" });
+    await sessao.enviarGrupoMova({ grupoJid: OUTRO, texto: CONTEUDO_SECRETO, correlationId: "t3" });
+  });
+  const redis = linhas.filter((l) => l.evento === "grupo.chave_redistribuicao");
+  assert.equal(redis.length, 1);
+  assert.equal(redis[0].correlationId, "t1");
+  assert.equal(redis[0].aparelhosComChaveAntes, 2);
+  const dist = linhas.filter((l) => l.evento === "grupo.chave_distribuicao");
+  assert.deepEqual(dist.map((d) => [d.correlationId, d.aparelhosConhecidos, d.chaveEnviadaAgora]), [["t1", 3, 3], ["t2", 3, 0], ["t3", 4, 3]]);
+  assert.deepEqual(dist[0].aparelhos.map((a) => [a.participante, a.dispositivo]), [["••3333@lid", 0], ["••6666@lid", 3], ["••6666@lid", 0]]);
+  assert.ok(store["sender-key-memory"][OUTRO]["777788889999:0@lid"], "o outro grupo não foi zerado");
+  // demais chaves intactas
+  assert.equal(store.session["5511912345678.0"], "SEGREDO-SESSAO");
+  assert.equal(store["sender-key"].x, "SEGREDO-CHAVE");
+  const tudo = JSON.stringify(linhas);
+  assert.ok(![CONTEUDO_SECRETO, "SEGREDO", "111122223333", "444455556666"].some((x) => tudo.includes(x)));
+});
+
+test("23/11 redistribuição: grupo fora da lista autorizada nunca é tocado, mesmo configurado", async () => {
+  const G = "120363000000000001@g.us", FORA = "120363000000000009@g.us";
+  const store = { "sender-key-memory": { [FORA]: { "111122223333:0@lid": true } } };
+  const keys = { async get(t, ids) { const o = {}; for (const i of ids) if (store[t]?.[i] !== undefined) o[i] = store[t][i]; return o; },
+    async set(d) { for (const t of Object.keys(d)) for (const i of Object.keys(d[t])) { if (d[t][i] === null) delete store[t][i]; else store[t][i] = d[t][i]; } } };
+  const fabricaSocket = fabricaFalsa();
+  const sessao = criarSessaoBaileys({
+    authAdapter: authFalso(), backendClient: backendFalso(), fabricaSocket, DisconnectReasonLoggedOut: 401, leaseManager: leaseFalso(),
+    config: { reconnect: { baseMs: 10, tetoMs: 40 }, heartbeatMs: 1_000_000, providerInstanceId: "t", gatewayVersion: "0", movaEnvioHabilitado: true,
+      movaGrupos: [G], movaRedistribuirChaveGrupo: FORA },
+  });
+  await sessao.conectar();
+  const socket = fabricaSocket.criados[0];
+  socket.authState = { keys };
+  socket.ev.emit("connection.update", { connection: "open" });
+  socket.ev.emit("creds.update", { registered: true });
+  await new Promise((r) => setImmediate(r));
+  await capturandoLogs(async () => { await assert.rejects(sessao.enviarGrupoMova({ grupoJid: FORA, texto: "x", correlationId: "f" })); });
+  assert.deepEqual(store["sender-key-memory"][FORA], { "111122223333:0@lid": true });
+});

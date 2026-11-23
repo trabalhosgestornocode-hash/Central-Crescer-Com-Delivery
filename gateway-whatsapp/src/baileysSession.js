@@ -269,6 +269,7 @@ export function criarSessaoBaileys({
   // 23/11 — RECIBOS das mensagens de GRUPO (MOVA/grupo interno): antes ficavam de fora do rastreio e o aceite/rejeição do
   // servidor e a entrega/leitura por participante eram descartados ("provider_receipt_nao_rastreado"). Só LOG (sem número
   // completo, sem conteúdo); não altera o envio nem o Baileys.
+  const redistribuicoesFeitas = new Set(); // grupos já redistribuídos neste processo (no máximo uma vez cada)
   const recibosGrupo = new Map(); // providerMessageId -> {correlationId, enviadoEmMs}
   const mascararParticipante = (jid) => {
     const m = /^([0-9]+)(?::([0-9]+))?@(lid|s\.whatsapp\.net)$/.exec(String(jid ?? ""));
@@ -1901,6 +1902,23 @@ export function criarSessaoBaileys({
         participantes: Number.isInteger(info?.participantes) ? info.participantes : null });
       recibosGrupo.set(providerIdGerado, { correlationId, enviadoEmMs: Date.now() });
       while (recibosGrupo.size > 300) recibosGrupo.delete(recibosGrupo.keys().next().value);
+      // 23/11: diagnóstico da distribuição da chave de remetente (só contagens e participantes mascarados; nenhum material
+      // criptográfico). Opcionalmente, UMA redistribuição por processo, só para o grupo configurado e autorizado.
+      const chaves = sockEnvio.authState?.keys ?? authAdapter.comoAuthState().keys;
+      const memoriaChave = async () => { try { return Object.keys((await chaves.get("sender-key-memory", [grupoJid]))?.[grupoJid] ?? {}); } catch { return null; } };
+      let antes = await memoriaChave();
+      const alvoRedistribuir = config?.movaRedistribuirChaveGrupo;
+      if (alvoRedistribuir && alvoRedistribuir === grupoJid && !redistribuicoesFeitas.has(grupoJid)
+          && Array.isArray(config?.movaGrupos) && config.movaGrupos.includes(grupoJid)) {
+        redistribuicoesFeitas.add(grupoJid);
+        try {
+          await chaves.set({ "sender-key-memory": { [grupoJid]: null } });
+          log("warn", "grupo.chave_redistribuicao", { correlationId, providerMessageId: providerIdGerado, jid: jidMascarado, aparelhosComChaveAntes: antes?.length ?? null });
+          antes = [];
+        } catch (e) {
+          log("error", "grupo.chave_redistribuicao_falhou", { correlationId, jid: jidMascarado, erro: e?.name ?? "erro" });
+        }
+      }
       const t1 = Date.now();
       let resultado;
       try {
@@ -1910,6 +1928,11 @@ export function criarSessaoBaileys({
         throw e;
       }
       const providerMessageId = resultado?.key?.id ?? providerIdGerado;
+      const depois = await memoriaChave();
+      const novos = depois && antes ? depois.filter((j) => !antes.includes(j)) : null;
+      log("info", "grupo.chave_distribuicao", { correlationId, providerMessageId, jid: jidMascarado,
+        aparelhosConhecidos: depois?.length ?? null, chaveEnviadaAgora: novos?.length ?? null,
+        aparelhos: (depois ?? []).slice(0, 60).map((j) => ({ ...mascararParticipante(j), chaveAgora: !!novos?.includes(j) })) });
       log("info", "grupo.send_resolved", { correlationId, providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1 });
       return { providerMessageId, enviadoEm: new Date().toISOString(), grupo: { jid: info.jid, nome: info.nome } };
     }
