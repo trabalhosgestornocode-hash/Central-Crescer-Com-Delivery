@@ -126,7 +126,7 @@ t("A2-E3 NFS-e em PDF no privado: anexo OFICIAL pela identidade operacional (só
   assert.equal(nota.estado, "ANEXADA");
 });
 
-t("A2-E4 sem concessão operacional: nota fica PENDENTE para o Centro Financeiro (nada escrito); foto não vale como nota", async () => {
+t("A2-E4 sem concessão operacional: nota fica PENDENTE para o Centro Financeiro (nada escrito); 23/11: foto da nota também vale, áudio não", async () => {
   const s = await cenario({ concessao: null });
   await s.enviar(gw({ texto: null, de: RAFAEL, grupo: RAFAEL, doc: PDF }));
   assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PROPOSTA", "NOTA_PENDENTE_ANEXO"]);
@@ -138,7 +138,13 @@ t("A2-E4 sem concessão operacional: nota fica PENDENTE para o Centro Financeiro
   foto.midia.mime = "image/jpeg";
   foto.tipo = "IMAGEM";
   await s.enviar(foto);
+  // 23/11: a nota pode vir em foto (outro arquivo da mesma semana ⇒ outra pendência para a conferência); áudio não é nota
+  assert.equal((await s.ultima()).motivo, "NOTA_PENDENTE_ANEXO");
+  const audio = gw({ texto: null, de: RAFAEL, grupo: RAFAEL, doc: "audio sintetico" });
+  audio.midia.mime = "audio/ogg";
+  await s.enviar(audio);
   assert.equal((await s.ultima()).motivo, "NOTA_PRECISA_SER_PDF");
+  assert.equal(s.escritas().length, 0);
 });
 
 t("A2-E5 configuração: entregador fora das unidades do MOVA é recusado; o número da equipe não vira conversa de entregador", () => {

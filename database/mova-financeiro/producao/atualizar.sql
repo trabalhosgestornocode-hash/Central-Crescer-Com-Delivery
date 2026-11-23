@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0011_mova_entregadores_rotina.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql
--- Novas: 0010_mova_despesa_documental.sql, 0012_mova_juros_documental.sql
+-- Novas: 0010_mova_despesa_documental.sql, 0012_mova_juros_documental.sql, 0016_mova_avisos_entregadores.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -22,6 +22,7 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0014_mova_unidade_sem_grupo.sql' and sha256 = '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b') then raise exception 'MOVA atualização: 0014_mova_unidade_sem_grupo.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0010_mova_despesa_documental.sql') then raise exception 'MOVA atualização: 0010_mova_despesa_documental.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0012_mova_juros_documental.sql') then raise exception 'MOVA atualização: 0012_mova_juros_documental.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0016_mova_avisos_entregadores.sql') then raise exception 'MOVA atualização: 0016_mova_avisos_entregadores.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0010_mova_despesa_documental.sql (arquivo f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c)
@@ -51,3 +52,13 @@ alter table mova.operacao_executada drop constraint operacao_executada_operacao_
 alter table mova.operacao_executada add constraint operacao_executada_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL'));
 insert into mova.mova_migracao (nome, sha256) values ('0012_mova_juros_documental.sql', 'eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba');
+
+-- ------------------------------------------------------------------------- 0016_mova_avisos_entregadores.sql (arquivo 3463280e2004756ca430625773c40d964a7f4152bc2bf4ff601569b0c80f3f8f)
+-- MOVA — 23/11/2026: avisos à GERÊNCIA no grupo da própria unidade, depois de cada envio privado de demonstrativo
+-- (AVISO_DEMONSTRATIVO) e de cada nota fiscal recebida e conferida (AVISO_NOTA_RECEBIDA). Só amplia a lista fechada de
+-- tipos de mova.entregador_envio (a chave única continua impedindo repetição). Nenhuma automação é ligada aqui: os avisos
+-- só saem com ENTREGADORES_AVISO_GRUPO ativa na unidade e grupo exclusivo dela (sem grupo ⇒ pendente, nunca outro grupo).
+-- (0015 é reservada ao PR #191.)
+alter table mova.entregador_envio drop constraint entregador_envio_tipo_check;
+alter table mova.entregador_envio add constraint entregador_envio_tipo_check check (tipo in ('SEMANAL', 'COBRANCA_NOTA', 'NOTA_RECEBIDA', 'AVISO_LIBERACAO', 'RELATORIO_QUARTA', 'AVISO_DEMONSTRATIVO', 'AVISO_NOTA_RECEBIDA'));
+insert into mova.mova_migracao (nome, sha256) values ('0016_mova_avisos_entregadores.sql', '3463280e2004756ca430625773c40d964a7f4152bc2bf4ff601569b0c80f3f8f');
