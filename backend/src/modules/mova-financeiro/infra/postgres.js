@@ -236,14 +236,17 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
      * MESMA conversa é escutada sem exigir o nome, até `ate` (relógio do banco). Guarda só a unidade e a consulta (nunca texto).
      */
     conversas: Object.freeze({
-      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, validadeMs }) {
-        await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5)
+      async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, contexto = null, validadeMs }) {
+        // `contexto` (migração 0017) = só o recorte da última consulta (período), nunca texto nem valores. Nova consulta o substitui.
+        await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta, contexto) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5, $6::jsonb)
                  on conflict (grupo_jid, participante_jid) do update set ate = excluded.ate, unidade_id = coalesce(excluded.unidade_id, mova.conversa_ativa.unidade_id),
-                   consulta = coalesce(excluded.consulta, mova.conversa_ativa.consulta), atualizado_em = now()`, [grupoId, participanteId, validadeMs, unidadeId, consulta]);
+                   consulta = coalesce(excluded.consulta, mova.conversa_ativa.consulta),
+                   contexto = case when excluded.consulta is not null then excluded.contexto else mova.conversa_ativa.contexto end, atualizado_em = now()`,
+          [grupoId, participanteId, validadeMs, unidadeId, consulta, contexto ? JSON.stringify(contexto) : null]);
       },
       async obter({ grupoId, participanteId }) {
-        const r = await q("select unidade_id, consulta from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
-        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta } : null;
+        const r = await q("select unidade_id, consulta, contexto from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
+        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta, contexto: r.rows[0].contexto ?? null } : null;
       },
       async encerrar({ grupoId, participanteId }) {
         await q("delete from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2", [grupoId, participanteId]);

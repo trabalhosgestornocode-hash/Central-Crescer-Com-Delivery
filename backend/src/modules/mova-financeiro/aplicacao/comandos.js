@@ -101,7 +101,9 @@ const NAO_E_PERGUNTA = ["paguei", "pagamos", "pague", "pagar ", "transfir", "reg
 const VAZIAS = new Set(["mova", "me", "a", "o", "as", "os", "da", "do", "das", "dos", "de", "na", "no", "em", "um", "uma", "conta", "contas", "boleto", "fatura",
   "explica", "explique", "explicar", "detalha", "detalhe", "detalhar", "fala", "fale", "falar", "mais", "sobre", "ja", "foi", "esta", "ta", "paga", "pago", "quitada", "quitado",
   "por", "que", "porque", "pq", "qual", "motivo", "vencida", "vencido", "aberta", "aberto", "atrasada", "atrasado", "pendente", "valor", "reais", "r", "para", "pra",
-  "essa", "esta", "aquela", "referente", "ainda", "nao", "sim", "voce", "pode", "poderia", "favor", "ok", "mes", "e", "ai"]);
+  "essa", "esta", "aquela", "referente", "ainda", "nao", "sim", "voce", "pode", "poderia", "favor", "ok", "mes", "e", "ai",
+  // pronomes/fillers de conversa ("detalha melhor isso", "me explica de onde saiu esse valor"): sem nome de conta, vai à IA com o contexto
+  "isso", "isto", "esse", "desse", "disso", "dessa", "melhor", "onde", "saiu", "veio", "tudo", "pessoal", "gente"]);
 
 /** "R$ 1.234,56" / "1234,56" / "R$ 12" ⇒ centavos; null se não houver valor. */
 function valorCitado(bruto) {
@@ -130,3 +132,34 @@ export function interpretarPerguntaDeConta(texto, hoje) {
   return v.ok ? { saida: v.saida, soPeriodo: false } : null;
 }
 const competencia_ = (data) => data.slice(0, 7);
+
+// ------------------------------------------------------------------------------------------------------------------
+// CONTINUIDADE DA CONVERSA sem IA (custo zero). Perguntas de acompanhamento curtas e inequívocas, que só fazem sentido com a
+// consulta ANTERIOR da mesma pessoa na mesma conversa ("só as vencidas", "agora por fornecedor", "nas duas"). O recorte
+// (período) vem do contexto curto que o próprio MOVA guardou — nunca de texto do usuário. A unidade NÃO é decidida aqui: segue
+// a regra determinística do motor (resolverUnidade), então o histórico jamais amplia o que a pessoa pode ver.
+const FAMILIA_CONTAS = Object.freeze(["CONTAS_A_PAGAR_ABERTAS", "CONTAS_VENCENDO", "CONTAS_VENCIDAS", "MAIORES_CONTAS_ABERTAS", "CONTAS_PARCIAIS", "FORNECEDORES_COM_PENDENCIAS", "CONTAS_SEM_COMPROVANTE"]);
+
+/** Saída validada (mesmo formato da IA) que repete a consulta da conversa, com o mesmo período. null se o contexto não valida. */
+export function saidaDeContinuacao(consulta, conversa, extra = {}) {
+  const r = conversa?.contexto && typeof conversa.contexto === "object" ? conversa.contexto : {};
+  const v = validarSaidaDaIa({
+    ...SAIDA_VAZIA, legivel: true, tipoDocumento: "OUTRO", intencao: "CONSULTAR", consulta, confianca: "ALTA",
+    competencia: r.competencia ?? null, periodoInicio: r.periodoInicio ?? null, periodoFim: r.periodoFim ?? null,
+    justificativa: "continuação da conversa (sem IA)", ...extra,
+  });
+  return v.ok ? v.saida : null;
+}
+
+/** @returns {object|null} saída validada para a pergunta de acompanhamento, ou null (segue o fluxo normal, inclusive IA). */
+export function interpretarSeguimento(texto, conversa) {
+  const bruto = String(texto ?? "").trim();
+  if (!conversa?.consulta || !bruto || bruto.length > 60 || /\d/.test(bruto)) return null;
+  const t = sem(bruto.replace(/^\s*@?mova[\s,!.:-]*/i, ""));
+  if (NAO_E_COMANDO.some((x) => t.includes(x))) return null;
+  const familiaContas = FAMILIA_CONTAS.includes(conversa.consulta);
+  if (familiaContas && /^ (e )?(so|apenas|somente) (as |os )?(vencid|atrasad)[a-z]* $/.test(t)) return saidaDeContinuacao("CONTAS_VENCIDAS", conversa);
+  if (familiaContas && /^ (e )?(agora )?(por|pelos|por cada) fornecedor(es)? $/.test(t)) return saidaDeContinuacao("FORNECEDORES_COM_PENDENCIAS", conversa);
+  if (/^ (e )?(nas|em|para|pras) (as )?(duas|ambas)( empresas| unidades| lojas)? $/.test(t) || /^ (e )?(nas|nos) dois $/.test(t)) return saidaDeContinuacao(conversa.consulta, conversa, { todasUnidades: true });
+  return null;
+}

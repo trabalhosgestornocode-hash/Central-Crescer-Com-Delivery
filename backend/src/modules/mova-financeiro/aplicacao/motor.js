@@ -24,7 +24,7 @@ import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
-import { interpretarComando } from "./comandos.js";
+import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
@@ -86,7 +86,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
 
-  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {}, privado = null, consulta = null }) {
+  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
     if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
     await a.historico.registrar({
       organizacaoId: escopo?.organizacaoId ?? null, unidadeId: escopo?.unidadeId ?? null, eventoId: evento.eventoId, mensagemId: evento.mensagemId,
@@ -102,20 +102,30 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     } else if (resposta) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
     // Continuidade: depois de responder, escuta a próxima mensagem DESTE participante nesta conversa (e lembra unidade/consulta).
     if (resposta && evento.participanteId && typeof a.conversas?.registrar === "function") {
-      await a.conversas.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, unidadeId: escopo?.unidadeId ?? null, consulta, validadeMs: JANELA_CONTINUIDADE_MS });
+      await a.conversas.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, unidadeId: escopo?.unidadeId ?? null, consulta, contexto: contextoConversa, validadeMs: JANELA_CONTINUIDADE_MS });
     }
     return { decisao, motivo, propostaId, resposta };
   }
 
-  async function lerDocumento(evento, grupo) {
+  async function lerDocumento(evento, grupo, conversa = null) {
     if (!evento.midia && !evento.texto) return { ok: true, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } };
     // Contexto de conversa = SÓ a mensagem respondida (respostaA), do MESMO grupo. Mensagens apenas próximas no tempo nunca entram.
     const citada = evento.respostaA ? await a.eventos.obter(evento.respostaA, evento.grupoId) : null;
     const contexto = { unidades: cfg.unidades.filter((x) => grupo.unidades.includes(x.unidadeId)).map((x) => x.nome), mensagemCitada: citada?.texto ?? null };
+    // Conversa (só TEXTO): consulta/unidade/período da última pergunta DESTA pessoa nesta conversa (janela curta). Compacto, sem texto
+    // nem valores; só a unidade que a pessoa pode tratar entra (o histórico nunca amplia permissões).
+    if (conversa?.consulta && !evento.midia) {
+      const un = conversa.unidadeId && grupo.unidades.includes(conversa.unidadeId) ? cfg.unidades.find((x) => x.unidadeId === conversa.unidadeId) : null;
+      const r = conversa.contexto ?? {};
+      contexto.conversa = { consulta: conversa.consulta, unidade: un?.nome ?? null, periodo: r.competencia ?? ((r.periodoInicio || r.periodoFim) ? `${r.periodoInicio ?? "?"} a ${r.periodoFim ?? "?"}` : null) };
+    }
+    const t0 = Date.now();
     let bruta;
     try {
       bruta = await extrator.extrair({ texto: evento.texto, tipo: evento.tipo, midia: evento.midia ? { mime: evento.midia.mime, referencia: evento.midia.referencia } : null, contexto });
+      registrar({ tipo: "MOVA_IA_LEITURA", ok: true, ms: Date.now() - t0, comContexto: Boolean(contexto.conversa), grupo: mascarar(evento.grupoId) }); // métrica sem texto, valor ou documento
     } catch (e) {
+      registrar({ tipo: "MOVA_IA_LEITURA", ok: false, ms: Date.now() - t0, codigo: e?.codigo ?? (e instanceof ErroTransitorio ? "TRANSITORIO" : "ERRO"), grupo: mascarar(evento.grupoId) });
       if (e instanceof ErroTransitorio) throw e; // IA/transcrição fora do ar: a fila tenta de novo; nada é criado agora
       return { ok: false, motivo: e?.codigo ? `EXTRATOR_FALHOU:${e.codigo}${e.detalhe ? `:${e.detalhe}` : ""}` : "EXTRATOR_FALHOU", codigo: e?.codigo ?? null };
     }
@@ -285,14 +295,29 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (cmd && !cmd.soPeriodo) { saida = cmd.saida; interpretacao = "COMANDO"; }
       else if (cmd?.soPeriodo && conversa?.consulta) { saida = Object.freeze({ ...cmd.saida, consulta: conversa.consulta }); interpretacao = "CONTINUIDADE"; }
     }
+    // Conversa natural sem IA (custo zero): "só as vencidas", "agora por fornecedor", "nas duas" e "e na Subway?" repetem a consulta
+    // anterior DESTA pessoa nesta conversa (janela curta). A unidade continua vindo da regra determinística (nunca do histórico).
+    if (!saida && !esclarecimento && conversa?.consulta && evento.tipo === "TEXTO" && !evento.midia) {
+      const seg = interpretarSeguimento(evento.texto, conversa)
+        ?? (/^\s*(e|mas)\b/i.test(evento.texto ?? "") && ehEsclarecimentoDeUnidade(evento.texto, daPessoa) ? saidaDeContinuacao(conversa.consulta, conversa) : null);
+      if (seg) { saida = seg; interpretacao = "CONTINUIDADE"; }
+    }
     if (!saida) {
-      const lida = await lerDocumento(evento, daPessoa);
+      const lida = await lerDocumento(evento, daPessoa, conversa);
       // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
       // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
       if (!lida.ok && IA_PAUSADA.includes(lida.codigo)) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.iaPausada(), injecao });
       if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: respostaDaFalhaDeLeitura(lida, evento), injecao });
       saida = lida.saida;
+      // A IA marcou que a mensagem depende da pergunta anterior e não trouxe consulta própria: repete a consulta da conversa (com o
+      // mesmo período, se a mensagem não trouxe outro). Só consulta: nenhuma outra intenção é reescrita.
+      if (saida.continuacao === true && !saida.consulta && conversa?.consulta && ["CONSULTAR", "OUTRA", "DESCONHECIDA"].includes(saida.intencao) && !saida.valorCentavos) {
+        const r = conversa.contexto ?? {};
+        const tem = Boolean(saida.competencia || saida.periodoInicio || saida.periodoFim);
+        const rec = validarSaidaDaIa({ ...saida, intencao: "CONSULTAR", consulta: conversa.consulta, ...(tem ? {} : { competencia: r.competencia ?? null, periodoInicio: r.periodoInicio ?? null, periodoFim: r.periodoFim ?? null }) });
+        if (rec.ok) { saida = rec.saida; interpretacao = "IA_CONTINUIDADE"; }
+      }
     }
 
     // 9. Intenções que o MOVA nunca executa / que só o Nível 2 faz.
@@ -700,6 +725,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
   }
 
+  /** Recorte (período) da consulta, para a continuidade: só datas/competência já validadas, nunca texto. */
+  const recorteDe = (s) => (s.competencia || s.periodoInicio || s.periodoFim ? { competencia: s.competencia ?? null, periodoInicio: s.periodoInicio ?? null, periodoFim: s.periodoFim ?? null } : null);
+
   /** Contexto comum das ferramentas: período explícito na resposta e data de referência do motor. */
   function contextoDaConsulta(saida) {
     const periodo = periodoDaConsulta(saida, hoje());
@@ -742,7 +770,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const c = { ...contextoDaConsulta(saida), detalhe, pergunta: evento.texto ?? "", palavrasDaUnidade: unidade.apelidos ?? [] };
     const r = await ferramenta(escopo, c);
     if (r.dadosInsuficientes) {
-      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${r.rotulo ?? c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta });
+      return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `${consulta}:DADOS_INSUFICIENTES`, escopo, resposta: RESPOSTA.dadosInsuficientes(`${unidade.nome} (${r.rotulo ?? c.periodo.rotulo})`), injecao, extra: { motivoSemDados: r.motivo, ...marca }, privado, consulta, contextoConversa: recorteDe(saida) });
     }
     // 16A: rastreabilidade — quando o Financeiro foi lido (os números podem mudar com novas importações).
     const lidoEm = relogio().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
@@ -753,7 +781,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // qualquer dúvida, devolve o texto determinístico.
     const padrao = RESPOSTA.consulta(linhas);
     const redacao = redator ? await redator.redigir({ textoPadrao: padrao, fatos: [`${unidade.nome} — ${rotulo}`, ...r.linhas], pergunta: evento.texto }) : null;
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: { ...marca, ...(redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {}) }, privado, consulta });
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, escopo, resposta: redacao?.texto ?? padrao, injecao, extra: { ...marca, ...(redacao ? { redacao: redacao.origem, redacaoMotivo: redacao.motivo } : {}) }, privado, consulta, contextoConversa: recorteDe(saida) });
   }
 
   /** Consulta das unidades do grupo: cada uma separada; total só quando TODAS têm o valor (senão "total indisponível"). */
@@ -776,7 +804,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const empresas = new Set(unidades.map((u) => u.organizacaoId));
     if (consulta === "FATURAMENTO") linhas.push(empresas.size > 1 ? "Total: não somado (unidades de empresas diferentes)."
       : valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
-    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, extra: { interpretacao, ...extraRota } });
+    return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, contextoConversa: recorteDe(saida), extra: { interpretacao, ...extraRota } });
   }
 
   return Object.freeze({ processar });
