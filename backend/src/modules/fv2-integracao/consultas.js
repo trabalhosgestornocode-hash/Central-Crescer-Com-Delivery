@@ -101,7 +101,7 @@ export const CONSULTAS = Object.freeze({
     fornecedores: (await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => ({ id: x.id, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
   }),
   // Entregadores Próprios: painel único da área, prévia sem efeito, demonstrativo da semana e histórico do entregador.
-  "/entregadores": (n, c, p) => n.consultarEntregadoresProprios(c, filtro(p, ["semana", "mes", "entregador", "situacao"])),
+  "/entregadores": (n, c, p) => n.consultarEntregadoresProprios(c, filtro(p, ["semana", "selecao", "mes", "entregador", "situacao"])),
   "/entregadores/previa": (n, c, p) => n.previaDoFechamentoSemanal(c, { inicio: p.inicio }),
   "/entregadores/fechamento": (n, c, p) => n.detalharFechamentoDoEntregador(c, { inicio: p.inicio, entregador: p.entregador }),
   "/entregadores/pessoa": (n, c, p) => n.consultarEntregador(c, { entregador: p.entregador }),

@@ -395,6 +395,11 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async contarEnviadasDesde(naoAntesDe) {
         return Number((await q("select count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and (estado = 'ENVIADA' or (estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE'))", [naoAntesDe])).rows[0].n);
       },
+      /** 23/11: enviadas por conversa desde `desde` (teto diário por conversa; mesma regra de contagem do teto geral). */
+      async contarEnviadasPorDestinoDesde(desde) {
+        const r = await q("select grupo_jid, count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and (estado = 'ENVIADA' or (estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE')) group by grupo_jid", [desde]);
+        return new Map(r.rows.map((x) => [x.grupo_jid, x.n]));
+      },
       async marcarEnviada(id, providerMessageId) {
         await q("update mova.resposta set estado = 'ENVIADA', provider_message_id = $2, enviada_em = now(), lease_ate = null where id = $1", [id, providerMessageId]);
       },
