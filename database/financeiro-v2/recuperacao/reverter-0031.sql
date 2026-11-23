@@ -56,6 +56,7 @@ begin
   if (to_jsonb(new)->>tg_argv[1])::bigint < (to_jsonb(old)->>tg_argv[1])::bigint then
     raise exception 'Financeiro v2: vincular pagamento do extrato não desfaz baixas (use o estorno, com a permissão própria).' using errcode = '42501';
   end if;
+  -- Na conta, a situação resultante de uma baixa só pode ser parcial ou quitada (nunca cancelar ou reabrir).
   if tg_table_name = 'fv2_obrigacao' and (to_jsonb(new)->>'situacao') not in ('PARCIAL', 'QUITADA') then
     raise exception 'Financeiro v2: vincular pagamento do extrato só deixa a conta parcial ou quitada.' using errcode = '42501';
   end if;
@@ -77,8 +78,9 @@ begin
       from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace ns on ns.oid = c.relnamespace
      where ns.nspname = current_schema() and c.relname = r.tabela and p.polname = r.politica;
     if expr is null then raise exception 'reverter-0031: política %.% não encontrada', r.tabela, r.politica; end if;
-    limpa := regexp_replace(expr, ' OR \(\( SELECT fv2_tem_acao\(ARRAY\[''financeiro_v2\.registrar_juros''::text\]\) AS fv2_tem_acao\)\)', '', 'g');
-    limpa := regexp_replace(limpa, ' OR \(SELECT fv2_tem_acao\(ARRAY\[''financeiro_v2\.registrar_juros''::text\]\) AS fv2_tem_acao\)', '', 'g');
+    -- O PostgreSQL imprime a cláusula como ` OR ( SELECT fv2_tem_acao(...) AS fv2_tem_acao)` (espaço depois do parêntese; com o
+    -- schema na frente se o search_path não o tiver). Os parênteses que sobram em volta da expressão antiga não mudam a regra.
+    limpa := regexp_replace(expr, '\s+OR\s+\(\s*SELECT\s+(financeiro_v2\.)?fv2_tem_acao\(ARRAY\[''financeiro_v2\.registrar_juros''::text\]\)\s+AS\s+fv2_tem_acao\)', '', 'g');
     if limpa like '%registrar_juros%' then raise exception 'reverter-0031: não consegui remover registrar_juros de %.%', r.tabela, r.politica; end if;
     execute format('alter policy %I on %I with check (%s)', r.politica, r.tabela, limpa);
   end loop;

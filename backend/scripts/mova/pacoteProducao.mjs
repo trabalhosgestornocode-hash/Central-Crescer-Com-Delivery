@@ -79,7 +79,7 @@ end $$;
 }
 
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
-export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"]); // 0009 aplicada em 23/11
+export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0011"]); // 0009 e 0011 aplicadas em 23/11 (0010 ainda NÃO: entra pelo atualizar.sql)
 
 /**
  * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as
