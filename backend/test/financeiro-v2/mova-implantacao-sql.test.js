@@ -110,3 +110,39 @@ test("23/11 concessão ADICIONAL do MOVA (ex.: Subway): só com a lista exata da
   assert.equal(rows.length, 2);
   assert.ok(rows.every((r) => JSON.stringify(r.acoes) === JSON.stringify([ACAO.VER]) && r.situacao === "ATIVA" && r.versao === 1));
 });
+
+test("23/11 isolamento por concessão (sessão REAL do leitor): só Subway → só Subway; depois as duas, explicitamente → as duas; revogar uma fecha só ela", pular, async () => {
+  const { interno, dono } = await cenario();
+  const papel = `fv2_teste_mova_iso_${randomBytes(3).toString("hex")}`;
+  const senha = randomBytes(24).toString("hex");
+  await executar(dono, sqlLoginDoLeitorDoMova(papel, senha));
+  const u = new URL(interno.urlApp); u.username = papel; u.password = senha;
+  const pool = await abrirPool(u.toString(), { max: 2 });
+  const leitor = criarLeitorFinanceiroMova({ pool });
+  const ler = (org, uni) => criarNucleoFinanceiro({ repositorio: leitor.repositorio, escoposAutorizados: [{ organizacaoId: org, unidadeId: uni }], relogio: () => AGORA, exigirConcessaoPersistida: true })
+    .consultarContasAPagar({ organizacaoId: org, unidadeId: uni, usuarioId: IDENTIDADE_MOVA, permissoes: [ACAO.VER] }, { pagina: 1, tamanho: 100 });
+  const sessao = (org, uni) => pool.query("select financeiro_v2.fv2_abrir_sessao_mova($1, $2)", [org, uni]);
+  try {
+    // "Subway" = ORG_B/UNI_B (outra organização); "Açaí" = ORG_A/UNI_A (tem a conta de R$ 350,00)
+    await executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B));
+    await sessao(ORG_B, UNI_B);
+    assert.deepEqual((await ler(ORG_B, UNI_B)).itens, [], "Subway lida (sem contas)");
+    await assert.rejects(sessao(ORG_A, UNI_A), (e) => e.code === "FV020", "só Subway: o Açaí é recusado pelo banco");
+    await assert.rejects(ler(ORG_A, UNI_A));
+    await assert.rejects(sessao(ORG_A, UNI_B), (e) => e.code === "FV020", "par organização/unidade trocado é recusado");
+    // as duas, só com a lista explícita
+    await executar(dono, sqlConcessaoDoMova(ORG_A, UNI_A, { alemDe: [UNI_B] }));
+    assert.deepEqual((await ler(ORG_A, UNI_A)).itens.map((i) => i.valorOriginalCentavos), [35000]);
+    assert.deepEqual((await ler(ORG_B, UNI_B)).itens, []);
+    // revogar a Subway (mecanismo oficial de concessão: situação REVOGADA) fecha só ela
+    await executar(dono, `set local search_path = financeiro_v2, pg_catalog, public;
+with r as (update fv2_concessao set situacao = 'REVOGADA', acoes = '[]'::jsonb, versao = versao + 1, atualizado_em = now() where usuario_id = '${IDENTIDADE_DO_MOVA}' and unidade_id = '${UNI_B}' returning *)
+insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CORRECAO', null, jsonb_build_object('versao', versao, 'acoes', acoes, 'situacao', situacao), 'Revogação sintética (teste).', concedido_por, now() from r;`);
+    await assert.rejects(sessao(ORG_B, UNI_B), (e) => e.code === "FV020");
+    assert.equal((await ler(ORG_A, UNI_A)).itens.length, 1, "o Açaí continua");
+    const { rows } = await dono.query("select unidade_id, acoes from financeiro_v2.fv2_concessao where usuario_id = $1 and situacao = 'ATIVA'", [IDENTIDADE_DO_MOVA]);
+    assert.equal(rows.length, 1);
+    assert.ok(rows.every((r) => JSON.stringify(r.acoes) === JSON.stringify([ACAO.VER])), "só 'ver' em todas");
+  } finally { await pool.end().catch(() => {}); }
+});
