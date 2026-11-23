@@ -217,8 +217,10 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
   /** Liquidações dos títulos, as movimentações que as pagaram e as OUTRAS liquidações dessas mesmas movimentações. */
   async function pagamentosDosTitulos(cx, tx, ids) {
     const diretas = await ligados(cx, tx, TIPO.LIQUIDACAO, "alvoId", ids);
-    const movIds = unicos(diretas.map((q) => q.movimentacaoId));
-    return { liquidacoes: await ligados(cx, tx, TIPO.LIQUIDACAO, "movimentacaoId", movIds), movimentacoes: await ligados(cx, tx, TIPO.MOVIMENTACAO, "id", movIds) };
+    const movIds = unicos(diretas.map((q) => q.movimentacaoId).filter(Boolean));
+    // Execução 17: pagamento por comprovante ainda sem conciliação não tem movimentação — entra pelas diretas.
+    const semMov = diretas.filter((q) => !q.movimentacaoId);
+    return { liquidacoes: [...(await ligados(cx, tx, TIPO.LIQUIDACAO, "movimentacaoId", movIds)), ...semMov], movimentacoes: await ligados(cx, tx, TIPO.MOVIMENTACAO, "id", movIds) };
   }
   async function documentosDosRegistros(cx, tx, registros) {
     const vinculos = await ligados(cx, tx, TIPO.VINCULO_DOCUMENTAL, "registroId", unicos(registros.map((r) => r.id)));

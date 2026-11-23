@@ -25,6 +25,7 @@ import { CODIGO as COD } from "../dominio/erros.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesEconomicas } from "./economico.js";
 import { validarPreviaDeVinculo, validarVinculoDeExtrato } from "../contratos/comandos.js";
+import { exigirSemComprovantePendente } from "./baixaPorComprovante.js";
 
 /** Por que uma saída não pode receber baixa de conta (null = pode). */
 export function motivoDeSaidaInelegivel(m) {
@@ -210,6 +211,8 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   const contas = [];
   for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
   for (const o of contas) await exigirPagamentoLiberado(tx, cx, o); // entregador próprio: só com nota e demonstrativo conferidos
+  // Execução 17: conta já paga por comprovante (mesmo valor, sem conciliação) não recebe segunda baixa: concilia-se.
+  for (const a of c.alocacoes) await exigirSemComprovantePendente(tx, cx, a.obrigacaoId, a.valorCentavos);
   // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
   const documentoExplicito = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
   // 09: pagamento ANTECIPADO (saída anterior à emissão) — identificação explícita + documento compatível + justificativa.

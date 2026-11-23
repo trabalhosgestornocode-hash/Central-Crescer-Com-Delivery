@@ -55,6 +55,15 @@ export const RESPOSTA = Object.freeze({
   // Agente 2 — Frente C: baixa pelo extrato (nunca pagamento bancário; a saída já estava no extrato).
   baixaExecutada: (p, r) => `Baixa registrada no Financeiro: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar, conferida com a saída do extrato de ${dataBr(r?.dataSaida)}. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   baixaConferida: (p) => `Proposta ${curto(p.id)}: baixa de ${reais(p.valorCentavos)} conferida com a saída do extrato. Falta a confirmação de um responsável no Centro Financeiro. Nada foi lançado ainda.`,
+  // Execução 17 — situações separadas: PAGO POR COMPROVANTE (conciliação bancária pendente) nunca é "conciliado".
+  pagoPorComprovante: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Situação: pago por comprovante. Conciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  comprovanteAguardandoConfirmacao: (p) => `Proposta ${curto(p.id)}: comprovante de ${reais(p.valorCentavos)} conferido (transação concluída). Falta a confirmação de um responsável para registrar como pago por comprovante; a conciliação bancária ficará pendente até o extrato. Nada foi lançado ainda.`,
+  comprovanteEmRevisao: (situacao) => `O comprovante ficou para conferência humana (${({ DOCUMENTO_INCONSISTENTE: "dados incompletos ou incertos na leitura", DOCUMENTO_ILEGIVEL: "documento ilegível", DOCUMENTO_SUSPEITO: "arquivo com sinais de alteração", COMPROVANTE_DUPLICADO: "comprovante já recebido" })[situacao] ?? "não deu para confirmar a conclusão da transação"}).`,
+  comprovanteNaoConcluido: (situacao) => ({
+    PIX_AGENDADO: "Este comprovante é de um AGENDAMENTO, não de um pagamento concluído. Nada foi registrado como pago. Envie o comprovante quando o pagamento for efetivado.",
+    TRANSFERENCIA_PENDENTE: "A transferência deste comprovante ainda está PENDENTE (em processamento). Nada foi registrado como pago. Envie o comprovante quando ela for concluída.",
+    TRANSACAO_CANCELADA: "Este comprovante mostra uma transação CANCELADA. Nada foi registrado como pago.",
+  })[situacao] ?? "Não deu para confirmar que o pagamento foi concluído. Nada foi registrado como pago.",
   extratoAmbiguo: () => "Há mais de uma saída no extrato com esse valor e data; a escolha fica com o financeiro.",
   aguardandoExtrato: () => "Ainda não achei a saída correspondente no extrato; confiro de novo quando o extrato for importado.",
   grupoOperacional: () => "Este grupo é operacional: aqui eu trato documentos e pendências, sem valores financeiros. Para valores, use a conversa privada com o MOVA ou o Centro Financeiro. Nada foi consultado.",

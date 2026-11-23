@@ -13,7 +13,7 @@ export const ABAS_CENTRAL = Object.freeze([
   { id: "automacoes", rotulo: "Automações" },
   { id: "seguranca", rotulo: "Segurança e Autonomia" },
 ]);
-const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas"], entregadores: ["entregadores"], automacoes: ["automacoes"], seguranca: ["politicas"] };
+const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores"], automacoes: ["automacoes"], seguranca: ["politicas"] };
 const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Cobrança da nota fiscal" };
 const NIVEL = { SOMENTE_PROPOR: ["Só propor", "neutro"], APLICAR_COM_CONFIRMACAO: ["Com confirmação", "alerta"], APLICAR_AUTOMATICO: ["Automático", "info"] };
 const ESTADO_OP = { EXECUTANDO: ["Executando", "info"], EXECUTADA: ["Executada", "ok"], FALHOU: ["Falhou", "erro"], REVERTIDA: ["Revertida", "neutro"] };
@@ -31,6 +31,9 @@ const ORIGEM = { MANUAL: "Lançamento manual", IMPORTACAO: "Importação", PLANI
 const ESTADO_DOC = { AGUARDANDO_CONFERENCIA: ["Aguardando conferência", "alerta"], REVISADO: ["Revisado", "ok"], ENCAMINHADO: ["Encaminhado ao Financeiro", "info"] };
 const TIPO_DOC = { COMPROVANTE: "Comprovante", BOLETO: "Boleto", NOTA_FISCAL: "Nota fiscal", RECIBO: "Recibo", OUTRO: "Outro" };
 const LIMITE_LINHAS = 80;
+const ETAPA = { RECEBIMENTO: "Recebimento", EXTRACAO: "Extração", IDENTIFICACAO: "Identificação", CLASSIFICACAO: "Classificação", OBRIGACAO: "Obrigação",
+  PAGAMENTO: "Pagamento", EXTRATO: "Extrato", CONCILIACAO: "Conciliação", RESULTADO: "Resultado" };
+const SIT_ETAPA = { FEITO: ["Feito", "ok"], PENDENTE: ["Pendente", "alerta"], BLOQUEADO: ["Bloqueado", "erro"], NAO_SE_APLICA: ["Não se aplica", "neutro"] };
 
 /**
  * @param {{ui:object, ler:(url:string)=>Promise<{ok:boolean,status:number,dados:any}>, enviar:(url:string, corpo:object)=>Promise<object>}} deps
@@ -40,6 +43,7 @@ export function criarCentral({ ui, ler, enviar }) {
   const cache = new Map(); // aba → { carregando, dados, erro }
   const filtro = { motivo: null, saida: null, aberta: null }; // conferência: motivo escolhido, grupo de saídas, pendência aberta
   const relacionadas = new Map(); // sha256 → { busca, itens } (sugestões pela legenda/busca; não é vínculo)
+  const linhas = new Map(); // Execução 17: linha do tempo aberta (proposta → etapas)
 
   async function carregar(aba) {
     const rotas = ROTAS[aba] ?? [];
@@ -92,14 +96,25 @@ export function criarCentral({ ui, ler, enviar }) {
       tabela(["Participante", "Nome", "Perfil", "Privado"], x.participantes.map((p, i) => ({ id: `${x.grupo}#${i}`, celulas: [el("code", { texto: p.id }), p.nome ?? "—", p.perfil ?? "por unidade", p.privado ? "sim" : "—"] })), "Participantes autorizados")));
   }
 
-  function operacoes({ operacoes: o, politicas: p }, pode) {
+  function operacoes({ operacoes: o, politicas: p, "pagamentos-a-conciliar": pc }, pode) {
+    const SIT_PC = { SEM_EXTRATO: ["Aguardando o extrato", "neutro"], CANDIDATA_UNICA: ["Saída do extrato encontrada", "info"], AMBIGUA: ["Várias saídas: escolha humana", "alerta"] };
     return [
+      // Execução 17: PAGO POR COMPROVANTE ≠ CONCILIADO. Só a saída do extrato ligada à mesma baixa concilia (nunca 2ª baixa).
+      cartao("Pagos por comprovante — conciliação bancária pendente",
+        el("p", { classe: "cf-dica", texto: "A conta já está paga pelo comprovante; falta ligar a saída do extrato à mesma baixa. Conciliar não cria outra saída, outra despesa nem outra baixa." }),
+        pc?.itens?.length ? tabela(["Pago em", "Valor", "Situação", "Saída do extrato", ""], pc.itens.map((x) => ({ id: x.liquidacaoId, celulas: [
+          dataBr(x.dataPagamento), reais(x.valorCentavos), selo(SIT_PC[x.situacao] ?? [x.situacao, "neutro"]),
+          x.candidatas.length === 1 ? `${dataBr(x.candidatas[0].data)} · ${reais(x.candidatas[0].valorCentavos)}` : x.candidatas.length ? `${x.candidatas.length} candidatas` : "—",
+          x.situacao === "CANDIDATA_UNICA" && pc.podeConciliar ? botao("Conciliar", { "data-acao": "central-conciliar-comprovante", "data-liquidacao": x.liquidacaoId, "data-movimentacao": x.candidatas[0].movimentacaoId, "data-versao": String(x.candidatas[0].versao) }) : "—"] })), "Pagos por comprovante")
+          : vazio(pc?.disponivel === false ? "Indisponível nesta versão do Financeiro." : "Nenhum pagamento por comprovante aguardando conciliação.")),
+      ...(linhas.size ? [cartao("Linha do tempo do documento", ...[...linhas.values()].map((lt) => tabela(["Etapa", "Situação", "Detalhe"], lt.etapas.map((e) => ({ id: e.etapa, celulas: [
+        ETAPA[e.etapa] ?? e.etapa, selo(SIT_ETAPA[e.situacao] ?? [e.situacao, "neutro"]), e.detalhe] })), "Etapas")))] : []),
       cartao("Operações executadas pelo MOVA",
         el("p", { classe: "cf-dica", texto: "Baixas feitas pelo serviço oficial a partir de um comprovante conferido com o extrato. Nenhum pagamento bancário é feito pelo MOVA." }),
         o.itens.length ? tabela(["Quando", "Operação", "Nível", "Valor", "Situação", "Evidência", ""], o.itens.map((x) => ({ id: x.id, celulas: [
           horaBr(x.criadaEm ?? x.executadaEm ?? new Date().toISOString()), x.operacao, selo(NIVEL[x.nivel] ?? [x.nivel, "neutro"]), reais(x.valorCentavos), selo(ESTADO_OP[x.estado] ?? [x.estado, "neutro"]),
           x.resultado?.documentoId ? "comprovante anexado" : x.motivo ? el("code", { texto: x.motivo }) : "—",
-          x.estado === "EXECUTADA" && pode.cancelar ? botao("Reverter", { "data-acao": "central-reverter", "data-operacao": x.id }, true) : "—"] })), "Operações") : vazio("Nenhuma operação executada nesta unidade.")),
+          el("span", {}, botao("Linha do tempo", { "data-acao": "central-linha-do-tempo", "data-proposta": x.propostaId }), x.estado === "EXECUTADA" && pode.cancelar ? botao("Reverter", { "data-acao": "central-reverter", "data-operacao": x.id }, true) : null)] })), "Operações") : vazio("Nenhuma operação executada nesta unidade.")),
       cartao("Aguardando confirmação", el("p", { texto: "Baixas conferidas com o extrato acima do limite da política aparecem em Propostas e Aprovações com o botão de confirmação." }),
         el("p", { classe: "cf-dica", texto: `Autonomia ${p.autonomiaLigada ? "ligada" : "desligada"} · identidade operacional ${p.identidadeOperacional ? "implantada" : "não implantada (tudo fica como proposta)"}.` })),
     ];
@@ -138,12 +153,14 @@ export function criarCentral({ ui, ler, enviar }) {
           selo(NIVEL[x.nivel] ?? [x.nivel, "neutro"]), reais(x.limiteCentavos), `${dataBr(x.vigenteDe)}${x.vigenteAte ? ` a ${dataBr(x.vigenteAte)}` : ""}`, x.responsavel,
           x.revogadaEm ? selo(["Revogada", "neutro"]) : pode.configurar ? botao("Revogar", { "data-acao": "central-revogar", "data-politica": x.id }, true) : "—"] })), "Políticas") : vazio("Nenhuma política: o MOVA só propõe."),
         pode.configurar ? el("form", { classe: "cf-form", "data-form": "politica", "data-unidade": pode.unidadeId },
+          el("label", {}, "Operação ", el("select", { name: "operacao" }, el("option", { value: "BAIXA_POR_EXTRATO", texto: "Baixa pelo extrato (saída já importada)" }),
+            el("option", { value: "BAIXA_DOCUMENTAL", texto: "Pagamento por comprovante (conciliação pendente)" }))),
           el("label", {}, "Nível ", el("select", { name: "nivel" }, Object.entries(NIVEL).map(([k, [r]]) => el("option", { value: k, texto: r })))),
           el("label", {}, "Limite (R$) ", el("input", { name: "limite", inputmode: "decimal", required: "" })),
           el("label", {}, "Responsável ", el("input", { name: "responsavel", maxlength: "120", required: "" })),
           el("label", {}, "Motivo ", el("input", { name: "motivo", minlength: "10", maxlength: "500", required: "" })),
           el("label", {}, "Vigente a partir de ", el("input", { name: "vigenteDe", type: "date", required: "" })),
-          botao("Criar política desta unidade (baixa pelo extrato)", { "data-acao": "central-politica" })) : null),
+          botao("Criar política desta unidade", { "data-acao": "central-politica" })) : null),
       cartao("Interruptores e orçamento de IA", el("p", { texto: "Desligar recebimento, processamento, IA ou envio — e a suspensão geral — fica na aba Processamento, com efeito imediato." })),
     ];
   }
@@ -265,6 +282,18 @@ export function criarCentral({ ui, ler, enviar }) {
       invalidar();
       return r.ok ? { ok: true, texto: b.dataset.estado === "ENCAMINHADO" ? "Encaminhado ao Financeiro (não é baixa nem conciliação)." : "Marcado como revisado (não é baixa nem conciliação)." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
     }
+    if (acao === "central-linha-do-tempo") {
+      const x = await ler(`/api/fv2/mova/linha-do-tempo?proposta=${encodeURIComponent(b.dataset.proposta)}`);
+      if (!x.ok) return { ok: false, texto: `Não foi possível: ${x.dados?.mensagem ?? "linha do tempo indisponível"}` };
+      linhas.clear();
+      linhas.set(b.dataset.proposta, x.dados);
+      return { ok: true, texto: "Linha do tempo aberta acima das operações." };
+    }
+    if (acao === "central-conciliar-comprovante") {
+      r = await enviar("/api/fv2/acoes/mova/conciliar-comprovante", { liquidacaoId: b.dataset.liquidacao, movimentacaoId: b.dataset.movimentacao, versaoMovimentacao: Number(b.dataset.versao) });
+      invalidar();
+      return r.ok ? { ok: true, texto: "Conciliado com o extrato (mesma baixa; nenhuma saída ou despesa nova)." } : { ok: false, texto: `Não foi possível: ${r.mensagem}` };
+    }
     if (acao === "central-reverter") {
       const justificativa = globalThis.prompt?.("Justificativa da reversão (mínimo 10 caracteres; fica na auditoria):")?.trim() ?? "";
       if (!justificativa) return null;
@@ -282,7 +311,8 @@ export function criarCentral({ ui, ler, enviar }) {
       const limite = Math.round(Number(String(v.limite).replace(/\./g, "").replace(",", ".")) * 100);
       if (!Number.isSafeInteger(limite) || limite < 0) return { ok: false, texto: "Limite inválido." };
       if (!f.dataset.unidade) return { ok: false, texto: "Unidade da sessão indisponível." };
-      r = await enviar("/api/fv2/acoes/mova/politica", { operacao: "BAIXA_POR_EXTRATO", unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
+      if (!["BAIXA_POR_EXTRATO", "BAIXA_DOCUMENTAL"].includes(v.operacao)) return { ok: false, texto: "Operação inválida." };
+      r = await enviar("/api/fv2/acoes/mova/politica", { operacao: v.operacao, unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
     } else if (acao === "central-confirmar-baixa") {
       r = await enviar("/api/fv2/acoes/mova/confirmar-baixa-extrato", { propostaId: b.dataset.proposta });
     } else return null;

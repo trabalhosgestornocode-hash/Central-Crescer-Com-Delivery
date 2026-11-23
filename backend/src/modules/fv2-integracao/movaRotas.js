@@ -30,8 +30,12 @@
 //   GET  /api/mova/documentos-recebidos  fila de revisão dos documentos do WhatsApp (ver)
 //   GET  /api/mova/documento-relacionadas?sha=&busca=  contas que podem se relacionar (pela legenda/busca; o arquivo não é lido) (ver)
 //   POST /acoes/mova/documento-conferir  marcar revisado/encaminhado (documentos); NÃO é baixa nem vínculo financeiro
+//   Execução 17 — pagamento por comprovante × conciliação:
+//   GET  /api/mova/pagamentos-a-conciliar  pagos por comprovante com a conciliação pendente e as saídas candidatas (ver)
+//   GET  /api/mova/linha-do-tempo?proposta=  etapas do documento: recebimento → … → pagamento → extrato → conciliação (ver)
+//   POST /acoes/mova/conciliar-comprovante  responsável liga a saída do extrato à MESMA baixa (vincular_pagamento; nunca 2ª baixa)
 import { ACAO, ErroFinanceiro } from "../financeiro-v2/index.js";
-import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, montarConferencia } from "../mova-financeiro/index.js";
+import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, linhaDoTempo, montarConferencia } from "../mova-financeiro/index.js";
 
 const recusa = (status, codigo, mensagem) => Object.assign(new Error(mensagem), { codigoHttp: status, codigo });
 const STATUS = { BAIXA_CONFERIDA_COM_EXTRATO: 409, EXTRATO_NAO_CONFERIDO: 409, OPERACAO_NAO_REVERSIVEL: 409, OPERACAO_NAO_ENCONTRADA: 404, POLITICA_NAO_ENCONTRADA: 404, POLITICA_INVALIDA: 400, JUSTIFICATIVA_OBRIGATORIA: 400, EXECUCAO_DESLIGADA: 404, PERMISSAO_INSUFICIENTE: 403, PROPOSTA_NAO_ENCONTRADA: 404, PROPOSTA_JA_DECIDIDA_OU_INEXISTENTE: 409, CATEGORIA_INVALIDA: 400, VERSAO_OBRIGATORIA: 400, CONTA_OBRIGATORIA: 400 };
@@ -114,6 +118,23 @@ export const CONSULTAS_MOVA = Object.freeze({
     return d;
   },
   "/mova/operacoes": async ({ ctx, mova }) => { exigirVer(ctx); return { itens: mova.armazenamento.operacoes ? await mova.armazenamento.operacoes.listar(escopo(ctx)) : [] }; },
+  "/mova/pagamentos-a-conciliar": async ({ ctx, nucleo }) => {
+    exigirVer(ctx);
+    if (typeof nucleo?.consultarPagamentosPorComprovanteAConciliar !== "function") return { disponivel: false, itens: [] };
+    const r = await nucleo.consultarPagamentosPorComprovanteAConciliar(ctx);
+    return { disponivel: true, podeConciliar: Boolean(ctx.permissoes?.includes(ACAO.VINCULAR_PAGAMENTO)), itens: r.itens };
+  },
+  "/mova/linha-do-tempo": async ({ ctx, mova, nucleo, params }) => {
+    exigirVer(ctx);
+    if (!UUID.test(params.proposta ?? "")) throw recusa(400, "PARAMETRO_INVALIDO", "Proposta inválida.");
+    const p = await mova.armazenamento.propostas.obter(escopo(ctx), params.proposta.toLowerCase());
+    if (!p) throw recusa(404, "PROPOSTA_NAO_ENCONTRADA", "Proposta não encontrada nesta unidade.");
+    const ops = mova.armazenamento.operacoes ? (await mova.armazenamento.operacoes.listar(escopo(ctx))).filter((o) => o.propostaId === p.id) : [];
+    const obrigacaoId = p.resultado?.obrigacaoId ?? p.comando?.entrada?.obrigacaoId ?? null;
+    let titulo = null;
+    if (obrigacaoId) { try { titulo = (await nucleo.detalharContaAPagar(ctx, { id: obrigacaoId })).titulo; } catch (e) { if (!(e instanceof ErroFinanceiro)) throw e; } }
+    return { propostaId: p.id, etapas: linhaDoTempo({ proposta: p, operacao: ops.at(-1) ?? null, titulo }) };
+  },
   "/mova/politicas": async ({ ctx, mova }) => {
     exigirVer(ctx);
     const todas = mova.armazenamento.politicas ? await mova.armazenamento.politicas.listar(ctx.organizacaoId) : [];
@@ -214,6 +235,14 @@ export const ACOES_MOVA = Object.freeze({
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarClassificacao(ctx, { propostaId: b.propostaId, versao: b.versao, categoria: b.categoria }) },
   "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria"], escreveNoFinanceiro: true,
     fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.aplicar(ctx, { propostaId: b.propostaId, contaId: b.contaId ?? null, categoria: b.categoria ?? null }, { nucleo }) },
+  // Execução 17: a pessoa (vincular_pagamento) liga a saída do extrato ao pagamento JÁ registrado por comprovante. O núcleo
+  // confere valor, data (tolerância), saída livre e idempotência; nada de segunda baixa, saída ou despesa.
+  "/mova/conciliar-comprovante": { campos: ["liquidacaoId", "movimentacaoId", "versaoMovimentacao"], escreveNoFinanceiro: true,
+    fazer: async ({ ctx, mova, nucleo, b }) => {
+      if (!mova.pagamentoPorComprovante) throw recusa(403, "PAGAMENTO_POR_COMPROVANTE_DESLIGADO", "Pagamento por comprovante ainda não foi ativado.");
+      return nucleo.conciliarPagamentoPorComprovante(ctx, { liquidacaoId: b.liquidacaoId, movimentacaoId: b.movimentacaoId, versaoMovimentacao: b.versaoMovimentacao,
+      justificativa: "Conciliação conferida na Central de Operações MOVA (saída do extrato × pagamento por comprovante).", confirmar: true });
+    } },
   "/mova/confirmar-baixa-extrato": { campos: ["propostaId"], escreveNoFinanceiro: true,
     fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.confirmarBaixaPorExtrato(ctx, { propostaId: b.propostaId }, { nucleo }) },
   "/mova/reverter-operacao": { campos: ["operacaoId", "justificativa"], escreveNoFinanceiro: true,

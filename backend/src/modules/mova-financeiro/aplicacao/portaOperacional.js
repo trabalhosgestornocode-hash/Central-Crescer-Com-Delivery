@@ -19,6 +19,9 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   enviarEvidencia: "ENVIAR_DOCUMENTO",
   vincularPagamentoDoExtrato: "VINCULAR_PAGAMENTO",
   anexarDocumentoDoEntregador: "ENVIAR_DOCUMENTO",
+  // Execução 17: pagamento por comprovante (sem saída bancária) e, quando o extrato chega, a conciliação com a MESMA baixa.
+  registrarPagamentoPorComprovante: "BAIXAR_POR_COMPROVANTE",
+  conciliarPagamentoPorComprovante: "VINCULAR_PAGAMENTO",
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

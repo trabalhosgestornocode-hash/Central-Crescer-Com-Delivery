@@ -205,3 +205,35 @@ export function contasRelacionadas(todas, texto, { limite = 8 } = {}) {
     .map((t) => Object.freeze({ id: t.id, fornecedor: fornecedorIdentificado(t) ? t.fornecedor.nome : null, descricao: t.descricao ?? null, vencimento: t.vencimento ?? null,
       valorCentavos: inteiro(t.valorOriginalCentavos), saldoCentavos: abertaComSaldo(t) ? t.saldoCentavos : 0, situacao: t.situacao }));
 }
+
+// ------------------------------------------------------------------------- Execução 17: linha do tempo de um documento
+export const ETAPAS_DO_DOCUMENTO = Object.freeze(["RECEBIMENTO", "EXTRACAO", "IDENTIFICACAO", "CLASSIFICACAO", "OBRIGACAO", "PAGAMENTO", "EXTRATO", "CONCILIACAO", "RESULTADO"]);
+const etapa = (id, situacao, detalhe) => Object.freeze({ etapa: id, situacao, detalhe });
+/**
+ * Linha do tempo de UM documento do MOVA (proposta), só com o que os registros mostram. Situações: FEITO, PENDENTE,
+ * BLOQUEADO, NAO_SE_APLICA. "Pago por comprovante" e "conciliado com extrato" são etapas DIFERENTES.
+ * @param {{proposta:object, operacao?:object|null, titulo?:object|null}} p  titulo = detalharContaAPagar(...).titulo
+ */
+export function linhaDoTempo({ proposta: p, operacao = null, titulo = null }) {
+  const l = p.leitura ?? {};
+  const comp = l.comprovante ?? p.comprovante ?? null;
+  const obrigacaoId = p.resultado?.obrigacaoId ?? p.comando?.entrada?.obrigacaoId ?? null;
+  const categoria = p.categoriaRevisada ?? p.categoriaSugerida ?? null;
+  const pagamento = titulo?.situacaoPagamento ?? p.resultado?.situacaoPagamento ?? null;
+  const conciliacao = titulo?.situacaoConciliacao ?? (p.resultado?.conciliacao ?? null);
+  const comExtrato = (titulo?.pagamentos ?? []).some((x) => x.movimentacaoId) || p.conciliacao?.situacao === "CONFERIDA";
+  const fim = { APLICADA: "FEITO", REJEITADA: "BLOQUEADO", AGUARDANDO_REVISAO: "PENDENTE", APLICANDO: "PENDENTE" }[p.estado] ?? "PENDENTE";
+  return Object.freeze([
+    etapa("RECEBIMENTO", "FEITO", p.evidencia ? "Documento recebido pelo WhatsApp" : "Relato por texto (sem arquivo)"),
+    etapa("EXTRACAO", l.tipoDocumento ? "FEITO" : "PENDENTE", comp ? `Leitura: ${comp.situacao}${l.idTransacao ? " · com identificador da transação" : ""}` : l.tipoDocumento ?? "Sem leitura"),
+    etapa("IDENTIFICACAO", p.unidadeId ? "FEITO" : "PENDENTE", "Unidade identificada"),
+    etapa("CLASSIFICACAO", categoria ? "FEITO" : "PENDENTE", categoria ? `Categoria ${categoria}${p.categoriaRevisada ? " (revisada)" : " (sugerida)"}` : "A classificar"),
+    etapa("OBRIGACAO", obrigacaoId ? "FEITO" : p.tipo === "DESPESA_PAGA" ? "PENDENTE" : "NAO_SE_APLICA", obrigacaoId ? "Conta a pagar identificada" : "Conta a pagar a registrar na aprovação"),
+    etapa("PAGAMENTO", ["PAGO_POR_COMPROVANTE", "PAGO"].includes(pagamento) ? "FEITO" : pagamento === "PARCIALMENTE_PAGO" ? "FEITO" : "PENDENTE",
+      ({ PAGO_POR_COMPROVANTE: "Pago por comprovante", PAGO: "Pago com a saída do extrato", PARCIALMENTE_PAGO: "Parcialmente pago", EM_ABERTO: "Em aberto" })[pagamento] ?? "Pagamento não registrado"),
+    etapa("EXTRATO", comExtrato ? "FEITO" : "PENDENTE", comExtrato ? "Saída do extrato encontrada" : "Aguardando o extrato"),
+    etapa("CONCILIACAO", conciliacao === "CONCILIADO_COM_EXTRATO" ? "FEITO" : p.conciliacao?.situacao === "AMBIGUA" ? "BLOQUEADO" : "PENDENTE",
+      ({ CONCILIADO_COM_EXTRATO: "Conciliado com o extrato", CONCILIACAO_PENDENTE: "Conciliação pendente" })[conciliacao] ?? (p.conciliacao?.situacao === "AMBIGUA" ? "Extrato ambíguo: escolha humana" : "Não conciliado")),
+    etapa("RESULTADO", fim, operacao ? `${operacao.operacao} · ${operacao.estado}${operacao.motivo ? ` (${operacao.motivo})` : ""}` : p.estado),
+  ]);
+}

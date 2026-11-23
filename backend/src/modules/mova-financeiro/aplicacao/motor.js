@@ -14,6 +14,7 @@
 // Nunca: grava no Financeiro, paga, exclui, classifica em definitivo, age em competência que não esteja ABERTA, presume a
 // unidade pelo histórico do participante. Comprovante de obrigação existente = proposta de BAIXA (nunca despesa nova).
 import { chaveDoDocumento } from "../dominio/documentos.js";
+import { SITUACAO_COMPROVANTE, avaliarComprovante } from "../dominio/comprovante.js";
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
@@ -27,6 +28,7 @@ import { interpretarComando } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 
+const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
   CONSULTA: "CONSULTA", ORIENTACAO: "ORIENTACAO", PROPOSTA: "PROPOSTA", FALHA_LEITURA: "FALHA_LEITURA",
@@ -406,6 +408,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
         pagador: saida.pagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).
+        situacaoTransacao: saida.situacaoTransacao ?? null, incertezas: saida.incertezas ?? [],
+        comprovante: evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO" ? avaliarComprovante(saida, { hoje: hoje() }) : null,
         justificativa: saida.justificativa ? mascararDadosSensiveis(String(saida.justificativa).slice(0, 300)) : null, camposAusentes: saida.camposAusentes ?? [] },
       categoriaSugerida: saida.categoriaSugerida, naturezaSugerida: saida.natureza, sinaisDeInjecao: injecao,
       // Unidade com requisitos financeiros incompletos: a proposta é guardada, mas a APLICAÇÃO fica bloqueada até completar.
@@ -422,15 +427,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Agente 2 — Frente C: depois de criada, a baixa é conferida com o extrato e, se a política autorizar, liquidada.
     const pos = posCriacao ? await posCriacao(proposta) : null;
     const texto = (pos?.texto ?? textoResposta(proposta)) + (incompleta ? ` ${RESPOSTA.pendenteUnidadeIncompleta()}` : "");
-    const extra = pos ? { conciliacao: pos.situacao, autonomia: pos.nivel, ...(pos.motivo ? { motivoExecucao: pos.motivo } : {}) } : {};
+    const extra = pos ? { conciliacao: pos.situacao, autonomia: pos.nivel, ...(pos.nivelDocumental ? { autonomiaDocumental: pos.nivelDocumental, comprovante: pos.comprovante } : {}), ...(pos.motivo ? { motivoExecucao: pos.motivo } : {}) } : {};
     // Agente 2: a resposta do documento leva VALOR — num grupo por LISTA segue a política (privado, ou grupo comprovado).
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
-    return concluir(evento, { decisao: pos?.situacao === "EXECUTADA" ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
+    return concluir(evento, { decisao: ["EXECUTADA", "PAGO_POR_COMPROVANTE"].includes(pos?.situacao) ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
   }
 
   async function tratarPagamento(ctx) {
     const { evento, escopo, saida, injecao } = ctx;
+    // Execução 17: comprovante AGENDADO, PENDENTE ou CANCELADO não é pagamento — nada é proposto como pago.
+    if (evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO") {
+      const av = avaliarComprovante(saida, { hoje: hoje() });
+      if ([SITUACAO_COMPROVANTE.PIX_AGENDADO, SITUACAO_COMPROVANTE.TRANSFERENCIA_PENDENTE, SITUACAO_COMPROVANTE.TRANSACAO_CANCELADA].includes(av.situacao)) {
+        await marcarDocumento(evento, escopo, null, saida);
+        return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: av.situacao, escopo, resposta: RESPOSTA.comprovanteNaoConcluido(av.situacao), injecao, extra: { comprovante: av.situacao } });
+      }
+    }
     if (!saida.dataPagamento) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "DATA_DE_PAGAMENTO_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["data do pagamento"]), injecao });
     // CAIXA: o mês do pagamento precisa estar aberto (a saída de dinheiro cai nele).
     const bloqueio = await competenciaAberta(ctx, mes(saida.dataPagamento));
@@ -463,7 +476,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
       datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento }, competenciaPendente: !competencia,
-      comando: { operacao: "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
+      // Execução 17: com comprovante, a aplicação registra a conta e o pagamento POR COMPROVANTE (nenhuma saída bancária
+      // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
+      comando: { operacao: evento.midia ? "registrarObrigacao+registrarPagamentoPorComprovante" : "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
     }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia));
   }
 
@@ -491,6 +506,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   /** Texto da resposta conforme o que a execução fez com a baixa (nada é dito como lançado sem ter sido). */
   function textoDaExecucao(p, r) {
     if (r.situacao === "EXECUTADA") return { ...r, texto: RESPOSTA.baixaExecutada(p, r.resultado) };
+    if (r.situacao === "PAGO_POR_COMPROVANTE") return { ...r, texto: RESPOSTA.pagoPorComprovante(p, r.resultado) };
+    if (r.situacao === "AGUARDANDO_EXTRATO" && r.comprovante === SITUACAO_COMPROVANTE.PIX_CONCLUIDO && r.nivelDocumental === NIVEL_APLICAR_COM_CONFIRMACAO) return { ...r, texto: RESPOSTA.comprovanteAguardandoConfirmacao(p) };
+    // Com política de baixa documental, o comprovante que não serviu de evidência diz o porquê (sem política: só aguarda o extrato).
+    if (r.situacao === "AGUARDANDO_EXTRATO" && r.comprovante && r.comprovante !== SITUACAO_COMPROVANTE.PIX_CONCLUIDO && !(r.motivosDocumentais ?? []).includes("SEM_POLITICA")) {
+      return { ...r, texto: `${RESPOSTA.propostaBaixa(p)} ${RESPOSTA.aguardandoExtrato()} ${RESPOSTA.comprovanteEmRevisao(r.comprovante)}` };
+    }
     if (r.situacao === "CONFERIDA") return { ...r, texto: RESPOSTA.baixaConferida(p) };
     if (r.situacao === "AMBIGUA") return { ...r, texto: `${RESPOSTA.propostaBaixa(p)} ${RESPOSTA.extratoAmbiguo()}` };
     return { ...r, texto: `${RESPOSTA.propostaBaixa(p)} ${RESPOSTA.aguardandoExtrato()}` };

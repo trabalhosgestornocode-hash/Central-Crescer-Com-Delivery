@@ -35,6 +35,9 @@ export const ACAO = Object.freeze({
   // Execução 08E — VINCULAR uma saída bancária JÁ registrada (extrato) a contas a pagar: baixa sem criar movimento nem
   // despesa. Separada de `registrar` (pagamento novo), `conciliar` e `reclassificar`. Nenhuma concessão anterior a recebe.
   VINCULAR_PAGAMENTO: "financeiro_v2.vincular_pagamento",
+  // Execução 17 — registrar o PAGAMENTO de conta a pagar pelo COMPROVANTE, sem movimentação bancária (a conciliação com o
+  // extrato fica pendente e se faz depois com `vincular_pagamento`). Nenhuma concessão anterior a recebe.
+  BAIXAR_POR_COMPROVANTE: "financeiro_v2.baixar_por_comprovante",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 
