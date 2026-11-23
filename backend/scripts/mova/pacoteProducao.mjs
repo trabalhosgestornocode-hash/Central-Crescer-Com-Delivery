@@ -109,6 +109,37 @@ end $$;
   return partes.join("");
 }
 
+/**
+ * aplicar-<NNNN>.sql: aplica UMA migração isolada (sem arrastar outras pendentes, ex.: a 0016 de avisos de entregadores). UMA
+ * transação; exige o schema mova com as instaladas (nome + sha256), a migração ainda NÃO registrada e a tabela que ela altera.
+ * Só para migrações aditivas e independentes das pendentes (0017: coluna nula em conversa_ativa).
+ */
+export function gerarAplicarUnica(prefixo, { tabelaExigida }, migracoes = listarMigracoes()) {
+  const m = migracoes.find((x) => x.nome.startsWith(`${prefixo}_`));
+  if (!m) throw new Error(`migração ${prefixo} inexistente`);
+  const ja = migracoes.filter((x) => INSTALADAS_EM_PRODUCAO.includes(x.nome.slice(0, 4)));
+  const conferir = ja.map((x) => `  if not exists (select 1 from mova.mova_migracao where nome = '${x.nome}' and sha256 = '${x.sha256}') then raise exception 'MOVA ${prefixo}: ${x.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  return `-- MOVA — APLICAÇÃO ISOLADA da ${m.nome} em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo. Não aplica nenhuma outra migração.
+-- Exige as já instaladas (nome + sha256): ${ja.map((x) => x.nome.slice(0, 4)).join(", ")}.
+-- Compatibilidade: o código ANTERIOR não referencia a coluna nova (INSERT/SELECT por lista de colunas) e continua funcionando.
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA ${prefixo}: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA ${prefixo}: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${conferir.join("\n")}
+  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA ${prefixo}: já aplicada — nada foi feito'; end if;
+  if to_regclass('mova.${tabelaExigida}') is null then raise exception 'MOVA ${prefixo}: tabela mova.${tabelaExigida} não existe — nada foi feito'; end if;
+end $$;
+
+-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})
+${m.sql.trimEnd()}
+insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');
+`;
+}
+
 export function gerarInventario() {
   return `-- MOVA — INVENTÁRIO SOMENTE LEITURA (gerado por backend/scripts/mova/pacoteProducao.mjs). Rodar ANTES e DEPOIS da instalação.
 -- Não altera nada. Não lê conteúdo de mensagens: só existência, contagens, permissões e marcadores.
@@ -127,7 +158,7 @@ union all select 'migracao_em_curso', coalesce((select string_agg(left(query, 60
 }
 
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario() };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }) };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }

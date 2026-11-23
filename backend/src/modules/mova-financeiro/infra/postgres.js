@@ -62,6 +62,11 @@ const linhaOperacao = (x) => (x ? Object.freeze({ id: x.id, chave: x.chave, prop
 
 export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
   const q = consultar(pool);
+  // Sonda da coluna `conversa_ativa.contexto` (migração 0017): ausente ⇒ formato antigo; reavalia a cada 60 s.
+  const colunaContexto = (() => { let ate = 0; return {
+    ok: () => Date.now() >= ate,
+    ausente: (e) => { const sim = e?.code === "42703" && /contexto/.test(String(e?.message ?? "")); if (sim) ate = Date.now() + 60_000; return sim; },
+  }; })();
   return Object.freeze({
     eventos: Object.freeze({
       /** @returns {Promise<{novo:boolean}>} */
@@ -236,17 +241,33 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
      * MESMA conversa é escutada sem exigir o nome, até `ate` (relógio do banco). Guarda só a unidade e a consulta (nunca texto).
      */
     conversas: Object.freeze({
+      // Compatibilidade de implantação: se a migração 0017 (coluna `contexto`) ainda não existir, grava/lê no formato antigo (sem o
+      // período) e tenta de novo a cada minuto — a ordem de implantação deixa de ser um risco para a conversa.
       async registrar({ grupoId, participanteId, unidadeId = null, consulta = null, contexto = null, validadeMs }) {
-        // `contexto` (migração 0017) = só o recorte da última consulta (período), nunca texto nem valores. Nova consulta o substitui.
-        await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta, contexto) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5, $6::jsonb)
+        // `contexto` (migração 0017) = só o recorte da última consulta (período/filtro), nunca texto nem valores. Nova consulta o substitui.
+        if (colunaContexto.ok()) {
+          try {
+            await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta, contexto) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5, $6::jsonb)
                  on conflict (grupo_jid, participante_jid) do update set ate = excluded.ate, unidade_id = coalesce(excluded.unidade_id, mova.conversa_ativa.unidade_id),
                    consulta = coalesce(excluded.consulta, mova.conversa_ativa.consulta),
                    contexto = case when excluded.consulta is not null then excluded.contexto else mova.conversa_ativa.contexto end, atualizado_em = now()`,
-          [grupoId, participanteId, validadeMs, unidadeId, consulta, contexto ? JSON.stringify(contexto) : null]);
+              [grupoId, participanteId, validadeMs, unidadeId, consulta, contexto ? JSON.stringify(contexto) : null]);
+            return;
+          } catch (e) { if (!colunaContexto.ausente(e)) throw e; }
+        }
+        await q(`insert into mova.conversa_ativa (grupo_jid, participante_jid, ate, unidade_id, consulta) values ($1,$2, now() + make_interval(secs => $3::double precision / 1000), $4, $5)
+                 on conflict (grupo_jid, participante_jid) do update set ate = excluded.ate, unidade_id = coalesce(excluded.unidade_id, mova.conversa_ativa.unidade_id),
+                   consulta = coalesce(excluded.consulta, mova.conversa_ativa.consulta), atualizado_em = now()`, [grupoId, participanteId, validadeMs, unidadeId, consulta]);
       },
       async obter({ grupoId, participanteId }) {
-        const r = await q("select unidade_id, consulta, contexto from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
-        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta, contexto: r.rows[0].contexto ?? null } : null;
+        if (colunaContexto.ok()) {
+          try {
+            const r = await q("select unidade_id, consulta, contexto from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
+            return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta, contexto: r.rows[0].contexto ?? null } : null;
+          } catch (e) { if (!colunaContexto.ausente(e)) throw e; }
+        }
+        const r = await q("select unidade_id, consulta from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2 and ate > now()", [grupoId, participanteId]);
+        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, consulta: r.rows[0].consulta, contexto: null } : null;
       },
       async encerrar({ grupoId, participanteId }) {
         await q("delete from mova.conversa_ativa where grupo_jid = $1 and participante_jid = $2", [grupoId, participanteId]);
