@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql
--- Novas: 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql
+-- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0011_mova_entregadores_rotina.sql
+-- Novas: 0012_mova_entregadores_cadastro.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -17,47 +17,24 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0007_mova_autonomia_operacoes.sql' and sha256 = 'cb13d733182446a34947d1b781430af21f654d5bb0f62309aa3a568ae8f1979d') then raise exception 'MOVA atualização: 0007_mova_autonomia_operacoes.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0008_mova_entregadores_automacoes.sql' and sha256 = 'e66e9c662dbfd1c7ddd60092ff5cab082fa7dc230ca08da2524b46821feb6182') then raise exception 'MOVA atualização: 0008_mova_entregadores_automacoes.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0009_mova_baixa_documental.sql' and sha256 = 'b690cafc5aedd8e5bc553ca886690de5d6e61bc88b0f3c95881a725b9a3f2754') then raise exception 'MOVA atualização: 0009_mova_baixa_documental.sql ausente ou com outro conteúdo — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0010_mova_despesa_documental.sql') then raise exception 'MOVA atualização: 0010_mova_despesa_documental.sql já aplicada — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0011_mova_entregadores_rotina.sql') then raise exception 'MOVA atualização: 0011_mova_entregadores_rotina.sql já aplicada — nada foi feito'; end if;
+  if not exists (select 1 from mova.mova_migracao where nome = '0011_mova_entregadores_rotina.sql' and sha256 = 'ff74849e1f40ea2f799ee3c8a5a5be8562bfebf9ecdbde59d6c9e24c3d2ee0ca') then raise exception 'MOVA atualização: 0011_mova_entregadores_rotina.sql ausente ou com outro conteúdo — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0012_mova_entregadores_cadastro.sql') then raise exception 'MOVA atualização: 0012_mova_entregadores_cadastro.sql já aplicada — nada foi feito'; end if;
 end $$;
 
--- ------------------------------------------------------------------------- 0010_mova_despesa_documental.sql (arquivo f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c)
--- MOVA — Agente 2 (23/11/2026): operação DESPESA_DOCUMENTAL (despesa sem conta prévia, paga por COMPROVANTE: registra a conta
--- a pagar pela ação estreita `registrar_obrigacao` do Financeiro e o pagamento por comprovante; conciliação pendente).
+-- ------------------------------------------------------------------------- 0012_mova_entregadores_cadastro.sql (arquivo 6a4f9f8b4214a03602fa74ad573485a29a69056386882a6597310b71614dea3d)
+-- MOVA — Agente 2 (23/11/2026): CADASTRO COMPLETO DOS ENTREGADORES (fonte ÚNICA de contatos, usada pelo Financeiro e pelo MOVA).
+-- Nada é apagado e nenhum dado existente muda. Toda alteração (troca de número, nome de exibição, observação, desativação)
+-- ENCERRA a linha vigente (ativo = false, quem, quando e por quê) e, quando for o caso, abre uma linha nova: o histórico é a
+-- própria sequência de linhas (valor anterior e novo, ator e horário), sem UPDATE de dado cadastral.
 --
--- Só amplia a lista fechada de operações das políticas e das execuções. Nenhuma política é semeada: sem política cadastrada
--- o MOVA só PROPÕE (a pessoa aprova na Central).
-alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
-alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
-  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL'));
-alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
-alter table mova.operacao_executada add constraint operacao_executada_operacao_check
-  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL'));
-insert into mova.mova_migracao (nome, sha256) values ('0010_mova_despesa_documental.sql', 'f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c');
+--   * observacoes: anotação operacional (opcional, até 500 caracteres). CPF, Pix e afins NÃO têm coluna (não são pedidos).
+--   * revogado_por / motivo_revogacao: quem encerrou a linha e por quê.
 
--- ------------------------------------------------------------------------- 0011_mova_entregadores_rotina.sql (arquivo ff74849e1f40ea2f799ee3c8a5a5be8562bfebf9ecdbde59d6c9e24c3d2ee0ca)
--- MOVA — Agente 2 (23/11/2026): ROTINA SEMANAL DOS ENTREGADORES — cadastro simples pelo gestor, leitura da nota fiscal,
--- aviso de liberação no grupo da unidade e relatório de quarta-feira. Nada é apagado; nenhum entregador é semeado.
---
---   * cadastro: o gestor informa o entregador OFICIAL (chave do fechamento do Financeiro) e o número; o backend confere a chave no
---     Financeiro antes de gravar. O papel da aplicação ganha INSERT e UPDATE só das colunas de revogação/verificação.
---   * nota: o resultado da leitura e da conferência (emitente, tomador, valor, período) fica na própria linha da nota.
---   * envios: tipos novos (aviso de liberação no grupo, relatório de quarta); a chave única continua impedindo repetição.
---   * automações: RELATÓRIO (quarta) e AVISO no grupo, com a mesma pausa individual por unidade.
+alter table mova.entregador_autorizado
+  add column observacoes text check (observacoes is null or length(observacoes) <= 500),
+  add column revogado_por uuid,
+  add column motivo_revogacao text check (motivo_revogacao is null or motivo_revogacao in ('DESATIVADO', 'TROCA_DE_NUMERO', 'EDICAO'));
 
--- Empresa exibida nas mensagens (nome da organização); opcional.
-alter table mova.grupo_unidade add column empresa text check (empresa is null or length(btrim(empresa)) between 1 and 120);
-
-alter table mova.entregador_autorizado add column cadastrado_por uuid, add column verificado_em timestamptz;
-grant insert (organizacao_id, unidade_id, chave, telefone_e164, privado, ids, nome, cadastrado_por, verificado_em) on mova.entregador_autorizado to mova_app;
-grant update (ativo, revogado_em, verificado_em) on mova.entregador_autorizado to mova_app;
-
-alter table mova.nota_entregador add column leitura jsonb, add column conferencia text check (conferencia is null or conferencia in ('CONFERE', 'DIVERGENTE', 'INCONCLUSIVA'));
-grant update (leitura, conferencia) on mova.nota_entregador to mova_app;
-
-alter table mova.entregador_envio drop constraint entregador_envio_tipo_check;
-alter table mova.entregador_envio add constraint entregador_envio_tipo_check check (tipo in ('SEMANAL', 'COBRANCA_NOTA', 'NOTA_RECEBIDA', 'AVISO_LIBERACAO', 'RELATORIO_QUARTA'));
-
-alter table mova.automacao drop constraint automacao_nome_check;
-alter table mova.automacao add constraint automacao_nome_check check (nome in ('ENTREGADORES_SEMANAL', 'ENTREGADORES_COBRANCA', 'RECONFERENCIA_EXTRATO', 'ENTREGADORES_RELATORIO', 'ENTREGADORES_AVISO_GRUPO'));
-insert into mova.mova_migracao (nome, sha256) values ('0011_mova_entregadores_rotina.sql', 'ff74849e1f40ea2f799ee3c8a5a5be8562bfebf9ecdbde59d6c9e24c3d2ee0ca');
+grant insert (observacoes) on mova.entregador_autorizado to mova_app;
+grant update (revogado_por, motivo_revogacao) on mova.entregador_autorizado to mova_app;
+insert into mova.mova_migracao (nome, sha256) values ('0012_mova_entregadores_cadastro.sql', '6a4f9f8b4214a03602fa74ad573485a29a69056386882a6597310b71614dea3d');

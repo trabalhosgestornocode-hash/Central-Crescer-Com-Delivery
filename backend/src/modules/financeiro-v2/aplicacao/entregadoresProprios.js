@@ -279,6 +279,17 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
         const pagoDaTaxa = (f) => Math.min(f.valorCentavos, (f.dados.complementos ?? []).filter((x) => x.tipo === "ADIAMENTO" && x.obrigacaoId !== f.obrigacaoId).reduce((t, x) => t + (obrigacoes.get(x.obrigacaoId)?.liquidadoCentavos ?? 0), 0) + (obrigacoes.get(f.obrigacaoId)?.liquidadoCentavos ?? 0) + (obrigacoes.get((f.dados.contaManual ?? f.dados.duplicidade?.contaManual)?.obrigacaoId)?.liquidadoCentavos ?? 0));
         const taxas = consolidada ? fechadosDaSemana.map((f) => ({ chave: f.entregadorChave, nome: f.entregadorNome, valorCentavos: f.valorCentavos, pagoCentavos: pagoDaTaxa(f) })) : grupos.map((g) => ({ chave: g.chave, nome: g.nome, valorCentavos: g.valorCentavos, pagoCentavos: 0 }));
         const resumoSemana = resumoDaSemana(taxas, extras.filter((x) => x.semanaInicio === selecionada.inicio), fechadosDaSemana.filter((f) => f.situacaoDocumental !== DOC.LIBERADO_PAGAMENTO).length);
+        // 23/11: indicadores SÓ da semana selecionada (não confundir com os acumulados em aberto de todas as semanas).
+        const daSemana = todos.filter((f) => f.semanaInicio === selecionada.inicio);
+        const contagem = (lista) => ({ quantidade: lista.length, valorCentavos: soma(lista) });
+        const indicadoresDaSemana = {
+          semanaInicio: selecionada.inicio, provisoria: !consolidada, entregadores: resumoSemana.porEntregador?.length ?? grupos.length,
+          devidoCentavos: resumoSemana.totalDevidoCentavos, pagoCentavos: resumoSemana.totalPagoCentavos, saldoCentavos: resumoSemana.saldoAbertoCentavos,
+          aguardandoNota: contagem(daSemana.filter((f) => [DOC.AGUARDANDO_NF, DOC.NF_REJEITADA].includes(f.situacaoDocumental))),
+          emAnalise: contagem(daSemana.filter((f) => [DOC.NF_RECEBIDA, DOC.NF_EM_CONFERENCIA, DOC.NF_APROVADA].includes(f.situacaoDocumental))),
+          liberado: contagem(daSemana.filter((f) => f.situacaoDocumental === DOC.LIBERADO_PAGAMENTO && ![SITUACAO_PAGAMENTO.PAGO, SITUACAO_PAGAMENTO.CANCELADO].includes(f.situacaoPagamento))),
+          vencido: contagem(daSemana.filter((f) => f.situacaoPagamento === SITUACAO_PAGAMENTO.VENCIDO)),
+        };
         const vinculadas = new Set(extras.map((x) => x.obrigacaoId).filter(Boolean));
         const contrapartes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x.nome]));
         const naSemana = (d) => d >= selecionada.inicio && d <= selecionada.fim;
@@ -306,7 +317,7 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
           },
           entregadores: [...cards.values()].sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR")), fechamentos: filtrados,
           semanas: semanasDoSeletor({ registros: semanas, hoje: dia }).map(({ registro: s, ...x }) => (s ? { ...x, pendencias: s.dados.pendencias?.length ?? 0, divergenciasAbertas: (s.dados.divergencias ?? []).filter((d) => d.situacao === "ABERTA").length, origem: s.dados.origem ?? s.dados.ultimaExecucao?.origem ?? null } : { ...x, pendencias: null, divergenciasAbertas: 0, origem: null })),
-          extras, resumoSemana, origensDeExtra, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes,
+          extras, resumoSemana, indicadoresDaSemana, origensDeExtra, cofreDisponivel: Boolean(cofreDeNotas), permissoes: cx.permissoes,
         };
       });
     },

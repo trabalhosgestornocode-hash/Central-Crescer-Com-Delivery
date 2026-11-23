@@ -1,0 +1,62 @@
+{
+ "dados": {
+  "ligado": true,
+  "unidadeAtendida": true,
+  "itens": [],
+  "notas": [],
+  "envios": [],
+  "cadastros": [
+   {
+    "id": "1",
+    "chave": "ana",
+    "telefone": "…0011",
+    "nome": "Ana",
+    "observacoes": "Turno da noite",
+    "ativo": true,
+    "criadoEm": "2026-11-23T09:00:00.000Z",
+    "envio": "APTO"
+   },
+   {
+    "id": "2",
+    "chave": "ana",
+    "telefone": "…0099",
+    "nome": "Ana",
+    "observacoes": null,
+    "ativo": false,
+    "criadoEm": "2026-11-20T09:00:00.000Z",
+    "revogadoEm": "2026-11-23T09:00:00.000Z",
+    "motivoRevogacao": "TROCA_DE_NUMERO"
+   },
+   {
+    "id": "3",
+    "chave": "carla",
+    "telefone": "…0033",
+    "nome": "Carla Sintética",
+    "observacoes": null,
+    "ativo": false,
+    "criadoEm": "2026-11-21T09:00:00.000Z",
+    "revogadoEm": "2026-11-22T09:00:00.000Z",
+    "motivoRevogacao": "DESATIVADO"
+   }
+  ]
+ },
+ "oficiais": {
+  "itens": [
+   {
+    "chave": "ana",
+    "nome": "Ana Sintética",
+    "ultimaSemana": "2026-11-09"
+   },
+   {
+    "chave": "bruno",
+    "nome": "Bruno Sintético",
+    "ultimaSemana": "2026-11-09"
+   },
+   {
+    "chave": "carla",
+    "nome": "Carla Sintética",
+    "ultimaSemana": "2026-11-09"
+   }
+  ]
+ }
+}

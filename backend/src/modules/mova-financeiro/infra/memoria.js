@@ -180,12 +180,34 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     entregadores: Object.freeze({
       async cadastrar(e) {
         if (cadastrados.some((x) => x.ativo && x.unidadeId === e.unidadeId && (x.chave === e.chave || x.telefoneE164 === e.telefoneE164))) return { conflito: true };
-        const id = randomUUID(); cadastrados.push({ id, ...e, ativo: true, criadoEm: relogio().toISOString(), revogadoEm: null }); return { id };
+        const id = randomUUID(); cadastrados.push({ id, ...e, observacoes: e.observacoes ?? null, ativo: true, criadoEm: relogio().toISOString(), revogadoEm: null, revogadoPor: null, motivoRevogacao: null }); return { id };
       },
-      async revogar({ organizacaoId, unidadeId, chave }) {
-        let n = 0; for (const x of cadastrados) if (x.ativo && x.organizacaoId === organizacaoId && x.unidadeId === unidadeId && x.chave === chave) { x.ativo = false; x.revogadoEm = relogio().toISOString(); n++; } return n;
+      async revogar({ organizacaoId, unidadeId, chave, por = null, motivo = "DESATIVADO" }) {
+        let n = 0; for (const x of cadastrados) if (x.ativo && x.organizacaoId === organizacaoId && x.unidadeId === unidadeId && x.chave === chave) { Object.assign(x, { ativo: false, revogadoEm: relogio().toISOString(), revogadoPor: por, motivoRevogacao: motivo }); n++; } return n;
       },
-      async listar(escopo) { return cadastrados.filter((x) => x.organizacaoId === escopo.organizacaoId && x.unidadeId === escopo.unidadeId).map((x) => ({ chave: x.chave, telefone: `…${x.telefoneE164.slice(-4)}`, nome: x.nome ?? null, ativo: x.ativo, criadoEm: x.criadoEm, revogadoEm: x.revogadoEm })).reverse(); },
+      async alterar({ organizacaoId, unidadeId, chave, por, mudancas }) {
+        const v = cadastrados.find((x) => x.ativo && x.organizacaoId === organizacaoId && x.unidadeId === unidadeId && x.chave === chave);
+        if (!v) return { naoEncontrado: true };
+        const nova = { telefoneE164: mudancas.telefoneE164 ?? v.telefoneE164, privado: mudancas.privado ?? v.privado, nome: mudancas.nome !== undefined ? mudancas.nome : v.nome, observacoes: mudancas.observacoes !== undefined ? mudancas.observacoes : v.observacoes };
+        if (nova.telefoneE164 === v.telefoneE164 && nova.nome === v.nome && nova.observacoes === v.observacoes) return { semMudanca: true };
+        if (cadastrados.some((x) => x !== v && x.ativo && x.unidadeId === unidadeId && x.telefoneE164 === nova.telefoneE164)) return { conflito: true };
+        const motivo = nova.telefoneE164 !== v.telefoneE164 ? "TROCA_DE_NUMERO" : "EDICAO";
+        Object.assign(v, { ativo: false, revogadoEm: relogio().toISOString(), revogadoPor: por, motivoRevogacao: motivo });
+        const id = randomUUID(); cadastrados.push({ id, organizacaoId, unidadeId, chave, ...nova, cadastradoPor: por, ativo: true, criadoEm: relogio().toISOString(), revogadoEm: null, revogadoPor: null, motivoRevogacao: null });
+        return { id, motivo, anterior: `…${v.telefoneE164.slice(-4)}`, atual: `…${nova.telefoneE164.slice(-4)}` };
+      },
+      async reativar({ organizacaoId, unidadeId, chave, por }) {
+        if (cadastrados.some((x) => x.ativo && x.unidadeId === unidadeId && x.chave === chave)) return { conflito: true };
+        const u = cadastrados.filter((x) => x.organizacaoId === organizacaoId && x.unidadeId === unidadeId && x.chave === chave).at(-1);
+        if (!u) return { naoEncontrado: true };
+        if (cadastrados.some((x) => x.ativo && x.unidadeId === unidadeId && x.telefoneE164 === u.telefoneE164)) return { conflito: true };
+        const id = randomUUID(); cadastrados.push({ ...u, id, cadastradoPor: por, ativo: true, criadoEm: relogio().toISOString(), revogadoEm: null, revogadoPor: null, motivoRevogacao: null });
+        return { id, telefone: `…${u.telefoneE164.slice(-4)}` };
+      },
+      async listar(escopo) {
+        return cadastrados.filter((x) => x.organizacaoId === escopo.organizacaoId && x.unidadeId === escopo.unidadeId).map((x) => ({ id: x.id, chave: x.chave, telefone: `…${x.telefoneE164.slice(-4)}`, nome: x.nome ?? null,
+          observacoes: x.observacoes ?? null, ativo: x.ativo, criadoEm: x.criadoEm, cadastradoPor: x.cadastradoPor ?? null, verificadoEm: null, revogadoEm: x.revogadoEm, revogadoPor: x.revogadoPor ?? null, motivoRevogacao: x.motivoRevogacao ?? null })).reverse();
+      },
     }),
     enviosEntregador: Object.freeze({
       async registrar(e) { if (envios.has(e.chave)) return false; envios.set(e.chave, Object.freeze({ ...e, criadoEm: relogio().toISOString() })); return true; },
