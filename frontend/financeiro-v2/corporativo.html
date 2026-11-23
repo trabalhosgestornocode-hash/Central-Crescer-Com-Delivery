@@ -57,6 +57,17 @@
         <p class="resultado-acao" role="status" aria-live="polite"></p>
       </form>
     </section>
+    <section class="card" id="sec-mova" aria-labelledby="t-mova" hidden><h2 id="t-mova">4. MOVA — lançamentos automáticos</h2>
+      <p>Autoriza o MOVA a registrar, nesta unidade, contas a pagar de boletos e notas, pagamentos por comprovante e anexos de documentos. As políticas de limite continuam valendo. Ele nunca faz pagamento bancário, estorno ou correção. Vale na próxima operação; revogar desliga na hora.</p>
+      <form id="form-mova">
+        <label>Unidade <select name="unidade" id="un-mova" required></select></label>
+        <label><input type="checkbox" name="juros"> Também registrar juros e multas confirmados (até 10% da conta)</label>
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <button type="submit" class="botao botao--primario" data-acao="CONCEDER">Autorizar o MOVA nesta unidade</button>
+        <button type="submit" class="botao" data-acao="REVOGAR">Revogar o MOVA nesta unidade</button>
+        <p class="resultado-acao" role="status" aria-live="polite"></p>
+      </form>
+    </section>
     <p><a href="/financeiro-v2/?modo=plataforma">Voltar para o Financeiro</a> · <a href="/">Voltar para a plataforma</a></p>
   </main>
   <script type="module" src="corporativo.js"></script>

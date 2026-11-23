@@ -36,7 +36,9 @@ export const DECISAO = Object.freeze({
   EXECUTADO: "EXECUTADO", // Agente 2 — Frente C: operação aplicada pelo serviço oficial conforme a política de autonomia
   DOCUMENTO_RECEBIDO: "DOCUMENTO_RECEBIDO", // Agente 2 — documento guardado para conferência humana, sem leitura e sem proposta
 });
-export const TIPO_PROPOSTA = Object.freeze({ BAIXA_DE_OBRIGACAO: "BAIXA_DE_OBRIGACAO", DESPESA_PAGA: "DESPESA_PAGA", NOVA_OBRIGACAO: "NOVA_OBRIGACAO", SOLICITACAO_DE_REVISAO: "SOLICITACAO_DE_REVISAO" });
+export const TIPO_PROPOSTA = Object.freeze({ BAIXA_DE_OBRIGACAO: "BAIXA_DE_OBRIGACAO", DESPESA_PAGA: "DESPESA_PAGA", NOVA_OBRIGACAO: "NOVA_OBRIGACAO", SOLICITACAO_DE_REVISAO: "SOLICITACAO_DE_REVISAO",
+  // 24/11 (0015): nota fiscal de uma conta JÁ registrada — só anexa o documento à conta (nenhum valor muda).
+  VINCULO_DE_DOCUMENTO: "VINCULO_DE_DOCUMENTO" });
 const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
 const CONTAS = ["BOLETO", "NOTA_FISCAL"];
 const CONSULTAS_DO_GRUPO = ["COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS"];
@@ -148,7 +150,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
       }
-      const resposta = u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
+      const resposta = u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
+        : u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
       return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: u.resultado, resposta, injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
     }
     const unidade = u.unidade;
@@ -314,7 +317,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Áudio: a TRANSCRIÇÃO conta como texto da mensagem (a unidade pode ter sido dita no áudio).
     // Resposta a uma pergunta de DIVERGÊNCIA ("sim", "2", "outra compra") não fala de unidade: a unidade segue a da mensagem original.
     const textos = (esclarecimento && !esclarecimento.divergencia ? [esclarecimento.texto] : [evento.texto, saida.transcricao]).filter(Boolean);
-    let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida });
+    // 24/11: o PAGADOR lido do DOCUMENTO (comprovante: titular da conta de origem; boleto: sacado; nota: tomador) identifica a
+    // unidade pelo cadastro `pagadores`. Relato só por texto não tem documento: o pagador dito no texto não conta.
+    const doDocumento = Boolean(evento.midia) && [...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento);
+    let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida,
+      pagador: doDocumento ? saida.pagador ?? null : null, documentoPagador: doDocumento ? saida.documentoPagador ?? null : null });
     // Agente 2 — CONSULTA (só leitura) sem unidade no texto: a unidade da conversa em andamento DESTA pessoa (janela curta).
     // Documento/lançamento continua exigindo evidência própria (nunca pelo histórico do participante).
     if (consulta && u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA && conversa?.unidadeId && daPessoa.unidades.includes(conversa.unidadeId)) {
@@ -327,7 +334,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
       }
-      const resposta = u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
+      const resposta = u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
+        : u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
       return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: u.resultado, resposta, injecao, extra: { evidenciaUnidade: u.evidencia } });
     }
     const unidade = u.unidade;
@@ -351,7 +359,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "DOCUMENTO_JA_RECEBIDO", escopo, propostaId: mesmo.propostaId ?? null, resposta: RESPOSTA.duplicado(mesmo.propostaId), injecao });
       }
     }
-    const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento, grupo, participante, interpretacao };
+    const ctx = { evento, escopo, unidade, saida, injecao, esclarecimento, grupo, participante, interpretacao, evidenciaUnidade: u.evidencia };
 
     if (consulta) {
       if (!perfilPodeConsultar(perfilNa(participante, unidade.unidadeId), consulta)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "PERFIL_SEM_CONSULTA", escopo, resposta: RESPOSTA.perfilSemConsulta(), injecao });
@@ -411,7 +419,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: `COMPETENCIA_${estado}`, escopo, resposta: RESPOSTA.competenciaFechada(competencia), injecao });
   }
 
-  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento, grupo = null, participante = null }, dados, textoResposta, { posCriacao = null } = {}) {
+  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento, grupo = null, participante = null, evidenciaUnidade = null }, dados, textoResposta, { posCriacao = null } = {}) {
     // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
     // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
     if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
@@ -427,13 +435,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       evidencia: evento.midia ? { sha256: evento.midia.sha256, referencia: evento.midia.referencia, mime: evento.midia.mime } : null,
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
-        pagador: saida.pagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        pagador: saida.pagador ?? null, documentoPagador: saida.documentoPagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
         // 23/11: evidências bancárias do comprovante para a conciliação (nunca confirmam compensação): banco do recebedor, data e hora impressas, valor.
         instituicaoDestino: saida.instituicaoDestino ?? null, horaTransacao: saida.horaTransacao ?? null, dataPagamento: saida.dataPagamento ?? null, valorCentavos: saida.valorCentavos ?? null,
         // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).
         situacaoTransacao: saida.situacaoTransacao ?? null, incertezas: saida.incertezas ?? [],
         comprovante: evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO" ? avaliarComprovante(saida, { hoje: hoje() }) : null,
-        justificativa: saida.justificativa ? mascararDadosSensiveis(String(saida.justificativa).slice(0, 300)) : null, camposAusentes: saida.camposAusentes ?? [] },
+        justificativa: saida.justificativa ? mascararDadosSensiveis(String(saida.justificativa).slice(0, 300)) : null, camposAusentes: saida.camposAusentes ?? [],
+        // 24/11: COMO a unidade foi identificada (TITULAR_DO_PAGADOR, DOCUMENTO_DO_PAGADOR, TEXTO, DOCUMENTO, GRUPO_DE_UMA_UNIDADE…), para a auditoria.
+        evidenciaUnidade },
       categoriaSugerida: saida.categoriaSugerida, naturezaSugerida: saida.natureza, sinaisDeInjecao: injecao,
       // Unidade com requisitos financeiros incompletos: a proposta é guardada, mas a APLICAÇÃO fica bloqueada até completar.
       bloqueioDeAplicacao: incompleta ? "REQUISITOS_FINANCEIROS_INCOMPLETOS" : null,
@@ -453,14 +463,19 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // Agente 2: a resposta do documento leva VALOR — num grupo por LISTA segue a política (privado, ou grupo comprovado).
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
-    return concluir(evento, { decisao: ["EXECUTADA", "PAGO_POR_COMPROVANTE"].includes(pos?.situacao) ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
+    return concluir(evento, { decisao: ["EXECUTADA", "PAGO_POR_COMPROVANTE", "CONTA_REGISTRADA", "DOCUMENTO_VINCULADO"].includes(pos?.situacao) ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
   }
 
   /** Categoria do plano da unidade pela descrição (uma só categoria casando); senão null → provisória "a classificar" (revisão humana). */
   async function categoriaDaDespesa(escopo, saida, legenda) {
     try {
       const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);
-      return escolherCategoria({ categorias: p?.categorias ?? p?.itens ?? [], categoriaSugerida: saida.categoriaSugerida, legenda });
+      // 24/11 (correção): o plano vem como ÁRVORE (lista de grupos com `filhas`); antes só `categorias`/`itens` eram lidos e nenhuma
+      // categoria era escolhida (tudo ia para "a classificar"). Achata a árvore; a regra continua: só UMA categoria lançável casando.
+      const plano = [];
+      const visitar = (xs) => { for (const c of xs ?? []) { plano.push(c); visitar(c?.filhas); } };
+      visitar(Array.isArray(p) ? p : p?.categorias ?? p?.itens ?? []);
+      return escolherCategoria({ categorias: plano, categoriaSugerida: saida.categoriaSugerida, legenda });
     } catch { return null; }
   }
 
@@ -592,6 +607,27 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
   async function tratarConta(ctx) {
     const { evento, escopo, saida, injecao } = ctx;
+    // 24/11: NOTA FISCAL de uma conta JÁ registrada (mesmo fornecedor e mesmo valor, qualquer vencimento): não duplica a despesa —
+    // a nota é VINCULADA à conta existente. Mais de uma conta compatível: vai para a conferência (nunca escolhe sozinho).
+    if (evento.midia && saida.tipoDocumento === "NOTA_FISCAL" && saida.favorecido) {
+      const daNota = (await porta.contasAPagarTodas(escopo)).filter((t) => t.situacao !== "CANCELADO" && t.valorOriginalCentavos === saida.valorCentavos && fornecedorCompativel(saida.favorecido, t));
+      if (daNota.length === 1) {
+        const [t] = daNota;
+        return criarProposta(ctx, {
+          tipo: TIPO_PROPOSTA.VINCULO_DE_DOCUMENTO, valorCentavos: saida.valorCentavos, parcial: false,
+          datas: { competencia: t.competencia ?? null, caixa: null, vencimento: t.vencimento ?? null },
+          comando: { operacao: "vincularDocumento", entrada: { obrigacaoId: t.id } },
+        }, (p) => RESPOSTA.notaParaVincular(p, t), {
+          posCriacao: execucao?.criarContas ? async (p) => {
+            const r = await execucao.aposVinculoDeDocumento(p, escopo);
+            return r.situacao === "DOCUMENTO_VINCULADO" ? { ...r, texto: RESPOSTA.notaVinculada(t) } : r;
+          } : null,
+        });
+      }
+      if (daNota.length > 1) {
+        return criarProposta(ctx, { tipo: TIPO_PROPOSTA.SOLICITACAO_DE_REVISAO, valorCentavos: saida.valorCentavos, parcial: false, datas: {}, comando: null }, RESPOSTA.notaComVariasContas);
+      }
+    }
     if (!saida.vencimento) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VENCIMENTO_AUSENTE", escopo, resposta: RESPOSTA.faltaInformacao(["vencimento"]), injecao });
     const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null; // 15A: nunca o mês do vencimento
     const bloqueio = competencia ? await competenciaAberta(ctx, competencia) : null;
@@ -602,13 +638,22 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       await marcarDocumento(evento, escopo, null, saida);
       return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "OBRIGACAO_JA_REGISTRADA", escopo, resposta: RESPOSTA.obrigacaoJaExiste(igual), injecao });
     }
-    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.vencimento });
+    // 24/11: categoria do plano (uma só casando com a legenda/sugestão) e a descrição da legenda, como na compra nova (PR #188).
+    const legenda = evento.midia ? legendaDoDocumento(evento.texto) : null;
+    const categoria = await categoriaDaDespesa(escopo, saida, legenda);
+    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.vencimento, descricao: legenda ? mascararDadosSensiveis(legenda).slice(0, 120) : null, categoria });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.NOVA_OBRIGACAO, valorCentavos: saida.valorCentavos, parcial: false,
-      datas: { competencia, caixa: null, vencimento: saida.vencimento }, competenciaPendente: !competencia,
+      datas: { competencia, caixa: null, vencimento: saida.vencimento }, competenciaPendente: !competencia, categoriaDefinida: Boolean(categoria),
       comando: { operacao: "registrarObrigacao", entrada: comando.valor },
-    }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia));
+    }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia), {
+      // 24/11: com a chave MOVA_OPERACAO_CRIAR_CONTAS e a política CONTA_A_PAGAR automática, registra a conta (em aberto) e anexa o documento.
+      posCriacao: execucao?.criarContas && evento.midia ? async (p) => {
+        const r = await execucao.aposContaNova(p, escopo);
+        return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRegistrada(p, r.resultado) } : r;
+      } : null,
+    });
   }
 
   /** Texto da resposta conforme o que a execução fez com a baixa (nada é dito como lançado sem ter sido). */
@@ -725,7 +770,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       linhas.push(r.dadosInsuficientes ? `• ${u.nome}: dados insuficientes.` : `• ${u.nome}: ${r.linhas.join("; ")}`);
       valores.push(r.dadosInsuficientes ? null : r.valorCentavos ?? null);
     }
-    if (consulta === "FATURAMENTO") linhas.push(valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
+    // 24/11: empresas diferentes (ex.: Açaí e Subway na mesma conversa privada multiempresa) nunca são somadas.
+    const empresas = new Set(unidades.map((u) => u.organizacaoId));
+    if (consulta === "FATURAMENTO") linhas.push(empresas.size > 1 ? "Total: não somado (unidades de empresas diferentes)."
+      : valores.every((v) => typeof v === "number") ? `Total das unidades: ${reais(valores.reduce((s, v) => s + v, 0))}.` : "Total das unidades: indisponível (há unidade sem dados).");
     return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: consulta, resposta: RESPOSTA.consulta(linhas), injecao, privado, consulta, extra: { interpretacao, ...extraRota } });
   }
 

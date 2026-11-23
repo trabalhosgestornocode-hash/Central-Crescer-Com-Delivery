@@ -281,6 +281,86 @@ select unidade_id, usuario_id, acoes, situacao, versao from fv2_concessao where 
 `;
 }
 
+// ------------------------------------------------------------------------------------------------------------------------
+// 24/11 — IDENTIDADE OPERACIONAL do MOVA (escrita estreita). Concessão POR UNIDADE, só com ações ESTREITAS autorizadas,
+// idempotente, com histórico (fv2_historico) e revogação independente por unidade. Gera o SQL; não executa nada.
+// Diferente da identidade de LEITURA (IDENTIDADE_DO_MOVA, só `ver`): a operacional NUNCA é a de leitura, nunca recebe ação
+// ampla (registrar, corrigir, cancelar, aplicar, conceder…) e só existe onde o proprietário concedeu.
+/** Ações que a identidade operacional pode receber (a lista do provedor fv2-integracao/operacionalMova.js). */
+export const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante",
+  "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros", "financeiro_v2.vincular_pagamento"]);
+const IDENTIDADES_RESERVADAS = Object.freeze([IDENTIDADE_DO_MOVA, EXECUTOR_BOOTSTRAP, "00000000-0000-4000-8000-00000000e7e9"]);
+const MIGRACAO_DA_ACAO = Object.freeze({ "financeiro_v2.registrar_obrigacao": "0030_registrar_obrigacao_documental.sql", "financeiro_v2.registrar_juros": "0031_registrar_juros_no_pagamento.sql" });
+
+function exigirOperacional({ identidade, organizacaoId, unidadeId, autor, justificativa }) {
+  if (![identidade, organizacaoId, unidadeId, autor].every((x) => UUID_MOVA.test(x ?? ""))) throw new Error("Identidade, empresa, unidade e autor precisam ser UUID.");
+  const id = identidade.toLowerCase();
+  if (IDENTIDADES_RESERVADAS.includes(id)) throw new Error("A identidade operacional precisa ser PRÓPRIA (nunca a de leitura do MOVA, a de entregadores ou o executor técnico).");
+  if (autor.toLowerCase() === id) throw new Error("Quem concede não pode ser a própria identidade.");
+  if (typeof justificativa !== "string" || justificativa.trim().length < 10 || justificativa.length > 500) throw new Error("Justificativa obrigatória (10 a 500 caracteres).");
+  return [id, organizacaoId.toLowerCase(), unidadeId.toLowerCase(), autor.toLowerCase()];
+}
+
+/**
+ * Concede (ou ALTERA para exatamente estas ações) a identidade operacional em UMA unidade. Recusa ação fora da lista estreita,
+ * lista sem `ver`, migração da ação ausente e identidade que já tenha ação ampla em QUALQUER unidade.
+ * @param {{identidade:string, organizacaoId:string, unidadeId:string, acoes:string[], concedidoPor:string, justificativa:string}} p
+ */
+export function sqlConcessaoOperacionalDoMova({ identidade, organizacaoId, unidadeId, acoes, concedidoPor, justificativa }) {
+  const [p, o, u, autor] = exigirOperacional({ identidade, organizacaoId, unidadeId, autor: concedidoPor, justificativa });
+  const lista = [...new Set((acoes ?? []).map(String))].sort();
+  if (!lista.includes("financeiro_v2.ver")) throw new Error("A concessão operacional sempre inclui financeiro_v2.ver.");
+  const fora = lista.filter((a) => !ACOES_OPERACIONAIS_DO_MOVA.includes(a));
+  if (fora.length) throw new Error(`Ação fora da lista estreita do MOVA: ${fora.join(", ")}.`);
+  if (lista.length < 2) throw new Error("Só `ver` é a identidade de LEITURA: a operacional precisa de ao menos uma ação estreita.");
+  const json = literal(JSON.stringify(lista));
+  const estreitas = literal(JSON.stringify(ACOES_OPERACIONAIS_DO_MOVA));
+  const migracoes = [...new Set(lista.map((a) => MIGRACAO_DA_ACAO[a]).filter(Boolean))];
+  return `-- MOVA — CONCESSÃO OPERACIONAL (escrita estreita) em UMA unidade. Revisar antes de aplicar. Idempotente.
+set local search_path = ${S}, pg_catalog, public;
+do $$ begin
+  if not exists (select 1 from fv2_escopo where organizacao_id = '${o}' and unidade_id = '${u}') then raise exception 'MOVA: a unidade não está no Financeiro v2 — nada foi feito'; end if;
+${migracoes.map((m) => `  if not exists (select 1 from fv2_migracao where nome = '${m}') then raise exception 'MOVA: a migração ${m} não foi aplicada — nada foi feito'; end if;`).join("\n")}
+  if exists (select 1 from fv2_concessao c where c.usuario_id = '${p}' and exists (select 1 from jsonb_array_elements_text(c.acoes) a where not ${estreitas}::jsonb ? a)) then
+    raise exception 'MOVA: a identidade operacional tem ação AMPLA em alguma unidade — nada foi feito';
+  end if;
+end $$;
+with atual as (select * from fv2_concessao where organizacao_id = '${o}' and unidade_id = '${u}' and usuario_id = '${p}' for update),
+nova as (
+  insert into fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
+  select gen_random_uuid(), '${o}', '${u}', 1, now(), '${autor}', now(), '${autor}', 'concessao:${p}', null, '{"origem":"MOVA_OPERACIONAL"}'::jsonb, '${p}', ${json}::jsonb, 'ATIVA', '${autor}', ${literal(justificativa.trim())}
+   where not exists (select 1 from atual)
+  returning *),
+alterada as (
+  update fv2_concessao c set acoes = ${json}::jsonb, situacao = 'ATIVA', versao = c.versao + 1, atualizado_em = now(), atualizado_por = '${autor}', concedido_por = '${autor}', justificativa = ${literal(justificativa.trim())}
+    from atual where c.id = atual.id and (c.acoes <> ${json}::jsonb or c.situacao <> 'ATIVA')
+  returning c.*, atual.acoes as acoes_antes, atual.situacao as situacao_antes, atual.versao as versao_antes)
+insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CRIACAO', null, jsonb_build_object('versao', versao, 'acoes', acoes, 'situacao', situacao), justificativa, concedido_por, now() from nova
+union all
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'ALTERACAO', jsonb_build_object('versao', versao_antes, 'acoes', acoes_antes, 'situacao', situacao_antes),
+       jsonb_build_object('versao', versao, 'acoes', acoes, 'situacao', situacao), justificativa, concedido_por, now() from alterada;
+select organizacao_id, unidade_id, acoes, situacao, versao from fv2_concessao where usuario_id = '${p}' order by organizacao_id, unidade_id;
+`;
+}
+
+/** Revoga a identidade operacional em UMA unidade (as demais ficam como estão). Idempotente; histórico gravado. */
+export function sqlRevogarConcessaoOperacionalDoMova({ identidade, organizacaoId, unidadeId, revogadoPor, justificativa }) {
+  const [p, o, u, autor] = exigirOperacional({ identidade, organizacaoId, unidadeId, autor: revogadoPor, justificativa });
+  return `-- MOVA — REVOGAÇÃO da concessão operacional em UMA unidade (vale na próxima operação: a porta relê a concessão a cada chamada).
+set local search_path = ${S}, pg_catalog, public;
+with atual as (select * from fv2_concessao where organizacao_id = '${o}' and unidade_id = '${u}' and usuario_id = '${p}' and situacao = 'ATIVA' for update),
+revogada as (
+  update fv2_concessao c set acoes = '[]'::jsonb, situacao = 'REVOGADA', versao = c.versao + 1, atualizado_em = now(), atualizado_por = '${autor}', justificativa = ${literal(justificativa.trim())}
+    from atual where c.id = atual.id
+  returning c.*, atual.acoes as acoes_antes, atual.versao as versao_antes)
+insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'ALTERACAO', jsonb_build_object('versao', versao_antes, 'acoes', acoes_antes, 'situacao', 'ATIVA'),
+       jsonb_build_object('versao', versao, 'acoes', acoes, 'situacao', situacao), justificativa, '${autor}', now() from revogada;
+select organizacao_id, unidade_id, acoes, situacao, versao from fv2_concessao where usuario_id = '${p}' order by organizacao_id, unidade_id;
+`;
+}
+
 /** Verificador SCRAM-SHA-256 do PostgreSQL: a senha em claro nunca vai ao SQL, ao log do banco nem ao histórico de comandos. */
 export function verificadorScram(senha, iteracoes = 4096, sal = randomBytes(16)) {
   const salgada = pbkdf2Sync(senha, sal, iteracoes, 32, "sha256");
@@ -418,6 +498,18 @@ if (executadoDireto && process.argv[2] === "--escopo") {
   process.exit(0);
 }
 if (executadoDireto && process.argv[2] === "--mova-concessao") { const i = process.argv.indexOf("--alem-de"); process.stdout.write(sqlConcessaoDoMova(process.argv[3], process.argv[4], { alemDe: i > 0 ? String(process.argv[i + 1] ?? "").split(",").filter(Boolean) : [] })); process.exit(0); }
+// 24/11: identidade OPERACIONAL — --mova-operacional <org> <unidade> --identidade <uuid> --acoes a,b --concedido-por <uuid> --justificativa "…"
+//        e --mova-operacional-revogar <org> <unidade> --identidade <uuid> --revogado-por <uuid> --justificativa "…"
+if (executadoDireto && (process.argv[2] === "--mova-operacional" || process.argv[2] === "--mova-operacional-revogar")) {
+  const arg = (k) => { const i = process.argv.indexOf(k); return i > 0 ? process.argv[i + 1] : undefined; };
+  try {
+    const comum = { identidade: arg("--identidade"), organizacaoId: process.argv[3], unidadeId: process.argv[4], justificativa: arg("--justificativa") };
+    process.stdout.write(process.argv[2] === "--mova-operacional"
+      ? sqlConcessaoOperacionalDoMova({ ...comum, acoes: String(arg("--acoes") ?? "").split(",").filter(Boolean), concedidoPor: arg("--concedido-por") })
+      : sqlRevogarConcessaoOperacionalDoMova({ ...comum, revogadoPor: arg("--revogado-por") }));
+    process.exit(0);
+  } catch (e) { process.stderr.write(`ERRO: ${e.message}\n`); process.exit(1); }
+}
 if (executadoDireto && process.argv[2] === "--mova-login") { process.stdout.write(sqlLoginDoLeitorDoMova(process.argv[3], process.env.FV2_MOVA_LEITOR_SENHA ?? "")); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--mova-verificar") { process.stdout.write(sqlVerificacaoDoLeitorDoMova(process.argv[3])); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--mova-desativar") { process.stdout.write(sqlDesativarLeitorDoMova(process.argv[3])); process.exit(0); }

@@ -16,6 +16,7 @@ const MOTIVOS = {
   CONTA_COMPARTILHADA: "Conta compartilhada não opera o financeiro: use uma conta pessoal.",
   NAO_E_ADMIN_DA_EMPRESA: "Só administradores da empresa na plataforma podem ser administradores financeiros.",
   JUSTIFICATIVA_INSUFICIENTE: "Escreva a justificativa (mínimo 20 caracteres).",
+  IDENTIDADE_OPERACIONAL_NAO_CONFIGURADA: "A identidade operacional do MOVA ainda não foi configurada no servidor.",
 };
 const mensagem = (r) => MOTIVOS[r.motivo] ?? MOTIVOS[r.erro] ?? estadoDoErro(r).mensagem ?? r.mensagem;
 let contexto = null;
@@ -33,9 +34,10 @@ async function carregar() {
   $("#sec-inicial").hidden = true;
   contexto = r.dados;
   $("#estado").textContent = `${contexto.organizacao.nome ?? "Empresa"} — ${contexto.unidades.length} unidade(s) com banco financeiro preparado.`;
-  for (const s of ["#sec-unidades", "#sec-acessos", "#sec-adm"]) $(s).hidden = false;
+  for (const s of ["#sec-unidades", "#sec-acessos", "#sec-adm", "#sec-mova"]) $(s).hidden = false;
   $("#lista-unidades").innerHTML = contexto.unidades.map((u) => `<li><label><input type="checkbox" name="unidade" value="${esc(u.id)}"> <strong>${esc(u.nome)}</strong>
     — ${u.liberada ? (u.escrita ? "ativa (consulta e lançamentos)" : "ativa só para consulta") : "desligada"}</label></li>`).join("");
+  $("#un-mova").innerHTML = contexto.unidades.map((u) => `<option value="${esc(u.id)}">${esc(u.nome)}</option>`).join("");
   $("#un-acessos").innerHTML = contexto.unidades.map((u) => `<option value="${esc(u.id)}">${esc(u.nome)}</option>`).join("");
   $("#lista-adm").innerHTML = contexto.administradores.map((a) => `<li>${a.eu ? "Você" : esc(a.contaId.slice(0, 8) + "…")}</li>`).join("");
   $('#form-adm select[name="conta"]').innerHTML = contexto.candidatosAAdministrador.length
@@ -99,5 +101,15 @@ $("#form-adm").addEventListener("submit", async (e) => {
   const r = await enviar("/api/fv2/corporativo/administradores", { conta: d.conta, ativo: true, justificativa: d.justificativa });
   saida.textContent = r.ok ? "Administrador financeiro adicionado." : mensagem(r);
   if (r.ok) carregar();
+});
+$("#form-mova").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.currentTarget;
+  const saida = f.querySelector(".resultado-acao");
+  const d = new FormData(f);
+  const acao = e.submitter?.dataset.acao === "REVOGAR" ? "REVOGAR" : "CONCEDER";
+  saida.textContent = "Enviando…";
+  const r = await enviar("/api/fv2/corporativo/mova-operacional", { unidade: d.get("unidade"), acao, juros: d.get("juros") === "on", justificativa: d.get("justificativa") });
+  saida.textContent = r.ok ? (acao === "REVOGAR" ? "MOVA revogado nesta unidade." : "MOVA autorizado nesta unidade.") : mensagem(r);
 });
 carregar();

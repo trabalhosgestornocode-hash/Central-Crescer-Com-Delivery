@@ -114,6 +114,26 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
         await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...r.resultado } });
         return a.propostas.obter(esc, p.id);
       }
+      // 24/11: nota fiscal de conta JÁ registrada — a pessoa confirma e a nota é ANEXADA à conta (nenhum valor muda, nada é lançado).
+      if (p.tipo === "VINCULO_DE_DOCUMENTO") {
+        await exigir(ctx, [ACAO.ENVIAR_DOCUMENTO]);
+        if (!execucao?.anexarDocumento || !p.comando?.entrada?.obrigacaoId) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
+        const tomadaV = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
+        if (!tomadaV) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
+        try {
+          const doc = await execucao.anexarDocumento({ proposta: p, escopo: esc, obrigacaoId: p.comando.entrada.obrigacaoId, executor: executorDaPessoa({ nucleo, ctx }) });
+          const resultado = { obrigacaoId: p.comando.entrada.obrigacaoId, documentoId: doc.documento.id };
+          const aplicada = await a.propostas.transicionar(esc, p.id, "APLICANDO", "APLICADA", resultado);
+          await a.aprovacoes.registrar({ propostaId: p.id, acao: "APLICADA", usuarioId: ctx.usuarioId, resultado });
+          await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado } });
+          return aplicada;
+        } catch (e) {
+          const codigo = e instanceof ErroDeAprovacao ? e.codigo : e instanceof ErroFinanceiro ? e.codigo : e?.codigo ?? "FALHA_NA_APLICACAO";
+          await a.propostas.transicionar(esc, p.id, "APLICANDO", "AGUARDANDO_REVISAO");
+          await a.aprovacoes.registrar({ propostaId: p.id, acao: "FALHOU", usuarioId: ctx.usuarioId, motivo: codigo });
+          throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao(codigo);
+        }
+      }
       if (p.tipo !== "NOVA_OBRIGACAO" && !porComprovante && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
       const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
       if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
