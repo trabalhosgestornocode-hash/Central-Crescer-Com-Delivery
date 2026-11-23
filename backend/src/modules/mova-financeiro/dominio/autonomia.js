@@ -27,7 +27,12 @@ export const OPERACAO = Object.freeze({
   CONTA_A_PAGAR: "CONTA_A_PAGAR",           // registrar obrigação a partir de boleto/nota
   ANEXAR_DOCUMENTO: "ANEXAR_DOCUMENTO",     // anexar evidência a lançamento existente (sem mexer em valor)
   BAIXA_DOCUMENTAL: "BAIXA_DOCUMENTAL",     // Execução 17: pagamento por COMPROVANTE (sem saída do extrato; conciliação pendente)
+  // 23/11: despesa SEM conta prévia, paga por comprovante — registra a conta a pagar (ação estreita registrar_obrigacao) e o
+  // pagamento por comprovante na mesma rotina. Mesmas exigências do comprovante que a BAIXA_DOCUMENTAL; política própria.
+  DESPESA_DOCUMENTAL: "DESPESA_DOCUMENTAL",
 });
+/** Operações decididas pelo COMPROVANTE (sem saída do extrato): mesmas exigências e anti-fracionamento. */
+const DOCUMENTAIS = new Set(["BAIXA_DOCUMENTAL", "DESPESA_DOCUMENTAL"]);
 const SEMPRE_PROIBIDAS = new Set(["PAGAMENTO_BANCARIO", "EXCLUSAO", "ESTORNO", "TRANSFERENCIA"]);
 /** Operações que liquidam (mexem em caixa): exigem a saída do extrato conferida para qualquer APLICAR_*. */
 const LIQUIDAM = new Set([OPERACAO.BAIXA_POR_EXTRATO, OPERACAO.DESPESA_PAGA]);
@@ -98,13 +103,13 @@ export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId
   if (nivel !== NIVEL.SOMENTE_PROPOR && valorCentavos > pol.limiteCentavos) { nivel = descer(nivel); motivos.push("ACIMA_DO_LIMITE"); }
   // Execução 17: o limite vale POR PAGAMENTO e não pode ser contornado dividindo um pagamento em vários comprovantes. O que já foi
   // baixado por comprovante na MESMA conta (ou ao MESMO favorecido em poucos dias) soma; passou do limite ⇒ confirmação humana.
-  if (operacao === OPERACAO.BAIXA_DOCUMENTAL && nivel === NIVEL.APLICAR_AUTOMATICO && acumuladoCentavos > 0 && valorCentavos + acumuladoCentavos > pol.limiteCentavos) {
+  if (DOCUMENTAIS.has(operacao) && nivel === NIVEL.APLICAR_AUTOMATICO && acumuladoCentavos > 0 && valorCentavos + acumuladoCentavos > pol.limiteCentavos) {
     nivel = NIVEL.APLICAR_COM_CONFIRMACAO; motivos.push("POSSIVEL_FRACIONAMENTO");
   }
   if (LIQUIDAM.has(operacao) && nivel !== NIVEL.SOMENTE_PROPOR && conciliacao?.situacao !== "CONFERIDA") {
     nivel = NIVEL.SOMENTE_PROPOR; motivos.push(conciliacao?.situacao === "AMBIGUA" ? "EXTRATO_AMBIGUO" : "SEM_EXTRATO_CONFERIDO");
   }
-  if (operacao === OPERACAO.BAIXA_DOCUMENTAL && nivel !== NIVEL.SOMENTE_PROPOR) {
+  if (DOCUMENTAIS.has(operacao) && nivel !== NIVEL.SOMENTE_PROPOR) {
     if (conciliacao?.situacao === "AMBIGUA") { nivel = NIVEL.SOMENTE_PROPOR; motivos.push("EXTRATO_AMBIGUO"); }
     else if (!comprovante?.apto) { nivel = NIVEL.SOMENTE_PROPOR; motivos.push(`COMPROVANTE_${comprovante?.situacao ?? "NAO_AVALIADO"}`, ...(comprovante?.motivos ?? [])); }
     else if (nivel === NIVEL.APLICAR_AUTOMATICO && !comprovante.comIdentificador) { nivel = NIVEL.APLICAR_COM_CONFIRMACAO; motivos.push("SEM_IDENTIFICADOR_DA_TRANSACAO"); }

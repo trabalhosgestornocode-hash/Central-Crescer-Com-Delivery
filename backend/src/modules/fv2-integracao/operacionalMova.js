@@ -8,7 +8,8 @@
 //   ANEXAR_DOCUMENTOS             enviar_documento
 //   REGISTRAR_PAGAMENTO_COMPROVANTE  baixar_por_comprovante (+ enviar_documento para anexar o comprovante)
 //   VINCULAR_EXTRATO              vincular_pagamento (liga a saída do extrato; nunca cria saída)
-//   CRIAR_OBRIGACOES              NÃO concedido ao MOVA: despesa nova continua por aprovação humana na Central
+//   CRIAR_OBRIGACOES              registrar_obrigacao (estreita: conta a pagar de UMA parcela, despesa, com documento — 0030);
+//                                 só com política e chave próprias; NÃO concedida em produção sem política específica
 //   REVERTER_OPERACOES            NÃO concedido ao MOVA: estorno é do responsável (cancelar), pela Central
 // Ações amplas (registrar, corrigir, cancelar, configurar, conceder, revogar, aplicar, homologar, reabrir) são RECUSADAS aqui.
 export const PERFIS_OPERACIONAIS = Object.freeze({
@@ -16,6 +17,7 @@ export const PERFIS_OPERACIONAIS = Object.freeze({
   ANEXAR_DOCUMENTOS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento"]),
   REGISTRAR_PAGAMENTO_COMPROVANTE: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante"]),
   VINCULAR_EXTRATO: Object.freeze(["financeiro_v2.ver", "financeiro_v2.vincular_pagamento"]),
+  CRIAR_OBRIGACOES: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_obrigacao"]),
 });
 export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(PERFIS_OPERACIONAIS).flat())]);
 

@@ -28,7 +28,9 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+  // 23/11: criar a conta a pagar (despesa sem conta prévia) só com as DUAS chaves: pagamento por comprovante e criação de despesas.
+  const despesasLigadas = Boolean(pagamentoPorComprovante && criarDespesas);
   const hoje = () => relogio().toISOString().slice(0, 10);
   // Leituras do Financeiro SEMPRE com a identidade de leitura do MOVA (o escopo pode vir da Central, sem usuário).
   const lendo = (escopo) => ({ organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, usuarioId: identidadeLeitura });
@@ -214,11 +216,12 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (!a.operacoes?.listar) return 0;
     const norm = (s) => (typeof s === "string" ? s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() : "");
     const dia = (d) => (typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? Date.parse(`${d.slice(0, 10)}T00:00:00Z`) / 86400000 : null);
-    const conta = proposta.comando?.entrada?.obrigacaoId ?? null;
+    const conta = proposta.comando?.entrada?.obrigacaoId ?? null; // despesa nova: sem conta; soma pelo favorecido
     const fav = norm(proposta.leitura?.favorecido);
-    const data = dia(proposta.leitura?.dataPagamento ?? proposta.comando?.entrada?.dataEfetiva ?? null);
+    // Despesa nova: a data do pagamento fica em comando.pagamento (a entrada é a da conta a pagar).
+    const data = dia(proposta.leitura?.dataPagamento ?? proposta.comando?.entrada?.dataEfetiva ?? proposta.comando?.pagamento?.dataEfetiva ?? proposta.datas?.caixa ?? null);
     return (await a.operacoes.listar(escopo))
-      .filter((o) => o.operacao === OPERACAO.BAIXA_DOCUMENTAL && o.estado === "EXECUTADA" && o.propostaId !== proposta.id)
+      .filter((o) => [OPERACAO.BAIXA_DOCUMENTAL, OPERACAO.DESPESA_DOCUMENTAL].includes(o.operacao) && o.estado === "EXECUTADA" && o.propostaId !== proposta.id)
       .filter((o) => (conta && o.resultado?.obrigacaoId === conta)
         || (fav && norm(o.resultado?.favorecido) === fav && data !== null && dia(o.resultado?.dataPagamento) !== null && Math.abs(dia(o.resultado.dataPagamento) - data) <= JANELA_FRACIONAMENTO_DIAS))
       .reduce((s, o) => s + (Number.isSafeInteger(o.valorCentavos) ? o.valorCentavos : 0), 0);
@@ -236,6 +239,53 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (!(await operacional.pode("registrarPagamentoPorComprovante", escopo)) || !(await operacional.pode("enviarEvidencia", escopo))) return { ...doc, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     const r = await pagarPorComprovante({ proposta, escopo, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, executor: operacional });
     return r.ok ? { ...doc, situacao: "PAGO_POR_COMPROVANTE", resultado: r.resultado } : { ...doc, motivosDocumentais: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
+   * 23/11 — DESPESA SEM CONTA PRÉVIA paga por comprovante (proposta DESPESA_PAGA com arquivo). Com as duas chaves, a política
+   * DESPESA_DOCUMENTAL automática e a identidade operacional com `registrar_obrigacao` + `baixar_por_comprovante` +
+   * `enviar_documento`, a rotina: (1) registra a conta a pagar pelo serviço oficial (uma parcela, despesa, fonte MOVA:<proposta>
+   * — idempotente), (2) anexa o comprovante a ela e (3) registra o pagamento POR COMPROVANTE (conciliação pendente). Qualquer
+   * falha volta a proposta para revisão; a nova tentativa reaproveita o que já foi gravado (mesma fonte, mesmo arquivo).
+   */
+  async function aposDespesaNova(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    if (!despesasLigadas) return { ...base, motivos: ["CRIACAO_DE_DESPESAS_DESLIGADA"] };
+    if (proposta.tipo !== "DESPESA_PAGA" || !proposta.evidencia) return { ...base, motivos: ["SEM_COMPROVANTE"] };
+    if (proposta.competenciaPendente || !proposta.comando?.entrada?.competencia) return { ...base, motivos: ["COMPETENCIA_PENDENTE"] };
+    const comprovante = comprovanteDa(proposta);
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.DESPESA_DOCUMENTAL, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje(), conciliacao: { situacao: "AGUARDANDO_EXTRATO" }, comprovante,
+      acumuladoCentavos: await acumuladoDocumental(escopo, proposta) });
+    await a.propostas.anotar(escopo, proposta.id, { autonomiaDocumental: decisao, comprovante });
+    const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: decisao.motivos, motivosDocumentais: decisao.motivos, comprovante: comprovante?.situacao ?? null };
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
+    if (!operacional) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    for (const op of ["registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "enviarEvidencia"]) {
+      if (!(await operacional.pode(op, escopo))) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    }
+    const { reserva, repetida } = await reservar(OPERACAO.DESPESA_DOCUMENTAL, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, decisao.politicaId, operacional);
+    if (repetida) return { ...r0, ...(repetida.ok ? { situacao: "PAGO_POR_COMPROVANTE", resultado: repetida.operacao?.resultado } : { motivo: repetida.motivo }) };
+    const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
+    if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ...r0, motivo: "PROPOSTA_JA_DECIDIDA" }; }
+    try {
+      const ob = await operacional.chamar("registrarObrigacaoDocumental", escopo, { ...proposta.comando.entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      const obrigacaoId = ob.obrigacoes[0].id;
+      const pago = await anexarEPagar({ proposta, escopo, obrigacaoId, dataPagamento: proposta.comando.pagamento.dataEfetiva, nivel: NIVEL.APLICAR_AUTOMATICO, executor: operacional });
+      const resultado = { ...pago, despesaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: proposta.comando.entrada.categoria ?? null };
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
+      const operacao = await a.operacoes.concluir(reserva.id, resultado);
+      await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
+        dados: { operacao: OPERACAO.DESPESA_DOCUMENTAL, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId, movimentacaoId: null, conciliacao: "PENDENTE" } });
+      return { ...r0, situacao: "PAGO_POR_COMPROVANTE", resultado, operacao };
+    } catch (erro) {
+      const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
+      await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "AGUARDANDO_REVISAO");
+      await a.operacoes.falhar(reserva.id, codigo);
+      await a.auditoria.registrar({ acao: "OPERACAO_FALHOU", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id, dados: { operacao: OPERACAO.DESPESA_DOCUMENTAL, codigo, detalhes: erro?.detalhes ?? null } });
+      registrar({ tipo: "MOVA_OPERACAO_FALHOU", codigo });
+      return { ...r0, motivo: codigo, motivosDocumentais: [...decisao.motivos, codigo] };
+    }
   }
 
   /**
@@ -278,5 +328,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, aposDespesaNova, reconferirPendentes, conciliarPendentes, operacional });
 }

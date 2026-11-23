@@ -33,10 +33,15 @@ test("teto: entrada acima do limite é recusada ANTES de reservar e de chamar", 
   assert.equal(s.enviados.length, 0); assert.equal(s.orc.reservas, 0);
 });
 
-test("teto: mídia recusada sem contagem nem chamada; contagem indisponível também recusa", async () => {
+test("teto: imagem/PDF passam pela contagem (piloto documental); outro tipo é recusado sem contagem nem chamada; contagem indisponível também recusa", async () => {
   const s = montar();
-  await assert.rejects(s.c.beta.messages.create(req({ messages: [{ role: "user", content: [{ type: "image", source: {} }, { type: "text", text: "x" }] }] })), (e) => e.codigo === "IA_TETO_MIDIA_RECUSADA");
+  await assert.rejects(s.c.beta.messages.create(req({ messages: [{ role: "user", content: [{ type: "audio", source: {} }, { type: "text", text: "x" }] }] })), (e) => e.codigo === "IA_TETO_MIDIA_RECUSADA");
   assert.equal(s.contados.length, 0); assert.equal(s.enviados.length, 0);
+  await s.c.beta.messages.create(req({ messages: [{ role: "user", content: [{ type: "image", source: {} }, { type: "text", text: "x" }] }] }));
+  assert.equal(s.contados.length, 1, "a imagem é contada antes"); assert.equal(s.enviados.length, 1);
+  const g = montar({ tokens: 3201 });
+  await assert.rejects(g.c.beta.messages.create(req({ messages: [{ role: "user", content: [{ type: "document", source: {} }] }] })), (e) => e.codigo === "IA_TETO_ENTRADA_EXCEDIDA");
+  assert.equal(g.enviados.length, 0); assert.equal(g.orc.reservas, 0);
   const f = montar({ contagemFalha: true });
   await assert.rejects(f.c.beta.messages.create(req()), (e) => e.codigo === "IA_TETO_CONTAGEM_INDISPONIVEL");
   assert.equal(f.enviados.length, 0); assert.equal(f.orc.reservas, 0);

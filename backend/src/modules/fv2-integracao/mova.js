@@ -95,6 +95,7 @@ export function lerConfiguracaoMova(env) {
   const escrita = sim(env.MOVA_OPERACAO_ESCRITA);
   if ((autonomia || escrita) && !operacao) contradicoes.push("AUTONOMIA_FORA_DA_OPERACAO");
   if (escrita && !autonomia) contradicoes.push("ESCRITA_SEM_AUTONOMIA");
+  if (sim(env.MOVA_OPERACAO_CRIAR_DESPESAS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) contradicoes.push("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE");
   if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) contradicoes.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
   // Agente 2 — Frente D: entregadores no privado (só OPERACAO) e a rotina semanal (exige os entregadores).
   const entregadores = sim(env.MOVA_ENTREGADORES);
@@ -132,6 +133,8 @@ export function lerConfiguracaoMova(env) {
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
       somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), recebimentoDocumental: sim(env.MOVA_OPERACAO_DOCUMENTOS_SEM_IA), comandosDeterministicos: true, autonomia, escrita,
       pagamentoPorComprovante: sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE),
+      // 23/11: criar a conta a pagar de despesa sem conta prévia (exige o pagamento por comprovante; padrão DESLIGADA).
+      criarDespesas: sim(env.MOVA_OPERACAO_CRIAR_DESPESAS),
       // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
       // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
       iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
@@ -224,7 +227,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     : EXTRATOR_DESLIGADO;
   const extrator = extratorIa !== EXTRATOR_DESLIGADO && cfg.iaSomenteDocumentos === true ? extratorSoDeDocumentos(extratorIa) : extratorIa;
   // 15A: respostas naturais — desligadas por padrão; exigem IA ligada e passam pelo MESMO orçamento/teto do extrator.
-  const redator = cfg.ia && cfg.respostasNaturais && criarClienteIa
+  const redator = cfg.ia && cfg.respostasNaturais && cfg.iaSomenteDocumentos !== true && criarClienteIa
     ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
     : null;
   // Agente 2 — Frente C: a escrita só existe com a identidade OPERACIONAL implantada pela plataforma (núcleo de escrita + concessões
@@ -235,7 +238,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
@@ -306,7 +309,8 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       try { await exigirBancoDeHomologacao(c, cfg.marcador); } finally { await c.end(); }
     };
     let criarClienteIa = null;
-    if (cfg.ia) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 1 }); }
+    if (cfg.ia && !env.ANTHROPIC_API_KEY) registrar({ evento: "MOVA_IA_SEM_CHAVE", aviso: "MOVA_IA_HABILITADA=1 sem ANTHROPIC_API_KEY: leitura por IA fica desligada" }); // falha segura: o resto segue
+    if (cfg.ia && env.ANTHROPIC_API_KEY) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 0, timeout: 60_000 }); } // sem nova tentativa oculta: cada tentativa passa pela reserva
     const enviarAoGateway = cfg.envio && cfg.transporteEnvio === "DIRETO" ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
     const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {

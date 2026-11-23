@@ -38,6 +38,9 @@ export const ACAO = Object.freeze({
   // Execução 17 — registrar o PAGAMENTO de conta a pagar pelo COMPROVANTE, sem movimentação bancária (a conciliação com o
   // extrato fica pendente e se faz depois com `vincular_pagamento`). Nenhuma concessão anterior a recebe.
   BAIXAR_POR_COMPROVANTE: "financeiro_v2.baixar_por_comprovante",
+  // Agente 2 (23/11) — registrar CONTA A PAGAR a partir de documento (uma parcela, despesa, com documento). Separada de
+  // `registrar` (que também cria movimentação, receita, contas...). Nenhuma concessão anterior a recebe (migração 0030).
+  REGISTRAR_OBRIGACAO: "financeiro_v2.registrar_obrigacao",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

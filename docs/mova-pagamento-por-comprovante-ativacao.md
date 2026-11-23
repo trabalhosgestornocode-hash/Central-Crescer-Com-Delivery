@@ -41,3 +41,23 @@ validação dos controles. A aprovação, sozinha, não ativa nada.
 4. Ligar a IA de leitura documental dentro do orçamento aprovado: US$ 1,00 e 20 chamadas, com `MOVA_IA_SOMENTE_DOCUMENTOS` no padrão (ligado).
 5. Ligar `MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE`, depois `MOVA_OPERACAO_AUTONOMIA` e `MOVA_OPERACAO_ESCRITA`.
 6. Fazer o primeiro comprovante real com acompanhamento. Conferir no Financeiro: baixa sem saída, conciliação pendente e nenhuma duplicidade.
+
+## Piloto de leitura documental por IA (23/11/2026)
+
+- Modelo único: `claude-haiku-5-5` (outro modelo é recusado na configuração e na resposta).
+- Orçamento persistente (`mova.orcamento_ia`): 20 chamadas, US$ 1,00 acumulado, reserva de US$ 0,02 por chamada **antes** de cada chamada (trava consultiva no banco; 40 chamadas simultâneas → exatamente 20 chegam à API).
+- Sem nova tentativa oculta do SDK (`maxRetries: 0`); tentativa sem resposta da API (tempo esgotado, conexão) é contada pelo valor da reserva — possivelmente faturada. Erro com resposta (4xx/5xx) custa 0, mas conta como tentativa.
+- Teto por chamada: entrada 20.000 tokens (contados de graça antes, inclusive imagem/PDF), saída 600, esforço baixo.
+- `MOVA_IA_SOMENTE_DOCUMENTOS` (padrão ligado): texto solto nunca gasta orçamento; o redator de respostas naturais fica desligado.
+- Sem chave `ANTHROPIC_API_KEY`, a IA fica desligada e o resto do MOVA segue (falha segura).
+- Desligamento imediato: `mova.controle.ia = false` (sem reinício). Histórico não é reprocessado (fila 100% CONCLUIDO em 23/11).
+- Duplicidade: o mesmo arquivo (sha256) não é lido duas vezes.
+
+## Despesa SEM conta prévia (DESPESA_DOCUMENTAL) — preparada, NÃO concedida
+
+- Ação nova e estreita `financeiro_v2.registrar_obrigacao` (migração 0030): quem só tem esta ação grava UM lançamento de DESPESA + UMA conta a pagar de uma parcela, criados na mesma transação; nada de movimentação, receita, alteração ou recorrência (conferido pelo banco).
+- Perfil `CRIAR_OBRIGACOES` = [ver, enviar_documento, registrar_obrigacao] — **não concedido a ninguém**.
+- Operação MOVA `DESPESA_DOCUMENTAL` (migração 0010): política própria, limite, antifracionamento somado com BAIXA_DOCUMENTAL.
+- Chave `MOVA_OPERACAO_CRIAR_DESPESAS` (padrão desligada; exige `MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE`).
+- Fluxo: conta nova (fonte `MOVA:<proposta>`, idempotente) → comprovante anexado → pagamento por comprovante (sem saída bancária; conciliação pendente) → resposta. Falha no meio: proposta volta para revisão; nova tentativa reaproveita a conta.
+- Recuperação: `database/financeiro-v2/recuperacao/reverter-0030.sql` e `database/mova-financeiro/recuperacao/reverter-0010.sql` (ensaiadas: voltam ao retrato idêntico de 0029/0009).

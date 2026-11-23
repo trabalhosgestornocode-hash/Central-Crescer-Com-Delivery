@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -619,6 +619,19 @@ alter table mova.operacao_executada drop constraint operacao_executada_operacao_
 alter table mova.operacao_executada add constraint operacao_executada_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL'));
 
+-- ------------------------------------------------------------------------- 0010_mova_despesa_documental.sql (arquivo f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c)
+-- MOVA — Agente 2 (23/11/2026): operação DESPESA_DOCUMENTAL (despesa sem conta prévia, paga por COMPROVANTE: registra a conta
+-- a pagar pela ação estreita `registrar_obrigacao` do Financeiro e o pagamento por comprovante; conciliação pendente).
+--
+-- Só amplia a lista fechada de operações das políticas e das execuções. Nenhuma política é semeada: sem política cadastrada
+-- o MOVA só PROPÕE (a pessoa aprova na Central).
+alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
+alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL'));
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL'));
+
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
 insert into mova.mova_migracao (nome, sha256) values
@@ -630,7 +643,8 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0006_mova_politica_resposta.sql', '1ecdc2f473854479b10487eddb1d1d842683ff3d0cf63d486764a46818261113'),
   ('0007_mova_autonomia_operacoes.sql', 'cb13d733182446a34947d1b781430af21f654d5bb0f62309aa3a568ae8f1979d'),
   ('0008_mova_entregadores_automacoes.sql', 'e66e9c662dbfd1c7ddd60092ff5cab082fa7dc230ca08da2524b46821feb6182'),
-  ('0009_mova_baixa_documental.sql', 'b690cafc5aedd8e5bc553ca886690de5d6e61bc88b0f3c95881a725b9a3f2754');
+  ('0009_mova_baixa_documental.sql', 'b690cafc5aedd8e5bc553ca886690de5d6e61bc88b0f3c95881a725b9a3f2754'),
+  ('0010_mova_despesa_documental.sql', 'f3aab5fe0574e86779b873e263551ebb8577049e3c0d3f3b58e753b8f731673c');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
