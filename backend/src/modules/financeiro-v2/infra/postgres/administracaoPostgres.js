@@ -19,7 +19,12 @@ export const PERFIS_DE_ACESSO = Object.freeze({
   CONSULTA: [ACAO.VER],
   OPERADOR: [ACAO.VER, ACAO.REGISTRAR, ACAO.CORRIGIR, ACAO.CANCELAR],
   FINANCEIRO: [ACAO.VER, ACAO.REGISTRAR, ACAO.CORRIGIR, ACAO.CANCELAR, ACAO.CONCILIAR, ACAO.REVISAR, ACAO.IMPORTAR, ACAO.CONFIGURAR, ACAO.FECHAR, ACAO.DOCUMENTOS, ACAO.APROVAR, ACAO.APLICAR, ACAO.CONFIRMAR_IMPORTACAO, ACAO.RECLASSIFICAR, ACAO.VINCULAR_PAGAMENTO],
+  // 23/11 (decisão do proprietário): TODAS as ações do catálogo, inclusive enviar documento, baixa por comprovante, conta a
+  // partir de documento, juros, homologar, reabrir, conceder e revogar. Só o administrador corporativo concede (e nunca a si
+  // mesmo: a regra do banco continua valendo); cada concessão exige justificativa e fica no histórico.
+  COMPLETO: Object.values(ACAO),
 });
+// FINANCEIRO não inclui homologar, reabrir e conceder/revogar; COMPLETO inclui tudo (só para quem o proprietário indicar).
 // Homologar, reabrir e conceder/revogar NÃO entram em perfil: homologar e reabrir seguem com segundo fator; conceder e
 // revogar são do administrador corporativo (painel de ativação).
 

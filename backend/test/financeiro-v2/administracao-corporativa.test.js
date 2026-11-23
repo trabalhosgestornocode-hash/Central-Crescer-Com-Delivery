@@ -201,6 +201,13 @@ test("0023 — concessão: sem autoconcessão, conta compartilhada recusada, pes
   assert.equal((await dar({ unidade: UNI_A, perfil: PESSOA_OP, nivel: "NENHUM" })).status, 200);
   assert.equal(motivo(await op("/acoes/configuracoes/conta/criar", { metodo: "POST", corpo: { tipo: "BANCARIA", nome: "Não deve gravar" } })), "SEM_CONCESSAO");
   assert.equal((await dar({ unidade: UNI_A, perfil: PESSOA_OP, nivel: "FINANCEIRO" })).status, 200, "religar");
+  // 23/11: nível COMPLETO grava TODAS as ações do catálogo (inclusive enviar documento e conceder); autoconcessão continua recusada
+  assert.equal((await dar({ unidade: UNI_A, perfil: PESSOA_ADMIN, nivel: "COMPLETO" })).status, 400, "autoconcessão do completo");
+  assert.equal((await dar({ unidade: UNI_A, perfil: PESSOA_OP, nivel: "COMPLETO" })).status, 200);
+  const gravadas = (await dono.query("select acoes from financeiro_v2.fv2_concessao where unidade_id = $1 and usuario_id = $2 and situacao = 'ATIVA'", [UNI_A, PESSOA_OP])).rows[0].acoes;
+  for (const a of ["financeiro_v2.enviar_documento", "financeiro_v2.conceder", "financeiro_v2.revogar", "financeiro_v2.homologar", "financeiro_v2.reabrir", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros"]) assert.ok(gravadas.includes(a), a);
+  assert.equal((await adm(`/corporativo/pessoas?unidade=${UNI_A}`)).corpo.pessoas.find((p) => p.perfilId === PESSOA_OP).nivel, "COMPLETO");
+  assert.equal((await dar({ unidade: UNI_A, perfil: PESSOA_OP, nivel: "FINANCEIRO" })).status, 200, "volta ao financeiro");
   const aud = (await dono.query("select finalidade, operacao, sessao_id, ator from financeiro_v2.fv2_auditoria_concessao where finalidade = 'ADMINISTRACAO_CORPORATIVA' order by seq")).rows;
   assert.ok(aud.length >= 4 && aud.every((a) => a.sessao_id === null && a.ator === PESSOA_ADMIN));
   assert.ok(aud.some((a) => a.operacao === "REVOGACAO"));

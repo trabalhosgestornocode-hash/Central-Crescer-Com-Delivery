@@ -210,6 +210,17 @@ test("a mesma nota não serve para duas semanas ou entregadores", async () => {
   await m.n.anexarDocumentoDoEntregador(m.c, nota());
   await rejeita(m.n.anexarDocumentoDoEntregador(m.c, nota({ entregador: "rafael", valorCentavos: 900 })), CODIGO.OPERACAO_INVALIDA);
 });
+test("23/11: nota anexada por engano e REJEITADA não bloqueia o mesmo arquivo no lugar certo; aprovada ou em análise continua bloqueando", async () => {
+  const m = await preparado();
+  await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG });
+  await m.n.anexarDocumentoDoEntregador(m.c, nota()); // anexada no lugar errado
+  await m.n.iniciarConferenciaDaNota(m.c, { inicio: SEG, entregador: "mauricio" });
+  await m.n.decidirNotaDoEntregador(m.c, { inicio: SEG, entregador: "mauricio", decisao: "REJEITAR", justificativa: "Anexada por engano nesta semana." });
+  const certo = await m.n.anexarDocumentoDoEntregador(m.c, nota({ entregador: "rafael", valorCentavos: 900 }));
+  assert.equal(certo.dados.notas.at(-1).vigente, true);
+  const errado = (await m.n.anexarDocumentoDoEntregador(m.c, nota({ arquivo: { conteudo: new Uint8Array(Buffer.from("%PDF-1.4 outra")), nome: "x.pdf", tipoMime: "application/pdf" }, numero: "101" })).catch((e) => e));
+  assert.equal(errado.codigo, CODIGO.OPERACAO_INVALIDA, "a mesma nota (número e emitente) agora vigente no rafael volta a bloquear");
+});
 test("fluxo completo: nota, aprovação, liberação e baixa pelo mecanismo existente; quitada uma só vez", async () => {
   const m = await preparado({ agora: "2026-11-11T15:00:00.000Z" });
   await m.n.fecharSemanaDeEntregadores(m.c, { inicio: SEG });
