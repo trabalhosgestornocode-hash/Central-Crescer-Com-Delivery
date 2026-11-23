@@ -405,6 +405,8 @@ details.card > summary h2.inline { display: inline; font-size: 16px; margin: 0; 
 .filtros-locais { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr)); gap: 10px 12px; align-items: end; margin: 0 0 16px; padding: 14px 16px; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio); }
 .filtros-locais label { display: grid; gap: 5px; font-size: 12px; font-weight: 500; color: var(--suave); min-width: 0; }
 .filtros-locais input, .filtros-locais select { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-height: 38px; max-width: 100%; }
+.filtros-locais .ent-filtro-semana { grid-column: span 2; } .filtros-locais .ent-filtro-semana select { width: 100%; }
+.filtros-locais .ent-semana-escolhida { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--suave); overflow-wrap: anywhere; } .ent-semana-escolhida strong { color: var(--texto); font-weight: 600; }
 .filtros-locais .caixa-marcar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--texto); min-height: 38px; }
 .filtros-locais .caixa-marcar input { min-height: 0; width: 18px; height: 18px; accent-color: var(--marca-escura); }
 .contas { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 20px; } .contas .card { margin-bottom: 0; }
@@ -655,7 +657,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
   .nos { margin-left: 8px; padding-left: 6px; }
   .painel { padding: 0 18px 28px; } .painel-cabeca { margin: 0 -18px 16px; padding: 14px 12px 12px 18px; }
 
-  .filtros-locais { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .filtros-locais .caixa-marcar { grid-column: 1 / -1; }
+  .filtros-locais { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .filtros-locais .caixa-marcar, .filtros-locais .ent-filtro-semana { grid-column: 1 / -1; }
   .filtros-locais select, .filtros-locais input:not([type="checkbox"]) { width: 100%; min-width: 0; }
   /* Tabelas viram cartões: cada célula mostra seu rótulo. */
   .tabela--cartoes thead { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
