@@ -112,7 +112,7 @@ t("A2-L4 comprovante ANTES do extrato: aguarda; quando a saída é importada, a 
 
 t("A2-L5 pagamento PARCIAL: baixa só do valor pago; a conta segue em aberto com o restante", async () => {
   const s = await liquidacao({ politica: {}, saidas: [10000], responder: () => PIX({ valorCentavos: 10000 }) });
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("L5") }));
+  await s.enviar(gw({ texto: "MOVA pagamento parcial da alfa", doc: pdf("L5") }));
   assert.equal((await s.ultima()).decisao, "EXECUTADO");
   const t1 = await s.titulo();
   assert.equal(t1.saldoCentavos, 20000);
