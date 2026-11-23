@@ -27,6 +27,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaU
 import { interpretarComando } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
@@ -220,17 +221,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const pend = await a.mensagens.tomarPendente(evento.respostaA);
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_RECEBIDO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
       // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
       // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
-      if (!evento.respostaA && evento.tipo === "TEXTO" && typeof a.mensagens.tomarPendenteRecente === "function" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa)) {
+      // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
+      const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
+      const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
+      if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
         const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
-        if (pend?.pendente) {
-          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, porEvento: evento.eventoId, participanteId: evento.participanteId } });
+        if (pend?.pendente && !pend.pendente.divergencia && !ehUnidade) {
+          // era a pergunta de unidade e a resposta curta não é uma unidade: devolve a pendência e segue o fluxo normal da mensagem
+          await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
+        } else if (pend?.pendente) {
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: pend.pendente.divergencia ? "RESPOSTA_DE_DIVERGENCIA_POR_CONTEXTO" : "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
     }
@@ -305,7 +312,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 11. Unidade (determinística; IA só confirma; nunca pelo histórico do participante).
     // O esclarecimento (resposta à pergunta) PREVALECE sobre o texto original, que era justamente o ambíguo.
     // Áudio: a TRANSCRIÇÃO conta como texto da mensagem (a unidade pode ter sido dita no áudio).
-    const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto, saida.transcricao]).filter(Boolean);
+    // Resposta a uma pergunta de DIVERGÊNCIA ("sim", "2", "outra compra") não fala de unidade: a unidade segue a da mensagem original.
+    const textos = (esclarecimento && !esclarecimento.divergencia ? [esclarecimento.texto] : [evento.texto, saida.transcricao]).filter(Boolean);
     let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida });
     // Agente 2 — CONSULTA (só leitura) sem unidade no texto: a unidade da conversa em andamento DESTA pessoa (janela curta).
     // Documento/lançamento continua exigindo evidência própria (nunca pelo histórico do participante).
@@ -420,6 +428,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
         pagador: saida.pagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        // 23/11: evidências bancárias do comprovante para a conciliação (nunca confirmam compensação): banco do recebedor, data e hora impressas, valor.
+        instituicaoDestino: saida.instituicaoDestino ?? null, horaTransacao: saida.horaTransacao ?? null, dataPagamento: saida.dataPagamento ?? null, valorCentavos: saida.valorCentavos ?? null,
         // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).
         situacaoTransacao: saida.situacaoTransacao ?? null, incertezas: saida.incertezas ?? [],
         comprovante: evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO" ? avaliarComprovante(saida, { hoje: hoje() }) : null,
@@ -446,8 +456,28 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return concluir(evento, { decisao: ["EXECUTADA", "PAGO_POR_COMPROVANTE"].includes(pos?.situacao) ? DECISAO.EXECUTADO : DECISAO.PROPOSTA, motivo: dados.tipo, escopo, propostaId: proposta.id, resposta: texto, injecao, extra, privado });
   }
 
+  /** Categoria do plano da unidade pela descrição (uma só categoria casando); senão null → provisória "a classificar" (revisão humana). */
+  async function categoriaDaDespesa(escopo, saida, legenda) {
+    try {
+      const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);
+      return escolherCategoria({ categorias: p?.categorias ?? p?.itens ?? [], categoriaSugerida: saida.categoriaSugerida, legenda });
+    } catch { return null; }
+  }
+
+  /**
+   * 23/11 — PERGUNTA objetiva de divergência: guarda a pendência (a resposta continua a operação) e responde no grupo ou, com valor,
+   * conforme a política de resposta (privado). Nada é gravado no Financeiro.
+   */
+  async function perguntar({ evento, escopo, saida, injecao, unidade, grupo = null, participante = null }, divergencia, texto, motivo) {
+    const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
+    const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
+    // A resposta vem na MESMA conversa em que a pergunta saiu (grupo ou privado): é por ela que a memória curta reencontra a pendência.
+    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia } });
+    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
+  }
+
   async function tratarPagamento(ctx) {
-    const { evento, escopo, saida, injecao } = ctx;
+    const { evento, escopo, saida, injecao, esclarecimento } = ctx;
     // Execução 17: comprovante AGENDADO, PENDENTE ou CANCELADO não é pagamento — nada é proposto como pago.
     if (evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO") {
       const av = avaliarComprovante(saida, { hoje: hoje() });
@@ -462,28 +492,88 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (bloqueio) return bloqueio;
     const abertas = await porta.contasAPagarAbertas(escopo);
     const valor = saida.valorCentavos;
+    const legenda = evento.midia ? legendaDoDocumento(evento.texto) : null; // legenda da mensagem original: descrição e evidência (entrada não confiável)
     let candidatas = saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor);
-    if (candidatas.length > 1) {
-      const exatas = candidatas.filter((t) => t.saldoCentavos === valor);
-      if (exatas.length === 1) candidatas = exatas;
-      else return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_OBRIGACOES_COMPATIVEIS", escopo, resposta: RESPOSTA.variasObrigacoes(candidatas.length), injecao });
+    let forcarNova = false; let contaEscolhida = null; let parcialConfirmado = false;
+
+    // 23/11 — RESPOSTA a uma pergunta de divergência: a operação CONTINUA (sem segunda confirmação) conforme o que a pessoa disse.
+    if (esclarecimento?.divergencia) {
+      const pend = esclarecimento.divergencia;
+      const desf = interpretarResposta(esclarecimento.texto, pend);
+      // O saldo pode ter mudado entre a pergunta e a resposta: a conta é relida pelo id, nunca usada do que foi guardado.
+      const porId = (id) => abertas.find((t) => t.id === id) ?? null;
+      if (desf.desfecho === DESFECHO.NAO_ENTENDI) return perguntar(ctx, pend, RESPOSTA.naoEntendiDivergencia(), "RESPOSTA_NAO_ENTENDIDA");
+      if (desf.desfecho === DESFECHO.NOVA) forcarNova = true;
+      else if (pend.tipo === TIPO_DIVERGENCIA.SEMELHANTE && pend.candidatas[0]?.situacao === "PAGA") {
+        // "É o mesmo pagamento?" — sim: nada novo; o registro existente é informado (nunca segunda despesa, baixa ou saída).
+        const existente = (await porta.contasAPagarTodas(escopo)).find((t) => t.id === pend.candidatas[0].id) ?? null;
+        await marcarDocumento(evento, escopo, null, saida);
+        return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "PAGAMENTO_IGUAL_JA_REGISTRADO", escopo, resposta: existente ? RESPOSTA.pagamentoJaRegistrado(existente) : RESPOSTA.duplicado(null), injecao });
+      } else {
+        contaEscolhida = porId(desf.desfecho === DESFECHO.ESCOLHER ? pend.candidatas[desf.indice]?.id : pend.candidatas[0]?.id);
+        if (!contaEscolhida) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONTA_NAO_ESTA_MAIS_ABERTA", escopo, resposta: RESPOSTA.faltaInformacao(["qual conta este comprovante paga (ela mudou desde a pergunta; reenvie o comprovante)"]), injecao });
+        if (desf.desfecho === DESFECHO.PARCIAL) parcialConfirmado = true;
+        if (desf.desfecho === DESFECHO.JUROS) {
+          if (valor <= contaEscolhida.saldoCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "JUROS_SEM_DIFERENCA", escopo, resposta: RESPOSTA.faltaInformacao(["a diferença não existe mais (o saldo mudou); reenvie o comprovante"]), injecao });
+          const juros = valor - contaEscolhida.saldoCentavos;
+          // Juros CONFIRMADOS: nenhuma segunda conta. O pagamento com juros (saída + juros classificados) é aplicado pelo Financeiro na
+          // Central pelo mesmo serviço oficial de "Paguei pelo banco" (a diferença vira juros e multas); o MOVA não tem ação para isso.
+          return criarProposta(ctx, {
+            tipo: TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, valorCentavos: valor, parcial: false,
+            datas: { competencia: contaEscolhida.competencia, caixa: saida.dataPagamento, vencimento: contaEscolhida.vencimento },
+            comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: contaEscolhida.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
+              juros: { valorCentavos: juros, principalCentavos: contaEscolhida.saldoCentavos, confirmadoPor: esclarecimento.participanteId } },
+          }, (p) => RESPOSTA.jurosAguardandoFinanceiro(p, contaEscolhida, juros), {
+            // Com as chaves, a política JUROS_DOCUMENTAL (limite = encargo máximo) e a ação `registrar_juros`: registra encargo + pagamento por comprovante.
+            posCriacao: execucao?.registrarJuros ? async (p) => {
+              const r = await execucao.aposJuros(p, escopo);
+              return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.pagoComJuros(p, r.resultado) } : r;
+            } : null,
+          });
+        }
+      }
     }
-    if (candidatas.length === 1) {
-      const t = candidatas[0];
-      if (valor > t.saldoCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_MAIOR_QUE_SALDO", escopo, resposta: RESPOSTA.valorMaiorQueSaldo(), injecao });
-      // BAIXA de obrigação existente: competência é a DA OBRIGAÇÃO; caixa é a data do pagamento. Não concilia extrato.
-      return criarProposta(ctx, {
+
+    if (!forcarNova) {
+      const casamento = contaEscolhida
+        ? { caso: valor === contaEscolhida.saldoCentavos ? "EXATA" : valor > contaEscolhida.saldoCentavos ? "MAIOR" : "MENOR", conta: contaEscolhida }
+        : classificarCasamento({ valorCentavos: valor, candidatas });
+      const baixa = (t) => criarProposta(ctx, {
+        // BAIXA de obrigação existente: competência é a DA OBRIGAÇÃO; caixa é a data do pagamento. Não concilia extrato.
         tipo: TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, valorCentavos: valor, parcial: valor < t.saldoCentavos,
         datas: { competencia: t.competencia, caixa: saida.dataPagamento, vencimento: t.vencimento },
         comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: t.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
       }, RESPOSTA.propostaBaixa, { posCriacao: execucao ? async (p) => textoDaExecucao(p, await execucao.aposBaixa(p, escopo)) : null });
+      // Cenários: A/B (exata) executa; D (menor) só com evidência de parcial; C (maior) e E (várias) SEMPRE perguntam — a diferença
+      // nunca é presumida como juros, nem a conta como compra nova.
+      if (casamento.caso === "EXATA") return baixa(casamento.conta);
+      if (casamento.caso === "MENOR") {
+        if (parcialConfirmado || legendaIndicaParcial(legenda)) return baixa(casamento.conta);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MENOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMenor(casamento.conta, valor), "VALOR_MENOR_QUE_SALDO", [casamento.conta]);
+      }
+      if (casamento.caso === "MAIOR") return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MAIOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMaior(casamento.conta, valor), "VALOR_MAIOR_QUE_SALDO", [casamento.conta]);
+      if (casamento.caso === "VARIAS") {
+        const proximas = [...casamento.candidatas].sort((x, y) => Math.abs(x.saldoCentavos - valor) - Math.abs(y.saldoCentavos - valor)).slice(0, MAX_CANDIDATAS_NA_PERGUNTA);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
+      }
+    }
+    // Nenhuma conta do favorecido (ou a pessoa disse "outra compra"): compra NOVA — mas a AUSÊNCIA de conta do mesmo favorecido não é,
+    // sozinha, prova de compra nova: antes, procura o mesmo pagamento já registrado e conta aberta de outro fornecedor com o mesmo valor.
+    if (!forcarNova && !esclarecimento?.divergencia) {
+      const semelhantes = buscarSemelhantes({ todas: await porta.contasAPagarTodas(escopo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
+      if (semelhantes.length) {
+        const [primeiro] = semelhantes;
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.SEMELHANTE, valorCentavos: valor, candidatas: [{ id: primeiro.conta.id, situacao: primeiro.situacao }] },
+          primeiro.situacao === "PAGA" ? RESPOSTA.perguntaSemelhantePaga(primeiro.conta) : RESPOSTA.perguntaSemelhanteAberta(primeiro.conta), "POSSIVEL_COMPRA_JA_REGISTRADA");
+      }
     }
     // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
     // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
     const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;
     const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
-    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento });
+    const categoria = await categoriaDaDespesa(escopo, saida, legenda);
+    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento, descricao: legenda ? mascararDadosSensiveis(legenda).slice(0, 120) : null, categoria });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
@@ -538,11 +628,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
 
   /** Comando no contrato REAL do Financeiro v2; categoria PROVISÓRIA (a sugestão da IA fica ao lado, para quem aprova). */
-  function comandoDeObrigacao(saida, { competencia, vencimento }) {
+  function comandoDeObrigacao(saida, { competencia, vencimento, descricao = null, categoria = null }) {
     // 15A: competência pendente — os DEMAIS campos são validados (com um mês provisório só para a validação) e o comando é
     // guardado SEM competência; quem revisa informa a competência e a aplicação recusa enquanto ela faltar.
     if (!competencia) {
-      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento });
+      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento, descricao, categoria });
       if (!r.ok) return r;
       const { competencia: _provisoria, ...semCompetencia } = r.valor;
       return { ok: true, valor: semCompetencia };
@@ -550,8 +640,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const emissao = saida.dataEmissao && saida.dataEmissao <= vencimento ? saida.dataEmissao : (hoje() <= vencimento ? hoje() : vencimento);
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: saida.favorecido ?? "Favorecido a identificar" },
-      valorOriginalCentavos: saida.valorCentavos, categoria: porta.categoriaProvisoria,
-      descricao: `${saida.tipoDocumento === "BOLETO" ? "Boleto" : saida.tipoDocumento === "NOTA_FISCAL" ? "Nota fiscal" : "Comprovante"} recebido pelo MOVA`,
+      valorOriginalCentavos: saida.valorCentavos, categoria: categoria ?? porta.categoriaProvisoria,
+      descricao: descricao ?? `${saida.tipoDocumento === "BOLETO" ? "Boleto" : saida.tipoDocumento === "NOTA_FISCAL" ? "Nota fiscal" : "Comprovante"} recebido pelo MOVA`,
       competencia, dataEmissao: emissao, vencimento,
       ...(saida.identificadorDocumento ? { identificador: saida.identificadorDocumento } : {}),
     };

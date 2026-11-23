@@ -16,7 +16,10 @@
 //     comprovante do mesmo valor ainda sem conciliação: o caminho certo é conciliar, nunca baixar de novo;
 //   - o banco repete as regras (migração 0029).
 import { exigirPagamentoLiberado } from "./guardaEntregadores.js";
-import { motivoDeSaidaInelegivel } from "./baixaPorExtrato.js";
+import { JUSTIFICATIVA_MINIMA_JUROS, LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL, limiteDeJurosSemJustificativa, motivoDeSaidaInelegivel } from "./baixaPorExtrato.js";
+import { baseNaTransacao } from "./base.js";
+import { operacoesEconomicas } from "./economico.js";
+import { CATEGORIA_JUROS_E_MULTAS } from "../dominio/planoDeContas.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, SITUACAO_LIQUIDACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
@@ -53,6 +56,17 @@ function validarBaixaPorComprovante(e) {
   };
 }
 
+export const TIPOS_DE_ENCARGO = Object.freeze(["JUROS", "MULTA", "JUROS_E_MULTA"]);
+const ROTULO_ENCARGO = Object.freeze({ JUROS: "Juros", MULTA: "Multa", JUROS_E_MULTA: "Juros e multa" });
+/** Pagamento por comprovante COM encargo: o valor do comprovante é o TOTAL (principal = saldo da conta + encargo). */
+function validarPagamentoComEncargo(e) {
+  const { encargoCentavos, tipoEncargo, ...resto } = e ?? {};
+  const c = validarBaixaPorComprovante(resto);
+  const tipo = tipoEncargo === undefined || tipoEncargo === null ? "JUROS" : String(tipoEncargo);
+  if (!TIPOS_DE_ENCARGO.includes(tipo)) falhar(CODIGO.ENTRADA_INVALIDA, "Tipo de encargo inválido.", { campo: "tipoEncargo" });
+  return { ...c, encargoCentavos: exigirCentavos(encargoCentavos, "encargoCentavos", { positivo: true }), tipoEncargo: tipo };
+}
+
 function validarConciliacaoDoComprovante(e) {
   semCamposDesconhecidos(e ?? {}, ["liquidacaoId", "movimentacaoId", "versaoMovimentacao", "justificativa", "confirmar"], "conciliacaoDoComprovante");
   return {
@@ -82,6 +96,87 @@ export async function exigirSemComprovantePendente(tx, cx, obrigacaoId, valorCen
   }
 }
 
+/**
+ * Corpo ÚNICO do pagamento por comprovante (com ou sem encargo): transacional e idempotente pelo documento. Com encargo, o
+ * ajuste (juros/multa) e a liquidação nascem na MESMA transação; a repetição nunca lança o encargo de novo.
+ */
+async function pagarPorComprovante(b, tx, cx, c) {
+  const chave = chaveDoComprovante(c);
+  await tx.travar(cx, chave, "EXCLUSIVA");
+  const ja = await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, chave);
+  if (ja) {
+    if (ja.alvoId === c.obrigacaoId && ja.valorCentavos === c.valorCentavos && ja.documentoId === c.documentoId) {
+      return { repetido: true, liquidacao: ja, titulo: await tx.obter(cx, TIPO.OBRIGACAO, ja.alvoId), conciliacao: ja.movimentacaoId ? CONCILIACAO_BANCARIA.CONCILIADA : CONCILIACAO_BANCARIA.PENDENTE };
+    }
+    falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Este comprovante (ou esta transação) já foi usado para registrar um pagamento.", { motivo: "COMPROVANTE_DUPLICADO", liquidacaoId: ja.id, obrigacaoId: ja.alvoId });
+  }
+  if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a conta, o valor e o comprovante e confirme o registro do pagamento.");
+  if (c.dataPagamento > b.hoje()) falhar(CODIGO.DATA_INVALIDA, "A data do pagamento não pode estar no futuro (comprovante de agendamento não é pagamento).", { campo: "dataPagamento" });
+  const doc = await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Comprovante");
+  if (doc.tipo !== "COMPROVANTE") falhar(CODIGO.EVIDENCIA_EXIGIDA, "Só um documento do tipo COMPROVANTE registra pagamento sem extrato.", { motivo: "DOCUMENTO_NAO_E_COMPROVANTE", tipo: doc.tipo });
+  // A MESMA transação (identificador do banco) num outro arquivo também não baixa duas vezes.
+  if (c.idTransacao) {
+    const tx0 = c.idTransacao.toUpperCase();
+    await tx.travar(cx, `comprovante:tx:${tx0}`, "EXCLUSIVA");
+    const perto = await tx.listar(cx, TIPO.LIQUIDACAO, { desde: { dataEfetiva: somarDias(c.dataPagamento, -JANELA_ID_TRANSACAO) }, ate: { dataEfetiva: somarDias(c.dataPagamento, JANELA_ID_TRANSACAO) } });
+    const mesma = perto.find((l) => ehPorComprovante(l) && String(l.idTransacao ?? "").toUpperCase() === tx0 && l.situacao !== SITUACAO_LIQUIDACAO.ESTORNADA);
+    if (mesma) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Esta transação já foi usada (outro arquivo do mesmo comprovante) para registrar um pagamento.", { motivo: "COMPROVANTE_DUPLICADO", liquidacaoId: mesma.id, obrigacaoId: mesma.alvoId });
+  }
+  await tx.travar(cx, `obrigacao:${c.obrigacaoId}`, "EXCLUSIVA");
+  let o = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Conta a pagar");
+  if (o.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.LIQUIDACAO_INCOMPATIVEL, "Conta cancelada não recebe pagamento.");
+  let encargo = null;
+  if (c.encargoCentavos) { encargo = await lancarEncargoDoPagamento(b, tx, cx, c, o); o = encargo.alvo; }
+  if (c.valorCentavos > o.saldoCentavos) {
+    falhar(CODIGO.LIQUIDACAO_EXCEDE_SALDO, `O comprovante (${formatarBRL(c.valorCentavos)}) supera o saldo em aberto da conta (${formatarBRL(o.saldoCentavos)}): revisar.`, { motivo: "VALOR_ACIMA_DO_SALDO", saldoCentavos: o.saldoCentavos });
+  }
+  await exigirPagamentoLiberado(tx, cx, o);
+  await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(c.dataPagamento)], referenciadas: [o.competencia], motivo: "pagamento registrado por comprovante" });
+  const liquidacao = await b.criar(tx, cx, TIPO.LIQUIDACAO, {
+    movimentacaoId: null, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.valorCentavos, estornadoCentavos: 0, dataEfetiva: c.dataPagamento,
+    situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: chave, origemDoVinculo: ORIGEM_COMPROVANTE, documentoId: doc.id, idTransacao: c.idTransacao,
+  }, c.justificativa);
+  const titulo = await b.alterar(tx, cx, TIPO.OBRIGACAO, o, aplicarLiquidacao(o, c.valorCentavos), EVENTO_HISTORICO.LIQUIDACAO, `Pago por comprovante: ${c.justificativa}`.slice(0, 500));
+  const chaveV = `${doc.id}|${TIPO.OBRIGACAO}|${o.id}`;
+  if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
+    await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: doc.id, registroTipo: TIPO.OBRIGACAO, registroId: o.id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento (conciliação com o extrato pendente)" }, c.justificativa);
+  }
+  return { repetido: false, liquidacao, titulo, conciliacao: CONCILIACAO_BANCARIA.PENDENTE, ...(encargo ? { encargo: { ajuste: encargo.ajuste, lancamento: encargo.lancamento, tipo: c.tipoEncargo, valorCentavos: c.encargoCentavos } } : {}),
+    efeito: { novasSaidas: 0, novasDespesas: encargo ? 1 : 0, pagoCentavos: c.valorCentavos, ...(encargo ? { encargoCentavos: c.encargoCentavos } : {}) } };
+}
+
+/**
+ * Encargo (juros/multa) do pagamento por comprovante — ação ESTREITA `registrar_juros`, sempre junto com o pagamento:
+ *   • só quita a conta: comprovante = saldo em aberto + encargo; • teto de ${LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL}% do valor da conta (acima: revisão humana, sem exceção);
+ *   • categoria oficial "Juros e multas pagos a fornecedores" (despesa financeira, competência do PAGAMENTO), nunca outra;
+ *   • o lançamento do ajuste usa o mecanismo oficial (registrarAjuste); a elevação a `corrigir` é interna a esta operação.
+ */
+async function lancarEncargoDoPagamento(b, tx, cx, c, o) {
+  if (!(cx.permissoes ?? []).includes(ACAO.REGISTRAR_JUROS)) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Registrar juros ou multa exige a permissão específica de registrar juros.", { acaoExigida: ACAO.REGISTRAR_JUROS });
+  if (o.situacao === SITUACAO_TITULO.CANCELADA || !(o.saldoCentavos > 0)) falhar(CODIGO.ENTRADA_INVALIDA, "Só uma conta em aberto recebe juros ou multa.", { campo: "encargoCentavos" });
+  if (c.encargoCentavos >= c.valorCentavos) falhar(CODIGO.ENTRADA_INVALIDA, "O encargo não pode ser o valor inteiro do comprovante.", { campo: "encargoCentavos" });
+  const principal = subtrair(c.valorCentavos, c.encargoCentavos);
+  if (principal !== o.saldoCentavos) {
+    falhar(CODIGO.ENTRADA_INVALIDA, "Juros ou multa só se classificam quando o pagamento quita a conta: o valor sem o encargo precisa ser igual ao saldo em aberto.", { campo: "encargoCentavos", saldoCentavos: o.saldoCentavos, principalCentavos: principal });
+  }
+  if (c.encargoCentavos > limiteDeJurosSemJustificativa(o.valorBaseCentavos)) {
+    falhar(CODIGO.ENTRADA_INVALIDA, `O encargo passa de ${LIMITE_JUROS_SEM_JUSTIFICATIVA_PERCENTUAL}% do valor da conta: só uma pessoa autorizada registra (justificativa mínima ${JUSTIFICATIVA_MINIMA_JUROS} caracteres).`, { motivo: "ENCARGO_ACIMA_DO_LIMITE", campo: "encargoCentavos" });
+  }
+  // A categoria oficial existe no plano da unidade; a PRIMEIRA vez (se faltar) só quem pode corrigir a cria — esta ação não cria categoria.
+  if (!(await b.categoriaPorCodigo(tx, cx, CATEGORIA_JUROS_E_MULTAS))) {
+    if (!(cx.permissoes ?? []).includes(ACAO.CORRIGIR)) {
+      falhar(CODIGO.ENTRADA_INVALIDA, "A categoria oficial de juros e multas ainda não existe nesta unidade: o primeiro encargo é registrado por uma pessoa autorizada.", { motivo: "CATEGORIA_DE_JUROS_AUSENTE", campo: "encargoCentavos" });
+    }
+    await b.categoriaDoSistema(tx, cx, CATEGORIA_JUROS_E_MULTAS);
+  }
+  const cxAjuste = { ...cx, permissoes: [...(cx.permissoes ?? []), ACAO.CORRIGIR] };
+  return operacoesEconomicas(baseNaTransacao(b, tx, cxAjuste)).registrarAjuste(cxAjuste, {
+    alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.encargoCentavos, categoria: CATEGORIA_JUROS_E_MULTAS, competencia: competenciaDe(c.dataPagamento),
+    motivo: `${ROTULO_ENCARGO[c.tipoEncargo]} pagos ao fornecedor (conta ${formatarBRL(o.valorBaseCentavos)} + ${formatarBRL(c.encargoCentavos)}), pagamento por comprovante: ${c.justificativa}`.slice(0, 500),
+    documentoId: c.documentoId,
+  });
+}
+
 export function operacoesDeBaixaPorComprovante(b) {
   return {
     /**
@@ -90,47 +185,17 @@ export function operacoesDeBaixaPorComprovante(b) {
      */
     registrarPagamentoPorComprovante(ctx, entrada) {
       const c = validarBaixaPorComprovante(entrada);
-      return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, async (cx, tx) => {
-        const chave = chaveDoComprovante(c);
-        await tx.travar(cx, chave, "EXCLUSIVA");
-        const ja = await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, chave);
-        if (ja) {
-          if (ja.alvoId === c.obrigacaoId && ja.valorCentavos === c.valorCentavos && ja.documentoId === c.documentoId) {
-            return { repetido: true, liquidacao: ja, titulo: await tx.obter(cx, TIPO.OBRIGACAO, ja.alvoId), conciliacao: ja.movimentacaoId ? CONCILIACAO_BANCARIA.CONCILIADA : CONCILIACAO_BANCARIA.PENDENTE };
-          }
-          falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Este comprovante (ou esta transação) já foi usado para registrar um pagamento.", { motivo: "COMPROVANTE_DUPLICADO", liquidacaoId: ja.id, obrigacaoId: ja.alvoId });
-        }
-        if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a conta, o valor e o comprovante e confirme o registro do pagamento.");
-        if (c.dataPagamento > b.hoje()) falhar(CODIGO.DATA_INVALIDA, "A data do pagamento não pode estar no futuro (comprovante de agendamento não é pagamento).", { campo: "dataPagamento" });
-        const doc = await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Comprovante");
-        if (doc.tipo !== "COMPROVANTE") falhar(CODIGO.EVIDENCIA_EXIGIDA, "Só um documento do tipo COMPROVANTE registra pagamento sem extrato.", { motivo: "DOCUMENTO_NAO_E_COMPROVANTE", tipo: doc.tipo });
-        // A MESMA transação (identificador do banco) num outro arquivo também não baixa duas vezes.
-        if (c.idTransacao) {
-          const tx0 = c.idTransacao.toUpperCase();
-          await tx.travar(cx, `comprovante:tx:${tx0}`, "EXCLUSIVA");
-          const perto = await tx.listar(cx, TIPO.LIQUIDACAO, { desde: { dataEfetiva: somarDias(c.dataPagamento, -JANELA_ID_TRANSACAO) }, ate: { dataEfetiva: somarDias(c.dataPagamento, JANELA_ID_TRANSACAO) } });
-          const mesma = perto.find((l) => ehPorComprovante(l) && String(l.idTransacao ?? "").toUpperCase() === tx0 && l.situacao !== SITUACAO_LIQUIDACAO.ESTORNADA);
-          if (mesma) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Esta transação já foi usada (outro arquivo do mesmo comprovante) para registrar um pagamento.", { motivo: "COMPROVANTE_DUPLICADO", liquidacaoId: mesma.id, obrigacaoId: mesma.alvoId });
-        }
-        await tx.travar(cx, `obrigacao:${c.obrigacaoId}`, "EXCLUSIVA");
-        const o = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Conta a pagar");
-        if (o.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.LIQUIDACAO_INCOMPATIVEL, "Conta cancelada não recebe pagamento.");
-        if (c.valorCentavos > o.saldoCentavos) {
-          falhar(CODIGO.LIQUIDACAO_EXCEDE_SALDO, `O comprovante (${formatarBRL(c.valorCentavos)}) supera o saldo em aberto da conta (${formatarBRL(o.saldoCentavos)}): revisar.`, { motivo: "VALOR_ACIMA_DO_SALDO", saldoCentavos: o.saldoCentavos });
-        }
-        await exigirPagamentoLiberado(tx, cx, o);
-        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(c.dataPagamento)], referenciadas: [o.competencia], motivo: "pagamento registrado por comprovante" });
-        const liquidacao = await b.criar(tx, cx, TIPO.LIQUIDACAO, {
-          movimentacaoId: null, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.valorCentavos, estornadoCentavos: 0, dataEfetiva: c.dataPagamento,
-          situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: chave, origemDoVinculo: ORIGEM_COMPROVANTE, documentoId: doc.id, idTransacao: c.idTransacao,
-        }, c.justificativa);
-        const titulo = await b.alterar(tx, cx, TIPO.OBRIGACAO, o, aplicarLiquidacao(o, c.valorCentavos), EVENTO_HISTORICO.LIQUIDACAO, `Pago por comprovante: ${c.justificativa}`.slice(0, 500));
-        const chaveV = `${doc.id}|${TIPO.OBRIGACAO}|${o.id}`;
-        if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
-          await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: doc.id, registroTipo: TIPO.OBRIGACAO, registroId: o.id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento (conciliação com o extrato pendente)" }, c.justificativa);
-        }
-        return { repetido: false, liquidacao, titulo, conciliacao: CONCILIACAO_BANCARIA.PENDENTE, efeito: { novasSaidas: 0, novasDespesas: 0, pagoCentavos: c.valorCentavos } };
-      });
+      return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, (cx, tx) => pagarPorComprovante(b, tx, cx, c));
+    },
+
+    /**
+     * 23/11 — PAGAMENTO por comprovante COM encargo (juros/multa confirmados): lança o encargo como ajuste da conta (categoria
+     * oficial) e liquida o TOTAL do comprovante na mesma transação. Exige `baixar_por_comprovante` + `registrar_juros` (+ o
+     * comprovante); não cria saída, segunda despesa de compra nem segundo pagamento. Idempotente pelo documento.
+     */
+    registrarPagamentoComEncargo(ctx, entrada) {
+      const c = validarPagamentoComEncargo(entrada);
+      return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, (cx, tx) => pagarPorComprovante(b, tx, cx, c));
     },
 
     /**

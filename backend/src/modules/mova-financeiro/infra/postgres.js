@@ -208,7 +208,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async lembrar(mensagemId, { grupoId, pendente }) {
         if (!pendente) { await q("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1 and resolvida_em is null", [mensagemId]); return; }
         await q(`insert into mova.mensagem_pendente (mensagem_id, grupo_jid, evento_id, leitura) values ($1,$2,$3,$4)
-                 on conflict (mensagem_id) do update set leitura = excluded.leitura, resolvida_em = null`, [mensagemId, grupoId, pendente.evento.eventoId, JSON.stringify({ evento: pendente.evento, saida: pendente.saida })]);
+                 on conflict (mensagem_id) do update set leitura = excluded.leitura, grupo_jid = excluded.grupo_jid, criada_em = now(), resolvida_em = null`, [mensagemId, grupoId, pendente.evento.eventoId, JSON.stringify({ evento: pendente.evento, saida: pendente.saida, ...(pendente.divergencia ? { divergencia: pendente.divergencia } : {}) })]);
       },
       /** Resolução ATÔMICA: duas respostas simultâneas à mesma pergunta não retomam o documento duas vezes. */
       async tomarPendente(mensagemId) {

@@ -79,9 +79,9 @@ end $$;
 }
 
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
-export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0011"]); // 0009 e 0011 aplicadas em 23/11
-/** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 = despesa documental (não usada pela rotina). */
-export const ADIADAS_EM_PRODUCAO = Object.freeze(["0010"]);
+export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0011", "0013", "0014"]); // conferido em produção 23/11 (nome + sha256); 0010 e 0012 entram pelo atualizar.sql
+/** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 autorizada em 23/11 com a 0012 (PR #188). */
+export const ADIADAS_EM_PRODUCAO = Object.freeze([]);
 
 /**
  * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as

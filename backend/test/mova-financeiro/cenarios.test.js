@@ -213,7 +213,7 @@ t("09 comprovante de obrigação existente: proposta de BAIXA (nunca despesa nov
   const doc = bytes("baixa-parcial");
   const s = await cenario({ roteiro: { [ref(doc)]: leitura({ valorCentavos: 5000 }) } });
   const o = await s.obrigacao(ALFA);
-  await s.enviar(gw({ doc, texto: "paguei parte, alfa" }));
+  await s.enviar(gw({ doc, texto: "pagamento parcial, alfa" }));
   const [p] = await s.propostas(ALFA);
   assert.deepEqual([p.tipo, p.comando.entrada.obrigacaoId, p.parcial, p.datas.competencia, p.datas.caixa], [TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, o.id, true, "2026-09", "2026-10-10"]);
   assert.equal((await s.m.nucleo.consultarContasAPagar(s.c(ALFA), {})).itens.length, 1);

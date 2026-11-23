@@ -149,7 +149,7 @@ t("A2-D6 comprovante DUPLICADO (mesma transação em outro arquivo): não cria s
 
 t("A2-D7 pagamento PARCIAL por comprovante: conta parcialmente paga, conciliação pendente do valor pago", async () => {
   const s = await documental({ politica: {}, responder: () => PIX({ valorCentavos: 15000 }) });
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D7") }));
+  await s.enviar(gw({ texto: "MOVA pagamento parcial da alfa", doc: pdf("D7") }));
   const t1 = await s.titulo();
   assert.deepEqual([t1.situacaoPagamento, t1.situacaoConciliacao, t1.saldoCentavos, t1.aConciliarCentavos], ["PARCIALMENTE_PAGO", "CONCILIACAO_PENDENTE", 25000, 15000]);
   assert.match(await s.resposta(), /pagamento parcial/);
@@ -282,9 +282,9 @@ t("A2-D16 FRACIONAMENTO: dividir um pagamento em comprovantes menores não conto
   let i = 0;
   const partes = [PIX({ valorCentavos: 80000, idTransacao: "E0000000020261010SINTFRAC0001" }), PIX({ valorCentavos: 70000, idTransacao: "E0000000020261010SINTFRAC0002" })];
   const s = await documental({ politica: LIMITE_APROVADO, valorConta: 150000, responder: () => partes[Math.min(i++, 1)] });
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa (parte 1)", doc: pdf("D16a") }));
+  await s.enviar(gw({ texto: "MOVA pagamento parcial da alfa (1)", doc: pdf("D16a") }));
   assert.equal((await s.ultima()).conciliacao, "PAGO_POR_COMPROVANTE");
-  await s.enviar(gw({ texto: "MOVA comprovante da alfa (parte 2)", doc: pdf("D16b") }));
+  await s.enviar(gw({ texto: "MOVA pagamento parcial da alfa (2)", doc: pdf("D16b") }));
   const segunda = (await s.propostas()).find((p) => p.valorCentavos === 70000);
   assert.deepEqual([segunda.autonomiaDocumental.nivel, segunda.autonomiaDocumental.motivos.includes("POSSIVEL_FRACIONAMENTO")], ["APLICAR_COM_CONFIRMACAO", true]);
   assert.equal(s.escritas().filter((x) => x.nome === "registrarPagamentoPorComprovante").length, 1, "só a 1ª parte foi baixada sozinha");

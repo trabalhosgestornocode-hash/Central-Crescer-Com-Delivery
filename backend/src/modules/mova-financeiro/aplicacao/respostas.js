@@ -7,6 +7,12 @@ const reais = (c) => {
 };
 const curto = (id) => String(id ?? "").slice(0, 8);
 const dataBr = (d) => (d ? `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}` : "-");
+/** Como a conta é citada na pergunta: a descrição (curta) e, quando há, o fornecedor. Dado do Financeiro, não texto do remetente. */
+const nomeDaConta = (t) => {
+  const d = String(t?.descricao ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+  const f = String(t?.fornecedor?.nome ?? "").replace(/\s+/g, " ").trim().slice(0, 60);
+  return d && f ? `${d} (${f})` : d || f || "fornecedor a identificar";
+};
 
 export const RESPOSTA = Object.freeze({
   /** Pergunta padrão definida pelo proprietário (Execução 02). Responder a esta mensagem retoma o documento. */
@@ -42,6 +48,16 @@ export const RESPOSTA = Object.freeze({
   faltaInformacao: (campos) => `Preciso de mais informação para seguir: ${campos.join(", ")}. Responda a esta mensagem. Nada foi registrado.`,
   variasObrigacoes: (n) => `Encontrei ${n} contas a pagar compatíveis com este comprovante. Diga qual foi paga respondendo a esta mensagem. Nada foi registrado.`,
   valorMaiorQueSaldo: () => "O valor do comprovante é maior que o saldo da conta a pagar encontrada. Confira (juros/multa?) — a decisão fica com o Financeiro. Nada foi registrado.",
+  // 23/11 — MOVA financeiro autônomo: perguntas OBJETIVAS de divergência (uma só pergunta; a resposta continua a operação).
+  perguntaValorMaior: (t, valor) => `Encontrei a conta de ${nomeDaConta(t)} com ${reais(t.saldoCentavos)} pendentes. O comprovante é de ${reais(valor)}. Os ${reais(valor - t.saldoCentavos)} de diferença são juros dessa conta? (Responda "sim", ou "outra compra" se este comprovante não é dessa conta.) Nada foi registrado.`,
+  perguntaValorMenor: (t, valor) => `Encontrei a conta de ${nomeDaConta(t)} com ${reais(t.saldoCentavos)} pendentes. O comprovante é de ${reais(valor)}, menor que o saldo. É pagamento parcial (restam ${reais(t.saldoCentavos - valor)} em aberto)? (Responda "sim", ou "outra compra" se não é dessa conta.) Nada foi registrado.`,
+  perguntaVariasContas: (cands) => `Encontrei ${cands.length} contas que podem ser esta:\n${cands.map((t, i) => `${i + 1}) ${nomeDaConta(t)} — ${reais(t.saldoCentavos)} pendentes${t.vencimento ? `, vence ${dataBr(t.vencimento)}` : ""}`).join("\n")}\nResponda o número da conta, ou "outra compra" se for uma compra nova. Nada foi registrado.`,
+  naoEntendiDivergencia: () => "Não entendi a resposta. Responda \"sim\", \"não\", o número da conta ou \"outra compra\", para eu continuar. Nada foi registrado.",
+  pagoComJuros: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)} = conta de ${reais(r.principalCentavos)} + juros de ${reais(r.encargoCentavos)}. Comprovante anexado. Conciliação bancária: pendente (o extrato ainda não confirma). Não criei segunda conta nem segundo pagamento.`,
+  perguntaSemelhantePaga: (t) => `Já existe um pagamento de ${reais(t.valorOriginalCentavos)} para ${nomeDaConta(t)} registrado${t.vencimento ? ` (vencimento ${dataBr(t.vencimento)})` : ""}. Este comprovante é do mesmo pagamento? (Responda "sim" — não registro de novo —, ou "outra compra".) Nada foi registrado.`,
+  perguntaSemelhanteAberta: (t) => `Encontrei a conta de ${nomeDaConta(t)} com ${reais(t.saldoCentavos)} pendentes, de outro fornecedor, com o mesmo valor deste comprovante. É essa conta que foi paga? (Responda "sim", ou "outra compra" se for uma compra nova.) Nada foi registrado.`,
+  pagamentoJaRegistrado: (t) => `Este pagamento já está registrado: ${nomeDaConta(t)}, ${reais(t.valorOriginalCentavos)}. Não criei despesa, pagamento nem saída novos.`,
+  jurosAguardandoFinanceiro: (p, t, juros) => `Anotado: conta de ${reais(t.saldoCentavos)} + juros de ${reais(juros)} = ${reais(p.valorCentavos)} (pedido ${curto(p.id)}). O pagamento com juros é aplicado pelo Financeiro na Central, com a diferença classificada como juros e multas; nada foi lançado ainda e não criei segunda conta.`,
   fonteOficial: (canais) => `Receita não é lançada pelo MOVA: cada canal tem fonte oficial (${canais}). Este documento fica só como evidência.`,
   fonteNaoConfirmada: () => "As fontes de faturamento desta unidade ainda não estão confirmadas no Financeiro. Nada foi registrado.",
   propostaBaixa: (p) => `Proposta ${curto(p.id)} criada para revisão: baixa ${p.parcial ? "PARCIAL " : ""}de ${reais(p.valorCentavos)} na conta a pagar existente (pagamento em ${dataBr(p.datas.caixa)}). Nada foi lançado ainda.`,
