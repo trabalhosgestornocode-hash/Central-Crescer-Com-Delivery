@@ -1,6 +1,6 @@
 // KIT — REENFILEIRAR mensagens privadas do MOVA recusadas ANTES do envio (ex.: 23/11/2026, Gateway sem os entregadores na
 // lista fechada WHATSAPP_MOVA_PRIVADOS ⇒ WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED). GERA o SQL para revisar e aplicar; não executa.
-// Só reabre mensagens FALHOU com aquele erro, naquela janela, para destino PRIVADO e com no máximo UMA tentativa (nada que já tenha
+// Só reabre mensagens FALHOU com aquele erro, naquela janela, para destino PRIVADO sem id do provedor e sem enviada_em (nada que já tenha
 // saído). Nenhum envio novo é criado: a mesma mensagem volta à fila e o enviador a entrega uma vez (limites e marco valem).
 // Uma linha de auditoria registra quem, por quê, quantas e quais ids (sem texto nem número).
 //
@@ -16,7 +16,7 @@ export function sqlReenfileirarFalhas({ erro, de, ate, esperadas, ator, motivo }
   if (Number.isNaN(Date.parse(de)) || Number.isNaN(Date.parse(ate)) || Date.parse(ate) <= Date.parse(de) || Date.parse(ate) - Date.parse(de) > 86_400_000) throw new Error("Janela inválida (até 24 h).");
   if (!Number.isSafeInteger(esperadas) || esperadas < 1 || esperadas > 100) throw new Error("Informe --esperadas (1 a 100).");
   if (typeof ator !== "string" || ator.trim().length < 3) throw new Error("Informe --ator.");
-  const filtro = `estado = 'FALHOU' and ultimo_erro = ${literal(erro)} and tentativas <= 1 and grupo_jid like '%@s.whatsapp.net'
+  const filtro = `estado = 'FALHOU' and ultimo_erro = ${literal(erro)} and provider_message_id is null and enviada_em is null and grupo_jid like '%@s.whatsapp.net'
      and criada_em between ${literal(de)}::timestamptz and ${literal(ate)}::timestamptz`;
   return `-- MOVA — reenfileirar ${esperadas} mensagem(ns) privada(s) recusada(s) antes do envio (${erro}). Revisar antes de aplicar.
 begin;
