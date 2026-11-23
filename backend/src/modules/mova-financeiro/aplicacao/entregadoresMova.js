@@ -11,7 +11,7 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
+import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
 
@@ -47,7 +47,7 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
   const servico = cfg.identidadeServico.usuarioId;
   const unidadeDe = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
   const rotuloDe = (id) => { const u = unidadeDe(id); return { unidade: u?.nome ?? null, empresa: u?.empresa ?? null }; };
@@ -55,7 +55,11 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
   // Grupo financeiro AUTORIZADO SÓ para esta unidade (nunca publica dados de uma unidade em grupo de outra ou de várias).
   const grupoDaUnidade = (id) => {
     const g = cfg.gruposAutorizados.filter((x) => !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO" && x.unidades.length === 1 && x.unidades[0] === id);
-    return g.length === 1 ? g[0] : null;
+    if (g.length === 1) return g[0];
+    // 23/11: unidade SEM grupo exclusivo cujo proprietário indicou, na configuração (MOVA_AVISOS_NO_GRUPO), o grupo da gerência
+    // que ela COMPARTILHA (ex.: "Contas à Pagar Subway / Açaí"). Só avisos à gerência; o grupo precisa estar autorizado.
+    const jid = Object.hasOwn(avisosNoGrupo, id) ? avisosNoGrupo[id] : null;
+    return (jid && cfg.gruposAutorizados.find((x) => x.grupoId === jid && !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO")) || null;
   };
   const escopoDe = (unidadeId) => { const u = unidadeDe(unidadeId); return { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico }; };
   const lerFechamentos = async (ent) => {
@@ -258,6 +262,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       if (fazCobranca) await a.automacoes.marcarExecucao(AUTOMACAO.COBRANCA, unidadeId, agora.toISOString());
     }
     await confirmarEnvios({ dia, semana, resumo });
+    await relatorioDaSemana({ dia, semana, resumo });
     await rotinaDoGrupo({ agora, dia, hora, semana, resumo });
     return resumo;
   }
@@ -268,6 +273,62 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
    * semanas anteriores nunca são anunciadas. Envio sem vínculo (anterior à 0016) é achado pela mensagem ao mesmo destino
    * registrada no mesmo minuto — só quando há exatamente uma.
    */
+  /** Envios SEMANAIS da unidade na semana, com a mensagem privada de cada um (vínculo ou, se anterior à 0016, a do mesmo minuto). */
+  async function paresDaSemana(unidadeId, inicio, porChave) {
+    const envios = (await a.enviosEntregador.listar(escopoDe(unidadeId))).filter((e) => e.tipo === "SEMANAL" && e.semanaInicio === inicio);
+    const pares = [];
+    for (const e of envios) {
+      const ent = porChave.get(`${unidadeId}|${e.entregador}`);
+      let id = e.respostaId ?? null;
+      if (!id && ent && typeof a.saida.paraDestinoEntre === "function") {
+        const t = Date.parse(e.criadoEm);
+        const ids = await a.saida.paraDestinoEntre(ent.privado, new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString());
+        if (ids.length === 1) id = ids[0];
+      }
+      if (id) pares.push({ e, ent, id });
+    }
+    return { envios, pares };
+  }
+
+  /**
+   * 23/11 (decisão do proprietário): UM relatório por grupo da gerência e por semana, quando TODOS os demonstrativos semanais
+   * das unidades desse grupo (com avisos ligados) foram ACEITOS pelo WhatsApp. Faltando algum (na fila ou recusado), espera.
+   * Grupo compartilhado (MOVA_AVISOS_NO_GRUPO) ⇒ as empresas saem juntas, cada uma na sua seção e com o seu total.
+   */
+  async function relatorioDaSemana({ dia, semana, resumo }) {
+    if (typeof a.saida.situacoes !== "function") return;
+    const inicio = somarDias(dia, -7 - ((semana + 6) % 7));
+    const porChave = new Map((cfg.entregadores ?? []).filter((e) => e.ativo).map((e) => [`${e.unidadeId}|${e.chave}`, e]));
+    const porGrupo = new Map();
+    for (const u of cfg.unidades) {
+      const auto = await a.automacoes.obter(AUTOMACAO.AVISO_GRUPO, u.unidadeId);
+      if (!auto || !auto.ativa || auto.pausadaEm) continue;
+      const grupo = grupoDaUnidade(u.unidadeId);
+      if (!grupo) continue;
+      const { envios, pares } = await paresDaSemana(u.unidadeId, inicio, porChave);
+      if (!envios.length) continue; // unidade sem demonstrativo nesta semana não entra nem segura o relatório
+      const sit = await a.saida.situacoes(pares.map((p) => p.id));
+      const completa = pares.length === envios.length && pares.every((p) => sit.get(p.id)?.estado === "ENVIADA");
+      porGrupo.set(grupo.grupoId, [...(porGrupo.get(grupo.grupoId) ?? []), { u, completa }]);
+    }
+    for (const [grupoId, unidades] of porGrupo) {
+      if (!unidades.every((x) => x.completa)) { resumo.pulados.push("RELATORIO_AGUARDANDO_ENVIOS"); continue; }
+      try {
+        const secoes = [];
+        for (const { u } of unidades) {
+          const r = rotuloDe(u.unidadeId);
+          secoes.push({ empresa: r.empresa ?? r.unidade ?? "Unidade", fechamentos: (await fechamentosDaUnidade(u.unidadeId)).filter((f) => f.semanaInicio === inicio) });
+        }
+        const texto = relatorioSemanalNoGrupo(secoes, { semanaInicio: inicio, semanaFim: somarDias(inicio, 6) });
+        if (await enviarUmaVez({ unidadeId: unidades[0].u.unidadeId, destino: grupoId, tipo: "AVISO_DEMONSTRATIVO", semanaInicio: inicio, entregador: "RELATORIO",
+          chave: `RELATORIO_SEMANA|${grupoId}|${inicio}`, texto })) resumo.relatorioSemana = (resumo.relatorioSemana ?? 0) + 1;
+      } catch (e) {
+        resumo.pulados.push("RELATORIO_FALHOU");
+        registrar({ tipo: "MOVA_RELATORIO_SEMANA_FALHOU", codigo: e?.code ?? e?.codigo ?? "ERRO" });
+      }
+    }
+  }
+
   async function confirmarEnvios({ dia, semana, resumo }) {
     if (typeof a.saida.situacoes !== "function") return;
     const inicio = somarDias(dia, -7 - ((semana + 6) % 7));
@@ -275,18 +336,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     for (const u of cfg.unidades) {
       const auto = await a.automacoes.obter(AUTOMACAO.AVISO_GRUPO, u.unidadeId);
       if (!auto || !auto.ativa || auto.pausadaEm) continue;
-      const envios = (await a.enviosEntregador.listar(escopoDe(u.unidadeId))).filter((e) => e.tipo === "SEMANAL" && e.semanaInicio === inicio);
-      const pares = [];
-      for (const e of envios) {
-        const ent = porChave.get(`${u.unidadeId}|${e.entregador}`);
-        let id = e.respostaId ?? null;
-        if (!id && ent && typeof a.saida.paraDestinoEntre === "function") {
-          const t = Date.parse(e.criadoEm);
-          const ids = await a.saida.paraDestinoEntre(ent.privado, new Date(t - 60_000).toISOString(), new Date(t + 60_000).toISOString());
-          if (ids.length === 1) id = ids[0];
-        }
-        if (id) pares.push({ e, ent, id });
-      }
+      const { pares } = await paresDaSemana(u.unidadeId, inicio, porChave);
       const sit = await a.saida.situacoes(pares.map((p) => p.id));
       for (const { e, ent, id } of pares) {
         const estado = sit.get(id)?.estado;

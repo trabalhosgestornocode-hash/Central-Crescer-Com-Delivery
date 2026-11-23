@@ -152,6 +152,10 @@ export function lerConfiguracaoMova(env) {
     envioMaximoDia: env.MOVA_ENVIO_MAXIMO_DIA ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_DIA) : 0) : null,
     envioMaximoPorConversaDia: env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA ? (/^[0-9]{1,3}$/.test(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) : 0) : (env.MOVA_ENVIO_MAXIMO_DIA ? 10 : null),
     respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
+    // 23/11: "<unidadeId>=<grupo>@g.us[,…]" — grupo da gerência COMPARTILHADO indicado pelo proprietário para os avisos de uma
+    // unidade sem grupo exclusivo. Entrada inválida é ignorada (o aviso fica pendente, como sem grupo).
+    avisosNoGrupo: Object.freeze(Object.fromEntries(String(env.MOVA_AVISOS_NO_GRUPO ?? "").split(",").map((x) => x.trim().toLowerCase().split("="))
+      .filter(([u, g, ...r]) => !r.length && UUID.test(u ?? "") && /^[0-9]{10,30}@g\.us$/.test(g ?? "")))),
   };
 }
 
@@ -251,7 +255,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviadorBase = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),

@@ -51,7 +51,7 @@ const NOTA = (x = {}) => base({ tipoDocumento: "NOTA_FISCAL", intencao: "OUTRA",
 const criados = [];
 after(async () => { for (const b of criados.splice(0)) await descartarBancoMova(b).catch(() => {}); });
 
-async function cenario({ semGrupoSubway = false, leitura = () => NOTA(), antigaComNota = false } = {}) {
+async function cenario({ avisosNoGrupo = {}, semGrupoSubway = false, leitura = () => NOTA(), antigaComNota = false } = {}) {
   const estado = { agora: SEGUNDA_14H };
   const relogio = () => new Date(estado.agora);
   const cofre = criarCofreMemoria();
@@ -74,7 +74,7 @@ async function cenario({ semGrupoSubway = false, leitura = () => NOTA(), antigaC
   const extrator = { async extrair(e) { leituras.push(e); return leitura(e); } };
   const concessoes = criarConcessoesMemoria([ALFA, XIS].map((u) => ({ organizacaoId: u === ALFA ? ORG : ORG_X, usuarioId: OPERADOR, unidadeId: u, acoes: [ACAO.VER, ACAO.ENVIAR_DOCUMENTO] })));
   const porta = criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: CONFIG.identidadeServico.usuarioId, concessoes });
-  const mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true, extrator, entregadores: true, operacional: porta });
+  const mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true, extrator, entregadores: true, operacional: porta, avisosNoGrupo });
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
   const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
@@ -112,7 +112,10 @@ t("H1 segunda 14h: Açaí e Subway enviam cada uma o SEU demonstrativo; o entreg
   assert.match(subway, /2 entrega\(s\) — R\$ 23,00/);
   assert.doesNotMatch(subway, /15,00|Açaí/);
   assert.ok(!out.some((x) => /26\/10\/2026/.test(x.texto)), "a semana antiga (também fechada) não é enviada");
-  const noGrupoAcai = out.filter((x) => x.destino === GRUPO).map((x) => x.texto), noGrupoSubway = out.filter((x) => x.destino === GRUPO_X).map((x) => x.texto);
+  const aviso = (x) => !/^📋/.test(x.texto); // o relatório da semana é conferido à parte
+  const noGrupoAcai = out.filter((x) => x.destino === GRUPO && aviso(x)).map((x) => x.texto), noGrupoSubway = out.filter((x) => x.destino === GRUPO_X && aviso(x)).map((x) => x.texto);
+  assert.equal(out.filter((x) => x.destino === GRUPO && !aviso(x)).length, 1, "Açaí: todos aceitos ⇒ relatório no próprio grupo");
+  assert.equal(out.filter((x) => x.destino === GRUPO_X && !aviso(x)).length, 0, "Subway: Bia recusada ⇒ sem relatório");
   assert.equal(noGrupoAcai.length, 2);
   assert.ok(noGrupoAcai.every((x) => /^📨 Açaí Sintético Ltda — Demonstrativo enviado para (Carlos|Ana), referente à semana de 02\/11\/2026 a 08\/11\/2026 \(aceito pelo WhatsApp\)\. Aguardando nota fiscal\.$/.test(x)));
   assert.equal(noGrupoSubway.length, 2);
@@ -197,9 +200,60 @@ t("H6 Subway SEM grupo da gerência: os envios privados da Subway saem mesmo ass
   assert.ok(out.some((x) => x.destino === BIA && /Subway Sintética Ltda/.test(x.texto)), "Bia (só Subway) recebeu");
   assert.equal(out.filter((x) => x.destino === CARLOS).length, 2);
   assert.ok(!out.some((x) => x.destino === GRUPO && /Subway/.test(x.texto)), "aviso da Subway nunca no grupo do Açaí");
-  assert.equal(out.filter((x) => x.destino === GRUPO).length, 2, "o Açaí avisa no próprio grupo (Carlos e Ana)");
+  assert.equal(out.filter((x) => x.destino === GRUPO && !/^📋/.test(x.texto)).length, 2, "o Açaí avisa no próprio grupo (Carlos e Ana)");
+  assert.ok(!out.some((x) => x.destino === GRUPO && /^📋/.test(x.texto) && /Subway/.test(x.texto)), "relatório do Açaí sem a Subway");
   const pend = (await s.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'AVISO_GRUPO_PENDENTE'")).rows[0].n;
   assert.equal(pend, 2, "Carlos e Bia na Subway: avisos pendentes de identificação do grupo");
+});
+
+t("H6b 23/11: o proprietário indica que a Subway COMPARTILHA o grupo da gerência do Açaí (MOVA_AVISOS_NO_GRUPO): os avisos pendentes da Subway saem nesse grupo, identificados, uma vez cada", async () => {
+  const s = await cenario({ semGrupoSubway: true, avisosNoGrupo: { [XIS]: GRUPO, "00000000-0000-4000-8000-000000000999": "123@g.us" } });
+  await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s.mova.entregadores.rotina();
+  await s.gateway();
+  await s.mova.entregadores.rotina();
+  await s.mova.entregadores.rotina(); // repetir não duplica
+  const noGrupo = (await s.saida()).filter((x) => x.destino === GRUPO && !/^📋/.test(x.texto)).map((x) => x.texto);
+  assert.equal(noGrupo.length, 4, "2 do Açaí + 2 da Subway");
+  assert.equal(noGrupo.filter((x) => /Subway Sintética Ltda/.test(x)).length, 2, "cada aviso da Subway identifica a empresa");
+  assert.equal(noGrupo.filter((x) => /Açaí Sintético Ltda/.test(x)).length, 2);
+  const pend = (await s.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'AVISO_GRUPO_PENDENTE'")).rows[0].n;
+  assert.equal(pend, 0);
+  // Grupo indicado que NÃO está autorizado ⇒ continua pendente (nunca um grupo qualquer).
+  const s2 = await cenario({ semGrupoSubway: true, avisosNoGrupo: { [XIS]: "999999999999@g.us" } });
+  await s2.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s2.mova.entregadores.rotina(); await s2.gateway(); await s2.mova.entregadores.rotina();
+  assert.ok(!(await s2.saida()).some((x) => x.destino !== GRUPO && /@g\.us$/.test(x.destino)));
+  assert.equal((await s2.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'AVISO_GRUPO_PENDENTE'")).rows[0].n, 2);
+});
+
+t("H6c 23/11: RELATÓRIO da semana no grupo da gerência só quando TODOS os demonstrativos foram aceitos; grupo compartilhado ⇒ as duas empresas juntas, com totais; uma vez só", async () => {
+  const s = await cenario({ semGrupoSubway: true, avisosNoGrupo: { [XIS]: GRUPO } });
+  await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s.mova.entregadores.rotina();
+  const relatorios = async () => (await s.saida()).filter((x) => x.destino === GRUPO && /^📋/.test(x.texto)).map((x) => x.texto);
+  assert.equal((await relatorios()).length, 0, "nada antes do retorno do WhatsApp");
+  await s.gateway();
+  await s.mova.entregadores.rotina();
+  await s.mova.entregadores.rotina();
+  const [r, ...resto] = await relatorios();
+  assert.equal(resto.length, 0, "um relatório só");
+  assert.match(r, /Entregadores — semana 02\/11\/2026 a 08\/11\/2026/);
+  assert.match(r, /\*Açaí Sintético Ltda\*[\s\S]*R\$ 15,00[\s\S]*\*Total Açaí Sintético Ltda: R\$/);
+  assert.match(r, /\*Subway Sintética Ltda\*[\s\S]*R\$ 23,00[\s\S]*\*Total Subway Sintética Ltda: R\$/);
+  assert.match(r, /Total geral: R\$/);
+  assert.match(r, /calendário do sistema, com vencimento em \*\d\d\/\d\d\/\d{4}/);
+  assert.ok(r.indexOf("Açaí Sintético") < r.indexOf("Subway Sintética"));
+});
+
+t("H6d um demonstrativo RECUSADO pelo WhatsApp segura o relatório da semana (não é 'todos enviados')", async () => {
+  const s = await cenario();
+  await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s.mova.entregadores.rotina();
+  await s.gateway({ recusar: [CARLOS] });
+  await s.mova.entregadores.rotina();
+  const out = await s.saida();
+  assert.ok(!out.some((x) => /^📋/.test(x.texto)), "sem relatório");
 });
 
 t("H7 entregador pergunta no privado: vê os DOIS fechamentos em seções separadas (empresa e período), sem somar", async () => {
