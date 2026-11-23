@@ -25,7 +25,7 @@ do $$ begin
   if exists (select 1 from mova.mova_migracao where nome = '0015_mova_pagadores_multiunidade.sql') then raise exception 'MOVA atualização: 0015_mova_pagadores_multiunidade.sql já aplicada — nada foi feito'; end if;
 end $$;
 
--- ------------------------------------------------------------------------- 0015_mova_pagadores_multiunidade.sql (arquivo f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87)
+-- ------------------------------------------------------------------------- 0015_mova_pagadores_multiunidade.sql (arquivo cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96)
 -- MOVA — 24/11/2026: IDENTIFICAÇÃO DA UNIDADE PELO PAGADOR e MOVA nas duas empresas (Açaí no Grau Saci + Subway Saci).
 --
 -- 1) `pagadores` no CADASTRO da unidade (grupo_unidade e unidade_sem_grupo): lista explícita dos titulares/documentos da CONTA
@@ -64,4 +64,4 @@ do $$ declare c text; begin
 end $$;
 alter table mova.proposta add constraint proposta_tipo_check
   check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO'));
-insert into mova.mova_migracao (nome, sha256) values ('0015_mova_pagadores_multiunidade.sql', 'f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87');
+insert into mova.mova_migracao (nome, sha256) values ('0015_mova_pagadores_multiunidade.sql', 'cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96');

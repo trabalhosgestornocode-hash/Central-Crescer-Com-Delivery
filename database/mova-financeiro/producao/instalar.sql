@@ -714,7 +714,7 @@ create table mova.unidade_sem_grupo (
 
 grant select on mova.unidade_sem_grupo to mova_app;
 
--- ------------------------------------------------------------------------- 0015_mova_pagadores_multiunidade.sql (arquivo f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87)
+-- ------------------------------------------------------------------------- 0015_mova_pagadores_multiunidade.sql (arquivo cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96)
 -- MOVA — 24/11/2026: IDENTIFICAÇÃO DA UNIDADE PELO PAGADOR e MOVA nas duas empresas (Açaí no Grau Saci + Subway Saci).
 --
 -- 1) `pagadores` no CADASTRO da unidade (grupo_unidade e unidade_sem_grupo): lista explícita dos titulares/documentos da CONTA
@@ -771,7 +771,7 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0012_mova_juros_documental.sql', 'eff9660cdfe1a5a1d969eb3a75e709b5d486a4df6d6e6bcd0555ee9cc8780bba'),
   ('0013_mova_entregadores_cadastro.sql', '6a4f9f8b4214a03602fa74ad573485a29a69056386882a6597310b71614dea3d'),
   ('0014_mova_unidade_sem_grupo.sql', '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b'),
-  ('0015_mova_pagadores_multiunidade.sql', 'f68c7be60a646b92f6b6d6db845a31270a043ff76d361d655e90894c0c668e87');
+  ('0015_mova_pagadores_multiunidade.sql', 'cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
