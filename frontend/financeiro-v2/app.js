@@ -57,7 +57,10 @@ const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
 const consultorCalendario = criarConsultor();
 const consultorImportacoes = criarConsultor();
-const consultorCadastro = criarConsultor(); // 23/11: Entregadores Próprios → Cadastro (fonte única com o MOVA)
+// 23/11: Entregadores Próprios → Informações dos entregadores. UM consultor POR consulta: o consultor descarta a anterior
+// quando outra começa, e as duas são feitas ao mesmo tempo (contatos do MOVA + entregadores oficiais).
+const consultorCadastro = criarConsultor();
+const consultorOficiais = criarConsultor();
 // Consulta da tela adiantada na plataforma (sai junto com a da sessão): consultor próprio, para uma não abortar a outra.
 const consultorAdiantado = criarConsultor();
 // Fontes de faturamento da unidade (decidem menu e canais): consultor próprio, para sair junto com a sessão sem abortar nada.
@@ -365,7 +368,7 @@ async function carregar() {
   const urlDasImportacoes = consultaDasImportacoes();
   const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
   const urlsDoCadastro = consultasDoCadastro();
-  const doCadastro = urlsDoCadastro ? Promise.all(urlsDoCadastro.map((u) => consultorCadastro.consultar(u, cabecalhos()))) : null;
+  const doCadastro = urlsDoCadastro ? Promise.all([consultorCadastro.consultar(urlsDoCadastro[0], cabecalhos()), consultorOficiais.consultar(urlsDoCadastro[1], cabecalhos())]) : null;
   const urlDaRota = consultaDaRota();
   const modulosDaTela = garantir(...(MODULOS_DA_ROTA[estado.rota] ?? [])); // em paralelo com a consulta
   let r;

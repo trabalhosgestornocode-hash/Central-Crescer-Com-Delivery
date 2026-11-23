@@ -134,3 +134,18 @@ test("app.js: informações só com a aba aberta; corpo só com os campos que ca
   assert.match(app, /oficiais: ro\.ok \? ro\.dados : null/);
   assert.ok(!/CAMPOS_MOVA[\s\S]{0,400}"confirmar"/.test(app.slice(app.indexOf("const CAMPOS_MOVA"), app.indexOf("const CAMPOS_MOVA") + 400)));
 });
+
+test("23/11 Informações: as DUAS consultas da aba usam consultores DIFERENTES (o mesmo consultor abortaria a 1ª e a tela ficaria em 'Carregando')", async () => {
+  const { criarConsultor } = await import("../financeiro-v2/consulta.js");
+  const lento = (url) => new Promise((ok) => setTimeout(() => ok({ ok: true, status: 200, json: async () => ({ ok: true, dados: { url } }), headers: { get: () => "application/json" } }), 5));
+  // o defeito: no MESMO consultor, a 1ª consulta paralela vira obsoleta (null)
+  const um = criarConsultor(lento, { usarCache: false });
+  const [a, b] = await Promise.all([um.consultar("/x/contatos"), um.consultar("/x/oficiais")]);
+  assert.equal(a, null);
+  assert.ok(b);
+  // a correção: um consultor por consulta
+  const app = readFileSync(new URL("../financeiro-v2/app.js", import.meta.url), "utf8");
+  assert.match(app, /const consultorOficiais = criarConsultor\(\);/);
+  assert.match(app, /Promise\.all\(\[consultorCadastro\.consultar\(urlsDoCadastro\[0\], cabecalhos\(\)\), consultorOficiais\.consultar\(urlsDoCadastro\[1\], cabecalhos\(\)\)\]\)/);
+  assert.ok(!/urlsDoCadastro\.map\(\(u\) => consultorCadastro/.test(app));
+});
