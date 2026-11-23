@@ -160,7 +160,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const semanal = await a.automacoes.obter(AUTOMACAO.SEMANAL, unidadeId);
       const cobranca = await a.automacoes.obter(AUTOMACAO.COBRANCA, unidadeId);
       const fazSemanal = semana === 1 && ativa(semanal, hora);
-      const fazCobranca = ativa(cobranca, hora);
+      const fazCobranca = semana === 2 && ativa(cobranca, hora); // 23/11: lembrete dos pendentes só na TERÇA
       if (!fazSemanal && !fazCobranca) continue;
       const rotulo = rotuloDe(unidadeId);
       const inicioFechado = somarDias(dia, -7 - ((semana + 6) % 7)); // segunda-feira da semana anterior
