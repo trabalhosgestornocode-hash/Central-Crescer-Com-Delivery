@@ -27,6 +27,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const notas = new Map();
   const envios = new Map();
   const automacoes = new Map();
+  const cadastrados = [];
 
   return Object.freeze({
     eventos: Object.freeze({
@@ -173,7 +174,18 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         const n = [...notas.values()].find((x) => x.id === id); if (!n || n.estado !== "PENDENTE_ANEXO") return false;
         Object.assign(n, { estado, motivo, documentoId, situacaoDocumental }); return true;
       },
+      async registrarLeitura(id, { leitura, conferencia }) { const n = [...notas.values()].find((x) => x.id === id); if (n) Object.assign(n, { leitura, conferencia }); },
       async listar(escopo) { return [...notas.values()].filter((n) => n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId).map((n) => Object.freeze({ ...n })).reverse(); },
+    }),
+    entregadores: Object.freeze({
+      async cadastrar(e) {
+        if (cadastrados.some((x) => x.ativo && x.unidadeId === e.unidadeId && (x.chave === e.chave || x.telefoneE164 === e.telefoneE164))) return { conflito: true };
+        const id = randomUUID(); cadastrados.push({ id, ...e, ativo: true, criadoEm: relogio().toISOString(), revogadoEm: null }); return { id };
+      },
+      async revogar({ organizacaoId, unidadeId, chave }) {
+        let n = 0; for (const x of cadastrados) if (x.ativo && x.organizacaoId === organizacaoId && x.unidadeId === unidadeId && x.chave === chave) { x.ativo = false; x.revogadoEm = relogio().toISOString(); n++; } return n;
+      },
+      async listar(escopo) { return cadastrados.filter((x) => x.organizacaoId === escopo.organizacaoId && x.unidadeId === escopo.unidadeId).map((x) => ({ chave: x.chave, telefone: `…${x.telefoneE164.slice(-4)}`, nome: x.nome ?? null, ativo: x.ativo, criadoEm: x.criadoEm, revogadoEm: x.revogadoEm })).reverse(); },
     }),
     enviosEntregador: Object.freeze({
       async registrar(e) { if (envios.has(e.chave)) return false; envios.set(e.chave, Object.freeze({ ...e, criadoEm: relogio().toISOString() })); return true; },

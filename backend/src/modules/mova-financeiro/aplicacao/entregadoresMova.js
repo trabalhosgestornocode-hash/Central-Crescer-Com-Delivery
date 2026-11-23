@@ -11,12 +11,15 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, precisaCobrarNota } from "../dominio/entregadores.js";
+import { avisoDeLiberacao, conferirNotaDoEntregador, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
+import { validarSaidaDaIa } from "../ia/contratos.js";
 
-export const AUTOMACAO = Object.freeze({ SEMANAL: "ENTREGADORES_SEMANAL", COBRANCA: "ENTREGADORES_COBRANCA" });
+// 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
+// AVISO_GRUPO = aviso de cada obrigação LIBERADA no grupo da unidade (a 1ª passada só registra o que já estava liberado).
+export const AUTOMACAO = Object.freeze({ SEMANAL: "ENTREGADORES_SEMANAL", COBRANCA: "ENTREGADORES_COBRANCA", RELATORIO: "ENTREGADORES_RELATORIO", AVISO_GRUPO: "ENTREGADORES_AVISO_GRUPO" });
 const AGUARDANDO = ["AGUARDANDO_NF", "NF_REJEITADA"];
-const FUSO_MS = -3 * 3600 * 1000; // horário de Brasília (sem horário de verão desde 2019)
+const FUSO_MS = -3 * 3600 * 1000; // America/Fortaleza (UTC−3, sem horário de verão; igual a Brasília desde 2019)
 const naoEncontrado = (e) => e?.codigo === "FV2_NAO_ENCONTRADO";
 
 export const RESPOSTA_ENTREGADOR = Object.freeze({
@@ -44,9 +47,16 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
   const servico = cfg.identidadeServico.usuarioId;
   const unidadeDe = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
+  const rotuloDe = (id) => { const u = unidadeDe(id); return { unidade: u?.nome ?? null, empresa: u?.empresa ?? null }; };
+  const cnpjDe = (id) => (unidadeDe(id)?.documentos ?? []).map((d) => String(d).replace(/\D/g, "")).find((d) => d.length === 14) ?? null;
+  // Grupo financeiro AUTORIZADO SÓ para esta unidade (nunca publica dados de uma unidade em grupo de outra ou de várias).
+  const grupoDaUnidade = (id) => {
+    const g = cfg.gruposAutorizados.filter((x) => !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO" && x.unidades.length === 1 && x.unidades[0] === id);
+    return g.length === 1 ? g[0] : null;
+  };
   const escopoDe = (unidadeId) => { const u = unidadeDe(unidadeId); return { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico }; };
   const lerFechamentos = async (ent) => {
     try { return (await porta.ler("consultarEntregador", escopoDe(ent.unidadeId), { entregador: ent.chave })).fechamentos.filter((f) => f.entregador?.chave === ent.chave); }
@@ -74,9 +84,12 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const { nota, nova } = await a.notasEntregador.registrar({ organizacaoId: escopo.organizacaoId, unidadeId: ent.unidadeId, entregador: ent.chave, semanaInicio: alvo.semanaInicio, sha256: evento.midia.sha256, eventoId: evento.eventoId });
     if (!nova && nota.estado !== "PENDENTE_ANEXO") return { decisao: "DUPLICADO", motivo: "NOTA_JA_RECEBIDA", resposta: RESPOSTA_ENTREGADOR.notaJaRecebida(), escopo };
     const esc = { organizacaoId: escopo.organizacaoId, unidadeId: ent.unidadeId };
+    // 23/11: leitura e conferência da nota (emitente, tomador, valor, período) — uma vez por nota; nunca libera nada sozinha.
+    const conferencia = nota.conferencia ? { resultado: nota.conferencia, motivos: [] } : await lerEConferir(nota, alvo, evento);
+    const respostaLida = conferencia ? respostaDaConferencia(alvo, conferencia) : null;
     if (!operacional || !(await operacional.pode("anexarDocumentoDoEntregador", esc))) {
-      await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_PENDENTE", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: alvo.semanaInicio, motivo: operacional ? "SEM_CONCESSAO_OPERACIONAL" : "SEM_IDENTIDADE_OPERACIONAL" } });
-      return { decisao: "PROPOSTA", motivo: "NOTA_PENDENTE_ANEXO", resposta: pend.resposta, escopo };
+      await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_PENDENTE", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: alvo.semanaInicio, conferencia: conferencia?.resultado ?? null, motivo: operacional ? "SEM_CONCESSAO_OPERACIONAL" : "SEM_IDENTIDADE_OPERACIONAL" } });
+      return { decisao: "PROPOSTA", motivo: "NOTA_PENDENTE_ANEXO", resposta: respostaLida ?? pend.resposta, escopo };
     }
     const bytes = await obterEvidencia(evento.midia.referencia);
     if (!bytes) return { decisao: "BLOQUEADO", motivo: "SEM_EVIDENCIA", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
@@ -88,7 +101,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const situacao = r.situacaoDocumental ?? r.fechamento?.situacaoDocumental ?? null;
       await a.notasEntregador.concluir(nota.id, { estado: "ANEXADA", documentoId: r.documento?.id ?? null, situacaoDocumental: situacao });
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_ANEXADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: nota.id, dados: { semana: alvo.semanaInicio, situacao } });
-      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
+      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
     } catch (e) {
       if (e instanceof ErroTransitorio) throw e; // fica PENDENTE_ANEXO; a nova tentativa da fila anexa
       await a.notasEntregador.concluir(nota.id, { estado: "RECUSADA", motivo: String(e?.detalhes?.motivo ?? e?.codigo ?? "RECUSADA").slice(0, 120) });
@@ -97,13 +110,37 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     }
   }
 
-  /** Envia uma vez (chave única) para o privado do entregador; devolve true se entrou na fila agora. */
-  async function enviarUmaVez({ ent, tipo, semanaInicio, chave, texto }) {
-    const u = unidadeDe(ent.unidadeId);
-    if (!(await a.enviosEntregador.registrar({ chave, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, entregador: ent.chave, tipo, semanaInicio }))) return false;
-    await a.saida.enfileirar({ grupoId: ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
+  /** Lê a NFS-e (IA, mesmo orçamento e teto) e confere com o fechamento. Falha ou orçamento esgotado ⇒ INCONCLUSIVA (revisão humana). */
+  async function lerEConferir(nota, fechamento, evento) {
+    if (!extrator || typeof a.notasEntregador.registrarLeitura !== "function") return null;
+    let conferencia, leitura = null;
+    try {
+      const bruta = await extrator.extrair({ texto: evento.texto ?? "", tipo: evento.tipo ?? "documento", midia: { mime: evento.midia.mime, referencia: evento.midia.referencia }, contexto: { unidades: [rotuloDe(nota.unidadeId).unidade].filter(Boolean), mensagemCitada: null } });
+      const v = validarSaidaDaIa(bruta);
+      if (!v.ok) conferencia = { resultado: "INCONCLUSIVA", motivos: [`LEITURA_INVALIDA:${v.erro}`] };
+      else {
+        const s = v.saida;
+        leitura = { tipoDocumento: s.tipoDocumento, legivel: s.legivel, valorCentavos: s.valorCentavos, competencia: s.competencia, dataEmissao: s.dataEmissao, favorecido: s.favorecido,
+          pagador: s.pagador ?? null, documentoDestinatario: s.documentoDestinatario, identificadorDocumento: s.identificadorDocumento, confianca: s.confianca };
+        conferencia = conferirNotaDoEntregador({ leitura, fechamento, ...rotuloDe(nota.unidadeId), cnpjTomador: cnpjDe(nota.unidadeId) });
+      }
+    } catch (e) {
+      conferencia = { resultado: "INCONCLUSIVA", motivos: [`LEITURA_INDISPONIVEL:${e?.codigo ?? "ERRO"}`] };
+    }
+    await a.notasEntregador.registrarLeitura(nota.id, { leitura: leitura ? { ...leitura, motivos: conferencia.motivos, situacaoFiscal: "NAO_CONSULTADA" } : { motivos: conferencia.motivos }, conferencia: conferencia.resultado });
+    await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_CONFERIDA", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: fechamento.semanaInicio, resultado: conferencia.resultado, motivos: conferencia.motivos } });
+    return conferencia;
+  }
+
+  /** Envia uma vez (chave única); destino = privado do entregador ou o grupo da unidade. Devolve true se entrou na fila agora. */
+  async function enviarUmaVez({ ent = null, destino = null, unidadeId = null, tipo, semanaInicio, chave, texto, entregador = null }) {
+    const u = unidadeDe(unidadeId ?? ent.unidadeId);
+    if (!(await a.enviosEntregador.registrar({ chave, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, entregador: entregador ?? ent?.chave ?? "-", tipo, semanaInicio }))) return false;
+    if (texto !== null) await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
     return true;
   }
+  const notasDaUnidade = async (escopo) => new Map((await a.notasEntregador.listar(escopo)).map((n) => [`${n.entregador}|${n.semanaInicio}`, n]));
+  const fechamentosDaUnidade = async (unidadeId) => (await porta.ler("consultarEntregadoresProprios", escopoDe(unidadeId), {})).fechamentos ?? [];
 
   const ativa = (auto, hora) => auto && auto.ativa && !auto.pausadaEm && hora >= auto.horario;
 
@@ -125,6 +162,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const fazSemanal = semana === 1 && ativa(semanal, hora);
       const fazCobranca = ativa(cobranca, hora);
       if (!fazSemanal && !fazCobranca) continue;
+      const rotulo = rotuloDe(unidadeId);
       const inicioFechado = somarDias(dia, -7 - ((semana + 6) % 7)); // segunda-feira da semana anterior
       for (const ent of lista) {
         if (!comConversa.has(ent.privado)) { resumo.pulados.push("SEM_CONVERSA"); continue; }
@@ -132,7 +170,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
           if (fazSemanal) {
             let f = null;
             try { f = await porta.ler("detalharFechamentoDoEntregador", escopoDe(unidadeId), { inicio: inicioFechado, entregador: ent.chave }); } catch (e) { if (!naoEncontrado(e)) throw e; }
-            const texto = f && f.entregador?.chave === ent.chave ? mensagemSemanal(f) : null;
+            const texto = f && f.entregador?.chave === ent.chave ? mensagemSemanal(f, rotulo) : null;
             if (!texto) resumo.pulados.push("SEM_FECHAMENTO");
             else if (await enviarUmaVez({ ent, tipo: "SEMANAL", semanaInicio: inicioFechado, chave: `SEMANAL|${unidadeId}|${ent.chave}|${inicioFechado}`, texto })) resumo.semanais += 1;
           }
@@ -150,7 +188,43 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       if (fazSemanal) await a.automacoes.marcarExecucao(AUTOMACAO.SEMANAL, unidadeId, agora.toISOString());
       if (fazCobranca) await a.automacoes.marcarExecucao(AUTOMACAO.COBRANCA, unidadeId, agora.toISOString());
     }
+    await rotinaDoGrupo({ agora, dia, hora, semana, resumo });
     return resumo;
+  }
+
+  /** Aviso de liberação e relatório de quarta no GRUPO financeiro da unidade (só unidades com grupo exclusivo). */
+  async function rotinaDoGrupo({ agora, dia, hora, semana, resumo }) {
+    resumo.avisos = 0; resumo.relatorios = 0;
+    for (const u of cfg.unidades) {
+      const aviso = await a.automacoes.obter(AUTOMACAO.AVISO_GRUPO, u.unidadeId);
+      const relatorio = await a.automacoes.obter(AUTOMACAO.RELATORIO, u.unidadeId);
+      const fazAviso = ativa(aviso, hora), fazRelatorio = semana === 3 && ativa(relatorio, hora);
+      if (!fazAviso && !fazRelatorio) continue;
+      const grupo = grupoDaUnidade(u.unidadeId);
+      if (!grupo) { resumo.pulados.push("SEM_GRUPO_DA_UNIDADE"); continue; }
+      const rotulo = rotuloDe(u.unidadeId);
+      let fechamentos;
+      try { fechamentos = await fechamentosDaUnidade(u.unidadeId); } catch (e) {
+        resumo.pulados.push("FALHA_DE_LEITURA"); registrar({ tipo: "MOVA_ROTINA_GRUPO_FALHOU", codigo: e?.codigo ?? "ERRO" }); continue;
+      }
+      if (fazAviso) {
+        // 1ª passada: só registra o que JÁ estava liberado (nada retroativo vai para o grupo).
+        const linhaDeBase = !aviso.ultimaExecucao;
+        for (const f of fechamentos.filter((x) => x.situacaoDocumental === "LIBERADO_PAGAMENTO" && !x.duplicidade)) {
+          const chave = `AVISO|${u.unidadeId}|${f.entregador?.chave}|${f.semanaInicio}`;
+          if (await enviarUmaVez({ unidadeId: u.unidadeId, destino: grupo.grupoId, tipo: "AVISO_LIBERACAO", semanaInicio: f.semanaInicio, entregador: f.entregador?.chave, chave, texto: linhaDeBase ? null : avisoDeLiberacao(f, rotulo) }) && !linhaDeBase) resumo.avisos += 1;
+        }
+        await a.automacoes.marcarExecucao(AUTOMACAO.AVISO_GRUPO, u.unidadeId, agora.toISOString());
+      }
+      if (fazRelatorio) {
+        // Considera as semanas com vencimento até hoje (+7) ainda abertas ou pagas recentemente: o que importa nesta quarta.
+        const limite = somarDias(dia, 7), desde = somarDias(dia, -21);
+        const alvo = fechamentos.filter((f) => f.vencimento <= limite && f.vencimento >= desde);
+        const texto = relatorioDeQuarta({ ...rotulo, unidade: rotulo.unidade ?? u.nome, fechamentos: alvo, notas: await notasDaUnidade({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }), hoje: dia });
+        if (await enviarUmaVez({ unidadeId: u.unidadeId, destino: grupo.grupoId, tipo: "RELATORIO_QUARTA", semanaInicio: somarDias(dia, -9), chave: `RELATORIO|${u.unidadeId}|${dia}`, texto })) resumo.relatorios += 1;
+        await a.automacoes.marcarExecucao(AUTOMACAO.RELATORIO, u.unidadeId, agora.toISOString());
+      }
+    }
   }
 
   return Object.freeze({ atender, rotina });

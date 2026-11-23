@@ -58,7 +58,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   // Agente 2 — Frente C: conferência com o extrato + política de autonomia (só com `autonomia`); escrita só com a porta OPERACIONAL.
   const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, pagamentoPorComprovante, criarDespesas, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
   // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
-  const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
+  const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, extrator, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,
     recebimentoDocumental, obterEvidencia: (r) => evidencias.obter(r) });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle, recebimentoDocumental });
