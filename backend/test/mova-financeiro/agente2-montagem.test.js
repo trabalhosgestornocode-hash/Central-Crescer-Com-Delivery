@@ -18,6 +18,10 @@ test("A2-M1 OPERACAO completa: modo, unidades, só consultas por padrão e coman
   assert.equal(c.habilitado, true);
   assert.deepEqual([c.modo, c.operacaoUnidades, c.somenteConsultas, c.comandosDeterministicos], ["OPERACAO", [U1, U2], true, true]);
   assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_DOCUMENTOS: "1" }).somenteConsultas, false);
+  // 23/11: grupo compartilhado para os avisos (só entradas válidas; vazio = nenhum).
+  assert.deepEqual(lerConfiguracaoMova(BASE).avisosNoGrupo, {});
+  assert.deepEqual(lerConfiguracaoMova({ ...BASE, MOVA_AVISOS_NO_GRUPO: ` ${U2.toUpperCase()}=120363000000000001@g.us , lixo, ${U1}=5500000000301@s.whatsapp.net, ${U1}=1@g.us=2` }).avisosNoGrupo,
+    { [U2]: "120363000000000001@g.us" });
 });
 
 test("A2-M2 OPERACAO incompleta ou contraditória não sobe", () => {

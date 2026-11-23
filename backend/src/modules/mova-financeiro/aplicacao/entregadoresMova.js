@@ -47,7 +47,7 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {} }) {
+export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
   const servico = cfg.identidadeServico.usuarioId;
   const unidadeDe = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
   const rotuloDe = (id) => { const u = unidadeDe(id); return { unidade: u?.nome ?? null, empresa: u?.empresa ?? null }; };
@@ -55,7 +55,11 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
   // Grupo financeiro AUTORIZADO SÓ para esta unidade (nunca publica dados de uma unidade em grupo de outra ou de várias).
   const grupoDaUnidade = (id) => {
     const g = cfg.gruposAutorizados.filter((x) => !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO" && x.unidades.length === 1 && x.unidades[0] === id);
-    return g.length === 1 ? g[0] : null;
+    if (g.length === 1) return g[0];
+    // 23/11: unidade SEM grupo exclusivo cujo proprietário indicou, na configuração (MOVA_AVISOS_NO_GRUPO), o grupo da gerência
+    // que ela COMPARTILHA (ex.: "Contas à Pagar Subway / Açaí"). Só avisos à gerência; o grupo precisa estar autorizado.
+    const jid = Object.hasOwn(avisosNoGrupo, id) ? avisosNoGrupo[id] : null;
+    return (jid && cfg.gruposAutorizados.find((x) => x.grupoId === jid && !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO")) || null;
   };
   const escopoDe = (unidadeId) => { const u = unidadeDe(unidadeId); return { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico }; };
   const lerFechamentos = async (ent) => {
