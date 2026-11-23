@@ -1804,7 +1804,10 @@ export function criarSessaoBaileys({
         if (!mova?.contatoHomologacao) throw recusa("homologação privada desligada");
         if (status !== STATUS_CONEXAO.CONNECTED || !socket) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
         const sockEnvio = socket;
-        if (!(await mova.contatoHomologacao.jidAutorizadoParaEnvio(grupoJid, sockEnvio))) throw recusa("destino privado não é o contato verificado");
+        if (!(await mova.contatoHomologacao.jidAutorizadoParaEnvio(grupoJid, sockEnvio))) {
+          log("warn", "mova.privado_recusado", { correlationId, motivo: "FORA_DA_LISTA_OU_WHATSAPP_NAO_CONFIRMOU" }); // sem número
+          throw recusa("destino privado não é o contato verificado");
+        }
         if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
         const id = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
         // 15J: guarda o conteúdo cifrado para RESPONDER a retry receipts (mesmo mecanismo do envio empresarial). Sem isto, o
@@ -1819,8 +1822,10 @@ export function criarSessaoBaileys({
         // as sessões de criptografia por número, e o aparelho não decifra ("Aguardando mensagem"). Com o LID do MESMO contato
         // verificado (resolvido pelo próprio WhatsApp, junto com o número autorizado acima), o Baileys endereça tudo por LID.
         // Sem LID conhecido, mantém o número. A autorização do destino não muda: continua sendo o número verificado.
-        const destinoEnvio = typeof ident?.lid === "string" && /^[0-9]{5,20}@lid$/.test(ident.lid) ? ident.lid : grupoJid;
-        log("info", "mova.privado_send_start", { correlationId, providerMessageId: id, idHash: hashId(id), via: destinoEnvio === grupoJid ? "PN" : "LID" });
+        // Sem LID: o JID CANÔNICO devolvido pelo WhatsApp (pode não ter o 9º dígito); nunca o número digitado no cadastro.
+        const destinoEnvio = typeof ident?.lid === "string" && /^[0-9]{5,20}@lid$/.test(ident.lid) ? ident.lid : (ident?.jid ?? grupoJid);
+        log("info", "mova.privado_send_start", { correlationId, providerMessageId: id, idHash: hashId(id), via: destinoEnvio.endsWith("@lid") ? "LID" : "PN",
+          jidCanonicoDifere: Boolean(ident?.jid && ident.cadastrado && ident.jid !== ident.cadastrado) });
         try { retryCache?.marcarEnvioIniciado?.(id); } catch { /* cache nunca interfere */ }
         let r;
         try { r = await sockEnvio.sendMessage(destinoEnvio, { text: texto }, { messageId: id }); }

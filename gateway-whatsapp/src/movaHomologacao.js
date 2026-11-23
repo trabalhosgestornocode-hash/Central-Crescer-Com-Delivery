@@ -31,7 +31,10 @@ export function criarVerificadorDeContato({ telefoneE164, resolver = resolverJid
   async function identidade(socket) {
     if (cache && cache.socket === socket) return cache.identidade;
     const r = await resolver({ socket, telefoneE164 }); // lança (preEnvio) se o WhatsApp não confirmar
-    const id = Object.freeze({ jid: r.jid, lid: r.lid ?? null });
+    // 23/11: no Brasil, conta antiga tem JID canônico SEM o 9º dígito (55 DD XXXXXXXX) enquanto o cadastro guarda 55 DD 9XXXXXXXX.
+    // `cadastrado` é o número AUTORIZADO (o do ambiente), que o WhatsApp acabou de confirmar (resolver acima; últimos dígitos
+    // coerentes). É a chave da conversa no backend; `jid`/`lid` são o endereço real de entrega.
+    const id = Object.freeze({ jid: r.jid, lid: r.lid ?? null, cadastrado: `${telefoneE164.slice(1)}@s.whatsapp.net` });
     cache = { socket, identidade: id };
     return id;
   }
@@ -44,13 +47,13 @@ export function criarVerificadorDeContato({ telefoneE164, resolver = resolverJid
       let id;
       try { id = await identidade(socket); } catch { return false; }
       const remoto = semDevice(key.remoteJid);
-      if (remoto === id.jid) return true;
-      if (remoto.endsWith("@lid")) return (id.lid !== null && remoto === id.lid) || semDevice(key.senderPn) === id.jid;
+      if (remoto === id.jid || remoto === id.cadastrado) return true;
+      if (remoto.endsWith("@lid")) return (id.lid !== null && remoto === id.lid) || [id.jid, id.cadastrado].includes(semDevice(key.senderPn));
       return false;
     },
     /** O JID pedido para ENVIO é o do contato verificado neste socket? */
     async jidAutorizadoParaEnvio(jid, socket) {
-      try { return semDevice(jid) === (await identidade(socket)).jid; } catch { return false; }
+      try { const id = await identidade(socket); return [id.jid, id.cadastrado].includes(semDevice(jid)); } catch { return false; }
     },
   });
 }

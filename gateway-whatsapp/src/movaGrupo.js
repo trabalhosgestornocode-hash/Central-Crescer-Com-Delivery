@@ -157,10 +157,11 @@ export function criarEncaminhadorMova({ grupos, notificar, baixarMidia = null, l
             if (typeof contatoHomologacao.quemEnviou === "function") {
               const ident = await contatoHomologacao.quemEnviou(m, socket);
               if (!ident) return;
-              jid = ident.jid;
+              jid = ident.cadastrado ?? ident.jid; // a conversa no backend é a do número cadastrado (9º dígito)
             } else {
               if (!(await contatoHomologacao.mensagemDoContato(m, socket))) return;
-              ({ jid } = await contatoHomologacao.identidade(socket));
+              const ident = await contatoHomologacao.identidade(socket);
+              jid = ident.cadastrado ?? ident.jid;
             }
             const payload = montarEventoMovaPrivado(m, { jidVerificado: jid, origemTipo: origem });
             if (!payload || recentes.has(payload.eventoId)) return;
