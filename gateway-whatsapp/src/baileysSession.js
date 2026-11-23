@@ -266,6 +266,28 @@ export function criarSessaoBaileys({
   // CB:message; nunca pelo type consolidado do upsert. Injetado (default de teste acima) para que server.js possa
   // ligar `rotularOffline` ao motor de recovery do Checkpoint G sem este módulo conhecer offlineRecovery.js.
   const statusPorMensagemId = new Map(); // providerMessageId -> {status}
+  // 23/11 — RECIBOS das mensagens de GRUPO (MOVA/grupo interno): antes ficavam de fora do rastreio e o aceite/rejeição do
+  // servidor e a entrega/leitura por participante eram descartados ("provider_receipt_nao_rastreado"). Só LOG (sem número
+  // completo, sem conteúdo); não altera o envio nem o Baileys.
+  const recibosGrupo = new Map(); // providerMessageId -> {correlationId, enviadoEmMs}
+  const mascararParticipante = (jid) => {
+    const m = /^([0-9]+)(?::([0-9]+))?@(lid|s\.whatsapp\.net)$/.exec(String(jid ?? ""));
+    return m ? { participante: `••${m[1].slice(-4)}@${m[3] === "lid" ? "lid" : "pn"}`, dispositivo: m[2] ? Number(m[2]) : 0 } : { participante: null, dispositivo: null };
+  };
+  function registrarReciboGrupo(no, origem) {
+    try {
+      const a = no?.attrs ?? {};
+      const ids = [a.id];
+      if (origem === "receipt" && Array.isArray(no.content)) for (const c of no.content[0]?.content ?? []) if (c?.tag === "item" && c.attrs?.id) ids.push(c.attrs.id);
+      for (const id of ids) {
+        const r = id && recibosGrupo.get(id);
+        if (!r) continue;
+        log(a.error || a.type === "retry" ? "warn" : "info", "grupo.recibo", { correlationId: r.correlationId, providerMessageId: id,
+          tipo: origem === "ack" ? (a.error ? "ack_erro" : "ack_servidor") : (a.type ?? "entrega"), erro: a.error ?? null,
+          ...mascararParticipante(a.participant ?? (origem === "ack" ? null : a.from)), latenciaMs: Date.now() - r.enviadoEmMs });
+      }
+    } catch { /* observador nunca interfere */ }
+  }
 
   function backoffMs() {
     const base = config.reconnect.baseMs * (2 ** tentativasReconexao);
@@ -1005,8 +1027,8 @@ export function criarSessaoBaileys({
     geracaoSocket += 1;
     geracaoDesteSocket = geracaoSocket;
     try {
-      socket.ws?.on?.("CB:ack,class:message", (no) => observadorEntrega.aoAckWs(no));
-      socket.ws?.on?.("CB:receipt", (no) => observadorEntrega.aoReceiptWs(no));
+      socket.ws?.on?.("CB:ack,class:message", (no) => { observadorEntrega.aoAckWs(no); registrarReciboGrupo(no, "ack"); });
+      socket.ws?.on?.("CB:receipt", (no) => { observadorEntrega.aoReceiptWs(no); registrarReciboGrupo(no, "receipt"); });
     } catch { /* observador nunca interfere */ }
 
     status = STATUS_CONEXAO.CONNECTING;
@@ -1875,7 +1897,10 @@ export function criarSessaoBaileys({
       }
       if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) throw naoConectado();
       const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
-      log("info", "grupo.send_start", { correlationId, socketGeneration: geracaoSocket, providerMessageId: providerIdGerado, jid: jidMascarado, lookupMs: Date.now() - t0 });
+      log("info", "grupo.send_start", { correlationId, socketGeneration: geracaoSocket, providerMessageId: providerIdGerado, jid: jidMascarado, lookupMs: Date.now() - t0,
+        participantes: Number.isInteger(info?.participantes) ? info.participantes : null });
+      recibosGrupo.set(providerIdGerado, { correlationId, enviadoEmMs: Date.now() });
+      while (recibosGrupo.size > 300) recibosGrupo.delete(recibosGrupo.keys().next().value);
       const t1 = Date.now();
       let resultado;
       try {

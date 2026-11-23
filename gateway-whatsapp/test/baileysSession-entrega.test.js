@@ -158,3 +158,36 @@ describe("enviar() — providerMessageId e logs", () => {
     assert.equal(backendClient.notificarStatusProvider.mock.calls.length, 1);
   });
 });
+
+test("23/11 grupo do MOVA: aceite/rejeição do servidor e entrega/leitura/retry POR PARTICIPANTE viram log grupo.recibo (sem número completo, sem conteúdo)", async () => {
+  const G = "120363000000000001@g.us";
+  const fabricaSocket = fabricaFalsa();
+  const sessao = criarSessaoBaileys({
+    authAdapter: authFalso(), backendClient: backendFalso(), fabricaSocket, DisconnectReasonLoggedOut: 401, leaseManager: leaseFalso(),
+    config: { reconnect: { baseMs: 10, tetoMs: 40 }, heartbeatMs: 1_000_000, providerInstanceId: "t", gatewayVersion: "0", movaEnvioHabilitado: true, movaGrupos: [G] },
+  });
+  await sessao.conectar();
+  const socket = fabricaSocket.criados[0];
+  socket.groupMetadata = mock.fn(async () => ({ id: G, subject: "Grupo", participants: [{ id: "5511999990000@s.whatsapp.net" }, { id: "5511912345678@s.whatsapp.net" }], size: 2 }));
+  socket.ev.emit("connection.update", { connection: "open" });
+  socket.ev.emit("creds.update", { registered: true });
+  await new Promise((r) => setImmediate(r));
+  const linhas = await capturandoLogs(async () => {
+    const { providerMessageId: id } = await sessao.enviarGrupoMova({ grupoJid: G, texto: CONTEUDO_SECRETO, correlationId: "mova-resposta:x" });
+    socket.ws.emit("CB:ack,class:message", { attrs: { id, class: "message", from: G, t: "1" } });
+    socket.ws.emit("CB:receipt", { attrs: { id, from: G, participant: "111122223333:2@lid" } });
+    socket.ws.emit("CB:receipt", { attrs: { id, from: G, participant: "111122223333@lid", type: "read" } });
+    socket.ws.emit("CB:receipt", { attrs: { id, from: G, participant: "5511912345678:5@s.whatsapp.net", type: "retry" } });
+    socket.ws.emit("CB:ack,class:message", { attrs: { id: "OUTRA", class: "message", from: G, error: "421" } }); // não rastreada
+    await tick();
+  });
+  const recibos = linhas.filter((l) => l.evento === "grupo.recibo");
+  assert.deepEqual(recibos.map((r) => [r.tipo, r.participante, r.dispositivo]), [
+    ["ack_servidor", null, null], ["entrega", "••3333@lid", 2], ["read", "••3333@lid", 0], ["retry", "••5678@pn", 5],
+  ]);
+  assert.match(recibos[3].severity, /^WARN/);
+  const tudo = JSON.stringify(linhas);
+  assert.ok(![CONTEUDO_SECRETO, "111122223333", "5511912345678"].some((x) => tudo.includes(x)));
+  const start = linhas.find((l) => l.evento === "grupo.send_start");
+  assert.equal(start.participantes, 2);
+});
