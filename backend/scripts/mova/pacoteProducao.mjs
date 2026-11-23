@@ -79,7 +79,7 @@ end $$;
 }
 
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
-export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014"]); // conferido em produção 24/11 (nome + sha256); 0015 entra pelo atualizar.sql
+export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"]); // conferido em produção 24/11 (nome + sha256); 0015 entra pelo atualizar.sql
 /** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 autorizada em 23/11 com a 0012 (PR #188). */
 export const ADIADAS_EM_PRODUCAO = Object.freeze([]);
 
