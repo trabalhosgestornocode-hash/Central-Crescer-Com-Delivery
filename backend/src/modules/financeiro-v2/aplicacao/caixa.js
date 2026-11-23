@@ -14,6 +14,7 @@ import {
   validarEstornoLiquidacao, validarEstornoMovimentacao, validarEstornoTransferencia, validarLiquidacao, validarMovimentacao, validarTransferencia,
 } from "../contratos/comandos.js";
 import { exigirPagamentoLiberado } from "./guardaEntregadores.js";
+import { exigirSemComprovantePendente } from "./baixaPorComprovante.js";
 
 const tipoDoAlvo = (alvoTipo) => (alvoTipo === ALVO_LIQUIDACAO.OBRIGACAO ? TIPO.OBRIGACAO : TIPO.RECEBIVEL);
 
@@ -92,6 +93,7 @@ export function operacoesDeCaixa(b) {
           const tipo = tipoDoAlvo(a.alvoTipo);
           const alvo = await b.obterOuFalhar(tx, cx, tipo, a.alvoId, "Título");
           if (tipo === TIPO.OBRIGACAO) await exigirPagamentoLiberado(tx, cx, alvo);
+          if (tipo === TIPO.OBRIGACAO) await exigirSemComprovantePendente(tx, cx, alvo.id, a.valorCentavos); // Execução 17: concilia, não baixa de novo
           const mudancas = aplicarLiquidacao(alvo, a.valorCentavos);
           liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, { movimentacaoId: mov.id, alvoTipo: a.alvoTipo, alvoId: a.alvoId, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva, situacao: SITUACAO_LIQUIDACAO.VALIDA }));
           titulos.push(await b.alterar(tx, cx, tipo, alvo, mudancas, EVENTO_HISTORICO.LIQUIDACAO));
@@ -117,12 +119,13 @@ export function operacoesDeCaixa(b) {
         await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(liq.dataEfetiva)], referenciadas: [(await tx.obter(cx, tipo, liq.alvoId))?.competencia ?? null], motivo: "estorno de liquidação" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         const alvo = await b.obterOuFalhar(tx, cx, tipo, liq.alvoId, "Título");
-        const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, liq.movimentacaoId, "Movimentação");
+        // Execução 17: pagamento por comprovante ainda sem conciliação não tem movimentação (nada a devolver ao alocado).
+        const mov = liq.movimentacaoId ? await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, liq.movimentacaoId, "Movimentação") : null;
         const estornado = somar(liq.estornadoCentavos ?? 0, valor);
         const situacao = estornado === liq.valorCentavos ? SITUACAO_LIQUIDACAO.ESTORNADA : SITUACAO_LIQUIDACAO.ESTORNADA_PARCIAL;
         const liquidacao = await b.alterar(tx, cx, TIPO.LIQUIDACAO, liq, { estornadoCentavos: estornado, situacao }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
         const titulo = await b.alterar(tx, cx, tipo, alvo, reverterLiquidacao(alvo, valor), EVENTO_HISTORICO.ESTORNO, c.justificativa);
-        const movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, mov, { alocadoCentavos: subtrair(mov.alocadoCentavos, valor) }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
+        const movimentacao = mov ? await b.alterar(tx, cx, TIPO.MOVIMENTACAO, mov, { alocadoCentavos: subtrair(mov.alocadoCentavos, valor) }, EVENTO_HISTORICO.ESTORNO, c.justificativa) : null;
         const estorno = await registrarEstorno(tx, cx, { alvoTipo: ALVO_ESTORNO.LIQUIDACAO, alvoId: liq.id, valorCentavos: valor, documentoId: c.documentoId }, c.justificativa);
         return { estorno, liquidacao, titulo, movimentacao };
       });

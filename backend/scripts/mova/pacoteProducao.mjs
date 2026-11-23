@@ -78,6 +78,35 @@ end $$;
   return partes.join("");
 }
 
+/** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
+export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"]);
+
+/**
+ * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as
+ * novas e as registra. Aborta (sem mudar nada) se alguma nova já estiver registrada ou se o banco for o de homologação.
+ */
+export function gerarAtualizar(migracoes = listarMigracoes()) {
+  const ja = migracoes.filter((m) => INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
+  const novas = migracoes.filter((m) => !INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
+  const conferir = ja.map((m) => `  if not exists (select 1 from mova.mova_migracao where nome = '${m.nome}' and sha256 = '${m.sha256}') then raise exception 'MOVA atualização: ${m.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  const inedita = novas.map((m) => `  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA atualização: ${m.nome} já aplicada — nada foi feito'; end if;`);
+  const partes = [`-- MOVA — ATUALIZAÇÃO do schema \`mova\` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
+-- Já instaladas (conferidas por nome e sha256): ${ja.map((m) => m.nome).join(", ")}
+-- Novas: ${novas.map((m) => m.nome).join(", ") || "(nenhuma)"}
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA atualização: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${[...conferir, ...inedita].join("\n")}
+end $$;
+`];
+  for (const m of novas) partes.push(`\n-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})\n${m.sql.trimEnd()}\ninsert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');\n`);
+  return partes.join("");
+}
+
 export function gerarInventario() {
   return `-- MOVA — INVENTÁRIO SOMENTE LEITURA (gerado por backend/scripts/mova/pacoteProducao.mjs). Rodar ANTES e DEPOIS da instalação.
 -- Não altera nada. Não lê conteúdo de mensagens: só existência, contagens, permissões e marcadores.
@@ -96,7 +125,7 @@ union all select 'migracao_em_curso', coalesce((select string_agg(left(query, 60
 }
 
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "inventario.sql": gerarInventario() };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario() };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }

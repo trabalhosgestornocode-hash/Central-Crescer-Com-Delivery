@@ -70,7 +70,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
 export const criarMovaSimulado = criarMova;
 import { criarExecucao } from "./aplicacao/execucao.js";
 // Agente 2 — Central de pendências e documentos recebidos sem IA (só leitura do Financeiro; conferência humana no banco do MOVA).
-export { MOTIVO as MOTIVO_PENDENCIA, MOTIVO_SAIDA, ROTULO_MOTIVO, ROTULO_SAIDA, classificarSaidas, contasRelacionadas, montarConferencia, pendenciaDaConta } from "./aplicacao/centralConferencia.js";
+export { MOTIVO as MOTIVO_PENDENCIA, MOTIVO_SAIDA, ROTULO_MOTIVO, ROTULO_SAIDA, classificarSaidas, contasRelacionadas, linhaDoTempo, montarConferencia, pendenciaDaConta } from "./aplicacao/centralConferencia.js";
 export { ESTADO_CONFERENCIA, MIMES_SEM_LEITURA, RESPOSTA_DOCUMENTO, TIPOS_INFORMADOS, conferirArquivo } from "./aplicacao/recebimentoDocumental.js";
 import { criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";
 export { AUTOMACAO, RESPOSTA_ENTREGADOR, criarEntregadoresMova } from "./aplicacao/entregadoresMova.js";

@@ -111,6 +111,22 @@ export function paginar(itens, pagina = 1, tamanho = 50) {
 
 // ------------------------------------------------------------------------------------------------------ contas a pagar
 
+/**
+ * Execução 17 — duas dimensões INDEPENDENTES: situação do PAGAMENTO (em aberto, parcial, pago, pago por comprovante) e
+ * situação da CONCILIAÇÃO bancária (não conciliado, pendente, conciliado com extrato). "Pago por comprovante" nunca é
+ * "conciliado": só a saída do extrato ligada ao pagamento concilia.
+ */
+export function dimensoesDoPagamento(o, pagamentos) {
+  const validos = pagamentos.filter((x) => x.valorCentavos > 0);
+  const pendentes = validos.filter((x) => x.conciliacaoBancaria === "CONCILIACAO_PENDENTE");
+  const situacaoPagamento = o.situacao === SITUACAO_TITULO.CANCELADA ? "CANCELADO"
+    : o.liquidadoCentavos === 0 ? "EM_ABERTO"
+      : o.saldoCentavos > 0 ? "PARCIALMENTE_PAGO"
+        : validos.some((x) => x.origem === "COMPROVANTE") ? "PAGO_POR_COMPROVANTE" : "PAGO";
+  const situacaoConciliacao = validos.length === 0 ? "NAO_CONCILIADO" : pendentes.length ? "CONCILIACAO_PENDENTE" : "CONCILIADO_COM_EXTRATO";
+  return { situacaoPagamento, situacaoConciliacao, aConciliarCentavos: pendentes.reduce((s, x) => s + x.valorCentavos, 0) };
+}
+
 export function situacaoAPagar(o, hoje, { provisoria = false } = {}) {
   if (o.situacao === SITUACAO_TITULO.CANCELADA) return SITUACAO_A_PAGAR.CANCELADO;
   if (o.saldoCentavos === 0) return SITUACAO_A_PAGAR.PAGO;
@@ -126,8 +142,12 @@ function pagamentosDoTitulo(p, tituloId) {
     return {
       liquidacaoId: q.id, movimentacaoId: q.movimentacaoId, data: q.dataEfetiva, valorCentavos: validoDaLiquidacao(q),
       conta: mov ? p.contaPorId.get(mov.contaId)?.nome ?? null : null, valorDaMovimentacaoCentavos: mov?.valorCentavos ?? null,
-      titulosNaMesmaMovimentacao: (p.liquidacoesPorMov.get(q.movimentacaoId) ?? []).length,
+      titulosNaMesmaMovimentacao: q.movimentacaoId ? (p.liquidacoesPorMov.get(q.movimentacaoId) ?? []).length : 0,
       documentos: mov ? documentosDe(p, TIPO.MOVIMENTACAO, mov) : [],
+      // Execução 17: pagamento por COMPROVANTE (sem saída do extrato) × pago com a saída do extrato.
+      origem: q.origemDoVinculo === "COMPROVANTE" ? "COMPROVANTE" : "MOVIMENTACAO",
+      conciliacaoBancaria: q.movimentacaoId ? "CONCILIADO_COM_EXTRATO" : "CONCILIACAO_PENDENTE",
+      idTransacao: q.idTransacao ?? null,
     };
   }).sort((a, b) => (a.data < b.data ? -1 : a.data > b.data ? 1 : 0));
 }
@@ -140,6 +160,7 @@ export function tituloAPagar(p, o, hoje) {
   const provisoria = !lancamento || lancamento.categoria === CATEGORIA_PROVISORIA;
   const classificacaoEconomica = provisoria ? CLASSIFICACAO_ECONOMICA.PENDENTE_DE_CLASSIFICACAO : lancamento.natureza === "PATRIMONIAL" ? CLASSIFICACAO_ECONOMICA.PATRIMONIAL : CLASSIFICACAO_ECONOMICA.CONFIRMADA;
   const situacao = situacaoAPagar(o, hoje, { provisoria });
+  const pagamentos = pagamentosDoTitulo(p, o.id);
   const emAberto = o.situacao !== SITUACAO_TITULO.CANCELADA && o.saldoCentavos > 0;
   const pendencias = [];
   if (emAberto && documentos.length === 0) pendencias.push("SEM_DOCUMENTO");
@@ -155,7 +176,8 @@ export function tituloAPagar(p, o, hoje) {
     competencia: o.competencia, competenciaHomologada: p.homologadas.has(o.competencia), dataEmissao: o.dataEmissao, vencimento: o.vencimento,
     parcela: o.parcela, recorrencia: o.recorrencia ?? null,
     valorOriginalCentavos: o.valorBaseCentavos, ajustesCentavos: o.ajustesCentavos, pagoCentavos: o.liquidadoCentavos, saldoCentavos: o.saldoCentavos,
-    situacao, vencido: emAberto && o.vencimento < hoje, pendencias, documentos, pagamentos: pagamentosDoTitulo(p, o.id),
+    situacao, vencido: emAberto && o.vencimento < hoje, pendencias, documentos, pagamentos,
+    ...dimensoesDoPagamento(o, pagamentos),
     origem: o.fonte?.sistema ?? "MANUAL",
   };
 }

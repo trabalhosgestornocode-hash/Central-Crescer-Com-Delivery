@@ -22,6 +22,18 @@ Consultas de contas/competência/caixa (identidade de leitura), proposta e aplic
 baixa por extrato com política (Frente C: `previaDoVinculoDoExtrato` → `enviarEvidencia` → `vincularPagamentoDoExtrato`,
 reversão por `estornarLiquidacao` só por responsável), fluxo de entregadores (desligado em produção).
 
+**Execução 17 — pagamento por comprovante × conciliação com o extrato** (núcleo: migração 0029; MOVA: 0009). Três operações novas:
+
+| Operação | Capacidade | Classe | Permissão | MOVA hoje |
+|---|---|---|---|---|
+| `registrarPagamentoPorComprovante` | Baixar | FINANCEIRA | baixar_por_comprovante (+ enviar_documento para anexar) | sim (política BAIXA_DOCUMENTAL ou confirmação humana) |
+| `conciliarPagamentoPorComprovante` | Conciliar | FINANCEIRA | vincular_pagamento | sim (candidata única + política BAIXA_POR_EXTRATO; senão a Central) |
+| `consultarPagamentosPorComprovanteAConciliar` | Consultar | LEITURA | ver | sim |
+
+Pago por comprovante = baixa SEM saída bancária (`movimentacao_id` nulo, origem COMPROVANTE, documento obrigatório).
+A saída do extrato que chega depois é LIGADA à mesma baixa (nunca 2ª baixa/saída/despesa); enquanto houver pagamento por
+comprovante a conciliar com o mesmo valor, `vincularPagamentoDoExtrato` e `registrarLiquidacao` da mesma conta são recusados.
+
 | Operação | Capacidade | Classe | Permissão | MOVA hoje |
 |---|---|---|---|---|
 | `abrirCaixa` | Executar rotinas | CRITICA | registrar | — |

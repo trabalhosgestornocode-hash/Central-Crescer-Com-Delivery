@@ -191,7 +191,7 @@ export const PERMISSOES = Object.freeze({
   "financeiro_v2.documentos": "abrir documentos do cofre",
   // 08B: ações separadas de decisões sensíveis.
   "financeiro_v2.aprovar": "aprovar ou rejeitar propostas", "financeiro_v2.aplicar": "aplicar propostas aprovadas",
-  "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada", "financeiro_v2.reclassificar": "reclassificar lançamentos", "financeiro_v2.enviar_documento": "enviar documentos de evidência", "financeiro_v2.vincular_pagamento": "vincular pagamentos do extrato",
+  "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada", "financeiro_v2.reclassificar": "reclassificar lançamentos", "financeiro_v2.enviar_documento": "enviar documentos de evidência", "financeiro_v2.vincular_pagamento": "vincular pagamentos do extrato", "financeiro_v2.baixar_por_comprovante": "registrar pagamento por comprovante (conciliação pendente)",
 });
 
 // ---------------------------------------------------------------- fontes de faturamento da unidade ativa

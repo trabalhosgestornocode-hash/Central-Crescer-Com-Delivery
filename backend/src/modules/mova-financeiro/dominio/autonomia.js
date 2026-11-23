@@ -4,7 +4,11 @@
 // (serviços oficiais, com login e permissão própria). Regras fixas, que nenhuma política consegue afrouxar:
 //   - sem política cadastrada para (operação, empresa, unidade) ⇒ SOMENTE_PROPOR;
 //   - pagamento bancário, exclusão e estorno ⇒ PROIBIDO (o MOVA nunca paga nem apaga);
-//   - comprovante isolado (imagem/PDF) nunca é liquidação: APLICAR_* só com a saída do EXTRATO conferida (conciliação única);
+//   - comprovante isolado (imagem/PDF) nunca é liquidação COM EXTRATO: BAIXA_POR_EXTRATO/DESPESA_PAGA só com a saída do
+//     EXTRATO conferida (conciliação única);
+//   - Execução 17 — BAIXA_DOCUMENTAL (pagamento registrado POR COMPROVANTE, conciliação pendente): APLICAR_* só com o
+//     comprovante avaliado como PIX_CONCLUIDO (avaliarComprovante: concluído, legível, consistente, não duplicado, arquivo
+//     íntegro); APLICAR_AUTOMATICO exige também o identificador da transação (sem ele, cai para confirmação);
 //   - acima do limite de valor da política ⇒ cai um nível (APLICAR_AUTOMATICO → APLICAR_COM_CONFIRMACAO → SOMENTE_PROPOR);
 //   - política sempre com responsável, motivo e vigência; desligar = revogar (fica o histórico) e vale na hora.
 
@@ -22,6 +26,7 @@ export const OPERACAO = Object.freeze({
   DESPESA_PAGA: "DESPESA_PAGA",             // despesa paga sem conta prévia, ligada a saída do extrato
   CONTA_A_PAGAR: "CONTA_A_PAGAR",           // registrar obrigação a partir de boleto/nota
   ANEXAR_DOCUMENTO: "ANEXAR_DOCUMENTO",     // anexar evidência a lançamento existente (sem mexer em valor)
+  BAIXA_DOCUMENTAL: "BAIXA_DOCUMENTAL",     // Execução 17: pagamento por COMPROVANTE (sem saída do extrato; conciliação pendente)
 });
 const SEMPRE_PROIBIDAS = new Set(["PAGAMENTO_BANCARIO", "EXCLUSAO", "ESTORNO", "TRANSFERENCIA"]);
 /** Operações que liquidam (mexem em caixa): exigem a saída do extrato conferida para qualquer APLICAR_*. */
@@ -80,7 +85,7 @@ const descer = (nivel) => ORDEM[Math.max(1, ORDEM.indexOf(nivel) - 1)];
  * @param {{situacao:string, candidatas?:number}|null} [p.conciliacao]  resultado de conferirComExtrato
  * @returns {{nivel:string, motivos:string[], politicaId:string|null}}
  */
-export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId, valorCentavos, hoje, conciliacao = null }) {
+export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId, valorCentavos, hoje, conciliacao = null, comprovante = null }) {
   if (SEMPRE_PROIBIDAS.has(operacao) || !Object.values(OPERACAO).includes(operacao)) return { nivel: NIVEL.PROIBIDO, motivos: ["OPERACAO_PROIBIDA"], politicaId: null };
   const vigente = (x) => !x.revogadaEm && x.vigenteDe <= hoje && (!x.vigenteAte || hoje <= x.vigenteAte);
   const daOperacao = politicas.filter((x) => x.operacao === operacao && x.organizacaoId === organizacaoId && vigente(x));
@@ -93,6 +98,11 @@ export function decidirAutonomia({ politicas, operacao, organizacaoId, unidadeId
   if (nivel !== NIVEL.SOMENTE_PROPOR && valorCentavos > pol.limiteCentavos) { nivel = descer(nivel); motivos.push("ACIMA_DO_LIMITE"); }
   if (LIQUIDAM.has(operacao) && nivel !== NIVEL.SOMENTE_PROPOR && conciliacao?.situacao !== "CONFERIDA") {
     nivel = NIVEL.SOMENTE_PROPOR; motivos.push(conciliacao?.situacao === "AMBIGUA" ? "EXTRATO_AMBIGUO" : "SEM_EXTRATO_CONFERIDO");
+  }
+  if (operacao === OPERACAO.BAIXA_DOCUMENTAL && nivel !== NIVEL.SOMENTE_PROPOR) {
+    if (conciliacao?.situacao === "AMBIGUA") { nivel = NIVEL.SOMENTE_PROPOR; motivos.push("EXTRATO_AMBIGUO"); }
+    else if (!comprovante?.apto) { nivel = NIVEL.SOMENTE_PROPOR; motivos.push(`COMPROVANTE_${comprovante?.situacao ?? "NAO_AVALIADO"}`, ...(comprovante?.motivos ?? [])); }
+    else if (nivel === NIVEL.APLICAR_AUTOMATICO && !comprovante.comIdentificador) { nivel = NIVEL.APLICAR_COM_CONFIRMACAO; motivos.push("SEM_IDENTIFICADOR_DA_TRANSACAO"); }
   }
   return { nivel, motivos, politicaId: pol.id ?? null };
 }

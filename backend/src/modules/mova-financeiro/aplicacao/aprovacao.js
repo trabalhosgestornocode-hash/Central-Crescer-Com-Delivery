@@ -11,8 +11,9 @@
 //   5. REVALIDA no momento da aplicação: competência aberta, saldo da obrigação, duplicidade de conta a pagar;
 //   6. aplica SÓ pelos serviços reais (`registrarObrigacao`, `pagarContaAPagar`), com a fonte `MANUAL/MOVA:<proposta>` —
 //      reaplicar devolve o mesmo registro no Financeiro (idempotência de segunda camada);
-//   7. comprovante NÃO concilia extrato: a baixa cria a saída na conta escolhida pelo administrador; a conciliação com o extrato
-//      continua sendo feita na Conciliação;
+//   7. comprovante NÃO concilia extrato. Execução 17: proposta COM comprovante é aplicada como PAGAMENTO POR COMPROVANTE
+//      (registrarPagamentoPorComprovante: nenhuma saída bancária criada, conciliação pendente; o extrato concilia depois a
+//      MESMA baixa). Só o relato por texto, sem arquivo, cria a saída na conta escolhida pelo administrador;
 //   8. nunca executa pagamento bancário; falha devolve a proposta para revisão e fica registrada (aprovacao FALHOU + auditoria).
 import { requisitosCompletos, unidadePorId } from "../dominio/configuracao.js";
 import { exigirContratoFinanceiro } from "./portaFinanceira.js";
@@ -55,7 +56,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     }
   }
 
-  async function executar(nucleo, ctx, p, { contaId, categoria }) {
+  async function executar(nucleo, ctx, p, { contaId, categoria, porComprovante = false }) {
     const fonte = { sistema: "MANUAL", idExterno: `MOVA:${p.id}` };
     if (p.tipo === "BAIXA_DE_OBRIGACAO") {
       const e = p.comando.entrada;
@@ -75,6 +76,10 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     if (p.tipo === "NOVA_OBRIGACAO") return { obrigacaoId, movimentacaoId: null };
     // DESPESA_PAGA: a mesma proposta registra a obrigação e a baixa (o mês do caixa também precisa estar aberto).
     await competenciaAberta(nucleo, ctx, mes(p.comando.pagamento.dataEfetiva));
+    if (porComprovante) {
+      // Execução 17: pago POR COMPROVANTE (sem saída bancária); o extrato concilia depois a mesma baixa.
+      return execucao.anexarEPagar({ proposta: p, escopo: escopo(ctx), obrigacaoId, dataPagamento: p.comando.pagamento.dataEfetiva, nivel: NIVEL.APLICAR_COM_CONFIRMACAO, executor: executorDaPessoa({ nucleo, ctx }) });
+    }
     const pg = await nucleo.pagarContaAPagar(ctx, { obrigacaoId, contaId, dataEfetiva: p.comando.pagamento.dataEfetiva, valorCentavos: p.comando.pagamento.valorCentavos });
     return { obrigacaoId, movimentacaoId: pg.movimentacao?.id ?? null };
   }
@@ -99,11 +104,21 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
       }
-      if (p.tipo !== "NOVA_OBRIGACAO" && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
+      // Execução 17: com comprovante (arquivo da proposta), pagamento POR COMPROVANTE — nenhuma saída bancária nova.
+      const porComprovante = ["BAIXA_DE_OBRIGACAO", "DESPESA_PAGA"].includes(p.tipo) && Boolean(p.evidencia?.referencia) && Boolean(execucao);
+      if (porComprovante) await exigir(ctx, [ACAO.BAIXAR_POR_COMPROVANTE, ACAO.ENVIAR_DOCUMENTO]);
+      if (porComprovante && p.tipo === "BAIXA_DE_OBRIGACAO") {
+        const r = await execucao.pagarPorComprovante({ proposta: p, escopo: esc, nivel: NIVEL.APLICAR_COM_CONFIRMACAO, politicaId: p.autonomiaDocumental?.politicaId ?? null, executor: executorDaPessoa({ nucleo, ctx }) });
+        await a.aprovacoes.registrar({ propostaId: p.id, acao: r.ok ? "APLICADA" : "FALHOU", usuarioId: ctx.usuarioId, motivo: r.ok ? null : r.motivo, resultado: r.resultado ?? null });
+        if (!r.ok) throw new ErroDeAprovacao(r.motivo ?? "FALHA_NA_EXECUCAO", r.detalhes ?? {});
+        await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...r.resultado } });
+        return a.propostas.obter(esc, p.id);
+      }
+      if (p.tipo !== "NOVA_OBRIGACAO" && !porComprovante && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
       const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
       if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
       try {
-        const resultado = await executar(nucleo, ctx, p, { contaId, categoria: categoria ?? p.categoriaRevisada ?? null });
+        const resultado = await executar(nucleo, ctx, p, { contaId, categoria: categoria ?? p.categoriaRevisada ?? null, porComprovante });
         const aplicada = await a.propostas.transicionar(esc, p.id, "APLICANDO", "APLICADA", resultado);
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "APLICADA", usuarioId: ctx.usuarioId, resultado });
         await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado } });
