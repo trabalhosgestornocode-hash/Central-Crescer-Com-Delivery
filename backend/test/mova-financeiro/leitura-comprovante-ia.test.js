@@ -98,3 +98,28 @@ test("respostas por causa: técnico não pede foto mais nítida; só o modelo de
   assert.match(RESPOSTA.falhaLeitura(), /nítida/);
   assert.equal(respostaDaFalhaDeLeitura({ ok: false, codigo: "AUDIO_SEM_TRANSCRICAO" }, ev), RESPOSTA.audioSemTranscricao());
 });
+
+// Achado com a API REAL (23/11): "Schemas contains too many parameters with union types (20 …) limit: 16" → HTTP 400 em toda leitura.
+// Os testes com cliente simulado não podiam ver isso; este guarda a regra da API no próprio esquema.
+import { esquemaDaSaida, normalizarSentinelas } from "../../src/modules/mova-financeiro/ia/contratos.js";
+test("esquema da IA respeita o limite da API: no máximo 16 parâmetros com união (anyOf ou type em lista)", () => {
+  let unioes = 0;
+  const visitar = (n) => {
+    if (Array.isArray(n)) return n.forEach(visitar);
+    if (n && typeof n === "object") {
+      if (Array.isArray(n.anyOf) || Array.isArray(n.type)) unioes++;
+      Object.values(n).forEach(visitar);
+    }
+  };
+  visitar(esquemaDaSaida());
+  assert.ok(unioes <= 16, `${unioes} uniões (limite da API: 16)`);
+});
+
+test("sentinelas do esquema ('' e valor 0) voltam a null antes da validação estrita; o resto passa intacto", () => {
+  const bruta = { ...COMPROVANTE, favorecido: "", dataPagamento: "", valorCentavos: 0, natureza: "", consulta: "", idTransacao: "", horaTransacao: "", incertezas: [] };
+  const n = normalizarSentinelas(bruta);
+  assert.equal(n.favorecido, null); assert.equal(n.dataPagamento, null); assert.equal(n.valorCentavos, null); assert.equal(n.natureza, null); assert.equal(n.idTransacao, null);
+  assert.equal(n.pagador, COMPROVANTE.pagador); assert.equal(n.legivel, true);
+  assert.ok(validarSaidaDaIa(n).ok);
+  assert.equal(normalizarSentinelas(null), null);
+});

@@ -10,7 +10,7 @@
 // (delimitado). O modelo não redige números para o grupo: as respostas são montadas pelo motor a partir do Financeiro.
 // Desligado por padrão: só é montado com MOVA_IA_HABILITADA=1 (ver fv2-integracao/mova.js). Nada de chave no repositório.
 import { ErroTransitorio } from "../gateway/fila.js";
-import { PROMPT_DO_EXTRATOR, esquemaDaSaida, montarEntradaDoModelo } from "./contratos.js";
+import { PROMPT_DO_EXTRATOR, esquemaDaSaida, montarEntradaDoModelo, normalizarSentinelas } from "./contratos.js";
 
 // DECISÃO DE ARQUITETURA (proprietário, 21/11/2026): o MOVA usa EXCLUSIVAMENTE o Claude Haiku 5.5. A IA só interpreta;
 // cálculos, validações, permissões e regras financeiras são do backend. Sem fallback automático para outro modelo.
@@ -97,7 +97,7 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
       let saida;
       try { saida = JSON.parse(textoJson); } catch { throw new ErroDeIa("IA_JSON_INVALIDO"); }
       if (transcricao && saida && typeof saida === "object" && !Array.isArray(saida)) saida.transcricao = transcricao;
-      return saida; // o motor valida com validarSaidaDaIa (chaves fechadas, enums, tipos)
+      return normalizarSentinelas(saida); // o motor valida com validarSaidaDaIa (chaves fechadas, enums, tipos)
     },
   });
 }
