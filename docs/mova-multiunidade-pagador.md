@@ -52,7 +52,15 @@ e não liga chave. Cada passo de ativação abaixo exige aprovação específica
      (`REQUISITOS_FINANCEIROS_INCOMPLETOS`).
 3. Concessão "ver" da identidade de leitura do MOVA na Subway (`pacoteProducao.mjs --mova-concessao … --alem-de …`) e
    `MOVA_OPERACAO_UNIDADES` com as duas unidades. Reiniciar o MOVA.
-4. Escrita (só quando aprovada): identidade operacional PRÓPRIA (`MOVA_IDENTIDADE_OPERACIONAL`, `MOVA_OPERACAO_ESCRITA=1`) com concessão
+4. **Caminho oficial (24/11):**
+   - a concessão da identidade operacional é feita pelo **administrador financeiro corporativo, logado**, no painel de ativação
+     ("4. MOVA — lançamentos automáticos"), rota `POST /corporativo/mova-operacional`. O beneficiário é fixo
+     (`MOVA_IDENTIDADE_OPERACIONAL` do servidor), as ações são só as estreitas e a auditoria fica em nome do administrador,
+     pela mesma função do banco das concessões às pessoas;
+   - as políticas são criadas na Central do MOVA (Segurança), que agora oferece as cinco operações, com o usuário logado como autor.
+   Os geradores SQL abaixo ficam para ensaio, teste e emergência de infraestrutura (assinam como autoridade técnica), nunca em
+   nome de outra pessoa.
+   Escrita (só quando aprovada): identidade operacional PRÓPRIA (`MOVA_IDENTIDADE_OPERACIONAL`, `MOVA_OPERACAO_ESCRITA=1`) com concessão
    **por unidade** pelo gerador revisado:
    - conceder ou alterar: `node scripts/fv2/pacoteProducao.mjs --mova-operacional <empresa> <unidade> --identidade <uuid> --acoes financeiro_v2.ver,financeiro_v2.enviar_documento,financeiro_v2.baixar_por_comprovante,financeiro_v2.registrar_obrigacao[,financeiro_v2.registrar_juros] --concedido-por <uuid> --justificativa "…"`;
    - revogar: `--mova-operacional-revogar`.

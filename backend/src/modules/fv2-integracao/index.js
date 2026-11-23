@@ -109,6 +109,8 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     provisionamentoHabilitado: cfg.habilitado && env.FV2_PROVISIONAMENTO_HABILITADO === "1",
     registrar,
     dependencias,
+    // 24/11: beneficiário FIXO da concessão operacional do MOVA pelo administrador corporativo (nunca vem do formulário).
+    movaIdentidadeOperacional: env.MOVA_IDENTIDADE_OPERACIONAL ?? null,
   });
 }
 
