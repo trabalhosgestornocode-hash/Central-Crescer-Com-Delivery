@@ -97,3 +97,16 @@ test("16C implantação: recusas — outra unidade, papel reservado/inválido, s
   assert.equal(verificadorScram("senha-de-teste", 4096, sal), verificadorScram("senha-de-teste", 4096, sal));
   assert.match(verificadorScram("senha-de-teste"), /^SCRAM-SHA-256\$4096:[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
 });
+
+test("23/11 concessão ADICIONAL do MOVA (ex.: Subway): só com a lista exata das já autorizadas; só 'ver'; idempotente", pular, async () => {
+  const { dono } = await cenario();
+  await executar(dono, sqlConcessaoDoMova(ORG_A, UNI_A));
+  await assert.rejects(executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B)), /outra unidade/, "sem --alem-de, a regra de uma unidade continua");
+  await assert.rejects(executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B, { alemDe: [UNI_B] })), /outra unidade/, "lista só com a própria = sem lista");
+  await assert.rejects(executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B, { alemDe: [UNI_A, "00000000-0000-4000-8000-0000000000ee"] })), /não são exatamente/);
+  await executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B, { alemDe: [UNI_A] }));
+  await executar(dono, sqlConcessaoDoMova(ORG_B, UNI_B, { alemDe: [UNI_A] }));
+  const { rows } = await dono.query("select unidade_id, acoes, situacao, versao from fv2_concessao where usuario_id = $1 order by unidade_id", [IDENTIDADE_DO_MOVA]);
+  assert.equal(rows.length, 2);
+  assert.ok(rows.every((r) => JSON.stringify(r.acoes) === JSON.stringify([ACAO.VER]) && r.situacao === "ATIVA" && r.versao === 1));
+});

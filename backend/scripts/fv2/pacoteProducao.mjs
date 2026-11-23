@@ -253,15 +253,23 @@ function exigirPapelDoLeitor(papel) {
  * como a dos entregadores. Recusa se a unidade não está no Financeiro v2, se a 0028 não foi aplicada ou se a identidade já
  * tem concessão ativa em OUTRA unidade (o piloto é de uma unidade só). Idempotente. Gera o SQL; não executa nada.
  */
-export function sqlConcessaoDoMova(organizacaoId, unidadeId) {
+export function sqlConcessaoDoMova(organizacaoId, unidadeId, { alemDe = [] } = {}) {
   if (!UUID_MOVA.test(organizacaoId) || !UUID_MOVA.test(unidadeId)) throw new Error("IDs de empresa/unidade inválidos.");
+  // 23/11: unidade ADICIONAL (ex.: Subway além do Açaí) só com a lista EXATA das unidades já autorizadas (conferida no banco).
+  if (!Array.isArray(alemDe) || !alemDe.every((x) => UUID_MOVA.test(x))) throw new Error("Lista de unidades já autorizadas inválida.");
   const [o, u, p] = [organizacaoId.toLowerCase(), unidadeId.toLowerCase(), IDENTIDADE_DO_MOVA];
-  const just = "Identidade técnica do MOVA: consultas somente-leitura (piloto de uma unidade).";
+  const ja = [...new Set(alemDe.map((x) => x.toLowerCase()))].filter((x) => x !== u).sort();
+  const just = ja.length ? "Identidade técnica do MOVA: consultas somente-leitura (unidade adicional autorizada pelo proprietário)."
+    : "Identidade técnica do MOVA: consultas somente-leitura (piloto de uma unidade).";
+  const outras = ja.length
+    ? `  if coalesce((select array_agg(unidade_id::text order by unidade_id::text) from fv2_concessao where usuario_id = '${p}' and situacao = 'ATIVA' and unidade_id <> '${u}'), '{}') <> array[${ja.map((x) => `'${x}'`).join(", ")}]::text[] then raise exception 'MOVA: as concessões ativas da identidade não são exatamente as unidades informadas em --alem-de — nada foi feito'; end if;
+  if exists (select 1 from fv2_concessao where usuario_id = '${p}' and situacao = 'ATIVA' and acoes <> '["financeiro_v2.ver"]'::jsonb) then raise exception 'MOVA: há concessão da identidade com ação além de ver — nada foi feito'; end if;`
+    : `  if exists (select 1 from fv2_concessao where usuario_id = '${p}' and situacao = 'ATIVA' and unidade_id <> '${u}') then raise exception 'MOVA: a identidade já tem concessão ativa em outra unidade (o piloto é de uma só) — nada foi feito'; end if;`;
   return `set local search_path = ${S}, pg_catalog, public;
 do $$ begin
   if not exists (select 1 from pg_proc where proname = 'fv2_abrir_sessao_mova') then raise exception 'MOVA: a migração 0028 não foi aplicada — nada foi feito'; end if;
   if not exists (select 1 from fv2_escopo where organizacao_id = '${o}' and unidade_id = '${u}') then raise exception 'MOVA: a unidade não está no Financeiro v2 — nada foi feito'; end if;
-  if exists (select 1 from fv2_concessao where usuario_id = '${p}' and situacao = 'ATIVA' and unidade_id <> '${u}') then raise exception 'MOVA: a identidade já tem concessão ativa em outra unidade (o piloto é de uma só) — nada foi feito'; end if;
+${outras}
 end $$;
 with nova as (
   insert into fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
@@ -409,7 +417,7 @@ if (executadoDireto && process.argv[2] === "--escopo") {
   process.stdout.write(`${t}-- sha256 ${sha(t)}\n`);
   process.exit(0);
 }
-if (executadoDireto && process.argv[2] === "--mova-concessao") { process.stdout.write(sqlConcessaoDoMova(process.argv[3], process.argv[4])); process.exit(0); }
+if (executadoDireto && process.argv[2] === "--mova-concessao") { const i = process.argv.indexOf("--alem-de"); process.stdout.write(sqlConcessaoDoMova(process.argv[3], process.argv[4], { alemDe: i > 0 ? String(process.argv[i + 1] ?? "").split(",").filter(Boolean) : [] })); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--mova-login") { process.stdout.write(sqlLoginDoLeitorDoMova(process.argv[3], process.env.FV2_MOVA_LEITOR_SENHA ?? "")); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--mova-verificar") { process.stdout.write(sqlVerificacaoDoLeitorDoMova(process.argv[3])); process.exit(0); }
 if (executadoDireto && process.argv[2] === "--mova-desativar") { process.stdout.write(sqlDesativarLeitorDoMova(process.argv[3])); process.exit(0); }
