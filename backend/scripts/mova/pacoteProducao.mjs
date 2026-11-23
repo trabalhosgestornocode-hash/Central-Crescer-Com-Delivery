@@ -20,7 +20,7 @@ export const TABELAS_ESPERADAS = Object.freeze([
   "aprovacao", "auditoria", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
   "entregador_envio", "evento", "evidencia", "fila", "grupo_autorizado", "grupo_membros", "grupo_unidade", "instancia_gateway",
   "mensagem_pendente", "nota_entregador", "operacao_executada", "orcamento_ia", "participante", "participante_autorizado",
-  "politica_autonomia", "proposta", "resposta", "mova_migracao",
+  "politica_autonomia", "proposta", "resposta", "unidade_sem_grupo", "mova_migracao",
 ]);
 
 export function listarMigracoes() {
@@ -79,7 +79,9 @@ end $$;
 }
 
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
-export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009"]); // 0009 aplicada em 23/11
+export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0011"]); // 0009 e 0011 aplicadas em 23/11
+/** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 = despesa documental (não usada pela rotina). */
+export const ADIADAS_EM_PRODUCAO = Object.freeze(["0010"]);
 
 /**
  * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as
@@ -87,7 +89,7 @@ export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "00
  */
 export function gerarAtualizar(migracoes = listarMigracoes()) {
   const ja = migracoes.filter((m) => INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
-  const novas = migracoes.filter((m) => !INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
+  const novas = migracoes.filter((m) => !INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)) && !ADIADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
   const conferir = ja.map((m) => `  if not exists (select 1 from mova.mova_migracao where nome = '${m.nome}' and sha256 = '${m.sha256}') then raise exception 'MOVA atualização: ${m.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
   const inedita = novas.map((m) => `  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA atualização: ${m.nome} já aplicada — nada foi feito'; end if;`);
   const partes = [`-- MOVA — ATUALIZAÇÃO do schema \`mova\` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).

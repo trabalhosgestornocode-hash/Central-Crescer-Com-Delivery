@@ -41,7 +41,7 @@ import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import { criarPortaOperacional } from "../mova-financeiro/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao, configuracaoViva,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -212,7 +212,9 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     // HOMOLOGACAO: o Financeiro também é o de homologação. PILOTO: a credencial do Financeiro é de leitura pura (0028).
     await verificarBancoFinanceiro();
   }
-  const configuracao = validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
+  const lerConfiguracao = async () => validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
+  // 23/11: só a lista de entregadores é recarregada em funcionamento (a cada envio/rotina, no máximo 1×/min, ou na hora pelo cadastro).
+  const configuracao = configuracaoViva(await lerConfiguracao(), { recarregar: lerConfiguracao, relogio: () => relogio().getTime() });
   if (cfg.modo === "PILOTO") exigirEscopoDoPiloto(configuracao, cfg.pilotoUnidadeId);
   if (cfg.modo === "OPERACAO") exigirEscopoDaOperacao(configuracao, cfg.operacaoUnidades);
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));
@@ -245,14 +247,19 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   }
   mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
-  const enviador = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
+  const enviadorBase = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
     habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
     maximoPorDia: cfg.envioMaximoDia ?? null, maximoPorConversaDia: cfg.envioMaximoPorConversaDia ?? null,
     // Homologação/piloto: só conversas PRIVADAS autorizadas. OPERACAO: os grupos por LISTA e as privadas DERIVADAS da lista.
-    destinosPermitidos: configuracao.gruposAutorizados.map((g) => g.grupoId).filter((j) => cfg.modo === "OPERACAO" || ehConversaPrivada(j)) });
+    destinosPermitidos: () => configuracao.gruposAutorizados.map((g) => g.grupoId).filter((j) => cfg.modo === "OPERACAO" || ehConversaPrivada(j)) });
+  const recarregar = async () => {
+    try { const r = await configuracao.recarregarEntregadores(); if (r.trocado) registrar({ tipo: "MOVA_ENTREGADORES_RECARREGADOS" }); else if (r.motivo === "OUTRAS_MUDANCAS_EXIGEM_REINICIO") registrar({ tipo: "MOVA_CONFIGURACAO_EXIGE_REINICIO" }); }
+    catch (e) { registrar({ tipo: "MOVA_ENTREGADORES_RECARGA_FALHOU", codigo: e?.codigo ?? e?.code ?? "ERRO" }); } // mantém a lista atual
+  };
+  const enviador = Object.freeze({ ...enviadorBase, async enviarPendentes(o) { await recarregar(); return enviadorBase.enviarPendentes(o); } });
   // Rotina dos entregadores: um passo a cada 5 min (idempotente; automação desligada/pausada por unidade não envia nada).
-  const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(() => mova.entregadores.rotina(), { registrar }) : null;
+  const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(async () => { await recarregar(); return mova.entregadores.rotina(); }, { registrar }) : null;
   return { mova, worker, enviador, configuracao, controle, orcamento, rotina };
 }
 
