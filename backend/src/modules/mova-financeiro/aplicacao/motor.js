@@ -207,7 +207,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const { novo } = await a.eventos.registrar(evento);
       if (!novo && await a.historico.temDecisao(evento.eventoId)) return { decisao: DECISAO.DUPLICADO, motivo: "EVENTO_JA_PROCESSADO" };
       // 4. NÍVEL 1: participante do grupo autorizado é registrado automaticamente (sem cadastro nem login).
-      if (novo) {
+      // 23/11: conversa privada de ENTREGADOR não é grupo (mova.participante exige mova.grupo_autorizado): o entregador já é o
+      // cadastro dele (mova.entregador_autorizado); registrá-lo aqui derrubava TODA mensagem dele (ERRO_PERMANENTE, sem NF).
+      if (novo && !grupo.entregador) {
         const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
         if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
       }

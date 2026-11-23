@@ -154,3 +154,20 @@ t("A2-E5 configuração: entregador fora das unidades do MOVA é recusado; o nú
   assert.deepEqual(cfg.gruposAutorizados.filter((g) => g.entregador).map((g) => g.grupoId).sort(), [MAURICIO, RAFAEL]);
   assert.equal(cfg.gruposAutorizados.find((g) => g.grupoId === FIN).entregador, undefined);
 });
+
+t("A2-E9 produção (23/11): conversa do entregador cadastrada pela Central NÃO existe em mova.grupo_autorizado; a mensagem dele é atendida (antes: FK de mova.participante ⇒ ERRO_PERMANENTE e 'o Financeiro não respondeu')", async () => {
+  const s = await cenario();
+  // Em produção as conversas de entregador vêm de mova.entregador_autorizado; só o grupo da equipe está em grupo_autorizado.
+  await s.banco.pool.query("delete from mova.grupo_unidade where grupo_jid in (select grupo_jid from mova.grupo_autorizado where tipo = 'PRIVADO_ENTREGADOR')");
+  await s.banco.pool.query("delete from mova.grupo_autorizado where tipo = 'PRIVADO_ENTREGADOR'");
+  await s.enviar(gw({ texto: "quanto deu minha semana?", de: MAURICIO, grupo: MAURICIO }));
+  const d = await s.ultima();
+  assert.equal(d.decisao, "CONSULTA", `decisão ${d.decisao}/${d.motivo}`);
+  assert.equal(d.motivo, "FECHAMENTO_DO_ENTREGADOR");
+  const out = await s.saida();
+  assert.match(out.at(-1).texto, /Mauricio.*02\/11\/2026 a 08\/11\/2026/s);
+  assert.doesNotMatch(out.at(-1).texto, /não respondeu/);
+  // Nota fiscal pelo mesmo caminho também passa.
+  await s.enviar(gw({ doc: PDF, de: MAURICIO, grupo: MAURICIO }));
+  assert.notEqual((await s.ultima()).decisao, "FALHOU");
+});
