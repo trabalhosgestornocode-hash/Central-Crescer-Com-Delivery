@@ -31,6 +31,7 @@ const GRUPO = /^[0-9]{5,40}(-[0-9]{1,20})?@g\.us$/;
 import { ACESSO, POLITICA_RESPOSTA, conversasPrivadasDerivadas, validarParticipantes } from "./participantes.js";
 import { CONSULTAS } from "../ia/contratos.js";
 import { conversasDosEntregadores, validarEntregadores } from "./entregadores.js";
+import { nomeCorresponde, validarPagadores } from "./pagador.js";
 
 export class ErroDeConfiguracao extends Error {
   constructor(campo) { super(`Configuração do MOVA inválida: ${campo}`); this.name = "ErroDeConfiguracao"; this.campo = campo; }
@@ -72,10 +73,17 @@ export function validarConfiguracao(c) {
       organizacaoId: u.organizacaoId.toLowerCase(), unidadeId: u.unidadeId.toLowerCase(), nome: u.nome.trim(),
       empresa: typeof u.empresa === "string" && u.empresa.trim() ? u.empresa.trim().slice(0, 120) : null,
       apelidos: Object.freeze([...new Set(apelidos)]), documentos: Object.freeze(documentos), fontes: validarFontes(u.fontes, i),
-      // 23/11 (0014): unidade atendida SEM grupo (só OPERACAO). Nunca aparece em grupo; não gera conversa.
+      // 24/11 (0015): titulares/documentos da CONTA PAGADORA da unidade (identificam a unidade pelo comprovante; dominio/pagador.js).
+      pagadores: validarPagadores(u.pagadores, { exigir, campo: `unidades[${i}].pagadores` }),
+      // 23/11 (0014): unidade atendida SEM grupo (só OPERACAO). Nunca aparece em grupo; não gera conversa por si.
       ...(u.semGrupo === true ? { semGrupo: true } : {}),
     });
   });
+  // Um mesmo pagador (nome ou documento) em duas unidades tornaria a identificação ambígua: recusado na montagem.
+  for (const [i, u] of unidades.entries()) for (const v of unidades.slice(i + 1)) {
+    exigir(!u.pagadores.documentos.some((d) => v.pagadores.documentos.includes(d)), "pagador_ambiguo");
+    exigir(!u.pagadores.nomes.some((n) => v.pagadores.nomes.some((m) => nomeCorresponde(n, m) || nomeCorresponde(m, n))), "pagador_ambiguo");
+  }
   exigir(new Set(unidades.map((u) => u.unidadeId)).size === unidades.length, "unidades.duplicadas");
   // Um apelido que aponta para duas unidades tornaria a identificação ambígua: recusado na montagem.
   const donoDoApelido = new Map();
@@ -108,7 +116,24 @@ export function validarConfiguracao(c) {
   // Uma conversa privada nunca mistura ORGANIZAÇÕES: a pessoa em grupos de duas empresas fica sem conversa privada derivada
   // (a resposta com valores não sai no grupo e ela é orientada a falar com o administrador). Isolamento antes de conveniência.
   const orgDe = new Map(unidades.map((u) => [u.unidadeId, u.organizacaoId]));
-  const derivadas = operacao ? conversasPrivadasDerivadas(grupos).filter((g) => new Set(g.unidades.map((u) => orgDe.get(u))).size === 1 && !grupos.some((x) => x.grupoId === g.grupoId)) : [];
+  // 24/11 (0015): unidade SEM grupo pode ter participantes AUTORIZADOS (cadastro da unidade): eles ganham a unidade na conversa
+  // privada derivada. Conversa com duas ORGANIZAÇÕES só quando a unidade acrescentada marcou o acesso como MULTIEMPRESA
+  // (autorização explícita e auditável no cadastro): no máximo UMA organização pode vir de acesso não marcado.
+  const semGrupo = operacao ? (c.unidades ?? []).flatMap((u, i) => {
+    if (u?.semGrupo !== true || u.participantes == null) return [];
+    const unidadeId = String(u.unidadeId).toLowerCase();
+    const participantes = validarParticipantes(u.participantes, { unidadesDoGrupo: [unidadeId], campo: `unidades[${i}]`, exigir });
+    exigir(u.acessoMultiempresa == null || typeof u.acessoMultiempresa === "boolean", `unidades[${i}].acessoMultiempresa`);
+    return participantes.length ? [{ unidadeId, participantes, multiempresa: u.acessoMultiempresa === true }] : [];
+  }) : [];
+  const multiempresa = new Set(semGrupo.filter((x) => x.multiempresa).map((x) => x.unidadeId));
+  const permitida = (g) => {
+    const orgs = new Set(g.unidades.map((u) => orgDe.get(u)));
+    if (orgs.size === 1) return true;
+    const naoMarcadas = new Set(g.unidades.filter((u) => !multiempresa.has(u)).map((u) => orgDe.get(u)));
+    return naoMarcadas.size <= 1;
+  };
+  const derivadas = operacao ? conversasPrivadasDerivadas(grupos, semGrupo).filter((g) => permitida(g) && !grupos.some((x) => x.grupoId === g.grupoId)) : [];
   // Agente 2 — Frente D: entregadores (só na OPERACAO), cada um numa unidade do MOVA e na organização dela.
   let entregadores = [];
   try { entregadores = operacao ? validarEntregadores(c.entregadores ?? []) : []; } catch (e) { exigir(false, `entregadores.${e.message}`); }

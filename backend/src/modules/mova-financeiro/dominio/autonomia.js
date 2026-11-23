@@ -9,7 +9,9 @@
 //   - Execução 17 — BAIXA_DOCUMENTAL (pagamento registrado POR COMPROVANTE, conciliação pendente): APLICAR_* só com o
 //     comprovante avaliado como PIX_CONCLUIDO (avaliarComprovante: concluído, legível, consistente, não duplicado, arquivo
 //     íntegro); APLICAR_AUTOMATICO exige também o identificador da transação (sem ele, cai para confirmação);
-//   - acima do limite de valor da política ⇒ cai um nível (APLICAR_AUTOMATICO → APLICAR_COM_CONFIRMACAO → SOMENTE_PROPOR);
+//   - acima do limite de valor da política ⇒ cai um nível (APLICAR_AUTOMATICO → APLICAR_COM_CONFIRMACAO → SOMENTE_PROPOR): o valor
+//     sozinho nunca IMPEDE o cadastro — vira confirmação de uma pessoa. Não existe teto universal: cada operação tem o limite da
+//     SUA política (ex.: conta a pagar, baixa, compra nova já paga e juros com limites diferentes por unidade);
 //   - política sempre com responsável, motivo e vigência; desligar = revogar (fica o histórico) e vale na hora.
 
 export const NIVEL = Object.freeze({
@@ -57,8 +59,8 @@ export function validarPolitica(p) {
   if (typeof p.motivo !== "string" || p.motivo.trim().length < 10 || p.motivo.length > 500) falha("motivo", "obrigatório (10 a 500)");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(p.vigenteDe ?? "")) falha("vigenteDe", "data");
   if (p.vigenteAte != null && (!/^\d{4}-\d{2}-\d{2}$/.test(p.vigenteAte) || p.vigenteAte < p.vigenteDe)) falha("vigenteAte", "data ≥ vigenteDe");
-  // APLICAR_AUTOMATICO nunca para obrigação nova: registrar conta a pagar sempre tem uma pessoa na confirmação.
-  if (p.nivel === NIVEL.APLICAR_AUTOMATICO && p.operacao === OPERACAO.CONTA_A_PAGAR) falha("nivel", "conta a pagar nova não é automática");
+  // 24/11 (0015): conta a pagar NOVA (boleto/nota) PODE ser automática quando a política da unidade o disser — a escrita ainda exige
+  // a chave MOVA_OPERACAO_CRIAR_CONTAS, o documento, fornecedor/categoria/competência/vencimento definidos e `registrar_obrigacao`.
   return Object.freeze({ ...p, unidadeId: p.unidadeId ?? null, vigenteAte: p.vigenteAte ?? null, revogadaEm: p.revogadaEm ?? null });
 }
 

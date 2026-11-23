@@ -166,13 +166,17 @@ export function criarCentral({ ui, ler, enviar }) {
   function seguranca({ politicas: p }, pode) {
     return [
       cartao("Políticas de autonomia",
-        el("p", { classe: "cf-dica", texto: "Sem política, o MOVA só propõe. Acima do limite, pede confirmação. Automático só com a saída do extrato conferida e a identidade operacional implantada. Conta a pagar nova nunca é automática." }),
+        el("p", { classe: "cf-dica", texto: "Sem política, o MOVA só propõe. Cada operação tem a sua política e o seu limite nesta unidade; acima do limite, pede confirmação. Automático só com a identidade operacional autorizada pelo administrador corporativo. Juros e multas: além do limite, nunca mais de 10% da conta." }),
         p.itens.length ? tabela(["Operação", "Unidade", "Nível", "Limite", "Vigência", "Responsável", ""], p.itens.map((x) => ({ id: x.id, celulas: [x.operacao, x.unidadeId ? "esta" : "todas da empresa",
           selo(NIVEL[x.nivel] ?? [x.nivel, "neutro"]), reais(x.limiteCentavos), `${dataBr(x.vigenteDe)}${x.vigenteAte ? ` a ${dataBr(x.vigenteAte)}` : ""}`, x.responsavel,
           x.revogadaEm ? selo(["Revogada", "neutro"]) : pode.configurar ? botao("Revogar", { "data-acao": "central-revogar", "data-politica": x.id }, true) : "—"] })), "Políticas") : vazio("Nenhuma política: o MOVA só propõe."),
         pode.configurar ? el("form", { classe: "cf-form", "data-form": "politica", "data-unidade": pode.unidadeId },
           el("label", {}, "Operação ", el("select", { name: "operacao" }, el("option", { value: "BAIXA_POR_EXTRATO", texto: "Baixa pelo extrato (saída já importada)" }),
-            el("option", { value: "BAIXA_DOCUMENTAL", texto: "Pagamento por comprovante (conciliação pendente)" }))),
+            el("option", { value: "BAIXA_DOCUMENTAL", texto: "Pagamento por comprovante de conta existente (conciliação pendente)" }),
+            el("option", { value: "CONTA_A_PAGAR", texto: "Conta a pagar nova de boleto ou nota (em aberto)" }),
+            el("option", { value: "ANEXAR_DOCUMENTO", texto: "Anexar nota a conta já registrada" }),
+            el("option", { value: "DESPESA_DOCUMENTAL", texto: "Compra nova já paga (conta + pagamento por comprovante)" }),
+            el("option", { value: "JUROS_DOCUMENTAL", texto: "Juros e multas confirmados (limite = encargo máximo)" }))),
           el("label", {}, "Nível ", el("select", { name: "nivel" }, Object.entries(NIVEL).map(([k, [r]]) => el("option", { value: k, texto: r })))),
           el("label", {}, "Limite (R$) ", el("input", { name: "limite", inputmode: "decimal", required: "" })),
           el("label", {}, "Responsável ", el("input", { name: "responsavel", maxlength: "120", required: "" })),
@@ -338,7 +342,7 @@ export function criarCentral({ ui, ler, enviar }) {
       const limite = Math.round(Number(String(v.limite).replace(/\./g, "").replace(",", ".")) * 100);
       if (!Number.isSafeInteger(limite) || limite < 0) return { ok: false, texto: "Limite inválido." };
       if (!f.dataset.unidade) return { ok: false, texto: "Unidade da sessão indisponível." };
-      if (!["BAIXA_POR_EXTRATO", "BAIXA_DOCUMENTAL"].includes(v.operacao)) return { ok: false, texto: "Operação inválida." };
+      if (!["BAIXA_POR_EXTRATO", "BAIXA_DOCUMENTAL", "CONTA_A_PAGAR", "ANEXAR_DOCUMENTO", "DESPESA_DOCUMENTAL", "JUROS_DOCUMENTAL"].includes(v.operacao)) return { ok: false, texto: "Operação inválida." };
       r = await enviar("/api/fv2/acoes/mova/politica", { operacao: v.operacao, unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
     } else if (acao === "central-confirmar-baixa") {
       r = await enviar("/api/fv2/acoes/mova/confirmar-baixa-extrato", { propostaId: b.dataset.proposta });
