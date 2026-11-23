@@ -63,8 +63,8 @@
 `node scripts/mova/validacaoConversaReal.mjs` (com `MOVA_ENV_ARQUIVO`): **8/8** cenários — pergunta determinística (0 IA), "e na beta?" (0 IA), fornecedor no mês passado (1 IA, R$ 1.000,00 correto), "e este mês?" mantendo o fornecedor (0 IA), "por que aumentou" (1 IA; o Financeiro mostrou que **caiu** 65% e o MOVA disse a verdade), tentativa de acessar outra empresa (bloqueada, 0 IA), saudação (0 IA), "paga essa conta" (1 IA → bloqueado). 3 chamadas, ~4,9 mil tokens de entrada e ~370 de saída cada; custo conservador (tabela US$ 4/20 por milhão) ≈ **US$ 0,027 por chamada** ⇒ o teto de US$ 10 comporta ≈ 370 perguntas livres; saudações, comandos e acompanhamentos não gastam.
 
 ### Checklist para ativar em produção (nada disto foi feito)
-1. Merge do PR + deploy do backend (Render).
-2. Aplicar a migração MOVA **0017** (aditiva; reversão `recuperacao/reverter-0017.sql`; `atualizar.sql` já regenerado) — sem ela, continuidade de **período/filtro** não persiste (o motor falha ao gravar o contexto).
+1. **Primeiro** aplicar a migração MOVA **0017** (aditiva; reversão `recuperacao/reverter-0017.sql`; `atualizar.sql` já regenerado). **A ordem importa:** o código novo grava a coluna `contexto` ao responder qualquer consulta; deploy sem a 0017 faria essa gravação falhar.
+2. Merge do PR + deploy do backend (Render).
 3. Render: `MOVA_IA_SOMENTE_DOCUMENTOS=0` (hoje padrão `true`). Pré-requisitos já existentes: `MOVA_IA_HABILITADA=1`, `ANTHROPIC_API_KEY`, orçamento em `mova.orcamento_ia`.
 4. Homologar com conversas reais da gerência (grupo/privado autorizados) e acompanhar `MOVA_IA_LEITURA` (latência/falhas) e `mova.consumo_ia`.
 5. Reversão imediata: `MOVA_IA_SOMENTE_DOCUMENTOS=1` ou desligar "ia" em `mova.controle`.
