@@ -44,6 +44,58 @@ export function operacoesEconomicas(b) {
     return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
   }
 
+  function registrarObrigacaoCom(acao, ctx, c, { soDespesa = false } = {}) {
+      const impressao = JSON.stringify(c);
+      return b.executar(ctx, acao, async (cx, tx) => {
+        const chave = b.chaveDe(c.fonte);
+        const existente = await b.jaRegistrado(tx, cx, TIPO.OBRIGACAO, chave ? `${chave}#1` : null, impressao);
+        if (existente) {
+          return {
+            lancamento: await tx.obter(cx, TIPO.LANCAMENTO, existente.lancamentoId),
+            obrigacoes: (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: existente.grupoId } })).sort((x, y) => x.parcela.numero - y.parcela.numero),
+            repetido: true,
+          };
+        }
+        await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
+        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início. Só com a
+        // abertura CONFIGURADA da unidade (competência e corte persistidos), nunca pelo que veio no formulário.
+        if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) {
+          const ab = await exigirAberturaPara(tx, cx, c.competencia);
+          if (c.dataEmissao > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem emissão até ${ab.dataDeCorte} (data de corte).`, { campo: "dataEmissao" });
+          if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
+        }
+        // doc 33: o identificador (NF, boleto) vale para QUALQUER conta a pagar — é o que torna inequívoca a baixa pelo extrato.
+        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
+        else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        await b.exigirDocumentos(tx, cx, c.documentoIds);
+        // "A classificar" e "títulos anteriores" são categorias do sistema: existem mesmo em plano implantado antes delas.
+        const categoria = DO_SISTEMA_NA_OBRIGACAO.includes(c.categoria) ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
+        if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
+          falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
+        }
+        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA) {
+          falhar(CODIGO.CATEGORIA_INVALIDA, "Conta a pagar por documento só em categoria de despesa.", { categoria: categoria.codigo });
+        }
+        const grupoId = b.gerarId();
+        const lancamento = await b.lancar(tx, cx, categoria, {
+          valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
+          competencia: c.competencia, fonte: c.fonte, origem: { tipo: TIPO.OBRIGACAO, id: grupoId },
+        }, { documentado: c.documentoIds.length > 0 });
+        const valores = ratear(c.valorOriginalCentavos, Array(c.parcelas).fill(1));
+        const obrigacoes = [];
+        for (const [i, valor] of valores.entries()) {
+          obrigacoes.push(await b.criar(tx, cx, TIPO.OBRIGACAO, {
+            grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
+            competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
+            parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
+            ...(c.identificador ? { identificador: c.identificador } : {}),
+            chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
+          }));
+        }
+        return { lancamento, obrigacoes, repetido: false };
+      });
+  }
+
   return {
     /**
      * Cadastra uma conta (Unicred, caixa físico, outras). Nunca recebe saldo: saldo é registrado à parte, com referência.
@@ -72,54 +124,20 @@ export function operacoesEconomicas(b) {
      * Obrigação a pagar. Parcelada: UM lançamento pelo total e N obrigações cujos valores somam exatamente o total.
      * A categoria decide a natureza: despesa/custo, dedução (tributo sobre venda) ou patrimonial (sem efeito no resultado).
      */
-    registrarObrigacao(ctx, entrada) {
+    registrarObrigacao(ctx, entrada) { return registrarObrigacaoCom(ACAO.REGISTRAR, ctx, validarObrigacao(entrada)); },
+
+    /**
+     * Agente 2 (23/11) — conta a pagar a partir de um DOCUMENTO (comprovante/nota) com a ação ESTREITA `registrar_obrigacao`:
+     * uma parcela, sem recorrência, categoria de DESPESA (ou "a classificar"); nunca receita,
+     * dedução, patrimonial ou título anterior à abertura. O documento entra logo depois pelo vínculo documental (enviarEvidencia
+     * exige o registro) e o pagamento por comprovante exige o COMPROVANTE no banco (0029). Mesmo serviço oficial; o
+     * banco (0030) confere de novo que quem só tem esta ação grava apenas o lançamento e a obrigação criados juntos.
+     */
+    registrarObrigacaoDocumental(ctx, entrada) {
       const c = validarObrigacao(entrada);
-      const impressao = JSON.stringify(c);
-      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
-        const chave = b.chaveDe(c.fonte);
-        const existente = await b.jaRegistrado(tx, cx, TIPO.OBRIGACAO, chave ? `${chave}#1` : null, impressao);
-        if (existente) {
-          return {
-            lancamento: await tx.obter(cx, TIPO.LANCAMENTO, existente.lancamentoId),
-            obrigacoes: (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: existente.grupoId } })).sort((x, y) => x.parcela.numero - y.parcela.numero),
-            repetido: true,
-          };
-        }
-        await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início. Só com a
-        // abertura CONFIGURADA da unidade (competência e corte persistidos), nunca pelo que veio no formulário.
-        if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) {
-          const ab = await exigirAberturaPara(tx, cx, c.competencia);
-          if (c.dataEmissao > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem emissão até ${ab.dataDeCorte} (data de corte).`, { campo: "dataEmissao" });
-          if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
-        }
-        // doc 33: o identificador (NF, boleto) vale para QUALQUER conta a pagar — é o que torna inequívoca a baixa pelo extrato.
-        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
-        else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
-        await b.exigirDocumentos(tx, cx, c.documentoIds);
-        // "A classificar" e "títulos anteriores" são categorias do sistema: existem mesmo em plano implantado antes delas.
-        const categoria = DO_SISTEMA_NA_OBRIGACAO.includes(c.categoria) ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
-        if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
-          falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
-        }
-        const grupoId = b.gerarId();
-        const lancamento = await b.lancar(tx, cx, categoria, {
-          valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
-          competencia: c.competencia, fonte: c.fonte, origem: { tipo: TIPO.OBRIGACAO, id: grupoId },
-        }, { documentado: c.documentoIds.length > 0 });
-        const valores = ratear(c.valorOriginalCentavos, Array(c.parcelas).fill(1));
-        const obrigacoes = [];
-        for (const [i, valor] of valores.entries()) {
-          obrigacoes.push(await b.criar(tx, cx, TIPO.OBRIGACAO, {
-            grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
-            competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
-            parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
-            ...(c.identificador ? { identificador: c.identificador } : {}),
-            chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
-          }));
-        }
-        return { lancamento, obrigacoes, repetido: false };
-      });
+      if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Conta a pagar por documento entra em uma parcela, sem repetição.", { campo: "parcelas" });
+      if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por documento.", { categoria: c.categoria });
+      return registrarObrigacaoCom(ACAO.REGISTRAR_OBRIGACAO, ctx, c, { soDespesa: true });
     },
 
     /**

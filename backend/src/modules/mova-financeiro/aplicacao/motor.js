@@ -479,7 +479,13 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Execução 17: com comprovante, a aplicação registra a conta e o pagamento POR COMPROVANTE (nenhuma saída bancária
       // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
       comando: { operacao: evento.midia ? "registrarObrigacao+registrarPagamentoPorComprovante" : "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
-    }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia));
+    }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia), {
+      // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.
+      posCriacao: execucao?.criarDespesas && evento.midia ? async (p) => {
+        const r = await execucao.aposDespesaNova(p, escopo);
+        return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado) } : r;
+      } : null,
+    });
   }
 
   async function tratarConta(ctx) {

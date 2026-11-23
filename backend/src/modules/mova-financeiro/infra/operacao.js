@@ -72,8 +72,11 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
     async concluir(id, { modelo, entrada, saida }) {
       await pool.query("update mova.consumo_ia set estado = 'CONCLUIDA', modelo = $2, entrada = $3, saida = $4, custo_microusd = $5 where id = $1", [id, modelo ?? null, entrada, saida, microusd(entrada, saida, modelo)]);
     },
-    /** Falha antes do modelo responder: libera a reserva (custo 0) mas mantém o registro (conta como chamada tentada). */
-    async falhar(id) { await pool.query("update mova.consumo_ia set estado = 'FALHOU', custo_microusd = 0 where id = $1", [id]); },
+    /** Falha com resposta de erro da API: libera a reserva (custo 0) mas mantém o registro (conta como chamada tentada).
+     *  `possivelmenteFaturada` (sem resposta: tempo, conexão): a RESERVA INTEIRA fica como custo — o limite acumulado nunca subestima. */
+    async falhar(id, { possivelmenteFaturada = false } = {}) {
+      await pool.query(possivelmenteFaturada ? "update mova.consumo_ia set estado = 'FALHOU' where id = $1" : "update mova.consumo_ia set estado = 'FALHOU', custo_microusd = 0 where id = $1", [id]);
+    },
     async resumo() {
       const o = (await pool.query("select limite_chamadas, limite_custo_microusd from mova.orcamento_ia where id")).rows[0];
       const u = (await pool.query("select count(*)::int as n, coalesce(sum(custo_microusd),0)::bigint as c, coalesce(sum(entrada),0)::bigint as e, coalesce(sum(saida),0)::bigint as s from mova.consumo_ia")).rows[0];
@@ -89,10 +92,14 @@ export function criarOrcamentoIa({ pool, precoEntradaPorMilhao = 4, precoSaidaPo
  * conferida ANTES pelo endpoint gratuito de contagem (inclui o formato estruturado) e sem fallback para outro modelo.
  * Qualquer recusa acontece antes de reservar: nenhuma chamada cobrada sai.
  */
+const BLOCOS_CONTAVEIS = new Set(["text", "image", "document"]);
+/** Falha COM resposta HTTP da API (4xx/5xx): a requisição não foi faturada. Sem resposta (tempo esgotado, conexão caída): pode ter sido. */
+export const falhaComRespostaDaApi = (e) => Number.isInteger(Number(e?.status)) && Number(e.status) >= 400;
 export async function aplicarTeto(cliente, req, teto) {
   if (!teto) return req;
   const blocos = (req.messages ?? []).flatMap((m) => (Array.isArray(m.content) ? m.content : [{ type: "text" }]));
-  if (blocos.some((b) => b.type !== "text")) throw new ErroDeIa("IA_TETO_MIDIA_RECUSADA");
+  // Piloto documental (23/11): imagem e PDF entram — a contagem gratuita os mede ANTES de reservar; outro tipo é recusado.
+  if (blocos.some((b) => !BLOCOS_CONTAVEIS.has(b.type))) throw new ErroDeIa("IA_TETO_MIDIA_RECUSADA");
   const { betas: _b, fallbacks: _f, ...resto } = req;
   const ajustado = { ...resto, max_tokens: Math.min(req.max_tokens ?? teto.maxSaida, teto.maxSaida),
     output_config: { ...(req.output_config ?? {}), ...(teto.esforco ? { effort: teto.esforco } : {}) } };
@@ -110,7 +117,7 @@ export function clienteComOrcamento(cliente, { orcamento, controle = null, teto 
     const id = await orcamento.reservar();
     let r;
     try { r = await cliente.beta.messages.create(req); } catch (e) {
-      try { await orcamento.falhar(id); } catch { /* a reserva fica contando: conservador */ }
+      try { await orcamento.falhar(id, { possivelmenteFaturada: !falhaComRespostaDaApi(e) }); } catch { /* a reserva fica contando: conservador */ }
       throw e;
     }
     try { await orcamento.concluir(id, { modelo: r?.model, entrada: r?.usage?.input_tokens ?? 0, saida: r?.usage?.output_tokens ?? 0 }); } catch { /* reserva fica (conservador) */ }
