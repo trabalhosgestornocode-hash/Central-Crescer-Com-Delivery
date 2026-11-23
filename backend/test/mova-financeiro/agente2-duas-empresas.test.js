@@ -112,7 +112,10 @@ t("H1 segunda 14h: Açaí e Subway enviam cada uma o SEU demonstrativo; o entreg
   assert.match(subway, /2 entrega\(s\) — R\$ 23,00/);
   assert.doesNotMatch(subway, /15,00|Açaí/);
   assert.ok(!out.some((x) => /26\/10\/2026/.test(x.texto)), "a semana antiga (também fechada) não é enviada");
-  const noGrupoAcai = out.filter((x) => x.destino === GRUPO).map((x) => x.texto), noGrupoSubway = out.filter((x) => x.destino === GRUPO_X).map((x) => x.texto);
+  const aviso = (x) => !/^📋/.test(x.texto); // o relatório da semana é conferido à parte
+  const noGrupoAcai = out.filter((x) => x.destino === GRUPO && aviso(x)).map((x) => x.texto), noGrupoSubway = out.filter((x) => x.destino === GRUPO_X && aviso(x)).map((x) => x.texto);
+  assert.equal(out.filter((x) => x.destino === GRUPO && !aviso(x)).length, 1, "Açaí: todos aceitos ⇒ relatório no próprio grupo");
+  assert.equal(out.filter((x) => x.destino === GRUPO_X && !aviso(x)).length, 0, "Subway: Bia recusada ⇒ sem relatório");
   assert.equal(noGrupoAcai.length, 2);
   assert.ok(noGrupoAcai.every((x) => /^📨 Açaí Sintético Ltda — Demonstrativo enviado para (Carlos|Ana), referente à semana de 02\/11\/2026 a 08\/11\/2026 \(aceito pelo WhatsApp\)\. Aguardando nota fiscal\.$/.test(x)));
   assert.equal(noGrupoSubway.length, 2);
@@ -197,7 +200,8 @@ t("H6 Subway SEM grupo da gerência: os envios privados da Subway saem mesmo ass
   assert.ok(out.some((x) => x.destino === BIA && /Subway Sintética Ltda/.test(x.texto)), "Bia (só Subway) recebeu");
   assert.equal(out.filter((x) => x.destino === CARLOS).length, 2);
   assert.ok(!out.some((x) => x.destino === GRUPO && /Subway/.test(x.texto)), "aviso da Subway nunca no grupo do Açaí");
-  assert.equal(out.filter((x) => x.destino === GRUPO).length, 2, "o Açaí avisa no próprio grupo (Carlos e Ana)");
+  assert.equal(out.filter((x) => x.destino === GRUPO && !/^📋/.test(x.texto)).length, 2, "o Açaí avisa no próprio grupo (Carlos e Ana)");
+  assert.ok(!out.some((x) => x.destino === GRUPO && /^📋/.test(x.texto) && /Subway/.test(x.texto)), "relatório do Açaí sem a Subway");
   const pend = (await s.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'AVISO_GRUPO_PENDENTE'")).rows[0].n;
   assert.equal(pend, 2, "Carlos e Bia na Subway: avisos pendentes de identificação do grupo");
 });
@@ -209,7 +213,7 @@ t("H6b 23/11: o proprietário indica que a Subway COMPARTILHA o grupo da gerênc
   await s.gateway();
   await s.mova.entregadores.rotina();
   await s.mova.entregadores.rotina(); // repetir não duplica
-  const noGrupo = (await s.saida()).filter((x) => x.destino === GRUPO).map((x) => x.texto);
+  const noGrupo = (await s.saida()).filter((x) => x.destino === GRUPO && !/^📋/.test(x.texto)).map((x) => x.texto);
   assert.equal(noGrupo.length, 4, "2 do Açaí + 2 da Subway");
   assert.equal(noGrupo.filter((x) => /Subway Sintética Ltda/.test(x)).length, 2, "cada aviso da Subway identifica a empresa");
   assert.equal(noGrupo.filter((x) => /Açaí Sintético Ltda/.test(x)).length, 2);
@@ -221,6 +225,35 @@ t("H6b 23/11: o proprietário indica que a Subway COMPARTILHA o grupo da gerênc
   await s2.mova.entregadores.rotina(); await s2.gateway(); await s2.mova.entregadores.rotina();
   assert.ok(!(await s2.saida()).some((x) => x.destino !== GRUPO && /@g\.us$/.test(x.destino)));
   assert.equal((await s2.banco.pool.query("select count(*)::int n from mova.auditoria where acao = 'AVISO_GRUPO_PENDENTE'")).rows[0].n, 2);
+});
+
+t("H6c 23/11: RELATÓRIO da semana no grupo da gerência só quando TODOS os demonstrativos foram aceitos; grupo compartilhado ⇒ as duas empresas juntas, com totais; uma vez só", async () => {
+  const s = await cenario({ semGrupoSubway: true, avisosNoGrupo: { [XIS]: GRUPO } });
+  await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s.mova.entregadores.rotina();
+  const relatorios = async () => (await s.saida()).filter((x) => x.destino === GRUPO && /^📋/.test(x.texto)).map((x) => x.texto);
+  assert.equal((await relatorios()).length, 0, "nada antes do retorno do WhatsApp");
+  await s.gateway();
+  await s.mova.entregadores.rotina();
+  await s.mova.entregadores.rotina();
+  const [r, ...resto] = await relatorios();
+  assert.equal(resto.length, 0, "um relatório só");
+  assert.match(r, /Entregadores — semana 02\/11\/2026 a 08\/11\/2026/);
+  assert.match(r, /\*Açaí Sintético Ltda\*[\s\S]*R\$ 15,00[\s\S]*\*Total Açaí Sintético Ltda: R\$/);
+  assert.match(r, /\*Subway Sintética Ltda\*[\s\S]*R\$ 23,00[\s\S]*\*Total Subway Sintética Ltda: R\$/);
+  assert.match(r, /Total geral: R\$/);
+  assert.match(r, /calendário do sistema, com vencimento em \*\d\d\/\d\d\/\d{4}/);
+  assert.ok(r.indexOf("Açaí Sintético") < r.indexOf("Subway Sintética"));
+});
+
+t("H6d um demonstrativo RECUSADO pelo WhatsApp segura o relatório da semana (não é 'todos enviados')", async () => {
+  const s = await cenario();
+  await s.ligar([AUTOMACAO.SEMANAL, AUTOMACAO.AVISO_GRUPO]);
+  await s.mova.entregadores.rotina();
+  await s.gateway({ recusar: [CARLOS] });
+  await s.mova.entregadores.rotina();
+  const out = await s.saida();
+  assert.ok(!out.some((x) => /^📋/.test(x.texto)), "sem relatório");
 });
 
 t("H7 entregador pergunta no privado: vê os DOIS fechamentos em seções separadas (empresa e período), sem somar", async () => {

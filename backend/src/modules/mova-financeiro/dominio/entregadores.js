@@ -312,3 +312,27 @@ const RESULTADO_NO_GRUPO = Object.freeze({
 export function avisoDeNotaRecebida(f, resultado, { empresa = null, unidade = null } = {}) {
   return `📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}. ${RESULTADO_NO_GRUPO[resultado] ?? "Aguardando conferência do financeiro."}`;
 }
+
+/**
+ * 23/11 (decisão do proprietário): RELATÓRIO da semana no grupo da gerência, depois que TODOS os demonstrativos foram aceitos
+ * pelo WhatsApp — nome, valor e empresa de cada entregador, total por empresa e total geral (nunca soma o mesmo entregador
+ * entre empresas numa linha só). `secoes`: [{ empresa, fechamentos }].
+ */
+export function relatorioSemanalNoGrupo(secoes, { semanaInicio, semanaFim }) {
+  const linhas = [`📋 *Entregadores — semana ${dataBr(semanaInicio)} a ${dataBr(semanaFim)}*`];
+  let total = 0, entregas = 0;
+  const vencimentos = new Set();
+  for (const { empresa, fechamentos } of secoes) {
+    const validos = fechamentos.filter((f) => !f.duplicidade && Number.isSafeInteger(f.valorCentavos))
+      .sort((x, y) => String(x.entregador?.nome ?? "").localeCompare(String(y.entregador?.nome ?? ""), "pt-BR"));
+    if (!validos.length) continue;
+    const soma = validos.reduce((n, f) => n + f.valorCentavos, 0), qtd = validos.reduce((n, f) => n + (f.entregas ?? 0), 0);
+    linhas.push("", `*${empresa}*`, ...validos.map((f) => `• ${f.entregador?.nome ?? "entregador"} — ${reais(f.valorCentavos)}`), `*Total ${empresa}: ${reais(soma)}* (${qtd} entregas)`);
+    total += soma; entregas += qtd;
+    for (const f of validos) if (f.vencimento) vencimentos.add(f.vencimento);
+  }
+  if (secoes.length > 1) linhas.push("", `💰 *Total geral: ${reais(total)}* (${entregas} entregas)`);
+  const venc = [...vencimentos].sort();
+  linhas.push("", `✅ Todos os pagamentos já estão lançados no calendário do sistema${venc.length ? `, com vencimento em *${venc.map(dataBr).join(", ")}*` : ""}. Cada demonstrativo foi enviado ao entregador, e os pagamentos aguardam a nota fiscal de cada um.`);
+  return linhas.join("\n");
+}
