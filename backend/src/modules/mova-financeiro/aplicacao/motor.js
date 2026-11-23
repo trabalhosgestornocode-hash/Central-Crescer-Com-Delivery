@@ -293,7 +293,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (!saida && comandosDeterministicos && evento.tipo === "TEXTO" && !evento.midia) {
       const cmd = interpretarComando(evento.texto, hoje());
       if (cmd && !cmd.soPeriodo) { saida = cmd.saida; interpretacao = "COMANDO"; }
-      else if (cmd?.soPeriodo && conversa?.consulta) { saida = Object.freeze({ ...cmd.saida, consulta: conversa.consulta }); interpretacao = "CONTINUIDADE"; }
+      else if (cmd?.soPeriodo && conversa?.consulta) { saida = Object.freeze({ ...cmd.saida, consulta: conversa.consulta }); interpretacao = "CONTINUIDADE";
+        // mantém o filtro (fornecedor/categoria) da consulta anterior; o dado vem do contexto guardado e é revalidado pelo contrato
+        const f = conversa.contexto ?? {};
+        if (COM_FILTRO.includes(conversa.consulta) && (f.favorecido || f.categoriaSugerida)) { const v = validarSaidaDaIa({ ...saida, favorecido: f.favorecido ?? null, categoriaSugerida: f.categoriaSugerida ?? null }); if (v.ok) saida = v.saida; }
+      }
     }
     // Conversa natural sem IA (custo zero): "só as vencidas", "agora por fornecedor", "nas duas" e "e na Subway?" repetem a consulta
     // anterior DESTA pessoa nesta conversa (janela curta). A unidade continua vindo da regra determinística (nunca do histórico).
@@ -315,7 +319,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (saida.continuacao === true && !saida.consulta && conversa?.consulta && ["CONSULTAR", "OUTRA", "DESCONHECIDA"].includes(saida.intencao) && !saida.valorCentavos) {
         const r = conversa.contexto ?? {};
         const tem = Boolean(saida.competencia || saida.periodoInicio || saida.periodoFim);
-        const rec = validarSaidaDaIa({ ...saida, intencao: "CONSULTAR", consulta: conversa.consulta, ...(tem ? {} : { competencia: r.competencia ?? null, periodoInicio: r.periodoInicio ?? null, periodoFim: r.periodoFim ?? null }) });
+        const rec = validarSaidaDaIa({ ...saida, intencao: "CONSULTAR", consulta: conversa.consulta, ...(tem ? {} : { competencia: r.competencia ?? null, periodoInicio: r.periodoInicio ?? null, periodoFim: r.periodoFim ?? null }),
+          ...(COM_FILTRO.includes(conversa.consulta) ? { favorecido: saida.favorecido ?? r.favorecido ?? null, categoriaSugerida: saida.categoriaSugerida ?? r.categoriaSugerida ?? null } : {}) });
         if (rec.ok) { saida = rec.saida; interpretacao = "IA_CONTINUIDADE"; }
       }
     }
@@ -726,7 +731,13 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   }
 
   /** Recorte (período) da consulta, para a continuidade: só datas/competência já validadas, nunca texto. */
-  const recorteDe = (s) => (s.competencia || s.periodoInicio || s.periodoFim ? { competencia: s.competencia ?? null, periodoInicio: s.periodoInicio ?? null, periodoFim: s.periodoFim ?? null } : null);
+  // Consultas com filtro (fornecedor/categoria) levam o filtro junto: "e este mês?" depois de "quanto pagamos ao fornecedor X" mantém X.
+  const COM_FILTRO = ["PAGAMENTOS_A_FORNECEDOR", "DESPESAS_POR_CATEGORIA", "COMPARATIVO_DE_DESPESAS"];
+  const recorteDe = (s) => {
+    const r = { competencia: s.competencia ?? null, periodoInicio: s.periodoInicio ?? null, periodoFim: s.periodoFim ?? null };
+    if (COM_FILTRO.includes(s.consulta)) { r.favorecido = s.favorecido ?? null; r.categoriaSugerida = s.categoriaSugerida ?? null; }
+    return Object.values(r).some(Boolean) ? r : null;
+  };
 
   /** Contexto comum das ferramentas: período explícito na resposta e data de referência do motor. */
   function contextoDaConsulta(saida) {

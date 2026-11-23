@@ -41,9 +41,9 @@ alter table mova.entregador_envio add column resposta_id uuid references mova.re
 grant update (resposta_id) on mova.entregador_envio to mova_app;
 insert into mova.mova_migracao (nome, sha256) values ('0016_mova_avisos_entregadores.sql', '76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc');
 
--- ------------------------------------------------------------------------- 0017_mova_conversa_contexto.sql (arquivo 7a8334c23e1fbb40f5e1266042f3d66791a65fda0086501b7272eecfe54ba0aa)
+-- ------------------------------------------------------------------------- 0017_mova_conversa_contexto.sql (arquivo b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69)
 -- MOVA — 24/11/2026: contexto CURTO da conversa para perguntas de acompanhamento ("e na Subway?", "só as vencidas").
--- Guarda apenas o RECORTE da última consulta (período: competência ou início/fim) por participante e conversa, no mesmo
--- registro de continuidade que já expira em minutos. Nunca texto de mensagem, valores, nomes ou documentos. Coluna nula = como era.
+-- Guarda apenas o RECORTE da última consulta (período e, quando houver, o filtro de fornecedor/categoria) por participante e conversa, no mesmo
+-- registro de continuidade que já expira em minutos. Nunca o texto da mensagem, valores ou documentos. Coluna nula = como era.
 alter table mova.conversa_ativa add column contexto jsonb check (contexto is null or (jsonb_typeof(contexto) = 'object' and pg_column_size(contexto) <= 512));
-insert into mova.mova_migracao (nome, sha256) values ('0017_mova_conversa_contexto.sql', '7a8334c23e1fbb40f5e1266042f3d66791a65fda0086501b7272eecfe54ba0aa');
+insert into mova.mova_migracao (nome, sha256) values ('0017_mova_conversa_contexto.sql', 'b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69');

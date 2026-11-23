@@ -767,10 +767,10 @@ alter table mova.entregador_envio add constraint entregador_envio_tipo_check che
 alter table mova.entregador_envio add column resposta_id uuid references mova.resposta (id);
 grant update (resposta_id) on mova.entregador_envio to mova_app;
 
--- ------------------------------------------------------------------------- 0017_mova_conversa_contexto.sql (arquivo 7a8334c23e1fbb40f5e1266042f3d66791a65fda0086501b7272eecfe54ba0aa)
+-- ------------------------------------------------------------------------- 0017_mova_conversa_contexto.sql (arquivo b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69)
 -- MOVA — 24/11/2026: contexto CURTO da conversa para perguntas de acompanhamento ("e na Subway?", "só as vencidas").
--- Guarda apenas o RECORTE da última consulta (período: competência ou início/fim) por participante e conversa, no mesmo
--- registro de continuidade que já expira em minutos. Nunca texto de mensagem, valores, nomes ou documentos. Coluna nula = como era.
+-- Guarda apenas o RECORTE da última consulta (período e, quando houver, o filtro de fornecedor/categoria) por participante e conversa, no mesmo
+-- registro de continuidade que já expira em minutos. Nunca o texto da mensagem, valores ou documentos. Coluna nula = como era.
 alter table mova.conversa_ativa add column contexto jsonb check (contexto is null or (jsonb_typeof(contexto) = 'object' and pg_column_size(contexto) <= 512));
 
 -- ================================================================================ registro, isolamento e conferência
@@ -792,7 +792,7 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0014_mova_unidade_sem_grupo.sql', '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b'),
   ('0015_mova_pagadores_multiunidade.sql', 'cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96'),
   ('0016_mova_avisos_entregadores.sql', '76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc'),
-  ('0017_mova_conversa_contexto.sql', '7a8334c23e1fbb40f5e1266042f3d66791a65fda0086501b7272eecfe54ba0aa');
+  ('0017_mova_conversa_contexto.sql', 'b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin

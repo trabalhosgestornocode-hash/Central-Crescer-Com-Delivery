@@ -10,6 +10,7 @@
 //   - sem registros = `dadosInsuficientes` (o motor responde que não há dados, nunca estima);
 //   - só agregados (política em dominio/privacidade.js): nada de conta bancária, pessoa ou linha a linha de fornecedor.
 import { reais, dataBr } from "./respostas.js";
+import { criarFerramentasDeConversa } from "./ferramentasConversa.js";
 import { contasParciais, contasSemComprovante, contasVencidas, explicarConta, fornecedoresComPendencias, maioresContas, pagamentosAConciliar } from "./conferenciaContas.js";
 
 const SITUACOES_COM_VALOR = new Set(["CONFIRMADO", "CALCULADO_AGUARDANDO_CONFERENCIA", "PRELIMINAR", "PARCIAL"]);
@@ -341,5 +342,7 @@ export function criarFerramentas({ porta, armazenamento }) {
     },
   };
   ferramentas.COMPARATIVO_UNIDADES = ferramentas.CONTAS_A_PAGAR_ABERTAS;
+  // 24/11: ferramentas de conversa (fornecedor, categoria, comparativo, entregadores sem nota). DESPESAS_POR_CATEGORIA passa a ter ranking.
+  Object.assign(ferramentas, criarFerramentasDeConversa({ porta, contasTodas, ok, insuficiente, posicao }));
   return Object.freeze(ferramentas);
 }
