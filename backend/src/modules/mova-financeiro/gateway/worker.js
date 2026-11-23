@@ -56,7 +56,7 @@ export function enderecoDeEnvio(r) {
 }
 /** Quantas respostas antes do teto passam a avisar no próprio texto (e a 1ª delas gera auditoria). */
 export const AVISO_TETO = 3;
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null }) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null , maximoPorDia = null, maximoPorConversaDia = null, relogio = () => new Date()}) {
   // 15I: teto de respostas entregues ao transporte. Agente 2: a contagem é PERSISTENTE (respostas enviadas desde o marco, no
   // banco), então reiniciar ou publicar não zera o teto. Perto do fim, a própria resposta avisa no grupo e fica na auditoria;
   // atingido, a resposta excedente não sai (FALHOU, com auditoria). O teto nunca é ampliado aqui.
@@ -67,6 +67,32 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
     if (!comTeto || typeof armazenamento.saida.contarEnviadasDesde !== "function") return;
     try { entregues = Math.max(entregues, await armazenamento.saida.contarEnviadasDesde(naoAntesDe)); } catch { /* sem leitura: mantém a contagem local */ }
   }
+  // 23/11: TETO OPERACIONAL DIÁRIO (rotina semanal com vários entregadores). Configurável (MOVA_ENVIO_MAXIMO_DIA e
+  // MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA), nunca ampliado aqui, e PERSISTENTE: contado no banco desde 00h de America/Fortaleza
+  // (UTC−3, sem horário de verão) — reiniciar não zera. O teto por conversa barra laço/repetição para um mesmo destino.
+  // Excedente não sai: FALHOU com auditoria (o gestor vê). Independente do orçamento de IA.
+  const comTetoDiario = Number.isInteger(maximoPorDia);
+  const comTetoConversa = Number.isInteger(maximoPorConversaDia);
+  const inicioDoDia = () => { const f = new Date(relogio().getTime() - 3 * 3600_000); return new Date(Date.UTC(f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), 3)).toISOString(); };
+  let doDia = { dia: null, entregues: 0, porConversa: new Map() };
+  async function sincronizarDia() {
+    if (!comTetoDiario && !comTetoConversa) return;
+    const dia = inicioDoDia();
+    if (doDia.dia !== dia) doDia = { dia, entregues: 0, porConversa: new Map() };
+    const desde = naoAntesDe && Date.parse(naoAntesDe) > Date.parse(dia) ? naoAntesDe : dia;
+    try { if (typeof armazenamento.saida.contarEnviadasDesde === "function") doDia.entregues = Math.max(doDia.entregues, await armazenamento.saida.contarEnviadasDesde(desde)); } catch { /* mantém a contagem local */ }
+    try {
+      if (comTetoConversa && typeof armazenamento.saida.contarEnviadasPorDestinoDesde === "function")
+        for (const [k, n] of await armazenamento.saida.contarEnviadasPorDestinoDesde(desde)) doDia.porConversa.set(k, Math.max(doDia.porConversa.get(k) ?? 0, n));
+    } catch { /* mantém a contagem local */ }
+  }
+  /** Motivo do bloqueio pelo teto do dia (ou null). */
+  function bloqueioDoDia(r) {
+    if (comTetoDiario && doDia.entregues >= maximoPorDia) return "TETO_DIARIO_DE_ENVIOS";
+    if (comTetoConversa && (doDia.porConversa.get(r.grupoId) ?? 0) >= maximoPorConversaDia) return "TETO_DIARIO_DA_CONVERSA";
+    return null;
+  }
+  function contarNoDia(r) { doDia.entregues += 1; doDia.porConversa.set(r.grupoId, (doDia.porConversa.get(r.grupoId) ?? 0) + 1); }
   const auditar = async (acao, dados) => {
     registrar({ tipo: acao, ...dados });
     try { await armazenamento.auditoria?.registrar?.({ acao, atorTipo: "SISTEMA", atorRef: "mova-enviador", alvo: "resposta", dados }); } catch { /* auditoria nunca impede o envio */ }
@@ -113,6 +139,7 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       if (rele) await sincronizarRele(envioLigado);
       if (!envioLigado) return { enviadas: 0, desligado: true }; // interruptor em tempo real
       await sincronizarTeto();
+      await sincronizarDia();
       if (tetoAtingido()) {
         // Atingido: as pendentes não ficam esperando em silêncio — cada uma vira FALHOU com auditoria (gestor vê o motivo).
         for (const r of await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos })) {
@@ -126,6 +153,12 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       for (const r of lote) {
         // 15I: teto da sessão atingido ⇒ a resposta excedente NÃO sai (FALHOU, visível para revisão).
         if (tetoAtingido()) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "TETO_DE_ENVIOS_DA_SESSAO", { final: true }); await auditar("MOVA_ENVIO_BLOQUEADO_PELO_TETO", { resposta: r.id, maximo: maximoDeEnvios }); continue; }
+        const doDiaBloqueio = bloqueioDoDia(r);
+        if (doDiaBloqueio) {
+          await armazenamento.saida.marcarFalhaDeEnvio(r.id, doDiaBloqueio, { final: true });
+          await auditar("MOVA_ENVIO_BLOQUEADO_PELO_TETO_DIARIO", { resposta: r.id, motivo: doDiaBloqueio, maximoDia: maximoPorDia, maximoPorConversa: maximoPorConversaDia });
+          continue;
+        }
         // Segunda barreira (além do filtro no banco): destino fora da lista nunca vai ao Gateway.
         if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
         // Suspensão imediata: o interruptor é relido a cada mensagem, não só no início do lote.
@@ -134,7 +167,7 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
         // respondida, quando for o MESMO celular (nono dígito). O Gateway compara com a identidade verificada pelo WhatsApp.
         const destino = enderecoDeEnvio(r);
         if (rele) {
-          try { await rele.publicar({ id: r.id, destino, texto: comAvisoDoTeto(r.texto) }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; entregues += 1; await depoisDeEntregar(); }
+          try { await rele.publicar({ id: r.id, destino, texto: comAvisoDoTeto(r.texto) }); await armazenamento.saida.marcarNoRele(r.id); enviadas += 1; entregues += 1; contarNoDia(r); await depoisDeEntregar(); }
           catch { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "RELE_INDISPONIVEL", { final: r.tentativas >= maxTentativas }); registrar({ tipo: "MOVA_RELE_INDISPONIVEL" }); }
           continue;
         }
@@ -142,6 +175,7 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
           const { providerMessageId } = await enviar({ grupoId: destino, texto: comAvisoDoTeto(r.texto), respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` });
           await armazenamento.saida.marcarEnviada(r.id, providerMessageId);
           entregues += 1;
+          contarNoDia(r);
           enviadas += 1;
           await depoisDeEntregar();
         } catch (err) {
