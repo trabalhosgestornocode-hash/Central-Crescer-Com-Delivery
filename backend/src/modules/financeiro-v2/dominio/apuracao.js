@@ -194,17 +194,21 @@ export function apurar(d, p) {
     for (const l of lancs) {
       const s = sinalDe(l);
       const f = folha(l, s, total);
-      let atual = noDaCategoria(categorias.get(l.categoriaId) ?? porCodigo.get(l.categoria));
-      if (!atual) { atual = noDaCategoria({ codigo: l.categoria, nome: l.categoria, natureza: l.natureza, paiId: null }); }
-      // Só apresentação: as cobranças diárias de entrega sob demanda do iFood ficam num nó próprio dentro da categoria
-      // (mesma soma; a impressão da apuração depende só das entradas). A tela mostra ali a quantidade de entregas.
+      const cat = categorias.get(l.categoriaId) ?? porCodigo.get(l.categoria);
+      // Só apresentação: as cobranças diárias de entrega sob demanda do iFood ficam num nó próprio, IRMÃO da categoria
+      // (ex.: em Despesas comerciais, junto de Entregadores Próprios e Entregas terceirizadas), e não escondido dentro de
+      // Comissões. Mesmo total da linha da DRE; a impressão da apuração depende só das entradas. A tela mostra ali a quantidade.
       const grupo = GRUPOS_DE_APRESENTACAO.find((g) => g.casa(l));
       if (grupo) {
-        const id = `GRUPO:${grupo.codigo}:${atual.id}`;
-        if (!nos.has(id)) { const no = { id, nome: grupo.nome, natureza: l.natureza, valorCentavos: 0, sinal: 0, origem: null, situacao: "REGISTRADO", referencias: { grupo: grupo.codigo }, filhos: [], ligado: true }; nos.set(id, no); atual.filhos.push(no); }
+        const paiDaCategoria = cat?.paiId ? categorias.get(cat.paiId) : null;
+        const alvo = paiDaCategoria ? noDaCategoria(paiDaCategoria) : (noDaCategoria(cat) ?? noDaCategoria({ codigo: l.categoria, nome: l.categoria, natureza: l.natureza, paiId: null }));
+        const id = `GRUPO:${grupo.codigo}:${alvo.id}`;
+        if (!nos.has(id)) { const no = { id, nome: grupo.nome, natureza: l.natureza, valorCentavos: 0, sinal: 0, origem: null, situacao: "REGISTRADO", referencias: { grupo: grupo.codigo }, filhos: [], ligado: true }; nos.set(id, no); alvo.filhos.push(no); }
         nos.get(id).filhos.push(f);
         continue;
       }
+      let atual = noDaCategoria(cat);
+      if (!atual) { atual = noDaCategoria({ codigo: l.categoria, nome: l.categoria, natureza: l.natureza, paiId: null }); }
       atual.filhos.push(f);
     }
     // Sobe a hierarquia: cada categoria com valor vira filha da categoria pai (até a raiz da classificação).

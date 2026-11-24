@@ -1,6 +1,7 @@
 // QUANTIDADE DE ENTREGAS nas linhas de entrega da DRE (somente leitura; nenhum cálculo financeiro da DRE muda).
 //
-//   * ENTREGADORES_PROPRIOS — fonte oficial: parser Foody (mesma porta e mesma regra da área Entregadores Próprios):
+//   * ENTREGADORES_PROPRIOS — semanas FECHADAS que compõem a linha (entregas guardadas no fechamento semanal); sem
+//     nenhuma conta na linha, cai na contagem ao vivo do parser Foody (provisória). Parser Foody (mesma porta e mesma regra da área Entregadores Próprios):
 //     conta só itens do tipo ENTREGA elegíveis e com entregador; cancelado só conta quando o parser o manteve com direito
 //     à taxa. Lançamentos manuais, taxas adicionais, ajustes e PIX nunca contam como entrega. Itens repetidos (mesmo id)
 //     contam uma vez.
@@ -67,6 +68,20 @@ export function contarEntregasTerceirizadas(lancamentos) {
   return { situacao: S.COM_DADOS, quantidade, fonte: "DESCRICAO_DOS_LANCAMENTOS", parcial: semQuantidade > 0, lancamentos: comQuantidade, semQuantidade };
 }
 
+/** Entregas das semanas fechadas que compõem a linha Entregadores Próprios da competência. null = nenhuma conta na linha. Pura. */
+export function contarEntregasDasSemanasFechadas(lancamentos, obrigacoes, fechamentos) {
+  const ativos = lancamentos.filter((l) => l.situacao === "ATIVO" && l.valorCentavos > 0);
+  if (!ativos.length) return null;
+  const obrigacaoDoLancamento = new Map(obrigacoes.map((o) => [o.lancamentoId, o.id]));
+  const fechamentoDaObrigacao = new Map(fechamentos.map((f) => [f.obrigacaoId, f]));
+  let quantidade = 0; let semFechamento = 0;
+  for (const l of ativos) {
+    const f = fechamentoDaObrigacao.get(obrigacaoDoLancamento.get(l.id));
+    if (f) quantidade += f.entregas ?? 0; else semFechamento += 1;
+  }
+  return { situacao: S.COM_DADOS, quantidade, fonte: "SEMANAS_FECHADAS", provisorio: false, parcial: semFechamento > 0, semQuantidade: semFechamento };
+}
+
 export function operacoesDeQuantidadesDeEntregas(b, { fonte = null } = {}) {
   return {
     /** Quantidade de entregas por linha de entrega da DRE, na competência e unidade do contexto. Nunca falha por fonte externa. */
@@ -86,10 +101,16 @@ export function operacoesDeQuantidadesDeEntregas(b, { fonte = null } = {}) {
         try { apuracao = await fonte.apurar({ organizacaoId: cx0.organizacaoId, unidadeId: cx0.unidadeId, inicio, fim }); } catch { apuracao = { disponivel: false, motivo: "FALHA_NA_LEITURA" }; }
         proprios = apuracao?.motivo === "PARSER_FOODY_DESLIGADO_NA_UNIDADE" ? { situacao: S.SEM_FONTE, quantidade: null, fonte: "FOODY", motivo: apuracao.motivo } : contarEntregasProprias(apuracao, { inicio, fim });
       }
-      const { sobDemanda, terceirizadas } = await b.consultar(ctx, async (cx, tx) => ({
+      const { sobDemanda, terceirizadas, semanas } = await b.consultar(ctx, async (cx, tx) => ({
         sobDemanda: contarEntregasSobDemanda(await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: "IFOOD", tipoRelatorio: RELATORIO_CONCILIACAO_IFOOD, competencia: comp, situacao: SITUACAO_REGISTRO_FONTE.ATIVO } })),
         terceirizadas: contarEntregasTerceirizadas(await tx.listar(cx, TIPO.LANCAMENTO, { onde: { competencia: comp, categoria: "ENTREGAS_TERCEIRIZADAS" } })),
+        semanas: contarEntregasDasSemanasFechadas(
+          await tx.listar(cx, TIPO.LANCAMENTO, { onde: { competencia: comp, categoria: "ENTREGADORES_PROPRIOS" } }),
+          await tx.listar(cx, TIPO.OBRIGACAO), await tx.listar(cx, TIPO.FECHAMENTO_ENTREGADOR)),
       }));
+      // 24/11/2026 (pedido do usuário): a quantidade é a das SEMANAS FECHADAS que formam o valor da linha (o fechamento
+      // semanal guarda as entregas). Sem nenhuma conta na linha da competência, mostra a contagem do parser (provisória).
+      if (semanas) proprios = semanas;
       return {
         competencia: comp,
         linhas: {
