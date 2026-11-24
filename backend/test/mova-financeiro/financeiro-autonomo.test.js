@@ -104,6 +104,29 @@ t("AUT-C2 valor maior e a resposta é 'outra compra': NÃO presume juros; cria a
   assert.deepEqual([(await s.liquidacoes()).length, (await s.saidas()).length], [1, 0]);
 });
 
+t("AUT-C3 (produção 23/11) 'Outra compra' CITANDO a pergunta do MOVA (não o comprovante): continua a operação, não vira conversa solta", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  const o = await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C3") }));
+  assert.equal((await s.ultima()).motivo, "VALOR_MAIOR_QUE_SALDO");
+  await s.enviar(gw({ texto: "Outra compra", grupo: FIN, respostaA: "3EB0PERGUNTADOMOVA0001" }));
+  const h = await s.ultima();
+  assert.notEqual(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
+  assert.equal(h.decisao, "EXECUTADO");
+  assert.equal((await s.contas()).length, 2, "a conta nova entrou ao lado da existente");
+  assert.equal(await s.saldo(o.obrigacoes[0].id), 5000, "a conta existente ficou intacta");
+  assert.ok((await s.mova.armazenamento.historico.todos()).some((x) => x.motivo === "RESPOSTA_DE_DIVERGENCIA_POR_CONTEXTO"));
+});
+
+t("AUT-C4 citação sem pendência e texto que não é resposta curta: segue o fluxo normal (não retoma pergunta alheia)", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C4") }));
+  await s.enviar(gw({ texto: "vou ver com a gerência amanhã e te falo", grupo: FIN, respostaA: "3EB0OUTRAMENSAGEM0001" }));
+  assert.ok(!(await s.mova.armazenamento.historico.todos()).some((x) => x.motivo === "RESPOSTA_DE_DIVERGENCIA_POR_CONTEXTO"));
+  assert.equal((await s.contas()).length, 1, "nada criado");
+});
+
 t("AUT-D valor MENOR sem evidência de parcial: pergunta; 'sim' → baixa parcial preservando o saldo restante e o valor original", async () => {
   const s = await autonomo({ responder: () => PIX({ valorCentavos: 15000 }), politica: null });
   const o = await s.conta("2026-10-20", 25000);

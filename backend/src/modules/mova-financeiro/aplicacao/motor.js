@@ -243,8 +243,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
       // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
       // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
-      const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
-      const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
+      // 24/11: a pendência é guardada pelo id da mensagem ORIGINAL (o comprovante); quem responde citando a PERGUNTA do MOVA cita
+      // outro id e o passo 5 não a encontra. Uma citação que não achou pendência segue as mesmas regras da memória curta (antes,
+      // "Outra compra" citando a pergunta caía em CONVERSA_SEM_PEDIDO_FINANCEIRO e a pergunta ficava aberta).
+      const ehUnidade = evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
+      const ehRespostaCurta = evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
       if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
         const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
         if (pend?.pendente && !pend.pendente.divergencia && !ehUnidade) {
