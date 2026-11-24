@@ -222,7 +222,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 4. NÍVEL 1: participante do grupo autorizado é registrado automaticamente (sem cadastro nem login).
       // 23/11: conversa privada de ENTREGADOR não é grupo (mova.participante exige mova.grupo_autorizado): o entregador já é o
       // cadastro dele (mova.entregador_autorizado); registrá-lo aqui derrubava TODA mensagem dele (ERRO_PERMANENTE, sem NF).
-      if (novo && !grupo.entregador) {
+      // 24/11: idem a conversa privada DERIVADA da lista (OPERACAO): não é grupo e não tem linha em grupo_autorizado em produção
+      // (2 das 9 falhas permanentes de 23/11). O membro é do GRUPO; a privada não registra participante.
+      if (novo && !grupo.entregador && !grupo.derivada) {
         const p = await a.participantes.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, nomeExibicao: evento.nomeExibicao ?? null });
         if (p.novo) await a.auditoria.registrar({ acao: "PARTICIPANTE_REGISTRADO", atorTipo: "SISTEMA", alvo: evento.participanteId, dados: { grupo: mascarar(evento.grupoId) } });
       }
