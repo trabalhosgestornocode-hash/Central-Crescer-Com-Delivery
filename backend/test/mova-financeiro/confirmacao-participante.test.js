@@ -119,8 +119,45 @@ t("CP-09 regra pura: mesma pessoa (id, celular com/sem 9, entrada da lista) pode
   const de = (participanteId, grupoId = GRUPO) => ({ participanteId, grupoId, telefoneE164: null });
   assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(FIN, FIN)).pode, true);
   assert.equal(podeConfirmarPendencia(cfg, de(LID), de(LID_PRIVADO, LID_PRIVADO)).motivo, "MESMA_PESSOA_AUTORIZADA");
-  assert.equal(podeConfirmarPendencia(cfg, de("5585988887777@s.whatsapp.net"), de("558588887777@s.whatsapp.net")).motivo, "MESMO_CELULAR");
+  // celular com/sem o nono dígito: vale só quando o número está NA LISTA da conversa (identidade canônica = entrada da configuração)
+  const cfgCel = validarConfiguracao({ ...CONFIG, gruposAutorizados: [{ ...CONFIG.gruposAutorizados[0], participantes: [...CONFIG.gruposAutorizados[0].participantes, { ids: ["5585988887777@s.whatsapp.net"], perfil: "FINANCEIRO" }] }, CONFIG.gruposAutorizados[1]] });
+  assert.equal(podeConfirmarPendencia(cfgCel, de("5585988887777@s.whatsapp.net"), de("558588887777@s.whatsapp.net")).motivo, "MESMO_CELULAR");
+  // revisão 24/11: o MESMO número fora da lista não confirma (coincidência de telefone sozinha não é identidade)
+  assert.equal(podeConfirmarPendencia(cfg, de("5585988887777@s.whatsapp.net"), de("558588887777@s.whatsapp.net")).motivo, "NAO_AUTORIZADO_NESTA_CONVERSA");
   assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(SO_ALFA)).pode, false);
   assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(LID)).pode, false);
   assert.equal(podeConfirmarPendencia(cfg, de(null), de(FIN)).pode, false);
+});
+
+t("CP-10 TELEFONE informado no evento não é identidade: JID desconhecido com o telefoneE164 do financeiro não confirma", () => {
+  const cfg = validarConfiguracao(CONFIG);
+  const r = podeConfirmarPendencia(cfg, { participanteId: FIN, grupoId: GRUPO }, { participanteId: ESTRANHO, grupoId: GRUPO, telefoneE164: "+5500000000201" });
+  assert.deepEqual([r.pode, r.motivo], [false, "NAO_AUTORIZADO_NESTA_CONVERSA"]);
+});
+
+t("CP-11 UNIDADE: quem responde precisa alcançar a unidade da pendência (financeiro só da Alfa não confirma pendência da Beta)", () => {
+  const cfg = validarConfiguracao(CONFIG);
+  const de = (participanteId) => ({ participanteId, grupoId: GRUPO });
+  assert.equal(podeConfirmarPendencia(cfg, de(SO_ALFA), de(SO_ALFA), { unidadeId: ALFA }).pode, true);
+  assert.equal(podeConfirmarPendencia(cfg, de(SO_ALFA), de(SO_ALFA), { unidadeId: "ffffffff-0000-4000-8000-00000000beef" }).motivo, "UNIDADE_FORA_DA_CONVERSA");
+});
+
+t("CP-12 VERSÃO COMPLETA: categoria/fornecedor/vencimento alterados (saldo igual) invalidam a confirmação", async () => {
+  const s = await cena();
+  const doc = await s.documento(FIN);
+  // a versão guardada na pergunta difere em outro campo que não o saldo (equivale a reclassificar ou trocar o fornecedor no meio)
+  const { rows: [pd] } = await s.banco.pool.query("select mensagem_id, leitura from mova.mensagem_pendente where resolvida_em is null");
+  const partes = pd.leitura.divergencia.candidatas[0].versao.split("|"); partes[3] = "fornecedor-trocado"; pd.leitura.divergencia.candidatas[0].versao = partes.join("|");
+  await s.banco.pool.query("update mova.mensagem_pendente set leitura = $2 where mensagem_id = $1", [pd.mensagem_id, JSON.stringify(pd.leitura)]);
+  await s.enviar(gw({ texto: "sim", de: FIN, respostaA: doc }));
+  assert.deepEqual([await motivo(s), (await s.propostas()).length], ["PERGUNTA_DESATUALIZADA", 0]);
+  assert.match((await s.saida()).at(-1).texto, /mudou: fornecedor/);
+});
+
+t("CP-13 EXPIRADA também citando o DOCUMENTO: pendência além da validade não é retomada e continua aberta", async () => {
+  const s = await cena();
+  const doc = await s.documento(FIN);
+  await s.banco.pool.query("update mova.mensagem_pendente set criada_em = now() - interval '73 hours' where resolvida_em is null");
+  await s.enviar(gw({ texto: "sim", de: FIN, respostaA: doc }));
+  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["PENDENCIA_EXPIRADA", 0, 1]);
 });
