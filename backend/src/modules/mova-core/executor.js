@@ -102,7 +102,9 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     const chave = `${nome}|${unidadeId}|${JSON.stringify(args)}`;
     const emCache = sessao.cache?.get(chave);
     let r; let consultadoEm = relogio();
-    if (emCache && relogio() - emCache.em < limites.cacheMs && !f.local) { r = emCache.r; registro.cache = true; consultadoEm = emCache.em; } // do cache: vale a data da consulta ORIGINAL
+    // ferramenta que PREPARA/ESCREVE ou que lê o estado de propostas nunca vem do cache (o mesmo pedido com outro anexo é outro pedido)
+    const semCache = Boolean(f.local || f.escrita || f.semCache);
+    if (emCache && relogio() - emCache.em < limites.cacheMs && !semCache) { r = emCache.r; registro.cache = true; consultadoEm = emCache.em; } // do cache: vale a data da consulta ORIGINAL
     else {
       try {
         r = await comTempo(Promise.resolve(f.executar({ porta, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), limites.tempoMs);
@@ -114,7 +116,7 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
         registro.defeito = String(e?.message ?? e).slice(0, 200);
         return falhar("FALHA_INTERNA_DA_FERRAMENTA", "Não consegui ler esse dado agora.");
       }
-      if (!f.local) sessao.cache?.set(chave, { r, em: relogio() });
+      if (!semCache) sessao.cache?.set(chave, { r, em: relogio() });
     }
     if (r?.erro) return falhar(r.erro, r.dados?.mensagem);
     const situacao = situacaoDoResultado(r);

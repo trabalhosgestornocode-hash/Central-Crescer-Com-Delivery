@@ -29,6 +29,8 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   // Execução 03 — leituras das ferramentas financeiras (aplicacao/ferramentas.js). Todas passam por b.consultar no núcleo.
   "consultarVendas", "apurarCompetencia", "consultarFluxoDeCaixa", "consultarContasAReceber", "consultarPendencias", "consultarPlanoDeContas",
   "consultarDocumentos", "detalharContaAPagar",
+  // MOVA CORE F4: prestação de contas das sangrias (pendente, prazo, estado) — só leitura (b.consultar).
+  "consultarPrestacaoDeSangrias",
   // 16A — cobertura por canal (dias com dado, pendências, até quando há registro) para o faturamento por canal.
   "consultarCalendarioDeFaturamento",
   // Agente 2 — fechamento semanal dos entregadores próprios (painel agregado; só leitura, b.consultar no núcleo).

@@ -2,6 +2,7 @@
 // continuidade mínima, auditoria, métricas e MODO SOMBRA. Não envia mensagens nem escreve nada: devolve a resposta para quem
 // chama decidir (na sombra, só registra a comparação com o motor atual).
 import { CATALOGO, FERRAMENTAS, OPERACOES_DO_CATALOGO, definicoesParaApi } from "./catalogo.js";
+import { intencaoDeterministica, ferramentasDeOperacao, textoDoDesfecho } from "./operacoes.js";
 import { criarExecutor, novaSessao } from "./executor.js";
 import { executarLaco, PADROES_DO_LACO } from "./laco.js";
 import { decidirRota, ROTA, RESPOSTAS_FIXAS } from "./roteador.js";
@@ -26,7 +27,9 @@ export { criarRepositorioDeIdentidadePostgres, criarRepositorioDeMemoriaPostgres
  * @param {object} deps.orcamento   reservar/concluir/falhar (renovável em homologação; memória no ambiente isolado)
  * @param {Array}  [deps.ferramentasExtras] p.ex. ferramentasDoAgenteCrescer(...)
  */
-export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null }) {
+export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras: extrasDadas = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null, operacoes = null }) {
+  // F4 integrada: com o serviço de operações, o modelo ganha preparar_operacao / propostas_do_mova (NUNCA executar)
+  const ferramentasExtras = operacoes ? [...extrasDadas, ...ferramentasDeOperacao()] : extrasDadas;
   const montar = (extras) => ({
     catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
     definicoes: [...definicoesParaApi(), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
@@ -43,7 +46,34 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
    */
   async function responder(e) {
     const requisicaoId = e.requisicaoId ?? `core-${Date.now().toString(36)}-${++seq}`;
-    const rota = decidirRota({ texto: e.texto, temAnexo: e.temAnexo, pendenciaAberta: e.pendenciaAberta, nucleoDisponivel: Boolean(cliente) });
+    const conversaChave = `${e.organizacaoId}|${e.conversaId}|${e.participanteId}`;
+    const autor = e.usuarioId ?? e.participanteId ?? null;
+    // F4 §11: CONFIRMAR / CANCELAR é decidido pelo SERVIDOR, antes do modelo e sem ele: só resposta inequívoca à proposta aberta
+    // desta conversa. "sim, mas..." ou qualquer correção vai para o modelo (nova versão). O texto sai do resultado REAL.
+    if (operacoes && !e.anexo?.arquivo) {
+      const intencao = intencaoDeterministica(e.texto);
+      const aberta = intencao ? await operacoes.abertaDaConversa(conversaChave) : null;
+      // 'sim' a uma proposta que foi para REVISÃO HUMANA: responde a verdade (nada entrou), sem executar e sem o modelo
+      const emRevisao = intencao === "CONFIRMAR" && !aberta ? await operacoes.emRevisaoDaConversa(conversaChave) : null;
+      if (aberta || emRevisao) {
+        const r = emRevisao ? { ok: false, motivo: "REVISAO_HUMANA", proposta: emRevisao }
+          : intencao === "CONFIRMAR" ? await operacoes.confirmar({ conversaChave, autor, autorizacaoDeEscrita: e.autorizacaoDeEscrita ?? null }) : await operacoes.cancelar({ conversaChave, autor });
+        const texto = textoDoDesfecho(r);
+        if (texto) {
+          const conversa = await memoria.obter({ organizacaoId: e.organizacaoId, conversaId: e.conversaId, participanteId: e.participanteId });
+          if (r.executada) conversa.cache?.clear?.(); // o Financeiro mudou: nenhuma leitura em cache desta conversa vale mais
+          await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: texto, ferramentas: [], fatos: conversa.fatos ?? [] });
+          const motivo = r.ok ? (r.executada ? "OPERACAO_EXECUTADA" : "OPERACAO_CANCELADA") : `OPERACAO_${r.motivo}`;
+          auditoria.registrar({ tipo: "MOVA_CORE_RESPOSTA", requisicaoId, rota: "OPERACAO", motivo, ferramentas: [], custoMicrousd: 0, latenciaMs: 0 });
+          metricas.registrar({ rota: "OPERACAO", motivo });
+          return { requisicaoId, rota: "OPERACAO", motivo, texto, ferramentas: [], uso: null, latenciaMs: 0,
+            operacao: { intencao, executada: Boolean(r.executada), estado: r.proposta?.estado ?? null, propostaId: r.proposta?.id ?? null, feitos: r.feitos ?? [] } };
+        }
+      }
+    }
+    // documento NO NÚCLEO só com operações ligadas e a opção explícita (homologação); senão o motor atual trata o anexo
+    const documentoNoCore = Boolean(operacoes && opcoes.documentosNoCore && e.anexo?.arquivo);
+    const rota = decidirRota({ texto: e.texto, temAnexo: documentoNoCore ? false : e.temAnexo, pendenciaAberta: e.pendenciaAberta, nucleoDisponivel: Boolean(cliente) });
     if (rota.rota !== ROTA.FERRAMENTAS) {
       const texto = rota.rota === ROTA.SEGURANCA ? RESPOSTAS_FIXAS.SEGURANCA : rota.rota === ROTA.SAUDACAO ? RESPOSTAS_FIXAS.SAUDACAO : null; // null = o motor atual trata
       metricas.registrar({ rota: rota.rota });
@@ -62,6 +92,7 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       ? memoria.fatosValidos(conversa, { pergunta: String(e.texto ?? ""), unidadeId: e.unidadeId, ferramentasPermitidas: new Set(Object.keys(catalogoDaVez)) })
       : conversa.fatos;
     const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId, hoje: e.hoje ?? null });
+    Object.assign(sessao, { operacoes, conversaChave, autor, anexo: documentoNoCore ? e.anexo : null });
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
     const orientacao = conceitos.orientacao(String(e.texto ?? ""));

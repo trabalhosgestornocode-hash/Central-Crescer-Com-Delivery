@@ -167,6 +167,24 @@ export const FERRAMENTAS = [
     },
   },
   {
+    nome: "prestacao_de_sangrias",
+    descricao: "Sangrias (retiradas de dinheiro do caixa) e a PRESTAÇÃO DE CONTAS de cada uma: quanto saiu, o que já foi gasto (despesas), o troco devolvido, quanto ainda está PENDENTE, o prazo e o estado (aguardando destino, parcial, atrasada, prestada). Uma retirada só vira despesa quando se informa o que foi comprado com ela.",
+    esquema: { type: "object", properties: { somentePendentes: { type: "boolean", description: "true = só as que ainda têm valor a prestar contas" }, inicio: DATA, fim: DATA, unidade: UNIDADE } },
+    valores: true, ops: ["consultarPrestacaoDeSangrias"],
+    async executar({ porta, escopo, args }) {
+      const r = await porta.ler("consultarPrestacaoDeSangrias", escopo, { ...(args.inicio ? { inicio: args.inicio } : {}), ...(args.fim ? { fim: args.fim } : {}), somentePendentes: args.somentePendentes === true });
+      const itens = (r?.itens ?? []).slice(0, 40).map((x) => ({ ref: x.movimentacaoId, data: x.data, descricao: x.descricao ?? null, estado: x.estado, retiradoCentavos: x.valorCentavos,
+        despesasCentavos: x.despesasCentavos ?? x.alocadoCentavos ?? 0, trocoCentavos: x.trocoDevolvidoCentavos ?? x.devolvidoCentavos ?? 0, pendenteCentavos: x.pendenteCentavos, prazoAte: x.prazoAte ?? x.vencePrestacaoEm ?? null,
+        despesas: (x.despesas ?? []).slice(0, 10).map((d) => ({ descricao: d.descricao ?? null, valorCentavos: d.valorCentavos })) }));
+      const tot = r?.totais ?? {};
+      return { dados: { prazoHoras: r?.prazoHoras ?? null, totais: tot, itens, nota: "Pendente NÃO é despesa: é dinheiro que saiu do caixa e ainda não teve destino informado." },
+        fatos: fatos(fato(tot.retiradoCentavos, "SANGRIA:retirado"), fato(tot.pendenteCentavos, "SANGRIA:pendente"),
+          itens.flatMap((x) => [fato(x.retiradoCentavos, "SANGRIA:retirado", { entidade: x.descricao, periodo: x.data }), fato(x.pendenteCentavos, "SANGRIA:pendente", { entidade: x.descricao, periodo: x.data }),
+            fato(x.despesasCentavos, "SANGRIA:despesas", { entidade: x.descricao, periodo: x.data }), fato(x.trocoCentavos, "SANGRIA:troco", { entidade: x.descricao, periodo: x.data }),
+            ...x.despesas.map((d) => fato(d.valorCentavos, "SANGRIA:despesa", { entidade: d.descricao, periodo: x.data }))])) };
+    },
+  },
+  {
     nome: "caixa_e_bancos",
     descricao: "Saldos e movimentos das contas de CAIXA FÍSICO e BANCOS (saldo informado, saldo calculado, diferença) num período. Use para 'saldo real do caixa', 'quanto tem no banco'.",
     esquema: { type: "object", properties: { inicio: DATA, fim: DATA, unidade: UNIDADE }, required: ["inicio", "fim"] },
