@@ -209,6 +209,9 @@ async function gatewayOuErro(deps) {
 }
 
 const jaEmAndamentoNoGateway = (e) => /already|em andamento|JA_CONECTADO|409/i.test(String(e?.message ?? ""));
+/** O WhatsApp encerrou o pareamento (401 loggedOut): o Gateway recusa com 410 e só o reset (Trocar número) gera QR novo. */
+const sessaoEncerradaNoGateway = (e) => /LOGGED_OUT|HTTP_410/i.test(String(e?.message ?? ""));
+const SESSAO_ENCERRADA = () => conflito("O WhatsApp encerrou a sessão anterior. Use \"Trocar número conectado\" para gerar um novo QR Code.", "SESSAO_ENCERRADA");
 
 /**
  * POST /comunicacao/conexao/reconciliar — "Rever estado da conexão". O operador só DISPARA a verificação: a decisão (CONCLUIDO / ABORTADO /
@@ -252,6 +255,7 @@ export async function iniciar(autor, deps = {}, { revisar = false } = {}) {
     if (!jaEmAndamentoNoGateway(e)) {
       await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "iniciar", erro: erroCurto(e) }, deps);
       await encerrarOperacao(operacaoId, deps);
+      if (sessaoEncerradaNoGateway(e)) throw SESSAO_ENCERRADA();
       throw conflito("Não foi possível iniciar a conexão agora. Verifique o Gateway e tente de novo.", "CONEXAO_INDISPONIVEL");
     }
   }
@@ -278,6 +282,7 @@ export async function novoQr({ operacaoId } = {}, autor, deps = {}) {
   } catch (e) {
     if (!jaEmAndamentoNoGateway(e)) {
       await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "novo_qr", erro: erroCurto(e) }, deps);
+      if (sessaoEncerradaNoGateway(e)) throw SESSAO_ENCERRADA();
       throw conflito("Não foi possível gerar um novo QR Code agora. Tente de novo em instantes.", "CONEXAO_INDISPONIVEL");
     }
   }
