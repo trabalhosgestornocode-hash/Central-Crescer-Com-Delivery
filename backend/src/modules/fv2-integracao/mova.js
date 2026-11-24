@@ -41,7 +41,7 @@ import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import { criarPortaOperacional } from "../mova-financeiro/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarWorker, validarConfiguracao, configuracaoViva,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarOrcamentoRenovavel, regimeDeOrcamento, criarWorker, validarConfiguracao, configuracaoViva,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -130,7 +130,7 @@ export function lerConfiguracaoMova(env) {
   if (contradicoes.length) return { habilitado: false, motivo: "CONFIGURACAO_CONTRADITORIA", contradicoes };
   return {
     habilitado: true, databaseUrl: env.MOVA_DATABASE_URL, servicoUsuarioId: env.MOVA_SERVICO_USUARIO_ID.toLowerCase(),
-    recebimento, processamento, ia, envio, modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: operacao ? env.MOVA_OPERACAO_MARCADOR : homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
+    recebimento, processamento, ia, envio, orcamentoRenovavel: env.MOVA_ORCAMENTO_RENOVAVEL === "1", modo: operacao ? "OPERACAO" : piloto ? "PILOTO" : homologacao ? "HOMOLOGACAO" : "SIMULACAO", marcador: operacao ? env.MOVA_OPERACAO_MARCADOR : homologacao || piloto ? env.MOVA_HOMOLOGACAO_MARCADOR : null,
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
       somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), recebimentoDocumental: sim(env.MOVA_OPERACAO_DOCUMENTOS_SEM_IA), comandosDeterministicos: true, autonomia, escrita,
@@ -236,7 +236,8 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     ? Object.freeze(Object.fromEntries(Object.entries(nucleoBase).map(([k, f]) => [k, typeof f === "function" ? (...a) => comAutomacao(() => f(...a)) : f])))
     : nucleoBase;
   const controle = criarControle({ pool });
-  const orcamento = criarOrcamentoIa({ pool });
+  // MOVA CORE F0: renovável (mensal/diário/por requisição) SÓ em homologação com MOVA_ORCAMENTO_RENOVAVEL=1; senão, o acumulado de sempre.
+  const orcamento = regimeDeOrcamento({ ligado: cfg.orcamentoRenovavel === true, modo: cfg.modo }) === "RENOVAVEL" ? criarOrcamentoRenovavel({ pool, registrar }) : criarOrcamentoIa({ pool });
   let mova = null;
   const obterEvidencia = (ref) => mova.evidencias.obter(ref);
   const extratorIa = cfg.ia && criarClienteIa

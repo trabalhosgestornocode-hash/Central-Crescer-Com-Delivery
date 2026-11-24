@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -773,6 +773,52 @@ grant update (resposta_id) on mova.entregador_envio to mova_app;
 -- registro de continuidade que já expira em minutos. Nunca o texto da mensagem, valores ou documentos. Coluna nula = como era.
 alter table mova.conversa_ativa add column contexto jsonb check (contexto is null or (jsonb_typeof(contexto) = 'object' and pg_column_size(contexto) <= 512));
 
+-- ------------------------------------------------------------------------- 0018_mova_orcamento_renovavel.sql (arquivo 34c8aa11626450c39523155a0a5ed0b55dc60cf381aceb064c5d1a60371d0a87)
+-- MOVA CORE — F0 (24/11/2026): orçamento de IA RENOVÁVEL, somente para HOMOLOGAÇÃO.
+-- Aditiva: nada existente é alterado. O orçamento acumulado (mova.orcamento_ia) continua valendo onde está em uso (produção).
+-- A política só vale com MOVA_ORCAMENTO_RENOVAVEL=1 no ambiente, em modo HOMOLOGACAO, E `ativo` nesta tabela (padrão: desligado).
+-- Limites aprovados pelo proprietário: mensal US$ 10, diário US$ 1, por requisição US$ 0,10; alertas em 50/80/100%.
+-- O código ainda prende cada limite a um teto máximo; o banco pode configurar valores menores, nunca maiores.
+
+create table mova.orcamento_ia_politica (
+  id                       boolean primary key default true check (id),
+  ativo                    boolean not null default false,
+  limite_mensal_microusd   bigint  not null default 10000000 check (limite_mensal_microusd >= 0),
+  limite_diario_microusd   bigint  not null default 1000000  check (limite_diario_microusd >= 0),
+  limite_requisicao_microusd bigint not null default 100000  check (limite_requisicao_microusd >= 0),
+  reserva_microusd         bigint  not null default 20000    check (reserva_microusd > 0),   -- reservado ANTES de cada chamada
+  max_passos_requisicao    integer not null default 6        check (max_passos_requisicao between 1 and 12),
+  alertas_percentuais      integer[] not null default '{50,80,100}',
+  fuso                     text    not null default 'America/Fortaleza',
+  atualizado_por           text,
+  atualizado_em            timestamptz not null default now()
+);
+insert into mova.orcamento_ia_politica (id) values (true);
+
+-- Dimensões de controle em cada chamada (nulas nas linhas antigas = como era).
+alter table mova.consumo_ia
+  add column organizacao_id uuid,
+  add column unidade_id     uuid,
+  add column requisicao_id  text check (requisicao_id is null or length(requisicao_id) <= 120),
+  add column cache_leitura  integer,
+  add column cache_escrita  integer,
+  add column regime         text check (regime is null or regime in ('ACUMULADO','RENOVAVEL'));
+create index consumo_ia_em_idx on mova.consumo_ia (em);
+create index consumo_ia_requisicao_idx on mova.consumo_ia (requisicao_id) where requisicao_id is not null;
+
+-- Cada alerta dispara UMA vez por período (o histórico de meses anteriores é preservado; renovar não apaga nada).
+create table mova.orcamento_ia_alerta (
+  periodo     text not null check (periodo ~ '^(M|D):\d{4}-\d{2}(-\d{2})?$'),   -- M:2026-11 ou D:2026-11-24
+  percentual  integer not null check (percentual between 1 and 100),
+  consumo_microusd bigint not null,
+  limite_microusd  bigint not null,
+  em          timestamptz not null default now(),
+  primary key (periodo, percentual)
+);
+
+grant select on mova.orcamento_ia_politica to mova_app;
+grant select, insert on mova.orcamento_ia_alerta to mova_app;
+
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
 insert into mova.mova_migracao (nome, sha256) values
@@ -792,7 +838,8 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0014_mova_unidade_sem_grupo.sql', '8c7631710233123f85a0c1cb2752dcbb115606be299269e68bb9294f631e203b'),
   ('0015_mova_pagadores_multiunidade.sql', 'cbcd5e4421952a876fcd0b22ad8c0af582d757096baf3aface6ad43aefea5a96'),
   ('0016_mova_avisos_entregadores.sql', '76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc'),
-  ('0017_mova_conversa_contexto.sql', 'b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69');
+  ('0017_mova_conversa_contexto.sql', 'b4950c5592e7e19a53fa2916e5b368272ea7712d4137799479349ec096eb9b69'),
+  ('0018_mova_orcamento_renovavel.sql', '34c8aa11626450c39523155a0a5ed0b55dc60cf381aceb064c5d1a60371d0a87');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
@@ -801,7 +848,7 @@ do $$ begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then execute 'revoke all on schema mova from authenticated'; execute 'revoke all on all tables in schema mova from authenticated'; end if;
 end $$;
 do $$ declare faltando text; begin
-  select string_agg(t, ', ') into faltando from unnest(array['aprovacao', 'auditoria', 'automacao', 'consumo_ia', 'controle', 'conversa_ativa', 'decisao', 'documento', 'entregador_autorizado', 'entregador_envio', 'evento', 'evidencia', 'fila', 'grupo_autorizado', 'grupo_membros', 'grupo_unidade', 'instancia_gateway', 'mensagem_pendente', 'nota_entregador', 'operacao_executada', 'orcamento_ia', 'participante', 'participante_autorizado', 'politica_autonomia', 'proposta', 'resposta', 'unidade_sem_grupo', 'mova_migracao']) t
+  select string_agg(t, ', ') into faltando from unnest(array['aprovacao', 'auditoria', 'automacao', 'consumo_ia', 'controle', 'conversa_ativa', 'decisao', 'documento', 'entregador_autorizado', 'entregador_envio', 'evento', 'evidencia', 'fila', 'grupo_autorizado', 'grupo_membros', 'grupo_unidade', 'instancia_gateway', 'mensagem_pendente', 'nota_entregador', 'operacao_executada', 'orcamento_ia', 'orcamento_ia_alerta', 'orcamento_ia_politica', 'participante', 'participante_autorizado', 'politica_autonomia', 'proposta', 'resposta', 'unidade_sem_grupo', 'mova_migracao']) t
    where not exists (select 1 from pg_tables where schemaname = 'mova' and tablename = t);
   if faltando is not null then raise exception 'MOVA instalação: tabelas ausentes: %', faltando; end if;
   -- Única exclusão permitida: mova.conversa_ativa (estado efêmero da conversa; 0005). Nada financeiro, nenhum histórico.

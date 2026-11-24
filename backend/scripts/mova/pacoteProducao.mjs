@@ -19,7 +19,7 @@ const DESTINO = join(RAIZ, "producao");
 export const TABELAS_ESPERADAS = Object.freeze([
   "aprovacao", "auditoria", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
   "entregador_envio", "evento", "evidencia", "fila", "grupo_autorizado", "grupo_membros", "grupo_unidade", "instancia_gateway",
-  "mensagem_pendente", "nota_entregador", "operacao_executada", "orcamento_ia", "participante", "participante_autorizado",
+  "mensagem_pendente", "nota_entregador", "operacao_executada", "orcamento_ia", "orcamento_ia_alerta", "orcamento_ia_politica", "participante", "participante_autorizado",
   "politica_autonomia", "proposta", "resposta", "unidade_sem_grupo", "mova_migracao",
 ]);
 

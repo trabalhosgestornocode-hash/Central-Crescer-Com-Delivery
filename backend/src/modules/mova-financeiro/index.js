@@ -38,6 +38,7 @@ export { criarReceptor } from "./gateway/receptor.js";
 export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorRele.js";
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
 export { CHAVES_DE_CONTROLE, PRECOS_IA, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
+export { TETOS_RENOVAVEIS_MICROUSD, criarOrcamentoRenovavel, custoMicrousd, regimeDeOrcamento } from "./infra/orcamentoRenovavel.js";
 export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
 
 /**
