@@ -104,5 +104,5 @@ test("custo: identificador datado do modelo usa o preço do modelo base", async 
 
 test("14 sem caracteres de controle no motor (edições automatizadas não podem corromper expressões)", async () => {
   const fonte = (await import("node:fs")).readFileSync(new URL("../../src/modules/mova-financeiro/aplicacao/motor.js", import.meta.url), "utf8");
-  assert.ok(!/[ -]/.test(fonte));
+  assert.ok(!/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(fonte));
 });

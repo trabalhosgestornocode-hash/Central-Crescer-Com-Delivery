@@ -194,13 +194,34 @@ t("27 evidências: só a unidade dona abre, exige permissão de documentos e con
 });
 
 // ------------------------------------------------------------------------------------------------ reversão de código
+/**
+ * Guarda das migrações do MOVA, por COMANDO (separado por ";"): DELETE/TRUNCATE só em tabelas do schema mova; DROP só de
+ * restrição/coluna-nula/função/gatilho/política/índice. Comandos REVOKE ficam fora: REVOKE só RETIRA privilégio, não apaga
+ * dado (ex.: "revoke delete, truncate on all tables in schema mova from mova_app" PROTEGE os dados). GRANT continua conferido.
+ */
+function violacoesDestrutivas(sql) {
+  const v = [];
+  for (const cmd of sql.split(";").map((c) => c.trim()).filter(Boolean)) {
+    if (/^revoke\b/i.test(cmd)) continue;
+    for (const m of cmd.matchAll(/\b(delete\s+from|truncate(?:\s+table)?)\s+([a-z0-9_."]+)/gi)) if (!/^mova\./.test(m[2].toLowerCase())) v.push(m[0]);
+    for (const m of cmd.matchAll(/\bdrop\s+(\w+)/gi)) if (!/^(constraint|not|function|trigger|policy|index)$/.test(m[1].toLowerCase())) v.push(m[0]);
+  }
+  return v;
+}
+test("21a a guarda de migrações FALHA quando há violação (autoteste com SQL sintético) e só o REVOKE fica fora", () => {
+  assert.deepEqual(violacoesDestrutivas("delete from public.pedidos where true"), ["delete from public.pedidos"]);
+  assert.deepEqual(violacoesDestrutivas("truncate table financeiro_v2.liquidacao"), ["truncate table financeiro_v2.liquidacao"]);
+  assert.deepEqual(violacoesDestrutivas("truncate only mova.x"), ["truncate only"], "TRUNCATE ONLY não escapa");
+  assert.deepEqual(violacoesDestrutivas("drop table mova.evidencia"), ["drop table"]);
+  assert.deepEqual(violacoesDestrutivas("grant delete, truncate on all tables in schema public to x"), ["truncate on"], "GRANT continua conferido");
+  assert.deepEqual(violacoesDestrutivas("revoke delete, truncate on all tables in schema mova from mova_app; truncate public.x"), ["truncate public.x"], "o REVOKE não esconde o comando seguinte");
+  assert.deepEqual(violacoesDestrutivas("revoke delete, truncate on all tables in schema mova from mova_app; delete from mova.evidencia where expira < now(); drop trigger t on mova.x"), []);
+});
 test("21 reversão de código: migrações só ADITIVAS no schema próprio (nada de produção alterado/apagado); app.js volta ao normal sem env", () => {
   const pasta = new URL("../../../database/mova-financeiro/migracoes/", import.meta.url);
   for (const f of readdirSync(pasta)) {
     const sql = readFileSync(new URL(f, pasta), "utf8").replace(/--.*$/gm, "");
-    // DELETE/TRUNCATE só em tabelas do schema mova (ex.: expurgo de evidências); DROP só de restrição/coluna-nula/função/gatilho próprios.
-    for (const m of sql.matchAll(/(deletes+from|truncate(?:s+table)?)s+([a-z_."]+)/gi)) assert.match(m[2].toLowerCase(), /^mova./, `${f}: ${m[0]}`);
-    for (const m of sql.matchAll(/drops+(w+)/gi)) assert.match(m[1].toLowerCase(), /^(constraint|not|function|trigger|policy|index)$/, `${f}: ${m[0]}`);
+    assert.deepEqual(violacoesDestrutivas(sql), [], `${f}: comando destrutivo fora do schema mova`);
     assert.doesNotMatch(sql, /\b(public|financeiro_v2|auth)\.\w+/i, `${f} não toca outros schemas`);
     assert.doesNotMatch(sql, /\bdrop\s+(table|schema)\b/i, `${f} sem DROP destrutivo`);
   }
