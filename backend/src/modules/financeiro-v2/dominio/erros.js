@@ -9,6 +9,9 @@ export const CODIGO = Object.freeze({
   DATA_INVALIDA: "FV2_DATA_INVALIDA",
   NAO_ENCONTRADO: "FV2_NAO_ENCONTRADO",
   CONFLITO_IDEMPOTENCIA: "FV2_CONFLITO_IDEMPOTENCIA",
+  // F4 §13: mesmo valor, mesma data e mesmo beneficiário de um pagamento por comprovante já registrado, sem identificador de
+  // transação que os diferencie (ex.: o MESMO comprovante fotografado de novo). Só segue com confirmação explícita.
+  POSSIVEL_DUPLICIDADE: "FV2_POSSIVEL_DUPLICIDADE",
   CONFLITO_VERSAO: "FV2_CONFLITO_VERSAO",
   FONTE_NAO_ORIGINA_VENDA: "FV2_FONTE_NAO_ORIGINA_VENDA",
   PAGAMENTOS_NAO_FECHAM: "FV2_PAGAMENTOS_NAO_FECHAM",

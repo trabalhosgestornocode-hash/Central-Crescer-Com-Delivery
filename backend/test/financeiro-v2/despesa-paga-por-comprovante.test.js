@@ -124,3 +124,17 @@ test("DP-7 banco — identidade operacional ESTREITA do MOVA num PostgreSQL real
   await assert.rejects(n.registrarDespesaPagaPorComprovante(op, entrada(f.id, { obrigacao: { fonte: { sistema: "MANUAL", idExterno: "MOVA:brownies-db-2" } } })));
   assert.equal(await conta(), antes, "a transação inteira voltou: nenhuma conta em aberto no banco");
 });
+
+test("DP-F4 COMPROVANTE FOTOGRAFADO DE NOVO (outro arquivo, sem ID de transação): mesmo valor+data+fornecedor ⇒ POSSIVEL_DUPLICIDADE e nada gravado; confirmação explícita segue", async () => {
+  const m = await montarComCadastros();
+  const n = m.nucleo; const c = estreito(m.c);
+  await n.registrarDespesaPagaPorComprovante(c, entrada(m.fornecedor.id, { idTransacao: null }));
+  const meio = await retrato(n, m.c);
+  const foto2 = entrada(m.fornecedor.id, { idTransacao: null, arquivo: pdf("mesmo-comprovante-foto-2"), obrigacao: { fonte: { sistema: "MANUAL", idExterno: "MOVA:brownies-foto-2" } } });
+  await assert.rejects(n.registrarDespesaPagaPorComprovante(c, foto2), (e) => e.codigo === CODIGO.POSSIVEL_DUPLICIDADE && e.detalhes?.valorCentavos === 25900);
+  assert.deepEqual(await retrato(n, m.c), meio, "atômico: nenhuma conta em aberto sobrou");
+  const confirmada = entrada(m.fornecedor.id, { idTransacao: null, arquivo: pdf("outra-compra-de-verdade"), obrigacao: { fonte: { sistema: "MANUAL", idExterno: "MOVA:brownies-outra" } }, pagamento: { naoEDuplicado: true, justificativa: "Segunda compra no mesmo dia, confirmada pelo gestor (sintético)." } });
+  const r = await n.registrarDespesaPagaPorComprovante(c, confirmada);
+  assert.equal(r.repetido, false);
+  assert.equal((await retrato(n, m.c)).contas, meio.contas + 1);
+});

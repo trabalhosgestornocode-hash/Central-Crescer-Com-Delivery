@@ -58,10 +58,10 @@ function validarBaixaPorComprovante(e) {
 
 /** 24/11 — dados do PAGAMENTO da despesa paga por comprovante (a conta e o documento nascem na mesma operação). */
 export function validarPagamentoDaDespesaPaga(e) {
-  semCamposDesconhecidos(e ?? {}, ["dataPagamento", "idTransacao", "justificativa", "confirmar"], "pagamento");
+  semCamposDesconhecidos(e ?? {}, ["dataPagamento", "idTransacao", "justificativa", "confirmar", "naoEDuplicado"], "pagamento");
   const idTransacao = e.idTransacao === undefined || e.idTransacao === null || e.idTransacao === "" ? null : String(e.idTransacao).trim();
   if (idTransacao !== null && !ID_TRANSACAO.test(idTransacao)) falhar(CODIGO.ENTRADA_INVALIDA, "Identificador de transação inválido.", { campo: "idTransacao" });
-  return { dataPagamento: exigirData(e.dataPagamento, "dataPagamento"), idTransacao, justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }), confirmar: e.confirmar === true };
+  return { dataPagamento: exigirData(e.dataPagamento, "dataPagamento"), idTransacao, justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }), confirmar: e.confirmar === true, naoEDuplicado: e.naoEDuplicado === true };
 }
 
 export const TIPOS_DE_ENCARGO = Object.freeze(["JUROS", "MULTA", "JUROS_E_MULTA"]);

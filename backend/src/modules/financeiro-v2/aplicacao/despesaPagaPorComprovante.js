@@ -62,6 +62,20 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
           obrigacaoId: conta.id, valorCentavos: conta.valorBaseCentavos, dataPagamento: pagamento.dataPagamento, documentoId: documento.documento.id,
           idTransacao: pagamento.idTransacao, justificativa: pagamento.justificativa, confirmar: true,
         });
+        // F4 §13 — COMPROVANTE FOTOGRAFADO DE NOVO (depois das conferências exatas: mesmo arquivo/mesma transação já recusados acima): outro arquivo (outro hash) não basta para ser outro pagamento. Mesmo valor, mesma
+        // data e mesmo beneficiário de um pagamento por comprovante já registrado, sem identificadores de transação DIFERENTES dos
+        // dois lados ⇒ recusa (nada fica gravado) até a pessoa confirmar que é outra compra (`naoEDuplicado` + justificativa).
+        if (!ob.repetido && !pago.repetido && !pagamento.naoEDuplicado) {
+          const iguais = (await tx.listar(cx, TIPO.LIQUIDACAO)).filter((l) => l.origemDoVinculo === "COMPROVANTE" && l.situacao !== "ESTORNADA" && l.alvoId !== conta.id && l.id !== pago.liquidacao?.id
+            && l.valorCentavos === conta.valorBaseCentavos && l.dataEfetiva === pagamento.dataPagamento
+            && !(l.idTransacao && pagamento.idTransacao && String(l.idTransacao).toUpperCase() !== pagamento.idTransacao.toUpperCase()));
+          for (const l of iguais) {
+            const outra = await tx.obter(cx, TIPO.OBRIGACAO, l.alvoId);
+            if (outra && outra.contraparteId && outra.contraparteId === conta.contraparteId) {
+              falhar(CODIGO.POSSIVEL_DUPLICIDADE, "Já existe um pagamento por comprovante com o mesmo valor, a mesma data e o mesmo fornecedor. Se for outra compra, confirme que não é o mesmo comprovante.", { obrigacaoId: outra.id, liquidacaoId: l.id, valorCentavos: l.valorCentavos, dataPagamento: l.dataEfetiva });
+            }
+          }
+        }
         return {
           repetido: Boolean(ob.repetido && pago.repetido),
           lancamento: ob.lancamento, obrigacao: pago.titulo, documento: documento.documento, liquidacao: pago.liquidacao,
