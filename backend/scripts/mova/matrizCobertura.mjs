@@ -11,6 +11,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPERACOES_PERMITIDAS } from "../../src/modules/mova-financeiro/aplicacao/portaFinanceira.js";
 import { OPERACOES_DE_ESCRITA } from "../../src/modules/mova-financeiro/aplicacao/portaOperacional.js";
+import { FERRAMENTAS } from "../../src/modules/mova-core/catalogo.js";
+// F1 (24/11): operação → ferramentas do catálogo central do MOVA CORE que a usam (linguagem natural, laço de ferramentas)
+const NA_F1 = new Map();
+for (const f of FERRAMENTAS) for (const op of f.ops ?? []) NA_F1.set(op, [...(NA_F1.get(op) ?? []), f.nome]);
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ = join(AQUI, "..", "..", "..");
@@ -37,7 +41,7 @@ const linhas = inventario.operacoes.map(({ operacao, arquivo, permissoes }) => {
   else if (!c) { situacao = "RESTRITA"; como = "sem classificação de risco ⇒ proibida até classificar"; }
   else if (c.classe === "CRITICA") { situacao = "RESTRITA"; como = "CRÍTICA: só aprovação humana no Dashboard"; }
   else { situacao = "PLANEJADA"; como = FASE[c.classe]; }
-  return { operacao, modulo: (arquivo ?? "?").replace(/^aplicacao\//, "").replace(/\.js$/, ""), classe: c?.classe ?? "—", permissoes: permissoes.join(", ") || "—", situacao, como };
+  return { operacao, modulo: (arquivo ?? "?").replace(/^aplicacao\//, "").replace(/\.js$/, ""), classe: c?.classe ?? "—", permissoes: permissoes.join(", ") || "—", situacao, como, f1: (NA_F1.get(operacao) ?? []).join(", ") || "—" };
 });
 
 const ferramentasAgente = readdirSync(join(RAIZ, "backend", "src", "modules", "agente", "tools")).filter((f) => f.endsWith(".tool.js")).map((f) => f.replace(/\.tool\.js$/, "")).sort();
@@ -55,12 +59,15 @@ const porModulo = {};
 for (const l of linhas) { const m = (porModulo[l.modulo] ??= {}); m[l.situacao] = (m[l.situacao] ?? 0) + 1; }
 const ORDEM = ["DISPONIVEL", "PARCIAL", "PLANEJADA", "RESTRITA"];
 
-let md = `# MOVA CORE — matriz de cobertura (F0)\n\nGerada por \`backend/scripts/mova/matrizCobertura.mjs\` (não editar à mão). Fontes: inventário do núcleo, classificação de risco, portas do MOVA e ferramentas do Agente Crescer.\n\n`;
+let md = `# MOVA CORE — matriz de cobertura (F0 + F1)\n\nGerada por \`backend/scripts/mova/matrizCobertura.mjs\` (não editar à mão). Fontes: inventário do núcleo, classificação de risco, portas do MOVA e ferramentas do Agente Crescer.\n\n`;
 md += `## Resumo\n\n| Situação | Operações |\n|---|---|\n${ORDEM.map((s) => `| ${s} | ${contagem[s] ?? 0} |`).join("\n")}\n| INEXISTENTE (pedido sem operação) | ${INEXISTENTES.length} |\n| **Total do núcleo** | **${linhas.length}** |\n\n`;
+const comF1 = linhas.filter((l) => l.f1 !== "—");
+const locais = FERRAMENTAS.filter((f) => !f.ops?.length);
+md += `## F1 — catálogo central de ferramentas\n\n${comF1.length} operações de leitura do núcleo atendidas por ${FERRAMENTAS.length - locais.length} ferramentas do catálogo, mais ${locais.length} locais (${locais.map((f) => f.nome).join(", ")}). Nenhuma escrita: \`preparar_registro\` só entende e prepara (executado:false). Operações CRÍTICAS e escritas continuam fora do catálogo.\n\n| Ferramenta | Operações do núcleo | Valores |\n|---|---|---|\n${FERRAMENTAS.map((f) => `| \`${f.nome}\` | ${(f.ops ?? []).join(", ") || "local"} | ${f.valores ? "sim" : "não"} |`).join("\n")}\n\n`;
 md += `## Por módulo do núcleo\n\n| Módulo | ${ORDEM.join(" | ")} |\n|---|${ORDEM.map(() => "---").join("|")}|\n${Object.entries(porModulo).sort().map(([m, c]) => `| ${m} | ${ORDEM.map((s) => c[s] ?? 0).join(" | ")} |`).join("\n")}\n\n`;
 md += `## Ferramentas de leitura do Agente Crescer (fora do núcleo financeiro)\n\nHoje só no Agente Crescer (painel web). Situação para o MOVA: **PLANEJADA (F1)**, reaproveitadas como ferramentas de leitura com o mesmo escopo de unidade.\n\n${ferramentasAgente.map((f) => `- \`${f}\``).join("\n")}\n\n`;
 md += `## Pedidos sem operação no sistema (INEXISTENTE)\n\n| Pedido | O que existe hoje | Caminho |\n|---|---|---|\n${INEXISTENTES.map((r) => `| ${r.join(" | ")} |`).join("\n")}\n\n`;
-md += `## Operação por operação\n\n| Operação | Módulo | Classe | Permissões | Situação | Como / quando |\n|---|---|---|---|---|---|\n${linhas.map((l) => `| \`${l.operacao}\` | ${l.modulo} | ${l.classe} | ${l.permissoes} | ${l.situacao} | ${l.como} |`).join("\n")}\n`;
+md += `## Operação por operação\n\n| Operação | Módulo | Classe | Permissões | Situação | Como / quando | Ferramenta F1 |\n|---|---|---|---|---|---|---|\n${linhas.map((l) => `| \`${l.operacao}\` | ${l.modulo} | ${l.classe} | ${l.permissoes} | ${l.situacao} | ${l.como} | ${l.f1} |`).join("\n")}\n`;
 
 const destino = join(RAIZ, "docs", "mova-core", "02-matriz-cobertura.md");
 writeFileSync(destino, md);

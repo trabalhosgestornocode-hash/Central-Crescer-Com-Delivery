@@ -1,0 +1,125 @@
+// MOVA CORE — F1: EXECUTOR SEGURO de ferramentas. Toda chamada do modelo passa por aqui, na ordem:
+//   1. ferramenta existe no catálogo (nome desconhecido ⇒ erro, nada executa);
+//   2. argumentos validados pelo esquema ESTRITO (campo desconhecido/tipo errado ⇒ ARGUMENTO_INVALIDO);
+//   3. referências opacas resolvidas (ref de outra unidade ou UUID cru ⇒ REFERENCIA_INVALIDA);
+//   4. unidade: a da conversa, ou uma das unidades que ESTA pessoa pode consultar NESTA conversa (outra ⇒ FORA_DO_ESCOPO);
+//   5. valores: ferramenta com valores só para perfil com consultas "TODAS" e conversa que permite valores;
+//   6. permissão REVALIDADA a cada chamada na concessão gravada do Financeiro (financeiro_v2.ver na unidade alvo);
+//   7. o escopo (organização, unidade, usuário) é INJETADO aqui — o modelo nunca o informa;
+//   8. execução com tempo-limite; resultado compactado, UUIDs trocados por referências, tamanho limitado;
+//   9. auditoria de cada chamada (ferramenta, unidade, argumentos sem dado pessoal, resultado, duração) e cache curto por conversa.
+// Nenhuma ferramenta do catálogo escreve: `preparar_registro` só devolve o pedido entendido (executado:false).
+import { validarEsquema, ErroDeArgumento } from "./esquema.js";
+import { ErroDeReferencia } from "./referencias.js";
+
+export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12 });
+const ACAO_VER = "financeiro_v2.ver";
+
+export class ErroDeFerramenta extends Error {
+  constructor(codigo, mensagem) { super(mensagem ?? codigo); this.codigo = codigo; }
+}
+
+const comTempo = (p, ms) => new Promise((ok, falha) => {
+  const t = setTimeout(() => falha(new ErroDeFerramenta("TEMPO_ESGOTADO", "A consulta demorou demais.")), ms);
+  p.then((v) => { clearTimeout(t); ok(v); }, (e) => { clearTimeout(t); falha(e); });
+});
+
+/**
+ * @param {object} deps
+ * @param {object} deps.catalogo  { nome: ferramenta }
+ * @param {object} deps.porta     { ler(op, escopo, entrada), permissoesDoUsuario(escopo), ehErroDeRegra?(e) }
+ * @param {object} deps.auditoria { registrar(evento) }
+ */
+export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} }, relogio = () => Date.now(), limites = LIMITES_DO_EXECUTOR }) {
+  if (!catalogo || !porta?.ler || !porta?.permissoesDoUsuario) throw new TypeError("executor exige catálogo e porta de leitura");
+
+  /**
+   * Uma requisição (uma mensagem da pessoa): referências, fatos e cache vivem na SESSÃO da conversa (criada por quem chama).
+   * @param {object} sessao { organizacaoId, unidadeId, usuarioId, unidadesPermitidas:[{id,nome}], perfil:{consultas}, podeValores, referencias, fatos:[], cache:Map, requisicaoId }
+   */
+  async function executar(sessao, chamada) {
+    const inicio = relogio();
+    const nome = chamada?.name;
+    const registro = { tipo: "MOVA_CORE_FERRAMENTA", requisicaoId: sessao.requisicaoId ?? null, ferramenta: nome ?? null, unidadeId: sessao.unidadeId };
+    const falhar = (codigo, mensagem) => {
+      auditoria.registrar({ ...registro, ok: false, codigo, ms: relogio() - inicio });
+      return { ok: false, codigo, conteudo: JSON.stringify({ erro: codigo, mensagem }) };
+    };
+    sessao.chamadas = (sessao.chamadas ?? 0) + 1;
+    if (sessao.chamadas > limites.maxChamadasPorRequisicao) return falhar("LIMITE_DE_CHAMADAS", "Limite de consultas desta pergunta atingido.");
+    const f = Object.hasOwn(catalogo, nome) ? catalogo[nome] : null;
+    if (!f) return falhar("FERRAMENTA_DESCONHECIDA", `Não existe a ferramenta ${String(nome).slice(0, 60)}.`);
+
+    let args;
+    try { args = validarEsquema(f.esquema, chamada.input ?? {}); }
+    catch (e) { if (e instanceof ErroDeArgumento) return falhar("ARGUMENTO_INVALIDO", e.message); throw e; }
+
+    // unidade alvo: só dentre as permitidas NESTA conversa (referência opaca de listar_unidades)
+    let unidadeId = sessao.unidadeId;
+    try {
+      if (args.unidade !== undefined) unidadeId = sessao.referencias.resolver(args.unidade, "__unidades__");
+      args = sessao.referencias.resolver(Object.fromEntries(Object.entries(args).filter(([k]) => k !== "unidade")), unidadeId);
+    } catch (e) { if (e instanceof ErroDeReferencia) return falhar("REFERENCIA_INVALIDA", e.message); throw e; }
+    if (!sessao.unidadesPermitidas.some((u) => u.id === unidadeId)) return falhar("FORA_DO_ESCOPO", "Essa unidade não pode ser consultada nesta conversa.");
+    registro.unidadeId = unidadeId;
+
+    if (f.valores && !(sessao.perfil?.consultas === "TODAS" && sessao.podeValores)) return falhar("SEM_PERMISSAO_PARA_VALORES", "Valores financeiros não podem ser mostrados para este perfil ou nesta conversa.");
+
+    const escopo = Object.freeze({ organizacaoId: sessao.organizacaoId, unidadeId, usuarioId: sessao.usuarioId });
+    if (!f.local) {
+      let acoes;
+      try { acoes = await porta.permissoesDoUsuario(escopo); } catch { return falhar("FINANCEIRO_INDISPONIVEL", "Não consegui conferir a permissão agora."); }
+      if (!(acoes ?? []).includes(ACAO_VER)) return falhar("SEM_PERMISSAO", "Sem permissão de consulta financeira nesta unidade.");
+    }
+
+    const chave = `${nome}|${unidadeId}|${JSON.stringify(args)}`;
+    const emCache = sessao.cache?.get(chave);
+    let r;
+    if (emCache && relogio() - emCache.em < limites.cacheMs && !f.local) { r = emCache.r; registro.cache = true; }
+    else {
+      try {
+        r = await comTempo(Promise.resolve(f.executar({ porta, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), limites.tempoMs);
+      } catch (e) {
+        if (e instanceof ErroDeFerramenta) return falhar(e.codigo, e.message);
+        if (porta.ehErroDeRegra?.(e)) return falhar("NAO_ENCONTRADO_OU_INVALIDO", "O Financeiro não encontrou isso nesta unidade.");
+        // indisponibilidade real (rede/banco) chega como ErroTransitorio da porta; qualquer outra coisa é DEFEITO da ferramenta
+        if (e?.name === "ErroTransitorio" || e?.constructor?.name === "ErroTransitorio") return falhar("FINANCEIRO_INDISPONIVEL", "O Financeiro não respondeu agora.");
+        registro.defeito = String(e?.message ?? e).slice(0, 200);
+        return falhar("FALHA_INTERNA_DA_FERRAMENTA", "Não consegui ler esse dado agora.");
+      }
+      if (!f.local) sessao.cache?.set(chave, { r, em: relogio() });
+    }
+    if (r?.erro) return falhar(r.erro, r.dados?.mensagem);
+
+    const unidade = sessao.unidadesPermitidas.find((u) => u.id === unidadeId);
+    // unidades viram referência no espaço próprio "__unidades__"; o restante no espaço da unidade alvo
+    let dados = r.dados;
+    if (nome === "listar_unidades") dados = { unidades: dados.unidades.map((u) => ({ ...u, id: sessao.referencias.opacar(u.id, "__unidades__") })) };
+    else dados = sessao.referencias.opacar(dados, unidadeId);
+    for (const x of r.fatos ?? []) sessao.fatos.push({ ...x, unidadeId, unidade: unidade?.nome ?? null, ferramenta: nome });
+    if (r.numeros) sessao.fatos.push({ valorCentavos: null, numeros: r.numeros, ferramenta: nome });
+    // inteiros não-monetários (entregas, quantidades) também podem entrar em `calcular`
+    coletarNumeros(r.dados, sessao);
+
+    let conteudo = JSON.stringify({ unidade: unidade?.nome ?? null, ...dados });
+    if (conteudo.length > limites.maxCaracteres) conteudo = `${conteudo.slice(0, limites.maxCaracteres)}…[resultado cortado: refine o filtro]`;
+    auditoria.registrar({ ...registro, ok: true, ms: relogio() - inicio, caracteres: conteudo.length, fatos: (r.fatos ?? []).length, escrita: f.escrita ?? null });
+    return { ok: true, conteudo, ferramenta: nome, unidadeId };
+  }
+  return Object.freeze({ executar });
+}
+
+function coletarNumeros(o, sessao, prof = 0) {
+  if (prof > 5 || !o || typeof o !== "object") return;
+  const ns = [];
+  for (const [k, v] of Object.entries(o)) {
+    if (Number.isInteger(v) && !k.endsWith("Centavos")) ns.push(v);
+    else if (v && typeof v === "object") coletarNumeros(v, sessao, prof + 1);
+  }
+  if (ns.length) sessao.fatos.push({ valorCentavos: null, numeros: ns, ferramenta: null });
+}
+
+/** Sessão de UMA requisição, ligada à memória da conversa (referências persistem na conversa, fatos e cache por requisição). */
+export function novaSessao({ conversa, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId }) {
+  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, referencias: conversa.referencias, fatos: [...(conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
+}

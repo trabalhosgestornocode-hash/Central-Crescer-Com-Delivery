@@ -37,6 +37,8 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   "previaDoVinculoDoExtrato",
   // Agente 2 — Frente D: o fechamento do PRÓPRIO entregador (histórico e detalhe da semana) — só leitura.
   "consultarEntregador", "detalharFechamentoDoEntregador",
+  // MOVA CORE F1 (24/11) — caixa físico e bancos para o catálogo de ferramentas: leituras (tesouraria.consulta / b.consultar).
+  "consultarCaixaEBancos", "consultarMovimentosDeCaixa",
   // Execução 17: pagamentos por comprovante ainda sem conciliação e as saídas candidatas do extrato — só leitura.
   "consultarPagamentosPorComprovanteAConciliar",
 ]);
