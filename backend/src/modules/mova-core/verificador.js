@@ -71,7 +71,10 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
   const entidadesConhecidas = [...new Set(monetarios.map((f) => f.entidade).filter((e) => e && String(e).length >= 3))];
 
   valores.forEach((v, i) => {
-    const candidatos = monetarios.filter((f) => casaValor(f, v));
+    const todos = monetarios.filter((f) => casaValor(f, v));
+    // §3: "R$ 0,00" que só casa com a soma de uma consulta SEM REGISTROS não é um valor apurado ("não encontrei" ≠ "gastou zero")
+    if (todos.length && v.valorCentavos === 0 && todos.every((f) => f.semRegistros)) { violacoes.push({ tipo: "ZERO_SEM_REGISTRO", valor: v.texto }); return; }
+    const candidatos = todos.filter((f) => !f.semRegistros);
     if (!candidatos.length) { violacoes.push({ tipo: "VALOR_SEM_FONTE", valor: v.texto }); return; }
     // segmento: a FRASE/LINHA deste valor, entre o valor anterior e o próximo (avaliação real 24/11: em listas, o nome da linha
     // seguinte ficava "mais perto" e o valor era atribuído a ele)

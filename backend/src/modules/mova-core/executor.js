@@ -49,6 +49,8 @@ const comTempo = (p, ms) => new Promise((ok, falha) => {
  * @param {object} deps.porta     { ler(op, escopo, entrada), permissoesDoUsuario(escopo), ehErroDeRegra?(e) }
  * @param {object} deps.auditoria { registrar(evento) }
  */
+import { COMO_COMUNICAR, marcarFatos, situacaoDoCodigo, situacaoDoResultado } from "./situacao.js";
+
 export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} }, relogio = () => Date.now(), limites = LIMITES_DO_EXECUTOR }) {
   if (!catalogo || !porta?.ler || !porta?.permissoesDoUsuario) throw new TypeError("executor exige catálogo e porta de leitura");
 
@@ -61,8 +63,11 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     const nome = chamada?.name;
     const registro = { tipo: "MOVA_CORE_FERRAMENTA", requisicaoId: sessao.requisicaoId ?? null, ferramenta: nome ?? null, unidadeId: sessao.unidadeId };
     const falhar = (codigo, mensagem) => {
-      auditoria.registrar({ ...registro, ok: false, codigo, ms: relogio() - inicio });
-      return { ok: false, codigo, conteudo: JSON.stringify({ erro: codigo, mensagem }) };
+      // §3: a falha também diz a SITUAÇÃO (bloqueado ≠ falha técnica ≠ sem registros ≠ indisponível) e como comunicá-la
+      const situacao = situacaoDoCodigo(codigo);
+      auditoria.registrar({ ...registro, ok: false, codigo, situacao, ms: relogio() - inicio });
+      if (situacao) (sessao.situacoes ??= []).push({ ferramenta: nome ?? null, situacao, codigo });
+      return { ok: false, codigo, situacao, conteudo: JSON.stringify({ erro: codigo, mensagem, ...(situacao ? { situacao, comoComunicar: COMO_COMUNICAR[situacao] } : {}) }) };
     };
     sessao.chamadas = (sessao.chamadas ?? 0) + 1;
     if (sessao.chamadas > limites.maxChamadasPorRequisicao) return falhar("LIMITE_DE_CHAMADAS", "Limite de consultas desta pergunta atingido.");
@@ -112,6 +117,9 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
       if (!f.local) sessao.cache?.set(chave, { r, em: relogio() });
     }
     if (r?.erro) return falhar(r.erro, r.dados?.mensagem);
+    const situacao = situacaoDoResultado(r);
+    (sessao.situacoes ??= []).push({ ferramenta: nome, situacao, codigo: null });
+    r = { ...r, fatos: marcarFatos(r.fatos, situacao) };
 
     const unidade = sessao.unidadesPermitidas.find((u) => u.id === unidadeId);
     // unidades viram referência no espaço próprio "__unidades__"; o restante no espaço da unidade alvo
@@ -125,10 +133,10 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     // inteiros não-monetários (entregas, quantidades) também podem entrar em `calcular`
     coletarNumeros(r.dados, sessao);
 
-    let conteudo = JSON.stringify({ unidade: unidade?.nome ?? null, ...(f.valores === false ? dados : comReais(dados)) });
+    let conteudo = JSON.stringify({ unidade: unidade?.nome ?? null, situacao, ...(COMO_COMUNICAR[situacao] ? { comoComunicar: COMO_COMUNICAR[situacao] } : {}), ...(f.valores === false ? dados : comReais(dados)) });
     if (conteudo.length > limites.maxCaracteres) conteudo = `${conteudo.slice(0, limites.maxCaracteres)}…[resultado cortado: refine o filtro]`;
     auditoria.registrar({ ...registro, ok: true, ms: relogio() - inicio, caracteres: conteudo.length, fatos: (r.fatos ?? []).length, escrita: f.escrita ?? null });
-    return { ok: true, conteudo, ferramenta: nome, unidadeId };
+    return { ok: true, conteudo, ferramenta: nome, unidadeId, situacao };
   }
   return Object.freeze({ executar });
 }

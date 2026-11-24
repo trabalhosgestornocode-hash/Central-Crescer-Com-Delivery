@@ -25,6 +25,9 @@ const rotulo = (o) => o?.nome ?? o?.fornecedor?.nome ?? o?.contraparte?.nome ?? 
 
 // ------------------------------------------------------------------------------------------------ fatos para o verificador
 /** Fato = um valor que a resposta pode citar, com o que ele SIGNIFICA. */
+const semAcento = (x) => String(x ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** A linha pedida ("cmv", "resultado") está na apuração? Compara pelo código e pelo nome oficiais, sem acento. */
+const linhaPedidaPresente = (pedido, linhas) => { const q = semAcento(pedido); return q.length > 0 && linhas.some((l) => semAcento(l.codigo).includes(q) || semAcento(l.nome).includes(q)); };
 const fato = (valorCentavos, significado, { entidade = null, periodo = null } = {}) => (Number.isInteger(valorCentavos) ? { valorCentavos, significado, entidade, periodo } : null);
 const fatos = (...xs) => xs.flat().filter(Boolean);
 
@@ -118,14 +121,20 @@ export const FERRAMENTAS = [
   {
     nome: "resultado_do_mes",
     descricao: "Apuração (DRE gerencial) de uma competência: receita, custos, despesas, resultado e indicadores, com o que ainda está pendente de conferência.",
-    esquema: { type: "object", properties: { competencia: COMPETENCIA, unidade: UNIDADE }, required: ["competencia"] },
+    esquema: { type: "object", properties: { competencia: COMPETENCIA, unidade: UNIDADE,
+      indicadores: { type: "array", items: { type: "string", maxLength: 40 }, maxItems: 8, description: "Linhas pedidas pela pessoa, como ela disse (ex.: [\"cmv\"], [\"resultado\"]). As que a apuração não trouxer voltam como NÃO CALCULÁVEIS." } }, required: ["competencia"] },
     valores: true, ops: ["apurarCompetencia"],
     async executar({ porta, escopo, args }) {
       const r = await porta.ler("apurarCompetencia", escopo, { competencia: args.competencia });
       // indicadores oficiais da apuração; valor nulo = BLOQUEADO (evidência insuficiente) — a resposta deve dizer isso, não "zero"
       const linhas = Object.values(r?.indicadores ?? {}).map((l) => ({ codigo: l.codigo, nome: l.nome, valorCentavos: l.valorCentavos ?? null, situacao: l.situacao ?? null, percentualDoBruto: l.percentualDoBruto ?? null }));
-      return { dados: { competencia: args.competencia, metodologia: r?.metodologia?.nome ?? null, indicadores: linhas.slice(0, 60), pendencias: (r?.pendencias ?? []).length,
-        aviso: linhas.some((l) => l.valorCentavos === null) ? "Indicadores com valorCentavos nulo estão BLOQUEADOS (falta evidência): não são zero." : null },
+      // §3: linhas-padrão da DRE que a apuração desta unidade NÃO trouxe são NÃO CALCULÁVEIS aqui (não existem, não são zero)
+      const naoApuradas = (args.indicadores ?? []).filter((x) => !linhaPedidaPresente(x, linhas));
+      const bloqueadas = linhas.filter((l) => l.valorCentavos === null).map((l) => l.nome);
+      return { situacao: linhas.length === 0 ? "SEM_REGISTROS" : naoApuradas.length && naoApuradas.length === (args.indicadores ?? []).length ? "NAO_CALCULAVEL" : naoApuradas.length ? "PARCIAL" : undefined,
+        dados: { competencia: args.competencia, metodologia: r?.metodologia?.nome ?? null, indicadores: linhas.slice(0, 60), pendencias: (r?.pendencias ?? []).length,
+        indicadoresNaoCalculaveis: [...naoApuradas, ...bloqueadas],
+        aviso: naoApuradas.length || bloqueadas.length ? `NÃO CALCULÁVEIS nesta apuração (não informar valor, não são zero): ${[...naoApuradas, ...bloqueadas].join(", ")}.` : null },
         fatos: linhas.map((l) => fato(l.valorCentavos, `DRE:${l.codigo}`, { entidade: l.nome, periodo: args.competencia })).filter(Boolean) };
     },
   },
