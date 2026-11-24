@@ -54,6 +54,12 @@ export const DADOS = {
     dre: { "2026-11": { FATURAMENTO_BRUTO_PROPRIO: 8540000, CMV: 2990000, DESPESAS_OPERACIONAIS: 2450000, RESULTADO_OPERACIONAL: 1180000 }, "2026-10": { FATURAMENTO_BRUTO_PROPRIO: 9120000, CMV: 3010000, DESPESAS_OPERACIONAIS: 2380000, RESULTADO_OPERACIONAL: 1760000 } },
     pendencias: [{ grupo: "CAIXA_E_CONCILIACAO", titulo: "3 saídas do extrato sem vínculo" }, { grupo: "CAIXA_E_CONCILIACAO", titulo: "Diferença de caixa em 23/11" }, { grupo: "CONTAS_E_PAGAMENTOS", titulo: "Conta vencida sem pagamento: Atacadão" }, { grupo: "DOCUMENTAIS", titulo: "Comprovante faltando: Laticínios" }],
     documentos: 23,
+    // F4/§9 (conjunto FINAL): sangrias com e sem prestação de contas. 20/11 já passou do prazo de 48 h; 23/11 ainda não.
+    sangrias: [
+      { movimentacaoId: "eeeeeeee-0000-4000-8000-00000000s001", data: "2026-11-20", descricao: "Compra de material de limpeza", valorCentavos: 5000, despesasCentavos: 3200, trocoDevolvidoCentavos: 0, pendenteCentavos: 1800, despesas: [{ descricao: "Detergente e esponjas", valorCentavos: 3200, comprovantePendente: true }], estado: "ATRASADA" },
+      { movimentacaoId: "eeeeeeee-0000-4000-8000-00000000s002", data: "2026-11-23", descricao: "Comprar grampos", valorCentavos: 1500, despesasCentavos: 0, trocoDevolvidoCentavos: 0, pendenteCentavos: 1500, despesas: [], estado: "AGUARDANDO_DESTINO" },
+      { movimentacaoId: "eeeeeeee-0000-4000-8000-00000000s003", data: "2026-11-18", descricao: "Troca de lâmpadas", valorCentavos: 12000, despesasCentavos: 11500, trocoDevolvidoCentavos: 500, pendenteCentavos: 0, despesas: [{ descricao: "Lâmpadas LED", valorCentavos: 11500, comprovantePendente: false }], estado: "PRESTADA" },
+    ],
   },
   [NORTE]: {
     contas: [conta("Doce Brownie Ltda", "Brownies novembro", 21000, 0, "2026-11-27", "2026-11"), conta("Energia Elétrica", "Conta de luz novembro", 61000, 61000, "2026-11-15", "2026-11", "UTILIDADES")],
