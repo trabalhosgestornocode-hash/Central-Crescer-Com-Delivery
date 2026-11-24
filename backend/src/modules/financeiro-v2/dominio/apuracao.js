@@ -58,6 +58,11 @@ const assinado = (l) => (l.natureza === N.RECEITA ? l.valorCentavos : -l.valorCe
  * partes é exatamente 10000 quando as partes somam o total. Partes negativas (prejuízo, resultado financeiro negativo)
  * entram com sinal — nada é forçado a ser positivo. Total ≤ 0 ou nulo: sem percentuais.
  */
+/** Agrupamentos de apresentação na composição da DRE (não mudam valores, categorias nem a impressão). */
+export const GRUPOS_DE_APRESENTACAO = Object.freeze([
+  { codigo: "ENTREGA_SOB_DEMANDA", nome: "Entrega Sob Demanda (iFood)", casa: (l) => /^ifood-conciliacao:[^:]+:ENTREGA_SOB_DEMANDA:/.test(String(l.fonte?.idExterno ?? "")) },
+]);
+
 export function participacoes(partes, total) {
   if (!Number.isSafeInteger(total) || total <= 0) return null;
   const T = BigInt(total);
@@ -191,6 +196,15 @@ export function apurar(d, p) {
       const f = folha(l, s, total);
       let atual = noDaCategoria(categorias.get(l.categoriaId) ?? porCodigo.get(l.categoria));
       if (!atual) { atual = noDaCategoria({ codigo: l.categoria, nome: l.categoria, natureza: l.natureza, paiId: null }); }
+      // Só apresentação: as cobranças diárias de entrega sob demanda do iFood ficam num nó próprio dentro da categoria
+      // (mesma soma; a impressão da apuração depende só das entradas). A tela mostra ali a quantidade de entregas.
+      const grupo = GRUPOS_DE_APRESENTACAO.find((g) => g.casa(l));
+      if (grupo) {
+        const id = `GRUPO:${grupo.codigo}:${atual.id}`;
+        if (!nos.has(id)) { const no = { id, nome: grupo.nome, natureza: l.natureza, valorCentavos: 0, sinal: 0, origem: null, situacao: "REGISTRADO", referencias: { grupo: grupo.codigo }, filhos: [], ligado: true }; nos.set(id, no); atual.filhos.push(no); }
+        nos.get(id).filhos.push(f);
+        continue;
+      }
       atual.filhos.push(f);
     }
     // Sobe a hierarquia: cada categoria com valor vira filha da categoria pai (até a raiz da classificação).

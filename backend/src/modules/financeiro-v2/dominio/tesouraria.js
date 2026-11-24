@@ -136,6 +136,17 @@ export function situacaoAPagar(o, hoje, { provisoria = false } = {}) {
   return o.liquidadoCentavos > 0 ? SITUACAO_A_PAGAR.PARCIALMENTE_PAGO : SITUACAO_A_PAGAR.EM_ABERTO;
 }
 
+/** Pagamentos do dia agrupados pela SAÍDA (baixa agrupada = várias contas, um pagamento), sem perder cada conta. */
+export function agruparPorSaida(pagos) {
+  const grupos = new Map();
+  for (const g of pagos) {
+    const k = g.movimentacaoId ?? `conta:${g.tituloId}:${grupos.size}`;
+    if (!grupos.has(k)) grupos.set(k, { movimentacaoId: g.movimentacaoId ?? null, conta: g.conta ?? null, itens: [] });
+    grupos.get(k).itens.push(g);
+  }
+  return [...grupos.values()].map((x) => ({ ...x, valorCentavos: somarLista(x.itens, (g) => g.valorCentavos) }));
+}
+
 function pagamentosDoTitulo(p, tituloId) {
   return (p.liquidacoesPorAlvo.get(tituloId) ?? []).map((q) => {
     const mov = p.movPorId.get(q.movimentacaoId);
@@ -690,7 +701,7 @@ export function calendarioFinanceiro(d, hoje, { mes }) {
   const [inicio, fim] = [primeiroDiaDe(mes), ultimoDiaDe(mes)];
   const titulos = p.obrigacoes.map((o) => tituloAPagar(p, o, hoje)).filter((t) => t.situacao !== SITUACAO_A_PAGAR.CANCELADO);
   const porVencimento = agrupar(titulos.filter((t) => t.vencimento >= inicio && t.vencimento <= fim), (t) => t.vencimento);
-  const pagamentos = titulos.flatMap((t) => t.pagamentos.filter((g) => g.data >= inicio && g.data <= fim).map((g) => ({ data: g.data, valorCentavos: g.valorCentavos, conta: g.conta, tituloId: t.id, fornecedor: t.fornecedor?.nome ?? null, descricao: t.descricao })));
+  const pagamentos = titulos.flatMap((t) => t.pagamentos.filter((g) => g.data >= inicio && g.data <= fim).map((g) => ({ data: g.data, valorCentavos: g.valorCentavos, conta: g.conta, movimentacaoId: g.movimentacaoId ?? null, tituloId: t.id, fornecedor: t.fornecedor?.nome ?? null, descricao: t.descricao })));
   const porPagamento = agrupar(pagamentos, (g) => g.data);
   const porRecorrencia = agrupar(recorrencias(p, hoje, fim).previstas.filter((r) => r.data >= inicio), (r) => r.data);
   const resumo = (t) => ({ id: t.id, fornecedor: t.fornecedor?.nome ?? null, descricao: t.descricao, categoria: t.categoria?.nome ?? null, parcela: t.parcela, vencimento: t.vencimento, valorOriginalCentavos: t.valorOriginalCentavos, pagoCentavos: t.pagoCentavos, saldoCentavos: t.saldoCentavos, situacao: t.situacao, recorrente: Boolean(t.recorrencia) });
@@ -709,7 +720,7 @@ export function calendarioFinanceiro(d, hoje, { mes }) {
       pagas: { quantidade: pagos.length, valorCentavos: somarLista(pagos, (g) => g.valorCentavos) },
       recorrentesPrevistas: { quantidade: recorrentes.length, valorCentavos: somarLista(recorrentes, (r) => r.valorCentavos) },
       emAbertoCentavos: somarLista(abertos, (t) => t.saldoCentavos),
-      titulos: doDia.map(resumo), pagamentos: pagos, recorrentes,
+      titulos: doDia.map(resumo), pagamentos: pagos, recorrentes, pagamentosAgrupados: agruparPorSaida(pagos),
     });
   }
   const soma = (fn) => somarLista(dias, fn);

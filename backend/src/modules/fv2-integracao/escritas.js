@@ -291,6 +291,13 @@ export const ESCRITAS = Object.freeze({
       ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true, ...(marcado(b.pagamentoAntecipado) ? { pagamentoAntecipado: true } : {}),
     });
   } },
+  // Baixa AGRUPADA: várias contas (saldo de cada uma) quitadas por UMA saída já registrada. Nenhuma saída ou despesa nova.
+  "/obrigacoes/vincular-extrato-agrupado": { campos: ["obrigacoes", "movimentacao", "versao", "documento", "justificativa"], fazer: (n, c, b) => n.vincularPagamentoAgrupado(c, {
+    obrigacaoIds: String(b.obrigacoes ?? "").split(",").filter(Boolean).slice(0, 50).map(id), movimentacaoId: id(b.movimentacao), versaoMovimentacao: inteiro(b.versao),
+    ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true,
+  }) },
+  // Reversão controlada: estorna TODAS as baixas da saída numa só transação (cada estorno fica auditado).
+  "/obrigacoes/reverter-baixa-agrupada": { campos: ["movimentacao", "versao", "justificativa"], fazer: (n, c, b) => n.reverterPagamentoAgrupado(c, { movimentacaoId: id(b.movimentacao), versaoMovimentacao: inteiro(b.versao), justificativa: b.justificativa, confirmar: true }) },
   // Cancelar uma conta a pagar (o grupo inteiro e o lançamento, nada é apagado). O núcleo recusa se houver pagamento vinculado.
   "/obrigacoes/cancelar": { campos: ["obrigacao", "justificativa"], fazer: (n, c, b) => n.cancelarObrigacao(c, { obrigacaoId: id(b.obrigacao), justificativa: b.justificativa }) },
   // Corrigir o VALOR de uma conta a pagar: o histórico é preservado — grava um ajuste (diferença) com motivo, na mesma categoria.

@@ -11,6 +11,7 @@
 //   - Execução 09 — saída ANTERIOR à emissão da conta (pagamento antecipado): sem bloqueio absoluto por data, mas com
 //     alerta na prévia, identificação explícita, documento compatível (conciliação sozinha não basta), justificativa
 //     detalhada e marca auditável na liquidação; sem isso, recusa (o vínculo não é comprovável). Também no banco (0020).
+import { createHash } from "node:crypto";
 import { exigirPagamentoLiberado } from "./guardaEntregadores.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, SENTIDO, SITUACAO_LIQUIDACAO, SITUACAO_MOVIMENTACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
@@ -45,7 +46,13 @@ export const JUSTIFICATIVA_MINIMA_ANTECIPACAO = 30;
 export const antecipacaoDe = (mov, o) => (o.dataEmissao && mov.dataEfetiva < o.dataEmissao
   ? { dias: diasEntre(mov.dataEfetiva, o.dataEmissao), dataSaida: mov.dataEfetiva, dataEmissao: o.dataEmissao } : null);
 
-const chaveDoVinculo = (movId, alocacoes) => `vinculo-extrato:${movId}:${alocacoes.map((a) => `${a.obrigacaoId}=${a.valorCentavos}`).sort().join(",")}`;
+// A chave cresce com o número de contas; o banco aceita até 400 caracteres (com o "#<conta>" da liquidação). Listas curtas
+// mantêm o formato de sempre (chaves já gravadas continuam iguais); listas longas (baixa agrupada) usam o sha256 da lista.
+const chaveDoVinculo = (movId, alocacoes) => {
+  const lista = alocacoes.map((a) => `${a.obrigacaoId}=${a.valorCentavos}`).sort().join(",");
+  const chave = `vinculo-extrato:${movId}:${lista}`;
+  return chave.length <= 300 ? chave : `vinculo-extrato:${movId}:sha256:${createHash("sha256").update(lista).digest("hex")}`;
+};
 const lados = (c) => [...(c.ladoA ?? []), ...(c.ladoB ?? [])];
 
 /** Conciliação CONFIRMADA, com evidência, que liga esta saída a esta conta (prova do vínculo sem documento novo). */

@@ -49,7 +49,7 @@ export function criarFonteEntregadores({ db, analisar, cobertura, chaveDe, agora
   }
   return Object.freeze({
     async apurar(p) {
-      const chave = `${p.organizacaoId}|${p.unidadeId}|${p.inicio}`;
+      const chave = `${p.organizacaoId}|${p.unidadeId}|${p.inicio}|${p.fim}`;
       const guardado = cache.get(chave);
       if (guardado && guardado.ate > agora()) return guardado.valor;
       const valor = await ler(p);

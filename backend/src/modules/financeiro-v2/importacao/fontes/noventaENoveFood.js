@@ -4,6 +4,7 @@
 // visíveis, mas não viram receita nem despesa; a diferença para o repasse informado fica em conferência.
 import { DIVERGENCIA, diferenca } from "../motor.js";
 import { col, definirFonte } from "./comum.js";
+import { centavosDeTextoBR } from "../../dominio/dinheiro.js";
 
 export const RELATORIO_99FOOD = "NOVENTA_E_NOVE_FOOD_RELATORIO";
 const TOLERANCIA_POR_VENDA_CENTAVOS = 1; // o valor médio vem arredondado pela plataforma
@@ -29,7 +30,20 @@ export const NOVENTA_E_NOVE_FOOD_RELATORIO = definirFonte({
     const loja = u.texto("loja");
     const nome = u.texto("nome");
     const inteiro = (campo) => { const t = u.bruto(campo); if (!/^\d{1,6}$/.test(t)) { u.erro("VALOR_INVALIDO", `${campo} deve ser um número inteiro.`, campo); return 0; } return Number(t); };
-    const dinheiro = (campo) => { const v = u.valor(campo); if (v !== null && v < 0) u.erro("VALOR_INVALIDO", `${campo} não pode ser negativo.`, campo); return v; };
+    // A exportação em texto da 99Food é pt-BR e apaga zeros à direita: "8.136" = R$ 8.136,00 e "8.847,5" = R$ 8.847,50.
+    // O leitor genérico recusa "8.136" (ambíguo). Aqui ele só vira milhar quando a PRÓPRIA linha prova a convenção
+    // brasileira (alguma coluna de valor com vírgula decimal); sem essa prova, continua recusado. A conferência
+    // quantidade × valor médio (fechar) pega qualquer leitura 1.000× errada.
+    const MONETARIOS = ["itens", "processamento", "comissao", "medio", "recompensas", "repasse", "receitaOferta", "marketing"];
+    const linhaEmPtBr = MONETARIOS.some((c) => /^-?[\d.]+,\d{1,2}$/.test(u.bruto(c)));
+    const dinheiro = (campo) => {
+      const t = u.bruto(campo);
+      let v;
+      if (linhaEmPtBr && /^\d{1,3}(\.\d{3})+$/.test(t)) v = centavosDeTextoBR(t, campo);
+      else v = u.valor(campo);
+      if (v !== null && v < 0) u.erro("VALOR_INVALIDO", `${campo} não pode ser negativo.`, campo);
+      return v;
+    };
     const itensCentavos = dinheiro("itens");
     const processamentoCentavos = dinheiro("processamento");
     const comissaoCentavos = dinheiro("comissao");
