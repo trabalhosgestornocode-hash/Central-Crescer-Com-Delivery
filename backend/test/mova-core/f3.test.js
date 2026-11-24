@@ -105,3 +105,22 @@ test("AN-09 meses sem dado aparecem na cobertura (não viram zero silencioso)", 
   const r = await analisar({ metrica: "VENDAS_BRUTAS", agruparPor: "UNIDADE", competencias: ["2026-10", "2026-11"] });
   assert.deepEqual(r.dados.cobertura.mesesSemDados, ["Alfa Norte 2026-10"]);
 });
+
+test("RS-09 expressão mais específica vence: 'despesas operacionais' é linha da DRE, não a soma das contas; trechos diferentes ficam", async () => {
+  const { criarResolvedorDeConceitos } = await import("../../src/modules/mova-core/resolucao.js");
+  const r = criarResolvedorDeConceitos();
+  assert.deepEqual(r.conceitos("despesas operacionais de novembro").map((c) => c.id), ["LINHA_DO_RESULTADO"]);
+  assert.match(r.orientacao("despesas operacionais de novembro"), /resultado_do_mes/);
+  assert.deepEqual(r.conceitos("quanto gastamos de gás?").map((c) => c.id), ["DESPESA"]);
+  assert.deepEqual(r.conceitos("foi reforço ou entrada do caixa?").map((c) => c.id).sort(), ["ENTRADA_DE_CAIXA", "REFORCO"]);
+});
+
+test("EX-01 valores já em reais para o modelo (formatados pelo código): todo xxxCentavos ganha xxxEmReais; centavos continuam", async () => {
+  const { comReais, emReais } = await import("../../src/modules/mova-core/executor.js");
+  assert.equal(emReais(8230000), "R$ 82.300,00");
+  assert.deepEqual(comReais({ saldoCentavos: 16400, itens: [{ valorCentavos: 1 }], quantidade: 3 }), { saldoCentavos: 16400, saldoEmReais: "R$ 164,00", itens: [{ valorCentavos: 1, valorEmReais: "R$ 0,01" }], quantidade: 3 });
+  const r = await analisar({ metrica: "DESPESAS", agruparPor: "FORNECEDOR", competencias: ["2026-10", "2026-11"] });
+  const at = r.dados.linhas.find((l) => l.grupo === "Atacadão");
+  assert.deepEqual([at.emReais.porCompetencia["2026-11"], at.emReais.diferenca], ["R$ 400,00", "R$ 200,00"]);
+  assert.ok(verificarFidelidade(`O Atacadão foi de ${at.emReais.porCompetencia["2026-10"]} para ${at.emReais.porCompetencia["2026-11"]}.`, { fatos: r.fatos }).ok, "o formato do código é o que o verificador lê");
+});

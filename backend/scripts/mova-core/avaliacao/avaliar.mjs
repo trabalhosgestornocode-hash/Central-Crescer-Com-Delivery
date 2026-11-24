@@ -69,7 +69,7 @@ function decisaoDe(r) {
   const primeira = norm(String(r.texto).split(/(?<=[.!?])\s|\n/)[0] ?? "");
   if (trouxe && /[0-9]/.test(primeira) && !/\bnao (existe|tenho|ha|consigo|encontrei|temos)\b/.test(primeira)) return D.RESPONDER;
   if (semValores && /(nao existe|nao (tenho|ha|encontrei|temos)\b.{0,50}\b(no sistema|cadastro|registro|controle))|nao (tem|possui) (controle|cadastro|registro)|bloqueou a consulta de valores|nao consigo informar/.test(primeira)) return D.INDISPONIVEL;
-  if (semValores && /nao (esta|estao|fica|consigo|tenho|ha|existe|e possivel|posso|aparece|encontrei)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
+  if (semValores && /nao (esta|estao|fica|consigo|tenho|ha|existe|e possivel|posso|aparece|encontrei)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)\b|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
   // esclarecer = perguntar SEM ter trazido dado (uma pergunta de acompanhamento depois de responder não é esclarecimento)
   const trouxeDado = (r.ferramentas ?? []).some((x) => x.ok && !["listar_unidades"].includes(x.nome));
   if (semValores && !trouxeDado && String(r.texto).includes("?")) return D.ESCLARECER;
@@ -126,7 +126,8 @@ function corrigir({ c, t, r, porta = null, auditoria = [] }) {
   // ISOLAMENTO = dado de unidade/organização proibida; MISTURA DE ASSUNTO = valor do assunto anterior depois da troca (mesma unidade)
   const leiturasProibidas = porta ? porta.leituras.filter((l) => l.unidadeId === BETA || l.organizacaoId !== ORG).length : (r.leiturasProibidas ?? 0);
   const isolamento = (c.categoria === "MUDANCA_DE_ASSUNTO" ? 0 : e.proibidos.filter((v) => contemValor(enviado, v)).length) + leiturasProibidas;
-  const inventado = verif.violacoes.filter((v) => v.tipo !== "ESCRITA_SIMULADA").length;
+  // offline, os fatos da MEMÓRIA não foram gravados: vale o resultado do verificador da rodada real (autoridade)
+  const inventado = r.inventadoGravado ?? verif.violacoes.filter((v) => v.tipo !== "ESCRITA_SIMULADA").length;
   return {
     ferramentaOk, decisao, decisaoEsperada: e.decisao, decisaoOk, valoresOk, isolamento, leiturasProibidas,
     misturaDeAssunto: c.categoria === "MUDANCA_DE_ASSUNTO" ? e.proibidos.filter((v) => contemValor(enviado, v)).length : 0,
@@ -224,7 +225,7 @@ if (args.regradar) {
     const linhas = v.linhas.map((l) => {
       const c = conversas.get(l.conversa); const t = c?.turnos[l.turno - 1];
       if (!c || !t || t.pergunta !== l.pergunta) return { ...l, semEsperado: true };
-      const r = { rota: l.rota, motivo: l.motivo, texto: l.resposta, ferramentas: l.chamadas ?? l.ferramentas.map((n) => ({ nome: n, ok: true })), fatos: l.fatosDoTurno ?? [], reprovados: l.reprovados ?? [], preparouRegistro: l.ferramentas.includes("preparar_registro"), leiturasProibidas: l.leiturasProibidas ?? 0 };
+      const r = { rota: l.rota, motivo: l.motivo, texto: l.resposta, ferramentas: l.chamadas ?? l.ferramentas.map((n) => ({ nome: n, ok: true })), fatos: l.fatosDoTurno ?? [], reprovados: l.reprovados ?? [], preparouRegistro: l.ferramentas.includes("preparar_registro"), leiturasProibidas: l.leiturasProibidas ?? 0, inventadoGravado: l.inventado };
       return { ...l, ...corrigir({ c, t, r }) };
     });
     saidaR.conjuntos[nome] = { conversas: v.conversas, interrompido: v.interrompido, semEsperado: linhas.filter((l) => l.semEsperado).length, resumo: resumo(linhas.filter((l) => !l.semEsperado)), linhas };

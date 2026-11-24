@@ -8,6 +8,7 @@
 // omitidas). Recorte parcial NUNCA sai como total consolidado.
 import { COMPETENCIA, TEXTO_CURTO } from "./esquema.js";
 import { bate, itemAPagar, todasAsPaginas } from "./leituras.js";
+import { emReais } from "./executor.js";
 
 const ACAO_VER = "financeiro_v2.ver";
 const CANAIS = ["BALCAO", "IFOOD", "ANOTA_AI", "NOVENTA_E_NOVE_FOOD", "OUTRO"];
@@ -205,6 +206,12 @@ export const FERRAMENTA_ANALISAR = Object.freeze({
     const totalGeral = !m.razao && monetario ? devolvidas.reduce((a, l) => a + (l.porCompetencia[fim] ?? 0), 0) : null;
     const consolidado = cobertura.completa && cobertura.linhasOmitidas === 0;
     if (Number.isInteger(totalGeral) && agruparPor !== "NENHUM") fatos.push({ valorCentavos: totalGeral, significado: consolidado ? "CALCULO:SOMA" : "CALCULO:SOMA:RECORTE", entidade: consolidado ? null : "linhas mostradas", periodo: fim, derivado: true });
-    return { dados: { metrica: m.rotulo, agrupamento: agruparPor, competencias, linhas: devolvidas, ...(Number.isInteger(totalGeral) && agruparPor !== "NENHUM" ? { [consolidado ? "totalDoUltimoMes" : "totalDasLinhasMostradas"]: totalGeral } : {}), cobertura, valoresEm: monetario ? "centavos" : "quantidade" }, fatos, numeros };
+    // valores monetários também JÁ EM REAIS (formatados pelo código: o modelo cita, não converte)
+    const r$ = (v) => (Number.isInteger(v) ? emReais(v) : undefined);
+    const linhasSaida = !monetario ? devolvidas : devolvidas.map((l) => ({ ...l, emReais: {
+      porCompetencia: Object.fromEntries(Object.entries(l.porCompetencia).filter(([, v]) => Number.isInteger(v)).map(([k, v]) => [k, emReais(v)])),
+      total: r$(l.total), mediaDoPeriodo: r$(l.mediaDoPeriodo), diferenca: r$(l.diferenca) } }));
+    const chaveTotal = consolidado ? "totalDoUltimoMes" : "totalDasLinhasMostradas";
+    return { dados: { metrica: m.rotulo, agrupamento: agruparPor, competencias, linhas: linhasSaida, ...(Number.isInteger(totalGeral) && agruparPor !== "NENHUM" ? { [chaveTotal]: totalGeral, [`${chaveTotal}EmReais`]: emReais(totalGeral) } : {}), cobertura, valoresEm: monetario ? "centavos (com emReais ao lado)" : "quantidade" }, fatos, numeros };
   },
 });
