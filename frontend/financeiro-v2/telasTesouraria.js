@@ -64,6 +64,72 @@ const barraDePago = (x) => {
   const pct = Math.min(100, Math.round((x.pagoCentavos / x.valorOriginalCentavos) * 100));
   return `<progress class="barra-pago" max="100" value="${pct}" aria-label="${pct}% já pago">${pct}%</progress>`;
 };
+/* ===== Baixa AGRUPADA: várias contas × uma saída do extrato ===== */
+/** Caixa de seleção de uma conta em aberto (lista e calendário). A soma é calculada no servidor, na prévia. */
+function marcadorAgrupado(x, pode) {
+  if (!pode || !(x.saldoCentavos > 0) || ["CANCELADO", "PAGO"].includes(x.situacao)) return "";
+  return `<label class="marcar-agrupado"><input type="checkbox" data-selecao-agrupada value="${esc(x.id)}"><span class="sr">Selecionar ${esc(descricaoLegivel(x.descricao))}</span></label>`;
+}
+const barraAgrupada = (pode) => (pode ? `<div class="barra-agrupada" data-barra-agrupada hidden><span><strong data-qtd-agrupada>0</strong> conta(s) selecionada(s) · a soma e a diferença aparecem na prévia</span><button type="button" class="botao botao--primario" data-baixa-agrupada>Baixar juntas pelo extrato</button></div>` : "");
+
+/** Pagamentos do dia agrupados pela saída: um pagamento único que quitou várias contas aparece uma vez, expansível. */
+function pagamentosDoDia(d) {
+  const linha = (g) => `<li><span>${esc(g.fornecedor ?? "")} · ${esc(descricaoLegivel(g.descricao))} · ${esc(g.conta ?? "")}</span>${valor(g.valorCentavos)}</li>`;
+  if (!d.pagamentosAgrupados) return d.pagamentos.map(linha).join("");
+  return d.pagamentosAgrupados.map((p) => (p.itens.length === 1 ? linha(p.itens[0])
+    : `<li class="pagamento-agrupado"><details><summary><span>Pagamento único · ${p.itens.length} contas · ${esc(p.conta ?? "")}</span>${valor(p.valorCentavos)}</summary><ul class="lista-simples">${p.itens.map((g) => `<li><span>${esc(g.fornecedor ?? "")} · ${esc(descricaoLegivel(g.descricao))}</span>${valor(g.valorCentavos)}</li>`).join("")}</ul>${p.movimentacaoId ? `<button type="button" class="botao-link" data-detalhe="pagamento:${esc(p.movimentacaoId)}">Ver o pagamento</button>` : ""}</details></li>`)).join("");
+}
+
+/** Prévia da baixa agrupada: contas, soma, escolha da saída, diferença e confirmação. */
+export function detalheBaixaAgrupada(d, ctx = {}) {
+  const ids = d.contas.map((c) => c.id).join(",");
+  const e = d.escolhida;
+  const contas = `<table class="tabela tabela--compacta"><caption class="sr">Contas selecionadas</caption><thead><tr><th scope="col" class="esquerda">Conta</th><th scope="col">Vencimento</th><th scope="col">Saldo</th></tr></thead><tbody>${d.contas.map((c) => `<tr>${td("Conta", `<strong>${esc(c.contraparte ?? "Fornecedor não identificado")}</strong><br><span class="nota">${esc(descricaoLegivel(c.descricao))} · ${esc(competencia(c.competencia))}</span>${c.bloqueios.length ? ` <span class="selo selo--erro">${esc(c.bloqueios[0])}</span>` : ""}`, "esquerda")}${td("Vencimento", esc(dataBR(c.vencimento)))}${td("Saldo", valor(c.saldoCentavos))}</tr>`).join("")}</tbody><tfoot><tr><th scope="row" colspan="2">Soma das contas</th>${td("Soma", valor(d.somaCentavos))}</tr></tfoot></table>`;
+  const linha = (x) => `<label class="saida${x.competenciaAceitaBaixa ? "" : " saida--bloqueada"}"><input type="radio" name="movimentacao" value="${esc(x.id)}"${e?.id === x.id ? " checked" : ""}${x.competenciaAceitaBaixa ? "" : " disabled"} required>
+<span class="saida__corpo"><span class="saida__topo"><strong>${esc(nomeDaSaida(x.descricao))}</strong><span class="saida__valor">${esc(moeda(x.disponivelCentavos))}</span></span>
+<span class="saida__meta">${esc(dataBR(x.data))} · ${esc(x.conta)}${x.igualASoma ? ' <span class="selo selo--ok">mesmo valor da soma</span>' : ""}${x.competenciaAceitaBaixa ? "" : ' <span class="selo selo--alerta">competência homologada</span>'}</span></span></label>`;
+  const ordenadas = [...d.saidasElegiveis].sort((a, z) => Number(z.igualASoma) - Number(a.igualASoma));
+  const escolher = `<form class="escolha-saida" data-previa-agrupada="${esc(ids)}" aria-label="Escolher a saída do extrato">
+<p class="painel-guia">Escolha a ÚNICA linha do extrato que pagou estas contas. Ela já está no sistema: nada é lançado de novo.</p>
+<div class="lista-saidas">${ordenadas.slice(0, 8).map(linha).join("")}${ordenadas.length > 8 ? `<details class="mais-saidas"><summary>Mostrar mais ${ordenadas.length - 8} saída(s)</summary>${ordenadas.slice(8).map(linha).join("")}</details>` : ""}</div>
+<button type="submit" class="botao">Ver diferença e confirmar</button></form>`;
+  let confirmar = "";
+  if (e) {
+    const dif = e.diferencaCentavos;
+    const pode = d.voceTemPermissao && !e.bloqueios.length;
+    confirmar = `<section class="card" aria-labelledby="t-conf-agrupada"><h3 id="t-conf-agrupada">Conferência</h3>
+<dl class="ficha ficha--compacta"><dt>Saída escolhida</dt><dd>${esc(nomeDaSaida(e.descricao))} · ${esc(dataBR(e.data))} · ${esc(e.conta)}</dd><dt>Disponível na saída</dt><dd>${valor(e.disponivelCentavos)}</dd><dt>Soma das contas</dt><dd>${valor(d.somaCentavos)}</dd><dt>Diferença</dt><dd data-diferenca-agrupada="${esc(String(dif))}">${valor(dif)} ${dif === 0 ? '<span class="selo selo--ok">valores iguais</span>' : dif > 0 ? '<span class="selo selo--alerta">sobra na saída</span>' : '<span class="selo selo--erro">soma maior que a saída</span>'}</dd></dl>
+${e.bloqueios.length ? `<ul class="aviso aviso--erro">${e.bloqueios.map((b) => `<li>${esc(b)}</li>`).join("")}</ul>` : ""}
+<ul class="mini"><li>${esc(e.efeito.contas)}</li><li>${esc(e.efeito.banco)}</li><li>${esc(e.efeito.dre)}</li>${e.efeito.diferenca ? `<li>${esc(e.efeito.diferenca)}</li>` : ""}</ul>
+${e.composicaoAtual.length ? `<p class="nota">Esta saída já quita ${e.composicaoAtual.length} conta(s): ${e.composicaoAtual.map((c) => esc(descricaoLegivel(c.descricao))).join("; ")}.</p>` : ""}
+${pode ? formAcao({ embutido: true, url: "/api/fv2/acoes/obrigacoes/vincular-extrato-agrupado", rotulo: `Confirmar baixa de ${d.contas.length} contas`, recarregar: `pagamento:${e.id}`,
+    aviso: "Confirmo que esta única saída pagou exatamente estas contas (contraparte, competência e valores conferidos).",
+    campos: `<input type="hidden" name="obrigacoes" value="${esc(ids)}"><input type="hidden" name="movimentacao" value="${esc(e.id)}"><input type="hidden" name="versao" value="${esc(String(e.versao))}">
+${e.exigeDocumento ? '<p class="aviso aviso--alerta">A saída não veio de extrato importado: anexe o comprovante na conta antes (o servidor recusa sem evidência).</p>' : ""}
+<label>Justificativa <input name="justificativa" maxlength="300" required value="Pagamento único no extrato quita estas ${d.contas.length} contas."></label>` }) : !d.voceTemPermissao ? nenhum("Você não tem a permissão de vincular pagamentos do extrato.") : ""}</section>`;
+  }
+  return `${fechar("Baixa agrupada pelo extrato")}
+<p class="painel-guia">As contas continuam separadas (descrição, categoria e competência de cada uma). Só o pagamento é único.</p>
+${contas}
+${escolher}
+${confirmar}`;
+}
+
+/** Pagamento (saída) e as contas que ele quitou; reversão controlada do grupo. */
+export function detalhePagamentoAgrupado(d, ctx = {}) {
+  const m = d.movimentacao;
+  const podeReverter = ["financeiro_v2.cancelar", "financeiro_v2.vincular_pagamento"].every((a) => (ctx?.permissoes ?? []).includes(a)) && d.contas.some((c) => c.viaExtrato);
+  return `${fechar(d.agrupado ? "Pagamento agrupado" : "Pagamento")}
+<header class="conta-hero"><p class="conta-hero__forn">${esc(nomeDaSaida(m.descricao))}</p><p class="conta-hero__desc">${esc(dataBR(m.data))} · saída de ${esc(moeda(m.valorCentavos))}</p>
+<div class="conta-hero__linha"><div><span class="conta-hero__rotulo">Quitou ${d.contas.length} conta(s)</span><strong class="conta-hero__valor">${esc(moeda(d.totalCentavos))}</strong>${m.disponivelCentavos ? `<span class="conta-hero__nota">sobra sem vínculo ${esc(moeda(m.disponivelCentavos))}</span>` : ""}</div></div></header>
+${d.contas.length ? `<ul class="lista-simples" data-composicao-pagamento>${d.contas.map((c) => `<li><span><strong>${esc(c.contraparte ?? "")}</strong> · ${esc(descricaoLegivel(c.descricao))} · ${esc(competencia(c.competencia))} <button type="button" class="botao-link" data-detalhe="pagar:${esc(c.obrigacaoId)}">Abrir conta</button></span>${valor(c.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma conta vinculada a esta saída.")}
+${podeReverter ? `<details class="card cancelar-conta"><summary><h3 class="inline">Reverter esta baixa</h3></summary>
+${formAcao({ url: "/api/fv2/acoes/obrigacoes/reverter-baixa-agrupada", titulo: "Reverter baixa", rotulo: `Reverter as ${d.contas.length} baixa(s)`, recarregar: `pagamento:${m.id}`,
+    aviso: "Confirmo a reversão: todas as contas deste pagamento voltam a ficar em aberto e a saída volta a ter saldo. Nada é apagado; cada estorno fica no histórico.",
+    campos: `<input type="hidden" name="movimentacao" value="${esc(m.id)}"><input type="hidden" name="versao" value="${esc(String(m.versao))}">
+<label>Motivo (obrigatório, mínimo 10 caracteres) <input name="justificativa" minlength="10" maxlength="500" required></label>` })}</details>` : ""}`;
+}
+
 export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
   const o = r.opcoesDeRegistro;
@@ -97,9 +163,9 @@ ${registrar}
 </form>
 ${r.recorrenciasSemRegistro?.length ? `<p class="aviso aviso--alerta">Recorrência sem registro: ${r.recorrenciasSemRegistro.map((x) => `${esc(x.fornecedor ?? "")} · ${esc(descricaoLegivel(x.descricao))} (${esc(dataBR(x.data))})`).join("; ")}. Nada foi lançado automaticamente.</p>` : ""}
 <section class="card" aria-labelledby="t-lista-pagar"><h2 id="t-lista-pagar" class="sr">Lista de contas a pagar</h2>
-${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes tabela--contas"><caption class="sr">Contas a pagar</caption><thead><tr><th scope="col">Vencimento</th><th scope="col">Fornecedor e descrição</th><th scope="col">Original</th><th scope="col">Pago</th><th scope="col">Saldo</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
-${r.itens.map((x) => `<tr class="linha-conta linha-conta--${esc(situacaoTitulo(x.situacao).classe)}">${td("Vencimento", etiquetaDeData(x.vencimento), "col-data")}${td("Fornecedor", `<strong>${esc(x.fornecedor?.nome ?? "Fornecedor não identificado")}</strong><br><span class="nota">${esc(descricaoLegivel(x.descricao))}${x.parcela?.total > 1 ? ` · parcela ${x.parcela.numero}/${x.parcela.total}` : ""}${x.recorrencia ? " · recorrente" : ""} · ${esc(x.categoria?.nome ?? "sem categoria")} · ${esc(competencia(x.competencia))}${x.competenciaHomologada ? " (homologada)" : ""}</span>${x.pendencias.includes("SEM_DOCUMENTO") ? ` <span class="selo selo--alerta">sem documento</span> <a class="botao-link" href="#/conferencias?competencia=${esc(x.competencia)}&amp;revisar=OBRIGACAO:${esc(x.id)}:DOCUMENTO">Pendência</a>` : ""}${x.efeitoNaDre === "FORA_ATE_CLASSIFICAR" ? ' <span class="selo selo--alerta" title="A dívida existe, mas a natureza econômica não está comprovada: fica fora da DRE até ser classificada.">fora da DRE até classificar</span>' : ""}`, "esquerda")}${td("Original", valor(x.valorOriginalCentavos))}${td("Pago", `${valor(x.pagoCentavos)}${barraDePago(x)}`)}${td("Saldo", valor(x.saldoCentavos))}${td("Situação", selo(x.situacao))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="pagar:${esc(x.id)}">Detalhar</button>`)}</tr>`).join("")}
-</tbody></table></div>` : nenhum("Nenhuma conta a pagar com estes filtros.")}
+${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes tabela--contas"><caption class="sr">Contas a pagar</caption><thead><tr><th scope="col"><span class="sr">Selecionar para baixa agrupada</span></th><th scope="col">Vencimento</th><th scope="col">Fornecedor e descrição</th><th scope="col">Original</th><th scope="col">Pago</th><th scope="col">Saldo</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
+${r.itens.map((x) => `<tr class="linha-conta linha-conta--${esc(situacaoTitulo(x.situacao).classe)}">${td("Selecionar", marcadorAgrupado(x, podeVincular(ctx)), "col-marcar")}${td("Vencimento", etiquetaDeData(x.vencimento), "col-data")}${td("Fornecedor", `<strong>${esc(x.fornecedor?.nome ?? "Fornecedor não identificado")}</strong><br><span class="nota">${esc(descricaoLegivel(x.descricao))}${x.parcela?.total > 1 ? ` · parcela ${x.parcela.numero}/${x.parcela.total}` : ""}${x.recorrencia ? " · recorrente" : ""} · ${esc(x.categoria?.nome ?? "sem categoria")} · ${esc(competencia(x.competencia))}${x.competenciaHomologada ? " (homologada)" : ""}</span>${x.pendencias.includes("SEM_DOCUMENTO") ? ` <span class="selo selo--alerta">sem documento</span> <a class="botao-link" href="#/conferencias?competencia=${esc(x.competencia)}&amp;revisar=OBRIGACAO:${esc(x.id)}:DOCUMENTO">Pendência</a>` : ""}${x.efeitoNaDre === "FORA_ATE_CLASSIFICAR" ? ' <span class="selo selo--alerta" title="A dívida existe, mas a natureza econômica não está comprovada: fica fora da DRE até ser classificada.">fora da DRE até classificar</span>' : ""}`, "esquerda")}${td("Original", valor(x.valorOriginalCentavos))}${td("Pago", `${valor(x.pagoCentavos)}${barraDePago(x)}`)}${td("Saldo", valor(x.saldoCentavos))}${td("Situação", selo(x.situacao))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="pagar:${esc(x.id)}">Detalhar</button>`)}</tr>`).join("")}
+</tbody></table></div>${barraAgrupada(podeVincular(ctx))}` : nenhum("Nenhuma conta a pagar com estes filtros.")}
 ${paginacao(r.paginacao, "contas-a-pagar")}
 </section>
 ${r.porFornecedor.length ? `<details class="card"><summary><h2 class="inline">Por fornecedor</h2></summary><ul class="lista-simples">${r.porFornecedor.map((g) => `<li><span>${esc(g.fornecedor?.nome ?? "Fornecedor não identificado")} · ${g.quantidade} conta(s)</span><span>${valor(g.saldoCentavos)}${g.vencidoCentavos ? ` <small class="valor--negativo">vencido ${esc(moeda(g.vencidoCentavos))}</small>` : ""}</span></li>`).join("")}</ul></details>` : ""}`;
@@ -219,7 +285,7 @@ ${blocoNaConta(d.entregadorProprio)}
 ${heroDaConta(t)}
 ${comoDarBaixa(d, ctx)}
 <h3>Pagamentos</h3>
-${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}${d.vinculoExtrato?.obrigacao?.pagamentos?.[i]?.viaExtrato ? ' · <span class="selo selo--info">vinculado do extrato</span>' : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
+${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s) <button type="button" class="botao-link" data-detalhe="pagamento:${esc(g.movimentacaoId)}">Ver o pagamento</button>` : ""}${d.vinculoExtrato?.obrigacao?.pagamentos?.[i]?.viaExtrato ? ' · <span class="selo selo--info">vinculado do extrato</span>' : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
 <details class="card dados-conta"><summary><h3 class="inline">Todos os dados da conta</h3></summary>
 <dl class="ficha">
   <dt>Valor original</dt><dd>${valor(t.valorOriginalCentavos)}</dd>
@@ -313,7 +379,7 @@ function notaDoEntregador(t) {
   return `<span class="nota-chip nota-chip--${ok ? "ok" : "pendente"}" title="${ok ? "A nota fiscal desta semana já foi enviada" : "A nota fiscal desta semana ainda não foi enviada"}">${ok ? "Nota enviada" : "Nota pendente"}</span>`;
 }
 
-export function diaDoCalendario(d) {
+export function diaDoCalendario(d, ctx = {}) {
   if (!d) return "";
   const dia = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${d.data}T12:00:00Z`));
   // Total em aberto do dia: calculado no servidor (dia.emAbertoCentavos) — a tela não soma dinheiro.
@@ -322,11 +388,12 @@ export function diaDoCalendario(d) {
     const quitada = !(t.saldoCentavos > 0);
     return `<li class="conta-dia${quitada ? " conta-dia--quitada" : ""}"><div class="conta-dia__txt"><strong>${esc(t.fornecedor ?? "Fornecedor não identificado")}</strong><span>${esc(descricaoLegivel(t.descricao))}${t.parcela?.total > 1 ? ` (${t.parcela.numero}/${t.parcela.total})` : ""}${t.recorrente ? " · recorrente" : ""}</span></div>
 <div class="conta-dia__val"><span class="conta-dia__valor">${esc(moeda(t.saldoCentavos))}</span>${selo(t.situacao)}</div>
-<div class="conta-dia__acao">${notaDoEntregador(t)}<button type="button" class="botao${quitada ? "" : " botao--primario"}" data-detalhe="pagar:${esc(t.id)}">${quitada ? "Ver conta" : "Dar baixa"}</button></div></li>`;
+<div class="conta-dia__acao">${marcadorAgrupado(t, podeVincular(ctx))}${notaDoEntregador(t)}<button type="button" class="botao${quitada ? "" : " botao--primario"}" data-detalhe="pagar:${esc(t.id)}">${quitada ? "Ver conta" : "Dar baixa"}</button></div></li>`;
   };
   return `<div class="dia-cab"><h2>${esc(dia)}</h2>${d.titulos.length ? `<p class="dia-resumo">${d.titulos.length} conta(s) vencendo${totalAberto ? ` · <strong>${esc(moeda(totalAberto))}</strong> em aberto` : " · tudo pago"}</p>` : ""}</div>
 ${d.titulos.length ? `<ul class="contas-dia">${d.titulos.map(cartao).join("")}</ul>` : ""}
-${d.pagamentos.length ? `<h3>Pagamentos feitos no dia</h3><ul class="lista-simples">${d.pagamentos.map((g) => `<li><span>${esc(g.fornecedor ?? "")} · ${esc(descricaoLegivel(g.descricao))} · ${esc(g.conta ?? "")}</span>${valor(g.valorCentavos)}</li>`).join("")}</ul>` : ""}
+${d.titulos.filter((t) => t.saldoCentavos > 0).length > 1 ? barraAgrupada(podeVincular(ctx)) : ""}
+${d.pagamentos.length ? `<h3>Pagamentos feitos no dia</h3><ul class="lista-simples">${pagamentosDoDia(d)}</ul>` : ""}
 ${d.recorrentes.length ? `<h3>Recorrências previstas (estimadas)</h3><ul class="lista-simples">${d.recorrentes.map((x) => `<li><span>${esc(x.fornecedor ?? "")} · ${esc(descricaoLegivel(x.descricao))}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul>` : ""}
 ${d.titulos.length + d.pagamentos.length + d.recorrentes.length ? "" : nenhum("Nada vence nem foi pago neste dia.")}`;
 }
@@ -480,7 +547,7 @@ ${paginacao(r.paginacao, "caixa-e-bancos")}
 
 // ----------------------------------------------------------------------------------------------------- calendário
 const SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
-export function calendario(cal, { selecionado = null } = {}) {
+export function calendario(cal, { selecionado = null, ctx = {} } = {}) {
   const deslocamento = (cal.dias[0].diaDaSemana + 6) % 7;
   // Marcador compacto: ponto de status + quantidade (o rótulo completo vai no title e no aria-label da célula).
   const marca = (n, classe, rotulo) => (n ? `<span class="cal-chip cal-chip--${classe}" title="${esc(`${n} ${rotulo}`)}"><i aria-hidden="true"></i>${n}</span>` : "");
@@ -510,7 +577,7 @@ ${abas("calendario")}
   }).join("")}
 </div>
 </div>
-<section id="dia-detalhe" class="card cal-painel" aria-live="polite">${selecionado ? diaDoCalendario(cal.dias.find((d) => d.data === selecionado)) : '<p class="cal-painel__vazio"><strong>Escolha um dia</strong>Toque em um dia do calendário para ver as contas e dar baixa.</p>'}</section>
+<section id="dia-detalhe" class="card cal-painel" aria-live="polite">${selecionado ? diaDoCalendario(cal.dias.find((d) => d.data === selecionado), ctx) : '<p class="cal-painel__vazio"><strong>Escolha um dia</strong>Toque em um dia do calendário para ver as contas e dar baixa.</p>'}</section>
 </div>`;
 }
 

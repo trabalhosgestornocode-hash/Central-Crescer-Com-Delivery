@@ -11,6 +11,7 @@
 //     então NENHUMA tolerância é presumida: qualquer diferença aberta bloqueia. Recebível válido ainda não pago não bloqueia.
 import { ESTADO_COMPETENCIA, ESTADO_DIVERGENCIA_FONTE, ESTADO_IMPORTACAO, ESTADO_PROPOSTA, SITUACAO_CORRESPONDENCIA, SITUACAO_SESSAO_CAIXA, SITUACAO_TITULO, TIPO } from "./catalogos.js";
 import { primeiroDiaDe, ultimoDiaDe } from "./tempo.js";
+import { formatarBRL } from "./dinheiro.js";
 import { caixaEBancos, documentosDe, preparar as prepararTesouraria, tituloAPagar } from "./tesouraria.js";
 import { DIVERGENCIA_VENDA } from "./vendasRecebimentos.js";
 import { avaliarPendenciasDoFechamento } from "./ressalvas.js";
@@ -304,6 +305,18 @@ export function pendenciasDaCompetencia(e) {
       origem: "Conciliação", impacto: c.diferencaCentavos ? "Os lados não fecham: confirmar não é possível sem explicação." : "Enquanto não confirmada, os registros seguem não conciliados.",
       documentosExistentes: (c.evidenciaDocumentoIds ?? []).map((id) => ({ referencia: id, tipo: p.documentoPorId.get(id)?.tipo ?? null, descricao: p.documentoPorId.get(id)?.descricao ?? null })),
       opcoes: ["Confirmar (se os lados fecham e não há disputa)", "Rejeitar com justificativa", "Registrar divergência com justificativa"], referencia: { tipo: "CORRESPONDENCIA", id: c.id }, tecnico: { motor: "conciliacao", relacao: c.relacao, regra: c.regra, forca: c.forca } });
+  }
+
+  // --- 99Food: diferença NÃO EXPLICADA entre (vendas − taxas − comissões − marketing) e o repasse informado, POR DIA.
+  // Só aviso (informativa, não bloqueia): nada é lançado para fechar o valor; a explicação vem da 99Food.
+  for (const l of (d.lancamentos ?? []).filter((x) => x.situacao === "ATIVO" && x.competencia === competencia && x.relatorio99Food?.componente === "VENDAS" && x.relatorio99Food.diferencaRepasseCentavos)) {
+    const r = l.relatorio99Food;
+    add({ chave: `99FOOD:DIA:${r.dia}`, grupo: GRUPO.RECEBIMENTOS_E_REPASSES, codigo: "REPASSE_99FOOD_DIFERENCA_DIA", titulo: `99Food ${r.dia.split("-").reverse().join("/")}: repasse diferente do resultado`, situacao: SITUACAO_PENDENCIA.INFORMATIVA,
+      efeitoNoFechamento: EFEITO_NO_FECHAMENTO.NAO_BLOQUEIA, valorCentavos: r.diferencaRepasseCentavos, origem: "NOVENTA_E_NOVE_FOOD",
+      motivo: `Resultado preliminar ${formatarBRL(r.resultadoPreliminarCentavos)} × repasse informado ${formatarBRL(r.repasseInformadoCentavos)}.`,
+      oQueAconteceu: "O relatório oficial da 99Food informa um repasse que não fecha com vendas de itens − taxas − comissões − marketing do mesmo dia.",
+      impacto: "Nenhum: a diferença não vira receita, despesa nem ajuste. O repasse só vira dinheiro recebido quando conciliado com o extrato.",
+      opcoes: ["Pedir à 99Food a composição do repasse do dia", "Registrar a explicação com documento"], referencia: { tipo: "LANCAMENTO", id: l.id }, tecnico: { motor: "relatorio99Food", dia: r.dia } });
   }
 
   // --- importações e documentação

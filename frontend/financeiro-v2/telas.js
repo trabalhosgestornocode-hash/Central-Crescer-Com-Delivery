@@ -123,6 +123,20 @@ function cardSec(titulo, v, s, codigo, nota = "") {
 
 // ------------------------------------------------------------------------------------------- árvore (composição)
 let seqNo = 0;
+// Quantidade de entregas da competência (rota /dre), mostrada entre o nome e o valor das linhas de entrega.
+let entregasDaDre = null;
+const LINHA_DE_ENTREGA = (no) => (["ENTREGADORES_PROPRIOS", "ENTREGAS_TERCEIRIZADAS"].includes(no.referencias?.categoria) ? no.referencias.categoria : no.referencias?.grupo === "ENTREGA_SOB_DEMANDA" ? "ENTREGA_SOB_DEMANDA" : null);
+const FONTE_ENTREGAS = Object.freeze({ FOODY: "parser Foody", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood" });
+export function quantidadeDeEntregas(q) {
+  if (!q) return "";
+  const fonte = FONTE_ENTREGAS[q.fonte] ?? "";
+  if (q.situacao === "COM_DADOS") {
+    const n = Number(q.quantidade).toLocaleString("pt-BR");
+    return `<span class="no-qtd" data-entregas="${esc(String(q.quantidade))}" title="Quantidade de entregas da competência (${esc(fonte)})${q.provisorio ? ". Há dia em aberto ou em revisão: número provisório" : ""}.">${esc(n)} ${q.quantidade === 1 ? "entrega" : "entregas"}${q.provisorio ? " (provisório)" : ""}</span>`;
+  }
+  const t = { SEM_DADOS: ["sem dados de entregas", `Nenhum dado de entregas importado nesta competência${fonte ? ` (${fonte})` : ""}.`], SEM_FONTE: ["quantidade sem fonte", "Não há fonte oficial integrada com a quantidade de entregas desta linha."], INDISPONIVEL: ["quantidade indisponível", `A fonte (${fonte}) não respondeu agora.`] }[q.situacao];
+  return t ? `<span class="no-qtd no-qtd--vazia" data-entregas="${esc(q.situacao)}" title="${esc(t[1])}">${esc(t[0])}</span>` : "";
+}
 function noArvore(no, nivel = 0) {
   const temFilhos = (no.filhos ?? []).length > 0;
   const id = `no-${(seqNo += 1)}`;
@@ -145,7 +159,9 @@ function noArvore(no, nivel = 0) {
     docs.length ? `<p class="mini docs">${docs.map((d) => `<span class="doc" title="Documento registrado, não acessível nesta versão">Documento ${esc(d.referencia ?? d)} — registrado, não acessível nesta versão</span>`).join(" ")}</p>` : "",
   ].join("");
   const legivel = descricaoLegivel(no.nome);
-  const cabeca = `<span class="no-nome"${legivel !== no.nome ? ` title="Original: ${esc(no.nome)}"` : ""}>${esc(legivel)}</span>${valor(no.valorCentavos)}<span class="no-pct">${esc(percentual(no.percentualDoBruto))}</span>`;
+  const linhaEntrega = LINHA_DE_ENTREGA(no);
+  const qtd = linhaEntrega && entregasDaDre ? quantidadeDeEntregas(entregasDaDre.linhas?.[linhaEntrega]) : "";
+  const cabeca = `<span class="no-nome"${legivel !== no.nome ? ` title="Original: ${esc(no.nome)}"` : ""}>${esc(legivel)}${qtd}</span>${valor(no.valorCentavos)}<span class="no-pct">${esc(percentual(no.percentualDoBruto))}</span>`;
   return `<li class="no nivel-${Math.min(nivel, 5)}">${temFilhos ? `<button type="button" class="no-alternar" aria-expanded="false" aria-controls="${id}" data-alternar>${cabeca}</button>` : `<div class="no-folha">${cabeca}</div>`}${extras || detalhes ? `<div class="no-extra">${extras}${detalhes}</div>` : ""}${temFilhos ? `<ul id="${id}" class="nos" hidden>${no.filhos.map((f) => noArvore(f, nivel + 1)).join("")}</ul>` : ""}</li>`;
 }
 export const arvore = (componentes) => `<ul class="nos nos--raiz">${(componentes ?? []).map((n) => noArvore(n)).join("")}</ul>`;
@@ -165,6 +181,7 @@ export function dre(r, { unidadeNome = "" } = {}) {
   const usarVersao = r.versaoHomologada && !r.versaoHomologada.reproduz;
   const linhas = usarVersao ? r.versaoHomologada.apuracao.dre.linhas.map((l) => ({ ...l, componentes: [], pendencias: [] })) : r.dre.linhas;
   const L = Object.fromEntries(linhas.map((l) => [l.codigo, l]));
+  entregasDaDre = r.entregas ?? null;
   const subtotal = (c) => ["RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_APOS_CUSTOS", "RESULTADO_GERENCIAL"].includes(c);
   return `
 <header class="cabecalho"><div><h1>DRE Gerencial</h1><p class="subtitulo">${esc(competencia(r.competencia))} · ${esc(unidadeNome)}</p></div><span class="selo selo--${r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "ok" : "neutro"}">${esc(r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "Competência homologada" : "Competência não homologada")}</span></header>

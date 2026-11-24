@@ -125,6 +125,9 @@ test("divergências por dia não se anulam: soma zero continua pendente e exige 
   assert.equal((await diaDe(n)).divergencias.find((x) => x.codigo === "REPASSE_99FOOD_DIVERGENTE").diferencaCentavos, 1000);
   const pend = (await n.apurarCompetencia(c, { competencia: "2026-11" })).pendencias.find((x) => x.tipo === "REPASSE_99FOOD_EM_CONFERENCIA");
   assert.deepEqual([pend.valorCentavos, pend.diasDivergentes, pend.somaAbsolutaCentavos], [0, 2, 2000]);
+  // Central de Conferências: uma pendência informativa POR DIA, com o sinal da diferença; não bloqueia o fechamento.
+  const central = (await n.consultarPendencias(c, { competencia: "2026-11", tamanho: 100 })).itens.filter((x) => x.codigo === "REPASSE_99FOOD_DIFERENCA_DIA");
+  assert.deepEqual(central.map((x) => [x.chave, x.valorCentavos, x.efeitoNoFechamento]).sort(), [["99FOOD:DIA:2026-11-01", 1000, "NAO_BLOQUEIA"], ["99FOOD:DIA:2026-11-02", -1000, "NAO_BLOQUEIA"]]);
 });
 
 test("mês sem diferença não dispensa conferência nem aparece como conciliado", async () => {
@@ -358,4 +361,18 @@ test("isolamento e permissão: outra unidade não vê nada e quem só consulta n
     await rejeita(aplicarDireto(n, imp, outra), CODIGO.NAO_ENCONTRADO);
     await rejeita(n.vincularLoja99Food(outra, { importacaoId: imp.id, lojaId: LOJA, justificativa: JUST }), CODIGO.NAO_ENCONTRADO);
   }
+});
+
+// 23/11/2026 — formato conferido com o arquivo real (valores aqui SINTÉTICOS): a 99Food apaga zeros à direita ("8.136" = R$ 8.136,00; "8.847,5" = R$ 8.847,50).
+test("pt-BR sem zeros à direita: milhar sem vírgula só é aceito quando a própria linha prova a convenção brasileira", () => {
+  const real = linha("2026-11-02", { itens: "7.215", proc: "0", com: "1.046,1", qtd: 150, medio: "48,1", rec: "3.900,2", repasse: "6.168,9", oferta: "7.000,5", mkt: "0", loja: "9007199254740993123" });
+  const r = analisar(csv([real]));
+  assert.deepEqual(r.erros, []);
+  const d = r.registros[0].dados;
+  assert.deepEqual([d.itensCentavos, d.comissaoCentavos, d.medioCentavos, d.recompensasCentavos, d.repasseCentavos, d.receitaOfertaCentavos], [721500, 104610, 4810, 390020, 616890, 700050]);
+  assert.equal(typeof d.estabelecimento, "string");
+  assert.equal(d.estabelecimento, "9007199254740993123"); // maior que Number.MAX_SAFE_INTEGER: preservado como texto
+  // Sem nenhuma vírgula na linha, "8.136" continua ambíguo e é recusado (nada é adivinhado).
+  const ambigua = linha("2026-11-02", { itens: "8.136", proc: "0", com: "1.180", qtd: 172, medio: "47", rec: "4.290", repasse: "6.955", oferta: "7.927", mkt: "0" });
+  assert.ok(analisar(csv([ambigua])).erros.some((e) => e.campo === "itens"));
 });

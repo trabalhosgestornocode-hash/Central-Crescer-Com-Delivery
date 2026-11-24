@@ -290,6 +290,8 @@ html[data-modo="plataforma"] .topo .filtros .so-demo { display: none; }
 .no-alternar[aria-expanded="true"]::before { transform: rotate(45deg); margin-top: -5px; }
 .no-alternar[aria-expanded="true"] { background: var(--superficie); }
 .no-nome { min-width: 0; overflow-wrap: anywhere; }
+.no-qtd { display: inline-block; margin-left: 10px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--suave); background: var(--superficie); border: 1px solid var(--linha); font-variant-numeric: tabular-nums; white-space: nowrap; vertical-align: 1px; }
+.no-qtd--vazia { font-style: italic; }
 .no-alternar > .valor, .no-folha > .valor { text-align: right; }
 .no-pct { text-align: right; font-size: 12.5px; color: var(--suave); font-variant-numeric: tabular-nums; }
 .no-alternar > .selo, .no-folha > .selo { justify-self: end; }
@@ -1018,3 +1020,13 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .conf-nota__motivos { margin: 12px 0 0; padding: 10px 14px 10px 28px; border-radius: var(--raio-sm); background: var(--alerta-bg); color: var(--alerta); font-size: var(--t-pequeno); }
 .conf-nota__rodape { display: flex; justify-content: center; margin-top: 18px; }
 .conf-nota__rodape .botao { min-width: 140px; }
+
+/* Baixa agrupada (várias contas × uma saída do extrato) */
+.col-marcar { width: 34px; text-align: center; }
+.marcar-agrupado { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; cursor: pointer; }
+.marcar-agrupado input { width: 18px; height: 18px; accent-color: var(--marca, currentColor); }
+[data-composicao-pagamento] li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.barra-agrupada { position: sticky; bottom: 12px; z-index: 5; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-top: 12px; padding: 12px 16px; border-radius: var(--raio-sm); background: var(--superficie); border: 1px solid var(--linha); box-shadow: 0 6px 20px rgba(0,0,0,.08); }
+.barra-agrupada[hidden] { display: none; }
+.pagamento-agrupado details > summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+.pagamento-agrupado .lista-simples { margin: 8px 0 4px 14px; }

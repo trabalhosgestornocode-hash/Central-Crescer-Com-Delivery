@@ -81,7 +81,9 @@ export const CONSULTAS = Object.freeze({
   "/dre": async (n, c, p) => {
     const ap = await n.apurarCompetencia(c, competencia(p));
     return { competencia: p.competencia, impressao: ap.impressao, versaoHomologada: ap.versaoHomologada, dre: await comFornecedores(n, c, structuredClone(ap.dre)), cadaCem: ap.cadaCem, pendencias: ap.pendencias,
-      faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL };
+      faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL,
+      // Quantidade de entregas nas linhas de entrega: informativa; se a fonte falhar, a DRE abre igual (sem a quantidade).
+      entregas: typeof n.quantidadesDeEntregas === "function" ? await n.quantidadesDeEntregas(c, competencia(p)).catch(() => null) : null };
   },
   "/composicao": async (n, c, p) => {
     if (!INDICADORES.has(p.codigo)) throw Object.assign(new Error("Indicador desconhecido."), { codigoHttp: 400, codigo: "INDICADOR_DESCONHECIDO" });
@@ -188,6 +190,8 @@ export const CONSULTAS = Object.freeze({
   "/documentos": (n, c, p) => n.consultarDocumentos(c, filtro(p, ["competencia", "situacao", ...PAGINA], PAGINA)),
   "/documento": (n, c, p) => n.detalharDocumento(c, { id: id(p) }),
   "/reclassificacao": (n, c, p) => n.consultarReclassificacao(c, p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : { lancamentoId: id(p), ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
+  "/baixa-agrupada": (n, c, p) => n.previaDaBaixaAgrupada(c, { obrigacaoIds: String(p.obrigacoes ?? "").split(",").filter(Boolean).slice(0, 50).map(uuidOu), ...(p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : {}) }),
+  "/pagamento-agrupado": (n, c, p) => n.consultarPagamentoAgrupado(c, { movimentacaoId: uuidOu(p.movimentacao) }),
   "/vinculo-extrato": async (n, c, p) => {
     const r = await n.previaDoVinculoDoExtrato(c, { obrigacaoId: uuidOu(p.obrigacao), ...(p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : {}) });
     if (!r?.escolhida) return r;

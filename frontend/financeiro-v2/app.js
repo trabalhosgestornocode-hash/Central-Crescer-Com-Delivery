@@ -306,7 +306,7 @@ function desenhar(dados) {
     case "contas-a-receber": return tes.contasAReceber(dados, f, { permissoes: permissoesDaUnidade(), competencia: estado.competencia });
     case "lancamentos": return tes.lancamentos(dados, f, { permissoes: permissoesDaUnidade() });
     case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f, { permissoes: permissoesDaUnidade() });
-    case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null });
+    case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null, ctx: ctxPainel() });
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);
     case "vendas-e-recebimentos": return ven.vendasERecebimentos(dados, f);
     case "conferencias": return conf.central(dados, f, { competencia: estado.competencia, unidadeNome: nomeUnidade(), permissoes: permissoesDaUnidade() });
@@ -497,6 +497,9 @@ function detalheDe(chave) {
   if (tipo === "reclassificacao") { const [lanc, categoria] = id.split("|"); return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, id: lanc, categoria })}`, DETALHE_RECLASSIFICACAO]; }
   if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
   // 08E: prévia do vínculo de uma saída do extrato com a conta — "vinculo:<conta>|<saída>".
+  // Baixa agrupada: "agrupada:<conta,conta,...>[|<saída>]" (prévia; só a ação confirma) e "pagamento:<saída>" (composição e reversão).
+  if (tipo === "agrupada") { const [obrigacoes, movimentacao] = id.split("|"); return [`/api/fv2/baixa-agrupada?${qs({ competencia: undefined, obrigacoes, movimentacao })}`, (d) => tes.detalheBaixaAgrupada(d, ctxPainel())]; }
+  if (tipo === "pagamento") return [`/api/fv2/pagamento-agrupado?${qs({ competencia: undefined, movimentacao: id })}`, (d) => tes.detalhePagamentoAgrupado(d, ctxPainel())];
   if (tipo === "vinculo") { const [obrigacao, movimentacao] = id.split("|"); return [`/api/fv2/vinculo-extrato?${qs({ competencia: undefined, obrigacao, movimentacao })}`, (d) => tes.detalheVinculoExtrato(d, ctxPainel())]; }
   // Fase 05: lançamentos que compõem um card — "card:<canal>|<modalidade>|<bandeira/operadora>|<início>|<fim>".
   if (tipo === "card") { const [canal, modalidade, chave, periodoInicio, periodoFim] = id.split("|"); return [`/api/fv2/vendas/liquido-esperado?${qs({ competencia: undefined, canal, modalidade, chave, periodoInicio, periodoFim })}`, (d) => can.detalheDoCard(d)]; }
@@ -843,6 +846,12 @@ document.addEventListener("click", (e) => {
   if (comp) { abrirPainel(comp.dataset.composicao, comp); return; }
   const det = e.target.closest("[data-detalhe]");
   if (det) { abrirDetalhe(det.dataset.detalhe, det); return; }
+  const agrupar = e.target.closest("[data-baixa-agrupada]");
+  if (agrupar) {
+    const ids = [...document.querySelectorAll("#conteudo [data-selecao-agrupada]:checked")].map((x) => x.value);
+    if (ids.length >= 2) abrirDetalhe(`agrupada:${ids.join(",")}`, agrupar);
+    return;
+  }
   const pag = e.target.closest("[data-pagina]");
   if (pag && !pag.disabled) { estado.pagina[pag.dataset.alvo] = Number(pag.dataset.pagina); carregar(); return; }
   const diaDoCanal = e.target.closest("[data-cal-dia]");
@@ -857,7 +866,7 @@ document.addEventListener("click", (e) => {
     estado.diaSelecionado = dia.dataset.dia;
     for (const b of document.querySelectorAll("[data-dia]")) { b.classList.toggle("cal-dia--sel", b === dia); b.setAttribute("aria-pressed", String(b === dia)); }
     const detalhe = $("#dia-detalhe");
-    detalhe.innerHTML = tes.diaDoCalendario(estado.calendario.dias.find((d) => d.data === estado.diaSelecionado));
+    detalhe.innerHTML = tes.diaDoCalendario(estado.calendario.dias.find((d) => d.data === estado.diaSelecionado), ctxPainel());
     detalhe.scrollIntoView({ block: "nearest" });
     return;
   }
@@ -938,10 +947,21 @@ document.addEventListener("submit", (e) => {
   const previaDemonstrativo = e.target.closest("[data-previa-demonstrativo]");
   if (previaDemonstrativo) { abrirDetalhe(`demonstrativo:${new URLSearchParams(new FormData(previaDemonstrativo)).toString()}`, previaDemonstrativo); return; }
   // 08E: prévia do vínculo com a saída do extrato (consulta; só a ação confirma).
+  const previaAgrupada = e.target.closest("[data-previa-agrupada]");
+  if (previaAgrupada) { const mov = new FormData(previaAgrupada).get("movimentacao"); if (mov) abrirDetalhe(`agrupada:${previaAgrupada.dataset.previaAgrupada}|${mov}`, previaAgrupada); return; }
   const previaVinculo = e.target.closest("[data-previa-vinculo]");
   if (previaVinculo) { const mov = new FormData(previaVinculo).get("movimentacao"); if (mov) abrirDetalhe(`vinculo:${previaVinculo.dataset.previaVinculo}|${mov}`, previaVinculo); return; }
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
+});
+document.addEventListener("change", (e) => {
+  if (!e.target.matches?.("[data-selecao-agrupada]")) return;
+  const marcadas = [...document.querySelectorAll("#conteudo [data-selecao-agrupada]:checked")];
+  for (const barra of document.querySelectorAll("#conteudo [data-barra-agrupada]")) {
+    barra.hidden = marcadas.length === 0;
+    barra.querySelector("[data-qtd-agrupada]").textContent = String(marcadas.length);
+    barra.querySelector("[data-baixa-agrupada]").disabled = marcadas.length < 2;
+  }
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharPainel(); });
 document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[data-cal-dia]"); if (dia) navegarNoCalendario(e, dia); });
