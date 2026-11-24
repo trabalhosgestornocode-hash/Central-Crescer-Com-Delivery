@@ -3,6 +3,8 @@
 // chama decidir (na sombra, só registra a comparação com o motor atual).
 import { CATALOGO, FERRAMENTAS, OPERACOES_DO_CATALOGO, definicoesParaApi } from "./catalogo.js";
 import { intencaoDeterministica, ferramentasDeOperacao, textoDoDesfecho } from "./operacoes.js";
+import { ferramentasDeConhecimento } from "./conhecimento.js";
+import { decidirEscalonamento, mensagensParaEscalonar } from "./escalonamento.js";
 import { criarExecutor, novaSessao } from "./executor.js";
 import { executarLaco, PADROES_DO_LACO } from "./laco.js";
 import { decidirRota, ROTA, RESPOSTAS_FIXAS } from "./roteador.js";
@@ -27,9 +29,10 @@ export { criarRepositorioDeIdentidadePostgres, criarRepositorioDeMemoriaPostgres
  * @param {object} deps.orcamento   reservar/concluir/falhar (renovável em homologação; memória no ambiente isolado)
  * @param {Array}  [deps.ferramentasExtras] p.ex. ferramentasDoAgenteCrescer(...)
  */
-export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras: extrasDadas = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null, operacoes = null }) {
+export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras: extrasDadas = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null, operacoes = null, conhecimento = null, escalonamento = null }) {
   // F4 integrada: com o serviço de operações, o modelo ganha preparar_operacao / propostas_do_mova (NUNCA executar)
-  const ferramentasExtras = operacoes ? [...extrasDadas, ...ferramentasDeOperacao()] : extrasDadas;
+  // F5: com a base de conhecimento, o modelo ganha buscar_conhecimento / sugerir_conhecimento (sugere; NUNCA aprova)
+  const ferramentasExtras = [...extrasDadas, ...(operacoes ? ferramentasDeOperacao() : []), ...(conhecimento ? ferramentasDeConhecimento() : [])];
   const montar = (extras) => ({
     catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
     definicoes: [...definicoesParaApi(), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
@@ -61,7 +64,6 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
         const texto = textoDoDesfecho(r);
         if (texto) {
           const conversa = await memoria.obter({ organizacaoId: e.organizacaoId, conversaId: e.conversaId, participanteId: e.participanteId });
-          if (r.executada) conversa.cache?.clear?.(); // o Financeiro mudou: nenhuma leitura em cache desta conversa vale mais
           await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: texto, ferramentas: [], fatos: conversa.fatos ?? [] });
           const motivo = r.ok ? (r.executada ? "OPERACAO_EXECUTADA" : "OPERACAO_CANCELADA") : `OPERACAO_${r.motivo}`;
           auditoria.registrar({ tipo: "MOVA_CORE_RESPOSTA", requisicaoId, rota: "OPERACAO", motivo, ferramentas: [], custoMicrousd: 0, latenciaMs: 0 });
@@ -92,17 +94,34 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       ? memoria.fatosValidos(conversa, { pergunta: String(e.texto ?? ""), unidadeId: e.unidadeId, ferramentasPermitidas: new Set(Object.keys(catalogoDaVez)) })
       : conversa.fatos;
     const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId, hoje: e.hoje ?? null });
-    Object.assign(sessao, { operacoes, conversaChave, autor, anexo: documentoNoCore ? e.anexo : null });
+    Object.assign(sessao, { operacoes, conhecimento, conversaChave, autor, anexo: documentoNoCore ? e.anexo : null });
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
     const orientacao = conceitos.orientacao(String(e.texto ?? ""));
     const contexto = [orientacao, recuperado].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
-    const r = await executarLaco({
+    const argsDoLaco = {
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),
       ambiente: { hoje: e.hoje, unidade, perfil: e.perfil?.nome ?? "—", podeValores: e.podeValores, contexto }, opcoes: { ...PADROES_DO_LACO, ...opcoes }, relogio,
       registrar: (x) => auditoria.registrar(x),
-    });
+    };
+    let r = await executarLaco(argsDoLaco);
+    // §4 (homologação): o SERVIDOR decide se um modelo maior tenta de novo, com as consultas já feitas; nunca por falta de dado,
+    // permissão, regra ou escrita. Fica a melhor resposta CONFERIDA; o custo das duas tentativas é somado.
+    const decisao = decidirEscalonamento({ r, sessao, config: escalonamento });
+    let infoEscalonamento = escalonamento?.habilitado ? { escalou: false, motivo: decisao.motivo } : null;
+    if (decisao.escalar) {
+      const r2 = await executarLaco({ ...argsDoLaco, mensagensIniciais: mensagensParaEscalonar(r.mensagens, decisao.motivo), opcoes: { ...argsDoLaco.opcoes, modelo: escalonamento.modelo, esforco: escalonamento.esforco, maxPassos: escalonamento.maxPassos } });
+      const conferida = (x) => (x.motivo === "RESPONDIDO" ? 2 : x.motivo === "RESPOSTA_PARCIAL_CONFERIDA" ? 1 : 0);
+      const melhor = conferida(r2) > conferida(r) ? r2 : r;
+      const somar = (k) => (r.uso[k] ?? 0) + (r2.uso[k] ?? 0);
+      infoEscalonamento = { escalou: true, motivo: decisao.motivo, de: r.modelo, para: r2.modelo, motivoDepois: r2.motivo, usouResposta: melhor === r2 ? "ESCALONADA" : "PRINCIPAL",
+        custoPrincipalMicrousd: r.uso.custoMicrousd, custoEscalonadoMicrousd: r2.uso.custoMicrousd, latenciaPrincipalMs: r.latenciaMs, latenciaEscalonadaMs: r2.latenciaMs };
+      auditoria.registrar({ tipo: "MOVA_CORE_ESCALONAMENTO", requisicaoId, ...infoEscalonamento });
+      r = { ...melhor, ferramentas: [...r.ferramentas, ...r2.ferramentas.map((f) => ({ ...f, escalonada: true }))], latenciaMs: r.latenciaMs + r2.latenciaMs,
+        uso: { entrada: somar("entrada"), saida: somar("saida"), cacheLeitura: somar("cacheLeitura"), cacheEscrita: somar("cacheEscrita"), custoMicrousd: somar("custoMicrousd"), chamadas: somar("chamadas") } };
+    }
+    const { mensagens: _m, ...semMensagens } = r; void _m; r = { ...semMensagens, ...(infoEscalonamento ? { escalonamento: infoEscalonamento } : {}) };
     await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: r.texto, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos, esclarecimentoPedido: r.motivo === "RESPONDIDO" && /\?\s*$/.test(String(r.texto ?? "")) && !(r.ferramentas ?? []).some((x) => x.ok) });
     auditoria.registrar({ tipo: "MOVA_CORE_RESPOSTA", requisicaoId, rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas.map((x) => x.nome), custoMicrousd: r.uso.custoMicrousd, latenciaMs: r.latenciaMs, verificador: r.verificacao?.ok ?? null });
     metricas.registrar({ rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas, uso: r.uso, latenciaMs: r.latenciaMs, verificacao: r.verificacao });

@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql
--- Novas: 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql
+-- Novas: 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -26,6 +26,8 @@ do $$ begin
   if exists (select 1 from mova.mova_migracao where nome = '0016_mova_avisos_entregadores.sql') then raise exception 'MOVA atualização: 0016_mova_avisos_entregadores.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0017_mova_conversa_contexto.sql') then raise exception 'MOVA atualização: 0017_mova_conversa_contexto.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0018_mova_orcamento_renovavel.sql') then raise exception 'MOVA atualização: 0018_mova_orcamento_renovavel.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0020_mova_core_propostas.sql') then raise exception 'MOVA atualização: 0020_mova_core_propostas.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0021_mova_core_conhecimento.sql') then raise exception 'MOVA atualização: 0021_mova_core_conhecimento.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0016_mova_avisos_entregadores.sql (arquivo 76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc)
@@ -95,3 +97,108 @@ create table mova.orcamento_ia_alerta (
 grant select on mova.orcamento_ia_politica to mova_app;
 grant select, insert on mova.orcamento_ia_alerta to mova_app;
 insert into mova.mova_migracao (nome, sha256) values ('0018_mova_orcamento_renovavel.sql', '34c8aa11626450c39523155a0a5ed0b55dc60cf381aceb064c5d1a60371d0a87');
+
+-- ------------------------------------------------------------------------- 0020_mova_core_propostas.sql (arquivo 1b7bd5f36f302ec80af081f9f0a2c383ad4c4764d21315ec9967f6313f4a8bd8)
+-- MOVA CORE — F4 integrada (24/11/2026): PROPOSTAS de operação persistentes (sobrevivem a reinício e valem entre instâncias).
+-- Aditiva: nenhuma tabela existente muda. Sem linhas, nada muda. APLICAÇÃO: só no banco ISOLADO de homologação até
+-- autorização específica para produção (backup + janela própria).
+--
+-- A proposta NÃO é dado financeiro: é o pedido da pessoa e o seu desfecho. O Financeiro só é alterado pela porta operacional
+-- (lista fechada), com chave idempotente; esta tabela guarda o estado da conversa e o resultado REAL devolvido pela transação.
+--   • revisão para compare-and-set: duas instâncias confirmando a mesma proposta ⇒ só uma passa para EXECUTANDO;
+--   • (raiz, versao) único: cada correção é uma versão nova; só a vigente é confirmável;
+--   • o comprovante fica em `anexo` só enquanto a proposta pode ser executada; em estado final o conteúdo é apagado (o
+--     Financeiro guardou a cópia oficial no cofre de documentos);
+--   • sem DELETE para o papel da aplicação.
+create table mova.core_proposta (
+  id               text primary key check (id ~ '^[0-9a-f-]{36}:v[0-9]{1,4}$'),
+  raiz             uuid not null,
+  versao           integer not null check (versao between 1 and 1000),
+  conversa_chave   text not null check (length(conversa_chave) <= 300),
+  organizacao_id   uuid not null,
+  unidade_id       uuid not null,
+  autor            text not null check (length(autor) between 1 and 160),
+  tipo             text not null check (tipo in ('COMPRA_JA_PAGA', 'PRESTACAO_DE_SANGRIA')),
+  estado           text not null check (estado in ('AGUARDANDO_DADOS', 'AGUARDANDO_CONFIRMACAO', 'EM_REVISAO_HUMANA', 'EXECUTANDO', 'EXECUTADA',
+                     'EXECUTADA_PARCIAL', 'FALHOU', 'CANCELADA', 'SUBSTITUIDA', 'EXPIRADA', 'RECUSADA', 'DESATUALIZADA')),
+  revisao          bigint not null default 1 check (revisao >= 1),
+  favorecido_chave text check (favorecido_chave is null or length(favorecido_chave) <= 200),
+  valor_centavos   bigint check (valor_centavos is null or valor_centavos >= 0),
+  executada_em     timestamptz,
+  criada_em        timestamptz not null,
+  expira_em        timestamptz not null check (expira_em > criada_em and expira_em <= criada_em + interval '2 hours'),
+  atualizada_em    timestamptz not null default now(),
+  proposta         jsonb not null check (jsonb_typeof(proposta) = 'object' and pg_column_size(proposta) <= 262144),
+  anexo            bytea check (anexo is null or octet_length(anexo) <= 10485760),
+  unique (raiz, versao),
+  check (estado not in ('EXECUTADA', 'EXECUTADA_PARCIAL') or executada_em is not null)
+);
+create index core_proposta_da_conversa on mova.core_proposta (conversa_chave, criada_em desc, versao desc);
+create index core_proposta_acumulado on mova.core_proposta (organizacao_id, unidade_id, favorecido_chave, executada_em)
+  where estado in ('EXECUTADA', 'EXECUTADA_PARCIAL');
+
+grant select, insert, update on mova.core_proposta to mova_app;
+insert into mova.mova_migracao (nome, sha256) values ('0020_mova_core_propostas.sql', '1b7bd5f36f302ec80af081f9f0a2c383ad4c4764d21315ec9967f6313f4a8bd8');
+
+-- ------------------------------------------------------------------------- 0021_mova_core_conhecimento.sql (arquivo 8374fcaa31978caf36f8e52faf9dc160f0c4f9f03305b33d93d3972de0fadd69)
+-- MOVA CORE — F5 (24/11/2026): CONHECIMENTO CORPORATIVO versionado, com origem, escopo, validade, responsável, aprovação,
+-- revogação e trilha. Aditiva. APLICAÇÃO: só no banco ISOLADO de homologação até autorização específica para produção.
+--
+-- O que É conhecimento: como o sistema funciona, metodologias, regras e políticas APROVADAS, procedimentos, particularidades
+-- das unidades. O que NÃO é: saldo, obrigação, valor em aberto, venda do dia — isso vem SEMPRE das ferramentas oficiais
+-- (o serviço recusa conteúdo com cara de dado dinâmico).
+--   • organizacao_id nulo = conhecimento do SISTEMA (vale para todas as empresas); unidade_id só junto com organizacao_id;
+--   • PENDENTE nunca é oficial; APROVADO exige aprovador humano diferente de quem sugeriu (a IA sugere, nunca aprova);
+--   • no máximo UMA versão APROVADA por (escopo, chave); aprovar a nova versão SUBSTITUI a anterior (registro, não DELETE);
+--   • revogação é registro (quem/quando/motivo); a trilha (core_conhecimento_evento) só recebe INSERT.
+create table mova.core_conhecimento (
+  id               uuid primary key default gen_random_uuid(),
+  chave            text not null check (chave ~ '^[a-z0-9][a-z0-9._-]{2,80}$'),
+  versao           integer not null check (versao between 1 and 10000),
+  organizacao_id   uuid,
+  unidade_id       uuid,
+  tipo             text not null check (tipo in ('FUNCIONAMENTO', 'REGRA_FINANCEIRA', 'METODOLOGIA', 'PROCEDIMENTO', 'POLITICA',
+                     'INTEGRACAO', 'GLOSSARIO', 'PARTICULARIDADE_DA_UNIDADE', 'DECISAO')),
+  titulo           text not null check (length(titulo) between 3 and 160),
+  conteudo         text not null check (length(conteudo) between 10 and 8000),
+  palavras         text[] not null default '{}' check (cardinality(palavras) <= 40),
+  texto_busca      text not null check (length(texto_busca) <= 12000),
+  busca            tsvector generated always as (to_tsvector('portuguese', texto_busca)) stored,
+  origem           text not null check (length(origem) between 3 and 300),
+  responsavel      text not null check (length(responsavel) between 2 and 120),
+  estado           text not null default 'PENDENTE' check (estado in ('PENDENTE', 'APROVADO', 'RECUSADO', 'SUBSTITUIDO', 'REVOGADO')),
+  sugerido_por     text not null check (length(sugerido_por) between 2 and 160),
+  sugerido_pela_ia boolean not null default false,
+  aprovado_por     text,
+  aprovado_em      timestamptz,
+  vigente_de       date,
+  vigente_ate      date,
+  revogado_em      timestamptz,
+  revogado_por     text,
+  motivo_revogacao text check (motivo_revogacao is null or length(motivo_revogacao) <= 300),
+  criado_em        timestamptz not null default now(),
+  check (unidade_id is null or organizacao_id is not null),
+  check (vigente_ate is null or vigente_de is null or vigente_ate >= vigente_de),
+  check (estado <> 'APROVADO' or (aprovado_por is not null and aprovado_em is not null and aprovado_por <> sugerido_por)),
+  check ((estado = 'REVOGADO') = (revogado_em is not null))
+);
+create unique index core_conhecimento_versao on mova.core_conhecimento (coalesce(organizacao_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(unidade_id, '00000000-0000-0000-0000-000000000000'::uuid), chave, versao);
+create unique index core_conhecimento_um_aprovado on mova.core_conhecimento (coalesce(organizacao_id, '00000000-0000-0000-0000-000000000000'::uuid),
+  coalesce(unidade_id, '00000000-0000-0000-0000-000000000000'::uuid), chave) where estado = 'APROVADO';
+create index core_conhecimento_busca on mova.core_conhecimento using gin (busca);
+create index core_conhecimento_escopo on mova.core_conhecimento (organizacao_id, unidade_id, estado);
+
+create table mova.core_conhecimento_evento (
+  id               bigint generated always as identity primary key,
+  conhecimento_id  uuid not null references mova.core_conhecimento (id),
+  acao             text not null check (acao in ('SUGERIDO', 'APROVADO', 'RECUSADO', 'SUBSTITUIDO', 'REVOGADO')),
+  por              text not null check (length(por) between 2 and 160),
+  em               timestamptz not null default now(),
+  detalhes         jsonb not null default '{}'::jsonb check (jsonb_typeof(detalhes) = 'object' and pg_column_size(detalhes) <= 16384)
+);
+create index core_conhecimento_evento_de on mova.core_conhecimento_evento (conhecimento_id, em);
+
+grant select, insert, update on mova.core_conhecimento to mova_app;
+grant select, insert on mova.core_conhecimento_evento to mova_app;
+insert into mova.mova_migracao (nome, sha256) values ('0021_mova_core_conhecimento.sql', '8374fcaa31978caf36f8e52faf9dc160f0c4f9f03305b33d93d3972de0fadd69');

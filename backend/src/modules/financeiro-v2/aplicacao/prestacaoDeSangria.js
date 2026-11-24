@@ -84,13 +84,16 @@ export function operacoesDePrestacaoDeSangria(b) {
       return b.consultar(ctx, async (cx, tx) => {
         const prazoHoras = await prazoDaUnidade(tx, cx);
         const itens = [];
-        for (const sessao of await tx.listar(cx, TIPO.SESSAO_CAIXA)) {
+        const sessoes = await tx.listar(cx, TIPO.SESSAO_CAIXA);
+        // (leitura) caixa aberto AGORA de cada conta: o troco de uma retirada cujo caixa já fechou volta no caixa atual (sem reabrir nada)
+        const abertaDaConta = new Map(sessoes.filter((x) => x.situacao === SITUACAO_SESSAO_CAIXA.ABERTA).sort((x, y) => String(x.dataAbertura).localeCompare(String(y.dataAbertura))).map((x) => [x.contaId, x]));
+        for (const sessao of sessoes) {
           for (const operacao of sessao.operacoes ?? []) {
             if (operacao.operacao !== OPERACAO_CAIXA.SANGRIA || !operacao.movimentacaoId) continue; // sangria para o banco = transferência
             if ((inicio && operacao.data < inicio) || (fim && operacao.data > fim)) continue;
             const mov = await tx.obter(cx, TIPO.MOVIMENTACAO, operacao.movimentacaoId);
             if (!mov) continue;
-            const r = { sessaoId: sessao.id, ...retratoDaPrestacao({ operacao, mov }, { agora: b.agora(), prazoHoras }) };
+            const r = { sessaoId: sessao.id, caixaDaRetirada: sessao.situacao, caixaAbertoAgora: abertaDaConta.get(sessao.contaId) ? { sessaoId: abertaDaConta.get(sessao.contaId).id, dataAbertura: abertaDaConta.get(sessao.contaId).dataAbertura } : null, ...retratoDaPrestacao({ operacao, mov }, { agora: b.agora(), prazoHoras }) };
             if (!entrada.somentePendentes || r.pendenteCentavos > 0) itens.push(r);
           }
         }

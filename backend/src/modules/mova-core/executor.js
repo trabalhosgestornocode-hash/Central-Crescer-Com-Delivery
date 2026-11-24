@@ -99,7 +99,8 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
       if (!(acoes ?? []).includes(ACAO_VER)) return falhar("SEM_PERMISSAO", "Sem permissão de consulta financeira nesta unidade.");
     }
 
-    const chave = `${nome}|${unidadeId}|${JSON.stringify(args)}`;
+    // cache ISOLADO por organização, unidade, identidade e permissão (e só dentro da MESMA mensagem: a pergunta seguinte lê de novo)
+    const chave = `${nome}|${sessao.organizacaoId}|${unidadeId}|${sessao.usuarioId ?? "-"}|${sessao.perfil?.consultas ?? "-"}|${sessao.podeValores ? 1 : 0}|${JSON.stringify(args)}`;
     const emCache = sessao.cache?.get(chave);
     let r; let consultadoEm = relogio();
     // ferramenta que PREPARA/ESCREVE ou que lê o estado de propostas nunca vem do cache (o mesmo pedido com outro anexo é outro pedido)
@@ -176,5 +177,5 @@ function coletarNumeros(o, sessao, prof = 0) {
 
 /** Sessão de UMA requisição, ligada à memória da conversa (referências persistem na conversa, fatos e cache por requisição). */
 export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje = null }) {
-  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
+  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: new Map(), chamadas: 0 };
 }

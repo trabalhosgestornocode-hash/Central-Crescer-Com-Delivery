@@ -20,10 +20,23 @@ export const TIPO_OPERACAO = Object.freeze({ COMPRA_JA_PAGA: "COMPRA_JA_PAGA", P
 export const ESTADO_PROPOSTA = Object.freeze({
   AGUARDANDO_DADOS: "AGUARDANDO_DADOS", AGUARDANDO_CONFIRMACAO: "AGUARDANDO_CONFIRMACAO", EM_REVISAO_HUMANA: "EM_REVISAO_HUMANA",
   EXECUTANDO: "EXECUTANDO", EXECUTADA: "EXECUTADA", EXECUTADA_PARCIAL: "EXECUTADA_PARCIAL", FALHOU: "FALHOU",
-  CANCELADA: "CANCELADA", SUBSTITUIDA: "SUBSTITUIDA", EXPIRADA: "EXPIRADA", RECUSADA: "RECUSADA",
+  CANCELADA: "CANCELADA", SUBSTITUIDA: "SUBSTITUIDA", EXPIRADA: "EXPIRADA", RECUSADA: "RECUSADA", DESATUALIZADA: "DESATUALIZADA",
 });
 const ABERTAS = new Set([ESTADO_PROPOSTA.AGUARDANDO_DADOS, ESTADO_PROPOSTA.AGUARDANDO_CONFIRMACAO]);
 export const VALIDADE_PROPOSTA_MS = 30 * 60 * 1000;
+/** Validade configurável (MOVA_CORE_PROPOSTA_VALIDADE_MIN, 5 a 120 minutos; padrão 30). Valor inválido ⇒ padrão. */
+export function validadeDaConfiguracao(env = {}) {
+  const n = Number.parseInt(env.MOVA_CORE_PROPOSTA_VALIDADE_MIN ?? "", 10);
+  return Number.isInteger(n) && n >= 5 && n <= 120 ? n * 60_000 : VALIDADE_PROPOSTA_MS;
+}
+/** Execução interrompida (queda entre a transação e a gravação do desfecho) é retomada depois deste tempo — sempre idempotente. */
+export const RETOMADA_APOS_MS = 2 * 60 * 1000;
+/** Identidade CANÔNICA do favorecido para o anti-fracionamento: "Doce Brownie", "DOCE BROWNIE LTDA." e "Doce Brownie ME" são o mesmo. */
+export function chaveCanonicaDoFavorecido(nome) {
+  const n = String(nome ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b(ltda|me|mei|epp|eireli|sa|cia|comercio|comercial|de|da|do|e)\b/g, " ").replace(/\s+/g, " ").trim();
+  return n ? "nome:" + n : null;
+}
 const POLITICA_DO_TIPO = { COMPRA_JA_PAGA: OPERACAO.DESPESA_DOCUMENTAL, PRESTACAO_DE_SANGRIA: OPERACAO.PRESTACAO_DE_SANGRIA };
 
 // ---------------------------------------------------------------- intenção determinística (só para EXECUTAR / CANCELAR)
@@ -61,7 +74,9 @@ export function criarRepositorioDePropostasMemoria() {
   };
 }
 
-const impressao = (x) => createHash("sha256").update(JSON.stringify(x)).digest("hex").slice(0, 32);
+// serialização CANÔNICA (chaves ordenadas): o jsonb do PostgreSQL reordena as chaves e a impressão precisa ser a mesma depois do banco
+const canonico = (v) => (Array.isArray(v) ? v.map(canonico) : v && typeof v === "object" && !(v instanceof Uint8Array) ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canonico(v[k])])) : v);
+const impressao = (x) => createHash("sha256").update(JSON.stringify(canonico(x))).digest("hex").slice(0, 32);
 const reais = (c) => (Number.isInteger(c) ? `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}` : "—");
 const codigoCategoria = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
@@ -162,7 +177,7 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
         fornecedor: forn.nome ?? args.fornecedor ?? null, contraparteId: forn.contraparteId ?? null, contraparteNova: forn.contraparteNova ?? null,
         categoria: cat.categoria ?? null, categoriaNome: cat.nome ?? null, competencia: data ? data.slice(0, 7) : null,
         comprovante: anexo?.arquivo ? { referencia: anexo.referencia ?? "anexo", idTransacao: anexo.idTransacao ?? null } : null };
-      return { dados, requisitos, avisos, valorCentavos: valor, favorecidoChave: forn.contraparteId ?? (forn.nome ? semAcento(forn.nome) : null),
+      return { dados, requisitos, avisos, valorCentavos: valor, favorecidoChave: chaveCanonicaDoFavorecido(forn.nome),
         detalhes: { candidatosFornecedor: forn.candidatos ?? null, candidatosCategoria: cat.candidatos ?? null, sugestoesCategoria: cat.sugestoes ?? null } };
     }
     if (tipo === TIPO_OPERACAO.PRESTACAO_DE_SANGRIA) {
@@ -185,7 +200,13 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
         resolvidas.push({ ...d, fornecedor: forn.nome ?? null, contraparteId: forn.contraparteId ?? null, contraparteNova: forn.contraparteNova ?? null, categoria: cat.categoria ?? null, categoriaNome: cat.nome ?? null });
       }
       if (total < alvo.pendenteCentavos) avisos.push("PRESTACAO_PARCIAL");
-      const dados = { sangria: { ref: alvo.movimentacaoId, sessaoId: alvo.sessaoId, descricao: alvo.descricao ?? null, data: alvo.data, pendenteCentavos: alvo.pendenteCentavos }, despesas: resolvidas, trocoCentavos: troco, restaCentavos: alvo.pendenteCentavos - total, dataTroco: hoje };
+      // troco: caixa da retirada FECHADO ⇒ volta no caixa aberto AGORA da mesma conta; nenhum aberto ⇒ requisito (nunca reabre, nunca retroage)
+      let sessaoDaDevolucaoId = alvo.sessaoId;
+      if (troco && alvo.caixaDaRetirada && alvo.caixaDaRetirada !== "ABERTA") {
+        if (alvo.caixaAbertoAgora?.sessaoId) { sessaoDaDevolucaoId = alvo.caixaAbertoAgora.sessaoId; avisos.push("TROCO_NO_CAIXA_ATUAL"); }
+        else requisitos.push("CAIXA_ABERTO");
+      }
+      const dados = { sangria: { ref: alvo.movimentacaoId, sessaoId: alvo.sessaoId, descricao: alvo.descricao ?? null, data: alvo.data, pendenteCentavos: alvo.pendenteCentavos }, despesas: resolvidas, trocoCentavos: troco, sessaoDaDevolucaoId, restaCentavos: alvo.pendenteCentavos - total, dataTroco: hoje };
       return { dados, requisitos: [...new Set(requisitos)], avisos, valorCentavos: total };
     }
     return { recusa: "TIPO_NAO_SUPORTADO" };
@@ -195,7 +216,7 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
     const d = p.dados;
     if (p.tipo === TIPO_OPERACAO.COMPRA_JA_PAGA) return `Compra nova já paga: ${d.descricao ?? "?"}${d.fornecedor ? ` — ${d.fornecedor}${d.contraparteNova ? " (fornecedor novo)" : ""}` : ""}, ${reais(d.valorCentavos)}, paga em ${d.dataPagamento ?? "?"}${d.contaOrigem ? ` (${d.contaOrigem})` : ""}${d.categoriaNome ? `, categoria ${d.categoriaNome}` : ""}. Uma despesa e um pagamento, ligados ao comprovante.`;
     const partes = d.despesas.map((x) => `${x.descricao} ${reais(x.valorCentavos)}`);
-    if (d.trocoCentavos) partes.push(`troco devolvido ao caixa ${reais(d.trocoCentavos)}`);
+    if (d.trocoCentavos) partes.push(`troco devolvido ao caixa ${reais(d.trocoCentavos)}${d.sessaoDaDevolucaoId && d.sessaoDaDevolucaoId !== d.sangria.sessaoId ? " (no caixa aberto hoje: o caixa da retirada já foi fechado e não é reaberto)" : ""}`);
     return `Prestação de contas da sangria "${d.sangria.descricao ?? d.sangria.ref}" (${reais(d.sangria.pendenteCentavos)} pendentes): ${partes.join("; ")}. Paga com o próprio dinheiro da retirada (nenhuma saída nova). ${d.restaCentavos > 0 ? `Continuam pendentes ${reais(d.restaCentavos)}.` : "A sangria fica totalmente prestada."}`;
   }
 
@@ -216,7 +237,7 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
       const base = { id: anterior?.tipo === tipo ? anterior.id.replace(/:v\d+$/, "") : randomUUID(), tipo, versao, dados: n.dados };
       const p = {
         ...base, id: `${base.id}:v${versao}`, raiz: base.id, conversaChave, organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, autor,
-        requisitos: n.requisitos, avisos: n.avisos, anexo: anexoEfetivo?.arquivo ? { arquivo: anexoEfetivo.arquivo, referencia: anexoEfetivo.referencia ?? "anexo", idTransacao: anexoEfetivo.idTransacao ?? null } : null, valorCentavos: n.valorCentavos ?? null, favorecidoChave: n.favorecidoChave ?? null,
+        args: structuredClone(args ?? {}), hojeDoPreparo: sessao.hoje, requisitos: n.requisitos, avisos: n.avisos, anexo: anexoEfetivo?.arquivo ? { arquivo: anexoEfetivo.arquivo, referencia: anexoEfetivo.referencia ?? "anexo", idTransacao: anexoEfetivo.idTransacao ?? null } : null, valorCentavos: n.valorCentavos ?? null, favorecidoChave: n.favorecidoChave ?? null,
         impressao: impressao({ tipo, dados: n.dados, unidadeId: sessao.unidadeId }), decisao,
         estado: n.requisitos.length ? ESTADO_PROPOSTA.AGUARDANDO_DADOS : decisao.nivel === NIVEL.PROIBIDO ? ESTADO_PROPOSTA.RECUSADA : decisao.nivel === NIVEL.SOMENTE_PROPOR ? ESTADO_PROPOSTA.EM_REVISAO_HUMANA : ESTADO_PROPOSTA.AGUARDANDO_CONFIRMACAO,
         criadaEm: agoraIso(), expiraEm: new Date(relogio() + validadeMs).toISOString(), resultado: null,
@@ -230,7 +251,19 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
     /** Determinístico: só a proposta VIGENTE, completa, dentro da validade, da MESMA pessoa, com autorização de escrita AGORA. */
     async confirmar({ conversaChave, autor, autorizacaoDeEscrita }) {
       const p = await abertaDaConversa(conversaChave);
-      if (!p) return { ok: false, motivo: "SEM_PROPOSTA_ABERTA" };
+      if (!p) {
+        // queda ENTRE a transação e a gravação do desfecho: a proposta ficou EXECUTANDO. Retoma com as MESMAS chaves idempotentes
+        // (o que o Financeiro já gravou volta "repetido") — só a mesma pessoa, com autorização AGORA, e só depois do intervalo.
+        const [u] = await repositorio.daConversa(conversaChave);
+        if (u?.estado === ESTADO_PROPOSTA.EXECUTANDO && u.autor === autor && autorizacaoDeEscrita?.pode && portaOperacional && relogio() - Date.parse(u.executandoDesde ?? u.criadaEm) >= RETOMADA_APOS_MS) {
+          const trava = await repositorio.salvar({ ...u, executandoDesde: agoraIso() }, { versaoEsperada: u.revisao });
+          if (!trava.ok) return { ok: false, motivo: "CONFIRMACAO_CONCORRENTE", proposta: u };
+          auditar("RETOMADA", trava.proposta);
+          return executar(trava.proposta);
+        }
+        if (u?.estado === ESTADO_PROPOSTA.EXECUTANDO) return { ok: false, motivo: "EM_EXECUCAO", proposta: u };
+        return { ok: false, motivo: "SEM_PROPOSTA_ABERTA" };
+      }
       if (p.autor !== autor) { auditar("CONFIRMACAO_RECUSADA", p, { motivo: "OUTRA_PESSOA" }); return { ok: false, motivo: "OUTRA_PESSOA", proposta: p }; }
       if (p.estado === ESTADO_PROPOSTA.AGUARDANDO_DADOS) return { ok: false, motivo: "FALTAM_DADOS", proposta: p };
       if (!autorizacaoDeEscrita?.pode) { auditar("CONFIRMACAO_RECUSADA", p, { motivo: autorizacaoDeEscrita?.motivo ?? "SEM_AUTORIZACAO_DE_ESCRITA" }); return { ok: false, motivo: "SEM_AUTORIZACAO_DE_ESCRITA", proposta: p }; }
@@ -242,7 +275,19 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
         auditar("ENCAMINHADA_A_REVISAO", p, { motivos: decisao.motivos }); return { ok: false, motivo: decisao.nivel === NIVEL.PROIBIDO ? "OPERACAO_PROIBIDA" : "REVISAO_HUMANA", proposta: p, decisao };
       }
       if (impressao({ tipo: p.tipo, dados: p.dados, unidadeId: p.unidadeId }) !== p.impressao) return { ok: false, motivo: "PROPOSTA_ALTERADA", proposta: p };
-      const trava = await repositorio.salvar({ ...p, estado: ESTADO_PROPOSTA.EXECUTANDO, decisao }, { versaoEsperada: p.revisao });
+      // revalida os DADOS no Financeiro AGORA (outra pessoa pela Central/Dashboard pode ter mudado a retirada, o fornecedor ou a
+      // categoria): se a proposta refeita agora não for idêntica à apresentada, ela fica DESATUALIZADA e nada é gravado.
+      if (p.args) {
+        const escopo = Object.freeze({ organizacaoId: p.organizacaoId, unidadeId: p.unidadeId, usuarioId: autor });
+        const agora = await normalizar({ tipo: p.tipo, args: p.args, escopo, anexo: p.anexo, hoje: p.hojeDoPreparo });
+        const mesma = !agora.recusa && !agora.requisitos.length && impressao({ tipo: p.tipo, dados: agora.dados, unidadeId: p.unidadeId }) === p.impressao;
+        if (!mesma) {
+          await repositorio.salvar({ ...p, estado: ESTADO_PROPOSTA.DESATUALIZADA, resultado: { ok: false, codigo: agora.recusa ?? "DADOS_MUDARAM", detalhes: agora.detalhes ?? null } }, { versaoEsperada: p.revisao });
+          auditar("DESATUALIZADA", p, { motivo: agora.recusa ?? "DADOS_MUDARAM" });
+          return { ok: false, motivo: "PROPOSTA_DESATUALIZADA", proposta: p, detalhes: agora.detalhes ?? null, recusa: agora.recusa ?? null };
+        }
+      }
+      const trava = await repositorio.salvar({ ...p, estado: ESTADO_PROPOSTA.EXECUTANDO, executandoDesde: agoraIso(), decisao }, { versaoEsperada: p.revisao });
       if (!trava.ok) return { ok: false, motivo: "CONFIRMACAO_CONCORRENTE", proposta: p }; // duas confirmações: só uma executa
       auditar("CONFIRMADA", trava.proposta, { nivel: decisao.nivel });
       return executar(trava.proposta);
@@ -289,13 +334,10 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
           feitos.push({ passo: "DESPESA_DA_SANGRIA", valorCentavos: x.valorCentavos, obrigacaoId: r?.despesa?.obrigacaoId ?? null, repetido: Boolean(r?.repetido), pendenteDepoisCentavos: r?.prestacao?.pendenteCentavos ?? null });
         }
         if (d.trocoCentavos) {
-          const r = await portaOperacional.chamar("registrarTrocoDaSangria", escopo, { sessaoId: d.sangria.sessaoId, movimentacaoId: d.sangria.ref, chave: chave("troco"), valorCentavos: d.trocoCentavos, data: d.dataTroco, confirmar: true });
+          const r = await portaOperacional.chamar("registrarTrocoDaSangria", escopo, { sessaoId: d.sangria.sessaoId, movimentacaoId: d.sangria.ref, chave: chave("troco"), valorCentavos: d.trocoCentavos, data: d.dataTroco, ...(d.sessaoDaDevolucaoId && d.sessaoDaDevolucaoId !== d.sangria.sessaoId ? { sessaoDaDevolucaoId: d.sessaoDaDevolucaoId } : {}), confirmar: true });
           feitos.push({ passo: "TROCO", valorCentavos: d.trocoCentavos, repetido: Boolean(r?.repetido), pendenteDepoisCentavos: r?.prestacao?.pendenteCentavos ?? null, estadoDaSangria: r?.prestacao?.estado ?? null });
         }
       }
-      const s = await repositorio.salvar({ ...p, estado: ESTADO_PROPOSTA.EXECUTADA, executadaEm: agoraIso(), resultado: { ok: true, feitos } });
-      auditar("EXECUTADA", s.proposta, { feitos: feitos.length });
-      return { ok: true, executada: true, proposta: s.proposta, feitos };
     } catch (e) {
       const codigo = e?.codigo ?? e?.code ?? "FALHA";
       // Falha TRANSITÓRIA (Financeiro/concessões fora do ar): a proposta volta a aguardar confirmação — repetir é seguro porque
@@ -307,6 +349,11 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
       auditar(retentavel ? "FALHA_TRANSITORIA" : estado, s.proposta, { codigo, feitos: feitos.length });
       return { ok: false, motivo: "FALHA_NA_EXECUCAO", codigo, mensagem, parcial: feitos.length > 0, retentavel, feitos, proposta: s.proposta };
     }
+    // FORA do try: se a gravação do desfecho falhar (queda do banco/processo DEPOIS da transação), a proposta continua EXECUTANDO
+    // — nunca vira "falhou" por engano — e a próxima confirmação da mesma pessoa a retoma pelas chaves idempotentes.
+    const s = await repositorio.salvar({ ...p, estado: ESTADO_PROPOSTA.EXECUTADA, executadaEm: agoraIso(), resultado: { ok: true, feitos } });
+    auditar("EXECUTADA", s.proposta, { feitos: feitos.length });
+    return { ok: true, executada: true, proposta: s.proposta, feitos };
   }
 }
 
@@ -314,7 +361,7 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
 const ROTULO_REQUISITO = {
   VALOR: "o valor", DATA_DO_PAGAMENTO: "a data do pagamento", DATA_FUTURA: "a data (está no futuro)", O_QUE_FOI_COMPRADO: "o que foi comprado",
   FORNECEDOR: "de quem foi comprado (loja/fornecedor)", FORNECEDOR_AMBIGUO: "qual dos fornecedores parecidos", CATEGORIA: "a categoria da despesa",
-  CATEGORIA_AMBIGUA: "qual categoria", COMPROVANTE: "o comprovante do pagamento (foto ou PDF)", DESPESAS_OU_TROCO: "o que foi gasto e/ou o troco",
+  CATEGORIA_AMBIGUA: "qual categoria", COMPROVANTE: "o comprovante do pagamento (foto ou PDF)", CAIXA_ABERTO: "um caixa aberto hoje para receber o troco (o caixa da retirada já foi fechado e não é reaberto; abra o caixa do dia na Central ou lance só as despesas agora)", DESPESAS_OU_TROCO: "o que foi gasto e/ou o troco",
 };
 const COMO_RESPONDER = {
   AGUARDANDO_DADOS: "NADA entrou no Financeiro. Peça SÓ o que falta (lista 'faltando'), em uma pergunta curta, e diga que depois disso a pessoa confirma. Não diga que registrou/lançou (use 'preparei').",
@@ -393,6 +440,8 @@ export function textoDoDesfecho(r) {
   }
   switch (r.motivo) {
     case "FALTAM_DADOS": return `Ainda não dá para lançar: falta ${p.requisitos.map((x) => ROTULO_REQUISITO[x] ?? x).join(", ")}. Nada entrou no Financeiro.`;
+    case "PROPOSTA_DESATUALIZADA": return `Os dados no Financeiro mudaram desde a proposta${r.recusa === "EXCEDE_O_PENDENTE" && Number.isInteger(r.detalhes?.pendenteCentavos) ? ` (agora faltam só ${reais(r.detalhes.pendenteCentavos)} para prestar contas dessa retirada)` : r.recusa === "SEM_SANGRIA_PENDENTE" ? " (essa retirada já foi prestada)" : ""}. Nada entrou no Financeiro; se quiser, refaço a proposta com os dados atuais.`;
+    case "EM_EXECUCAO": return "Esse lançamento está sendo processado agora. Pergunte daqui a pouco se foi lançado; nada será gravado em duplicidade.";
     case "OUTRA_PESSOA": return "Só quem pediu este lançamento pode confirmá-lo. Nada entrou no Financeiro.";
     case "SEM_AUTORIZACAO_DE_ESCRITA": return "Você não tem autorização para confirmar lançamentos pelo MOVA nesta unidade. Nada entrou no Financeiro; a proposta fica visível para quem pode confirmar na Central.";
     case "EXECUCAO_DESLIGADA": return "A execução de lançamentos pelo MOVA está desligada. Nada entrou no Financeiro; a proposta fica registrada para a Central.";

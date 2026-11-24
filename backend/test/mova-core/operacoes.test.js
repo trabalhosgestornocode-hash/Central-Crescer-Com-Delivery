@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { criarMovaCore, criarOrcamentoMemoria, LIMITES_HOMOLOGACAO } from "../../src/modules/mova-core/index.js";
-import { criarServicoDeOperacoes, intencaoDeterministica, ESTADO_PROPOSTA, criarRepositorioDePropostasMemoria } from "../../src/modules/mova-core/operacoes.js";
+import { criarServicoDeOperacoes, intencaoDeterministica, ESTADO_PROPOSTA, criarRepositorioDePropostasMemoria, textoDoDesfecho, chaveCanonicaDoFavorecido, validadeDaConfiguracao } from "../../src/modules/mova-core/operacoes.js";
 import { executorDaPessoa, OPERACOES_DE_ESCRITA } from "../../src/modules/mova-financeiro/aplicacao/portaOperacional.js";
 import { OPERACOES_PERMITIDAS } from "../../src/modules/mova-financeiro/aplicacao/portaFinanceira.js";
 import { ErroTransitorio } from "../../src/modules/mova-financeiro/gateway/fila.js";
@@ -18,7 +18,7 @@ const pdf = (marca = randomUUID()) => new TextEncoder().encode(`%PDF-1.4\n% comp
 const ANEXO = (marca = "brownies", idTransacao = "E00000000202610141200ABCDEF123456") => ({ arquivo: { conteudo: pdf(marca), nome: "comprovante.pdf", tipoMime: "application/pdf" }, referencia: "comprovante.pdf", idTransacao });
 const POLITICAS = (unidadeId = UNI_A, limiteCentavos = 100000) => ["DESPESA_DOCUMENTAL", "PRESTACAO_DE_SANGRIA"].map((operacao, i) => ({ id: `pol-${i}`, operacao, organizacaoId: ORG_A, unidadeId, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos, vigenteDe: "2026-01-01", vigenteAte: null, revogadaEm: null }));
 
-async function montar({ politicas = POLITICAS(), autorizado = true, porta: portaDada = null, roteiro = [] } = {}) {
+async function montar({ politicas = POLITICAS(), autorizado = true, porta: portaDada = null, roteiro = [], repositorio = undefined, relogio = () => AGORA.getTime(), validadeMs = undefined } = {}) {
   const m = await montarComCadastros();
   const n = m.nucleo; const c = m.c;
   const doce = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Doce Brownie Ltda" });
@@ -28,7 +28,7 @@ async function montar({ politicas = POLITICAS(), autorizado = true, porta: porta
   const chamadas = [];
   const escrita = portaDada ?? executorDaPessoa({ nucleo: Object.fromEntries(Object.entries(n).map(([k, f]) => [k, typeof f === "function" ? (cx, e) => { chamadas.push(k); return f(cx, e); } : f])), ctx: c });
   let lista = politicas;
-  const operacoes = criarServicoDeOperacoes({ porta: leitura, portaOperacional: escrita, politicas: async () => lista, relogio: () => AGORA.getTime() });
+  const operacoes = criarServicoDeOperacoes({ porta: leitura, portaOperacional: escrita, politicas: async () => lista, relogio, ...(repositorio ? { repositorio } : {}), ...(validadeMs ? { validadeMs } : {}) });
   const cliente = clienteRoteirizado(roteiro);
   const core = criarMovaCore({ porta: leitura, cliente, orcamento: criarOrcamentoMemoria(LIMITES_HOMOLOGACAO), operacoes, opcoes: { documentosNoCore: true }, relogio: () => AGORA.getTime() });
   const turno = (texto, extra = {}) => core.responder({ organizacaoId: ORG_A, conversaId: "conv-1", participanteId: "5585999990001@s.whatsapp.net", usuarioId: "pessoa-1",
@@ -45,7 +45,7 @@ async function montar({ politicas = POLITICAS(), autorizado = true, porta: porta
     if (fechar) await n.fecharCaixa(c, { sessaoId: sessao.id, dataFechamento: DIA, contadoCentavos: 10000 - valor, justificativa: "fechamento sintético", confirmar: true });
     return { movId: r.operacao.movimentacaoId, sessao };
   };
-  return { m, n, c, doce, antiga, operacoes, core, cliente, turno, retrato, chamadas, abrirSangria, trocarPoliticas: (x) => { lista = x; } };
+  return { m, n, c, doce, antiga, operacoes, leitura, escrita, core, cliente, turno, retrato, chamadas, abrirSangria, trocarPoliticas: (x) => { lista = x; } };
 }
 const preparo = (args, fala = "Preparei. Confirma?") => [[usar("preparar_operacao", args)], [falar(fala)]];
 const COMPRA = { tipo: "COMPRA_JA_PAGA", valorCentavos: 25900, fornecedor: "Doce Brownie", dataPagamento: DIA, contaOrigem: "Banco Inter", descricao: "Brownies (compra nova)", categoria: "Insumos" };
@@ -238,7 +238,7 @@ test("SG-2 recusas sem gravar: passa do pendente; nenhuma sangria pendente; reti
   assert.equal(de.motivo, "SEM_SANGRIA_PENDENTE", "já prestada: a mesma retirada não gera 2ª despesa");
 });
 
-test("SG-3 várias despesas numa retirada e prestação PARCIAL (o resto continua pendente); caixa FECHADO: a despesa entra, o troco é recusado com o motivo real (execução parcial dita como tal)", async () => {
+test("SG-3 várias despesas numa retirada e prestação PARCIAL (o resto continua pendente); caixa da retirada FECHADO: sem caixa aberto o troco espera (nunca reabre); com o caixa do dia aberto, o troco volta NELE", async () => {
   const t = await montar();
   const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
   const { movId } = await t.abrirSangria(5000, "Compras do dia");
@@ -248,25 +248,134 @@ test("SG-3 várias despesas numa retirada e prestação PARCIAL (o resto continu
   assert.deepEqual([r.executada, r.feitos.length, r.feitos.at(-1).pendenteDepoisCentavos], [true, 2, 1200]);
 
   const f = await montar();
-  const { movId: m2 } = await f.abrirSangria(1500, "Comprar grampos", { fechar: true });
-  await f.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "PRESTACAO_DE_SANGRIA", args: { sangria: m2, despesas: [{ valorCentavos: 1200, descricao: "Grampos", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }], trocoCentavos: 300 } });
+  const { movId: m2, sessao: caixaAntigo } = await f.abrirSangria(1500, "Comprar grampos", { fechar: true });
+  const args = { sangria: m2, despesas: [{ valorCentavos: 1200, descricao: "Grampos", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }], trocoCentavos: 300 };
+  const semCaixa = await f.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "PRESTACAO_DE_SANGRIA", args });
+  assert.deepEqual([semCaixa.proposta.estado, semCaixa.proposta.requisitos], ["AGUARDANDO_DADOS", ["CAIXA_ABERTO"]], "sem caixa aberto: nada reabre, o troco espera");
+  assert.equal((await f.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } })).motivo, "FALTAM_DADOS");
+  // a Central abre o caixa de HOJE (procedimento normal da tesouraria); o troco volta nele, com a data de hoje
+  const { sessao: caixaHoje } = await f.n.abrirCaixa(f.c, { contaId: f.m.caixa.id, dataAbertura: HOJE, saldoContadoCentavos: 8500 });
+  const comCaixa = await f.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "PRESTACAO_DE_SANGRIA", args });
+  assert.deepEqual([comCaixa.proposta.estado, comCaixa.proposta.avisos.includes("TROCO_NO_CAIXA_ATUAL"), comCaixa.proposta.dados.sessaoDaDevolucaoId], ["AGUARDANDO_CONFIRMACAO", true, caixaHoje.id]);
+  assert.match(comCaixa.proposta.resumo, /caixa aberto hoje/);
   const x = await f.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } });
-  assert.deepEqual([x.ok, x.parcial, x.proposta.estado], [false, true, ESTADO_PROPOSTA.EXECUTADA_PARCIAL]);
-  assert.match(x.mensagem, /caixa está fechado/i);
+  assert.equal(x.executada, true);
+  const [s] = (await f.n.consultarPrestacaoDeSangrias(f.c)).itens;
+  assert.deepEqual([s.estado, s.pendenteCentavos, s.caixaDaRetirada], ["PRESTADA", 0, "FECHADA"]);
+  const antigo = (await f.n.consultarRegistros(f.c, { tipo: "SESSAO_CAIXA" })).find((z) => z.id === caixaAntigo.id);
+  assert.equal(antigo.situacao, "FECHADA", "o caixa antigo continua fechado (nenhuma reabertura, nada retroativo)");
 });
 
-test("SG-4 edição CONCORRENTE por outra pessoa entre o preparo e o 'sim': o núcleo recusa o excedente e nada entra em dobro", async () => {
+test("SG-4 edição CONCORRENTE (Central/Dashboard) entre o preparo e o 'sim': a proposta fica DESATUALIZADA antes de qualquer gravação; o texto diz o novo pendente", async () => {
   const t = await montar();
   const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
   const { movId, sessao: cx } = await t.abrirSangria(1500);
   await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "PRESTACAO_DE_SANGRIA", args: { sangria: movId, despesas: [{ valorCentavos: 1200, descricao: "Grampos", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }] } });
-  // outra pessoa, pela Central, presta R$ 10 da mesma retirada
   await t.n.registrarDespesaDaSangria(t.c, { sessaoId: cx.id, movimentacaoId: movId, chave: "CENTRAL:1", justificativa: "Compra registrada pela Central", confirmar: true,
     obrigacao: { contraparteId: t.m.fornecedor.id, valorOriginalCentavos: 1000, categoria: "INSUMOS", descricao: "Outra compra" } });
   const antes = await t.retrato();
+  const chamadasAntes = t.chamadas.length;
   const r = await t.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } });
-  assert.deepEqual([r.ok, r.parcial, r.proposta.estado], [false, false, ESTADO_PROPOSTA.FALHOU]);
-  assert.deepEqual(await t.retrato(), antes, "nada gravado pela proposta desatualizada");
+  assert.deepEqual([r.ok, r.motivo, r.recusa], [false, "PROPOSTA_DESATUALIZADA", "EXCEDE_O_PENDENTE"]);
+  assert.equal(t.chamadas.length, chamadasAntes, "nenhuma escrita foi sequer tentada");
+  assert.deepEqual(await t.retrato(), antes);
+  assert.match(textoDoDesfecho(r), /agora faltam só R\$ 5,00/);
+  assert.equal((await t.operacoes.daConversa("k"))[0].estado, "DESATUALIZADA");
+});
+
+test("OP-08 categoria trocada na conversa: nova versão com a categoria nova; só ela é executada", async () => {
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: COMPRA, anexo: ANEXO() });
+  const v2 = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, categoria: "Embalagens" } });
+  assert.deepEqual([v2.proposta.versao, v2.proposta.dados.categoria, Boolean(v2.proposta.anexo)], [2, "EMBALAGENS", true], "o comprovante do turno anterior continua valendo");
+  assert.equal((await t.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } })).executada, true);
+  const nova = (await t.n.consultarRegistros(t.c, { tipo: "OBRIGACAO" })).find((o) => o.descricao === "Brownies (compra nova)");
+  assert.equal((await t.n.detalharContaAPagar(t.c, { id: nova.id })).titulo.categoria.codigo, "EMBALAGENS");
+});
+
+test("OP-09 documentos DIFERENTES para a MESMA transação (mesmo ID do Pix) e o MESMO arquivo em outra compra: o 2º é recusado pelo Financeiro e nada fica gravado", async () => {
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  const ok = async (chave, args, anexo) => { await t.operacoes.preparar({ conversaChave: chave, sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args, anexo }); return t.operacoes.confirmar({ conversaChave: chave, autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } }); };
+  assert.equal((await ok("k1", COMPRA, ANEXO("foto-1", "E0000000020261014TRANSACAOUNICA0001"))).executada, true);
+  const depois = await t.retrato();
+  const outraFoto = await ok("k2", { ...COMPRA, descricao: "Brownies (outra foto)" }, ANEXO("foto-2", "E0000000020261014TRANSACAOUNICA0001"));
+  assert.deepEqual([outraFoto.ok, outraFoto.parcial, outraFoto.proposta.estado], [false, false, "FALHOU"]);
+  const mesmoArquivo = await ok("k3", { ...COMPRA, descricao: "Brownies (mesmo arquivo)" }, ANEXO("foto-1", "E0000000020261014OUTRATRANSACAO02"));
+  assert.equal(mesmoArquivo.ok, false);
+  assert.deepEqual(await t.retrato(), depois, "nenhuma conta, despesa ou baixa a mais");
+});
+
+test("OP-10 fornecedor AMBÍGUO: a proposta pede qual (com os candidatos) e não escolhe sozinha; com o nome exato, resolve", async () => {
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  for (const nome of ["Atacadão Centro", "Atacadão Norte"]) {
+    const f = await t.n.registrarContraparte(t.c, { tipo: "FORNECEDOR", nome });
+    await t.n.registrarObrigacao(t.c, { contraparteId: f.id, valorOriginalCentavos: 5000, categoria: "INSUMOS", descricao: "x", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento: "2026-10-30" });
+  }
+  const a = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, fornecedor: "Atacadão" }, anexo: ANEXO() });
+  assert.deepEqual([a.proposta.estado, a.proposta.requisitos.includes("FORNECEDOR_AMBIGUO")], ["AGUARDANDO_DADOS", true]);
+  assert.deepEqual((a.detalhes.candidatosFornecedor ?? []).map((x) => x.nome ?? x).sort(), ["Atacadão Centro", "Atacadão Norte"]);
+  const b = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, fornecedor: "Atacadão Norte" } });
+  assert.deepEqual([b.proposta.estado, b.proposta.dados.fornecedor], ["AGUARDANDO_CONFIRMACAO", "Atacadão Norte"]);
+});
+
+test("OP-11 anti-fracionamento pela identidade CANÔNICA: 'Padaria Pão Quente' e 'PADARIA PAO QUENTE LTDA.' somam no mesmo favorecido", async () => {
+  assert.equal(chaveCanonicaDoFavorecido("Padaria Pão Quente"), chaveCanonicaDoFavorecido("PADARIA PAO QUENTE LTDA."));
+  assert.equal(chaveCanonicaDoFavorecido("Doce Brownie ME"), chaveCanonicaDoFavorecido("doce  brownie"));
+  assert.notEqual(chaveCanonicaDoFavorecido("Padaria Pão Quente"), chaveCanonicaDoFavorecido("Padaria Pão Doce"));
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  await t.operacoes.preparar({ conversaChave: "k1", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, fornecedor: "Padaria Pão Quente", valorCentavos: 60000, descricao: "Pães lote 1" }, anexo: ANEXO("p1", "E0000000020261014PADARIA00000001") });
+  assert.equal((await t.operacoes.confirmar({ conversaChave: "k1", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } })).executada, true);
+  const b = await t.operacoes.preparar({ conversaChave: "k2", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, fornecedor: "PADARIA PAO QUENTE LTDA.", valorCentavos: 60000, descricao: "Pães lote 2" }, anexo: ANEXO("p2", "E0000000020261014PADARIA00000002") });
+  assert.deepEqual([b.proposta.estado, b.proposta.decisao.motivos.includes("POSSIVEL_FRACIONAMENTO")], ["EM_REVISAO_HUMANA", true]);
+  const forn = (await t.n.consultarRegistros(t.c, { tipo: "CONTRAPARTE" })).filter((x) => /padaria/i.test(x.nome));
+  assert.equal(forn.length, 1, "o 2º pedido reconhece o fornecedor criado pelo 1º (não duplica o cadastro)");
+});
+
+test("OP-12 validade configurável (5–120 min, padrão 30) e retomada de execução INTERROMPIDA entre a transação e a gravação do desfecho, sem duplicar", async () => {
+  assert.equal(validadeDaConfiguracao({ MOVA_CORE_PROPOSTA_VALIDADE_MIN: "10" }), 600_000);
+  for (const v of [undefined, "1", "500", "abc"]) assert.equal(validadeDaConfiguracao({ MOVA_CORE_PROPOSTA_VALIDADE_MIN: v }), 30 * 60_000, String(v));
+  let agora = AGORA.getTime();
+  const repo = criarRepositorioDePropostasMemoria();
+  let quebrado = false;
+  const instavel = { ...repo, salvar: async (p, o) => { if (quebrado) throw new Error("conexão perdida"); if (p.estado === "EXECUTANDO") quebrado = true; return repo.salvar(p, o); } };
+  const t = await montar({ repositorio: instavel, relogio: () => agora, validadeMs: 10 * 60_000 });
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: COMPRA, anexo: ANEXO() });
+  assert.equal(Date.parse((await repo.daConversa("k"))[0].expiraEm) - agora, 10 * 60_000);
+  await assert.rejects(t.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } }), /conexão perdida/);
+  const meio = await t.retrato();
+  assert.equal((await repo.daConversa("k"))[0].estado, "EXECUTANDO", "a transação aconteceu; o desfecho não foi gravado");
+  // outra instância (processo reiniciado), sobre o mesmo repositório
+  const t2 = criarServicoDeOperacoes({ porta: t.leitura, portaOperacional: t.escrita, politicas: async () => POLITICAS(), relogio: () => agora, repositorio: repo });
+  assert.equal((await t2.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } })).motivo, "EM_EXECUCAO", "antes do intervalo: não retoma");
+  agora += 3 * 60_000;
+  assert.equal((await t2.confirmar({ conversaChave: "k", autor: "outra", autorizacaoDeEscrita: { pode: true } })).motivo, "EM_EXECUCAO", "outra pessoa não retoma");
+  const r = await t2.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } });
+  assert.deepEqual([r.executada, r.feitos.every((f) => f.repetido)], [true, true]);
+  assert.match(textoDoDesfecho(r), /já estava registrado/);
+  assert.deepEqual(await t.retrato(), meio, "a retomada não duplicou nada");
+});
+
+test("OP-13 cache: preparo nunca vem do cache; a leitura é isolada por identidade e permissão e não atravessa mensagens", async () => {
+  const { criarExecutor, novaSessao } = await import("../../src/modules/mova-core/executor.js");
+  const { criarReferencias } = await import("../../src/modules/mova-core/referencias.js");
+  let leituras = 0;
+  const catalogo = { ler_algo: { nome: "ler_algo", valores: true, ops: ["consultarContasAPagar"], esquema: { type: "object", properties: {} }, async executar() { leituras++; return { dados: { n: leituras }, fatos: [] }; } },
+    preparar_algo: { nome: "preparar_algo", valores: true, ops: [], escrita: "PROPOSTA", esquema: { type: "object", properties: {} }, async executar() { leituras++; return { dados: { n: leituras }, fatos: [] }; } } };
+  const ex = criarExecutor({ catalogo, porta: { ler: async () => ({}), permissoesDoUsuario: async () => ["financeiro_v2.ver"] } });
+  const conversa = { referencias: criarReferencias(), fatos: [] };
+  const sessao = (usuarioId, podeValores = true) => novaSessao({ conversa: { ...conversa }, organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId, unidadesPermitidas: [{ id: UNI_A, nome: "A" }], perfil: PERFIL_FIN, podeValores, requisicaoId: "r", hoje: HOJE });
+  const s1 = sessao("pessoa-1");
+  await ex.executar(s1, { name: "ler_algo", input: {} }); await ex.executar(s1, { name: "ler_algo", input: {} });
+  assert.equal(leituras, 1, "na MESMA mensagem, a mesma leitura vem do cache");
+  await ex.executar(s1, { name: "preparar_algo", input: {} }); await ex.executar(s1, { name: "preparar_algo", input: {} });
+  assert.equal(leituras, 3, "preparar nunca usa resultado anterior");
+  await ex.executar(sessao("pessoa-1"), { name: "ler_algo", input: {} });
+  assert.equal(leituras, 4, "mensagem nova ⇒ leitura nova (dado atual)");
 });
 
 test("SG-5 a escrita do MOVA só usa a LISTA FECHADA (prestação entra com REGISTRAR; nenhuma operação paga, estorna ou transfere)", () => {

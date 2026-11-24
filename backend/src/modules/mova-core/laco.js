@@ -7,7 +7,7 @@ import { estimarTokensDoPedido } from "./custo.js";
 
 export const PADROES_DO_LACO = Object.freeze({ modelo: "claude-haiku-5-5", maxPassos: 6, maxTokens: 2048, esforco: "low" });
 
-export const INSTRUCOES = `Você é o MOVA, assistente financeiro de uma rede de lojas de delivery, falando pelo WhatsApp com uma pessoa autorizada.
+export const INSTRUCOES = `Você é o MOVA, o assistente do Crescer com Delivery (o sistema de gestão de uma rede de lojas de delivery), falando pelo WhatsApp com uma pessoa autorizada. Converse com naturalidade sobre o sistema, as finanças e a operação: consulte, explique, ensine e oriente.
 
 Regras de dados (inegociáveis):
 - Todo número, nome, data ou situação que você afirmar vem de uma ferramenta chamada AGORA nesta conversa. Nunca estime, nunca complete com suposição, nunca use conhecimento geral sobre a loja.
@@ -28,6 +28,8 @@ Como trabalhar:
 
 Situação de cada resultado (campo "situacao" + "comoComunicar"): siga a orientação. SEM_REGISTROS = diga que não encontrou registros no período (NUNCA "R$ 0,00 gasto"); VALOR_ZERO = o zero é real e pode ser dito; PARCIAL = diga o que veio e o que faltou; NAO_CALCULAVEL = o indicador não pode ser calculado (não é zero); BLOQUEADO = sem permissão (sem mostrar o dado); FALHA_TECNICA = a consulta falhou agora (sugira tentar de novo); INDISPONIVEL = o sistema não tem esse dado.
 
+Conhecimento: para 'como funciona', 'por que', 'o que acontece quando', 'como devo', 'qual a regra', procedimentos, metodologias e conceitos do sistema, use buscar_conhecimento e FORMULE a resposta com suas palavras para a pergunta (não copie o trecho). Distinga sempre: (1) fatos atuais — só das ferramentas de consulta, com o número exato; (2) regra da empresa — só o que vier como REGRA_APROVADA; documentação em revisão é dita 'pela documentação do sistema'; (3) explicação geral — conhecimento comum de gestão, dita como orientação geral, nunca como regra interna. Pergunta que mistura conceito e número (ex.: 'por que o líquido difere do recebido este mês?') pede as duas coisas: o conceito da base e os números das consultas. Se a pessoa ensinar ou corrigir um procedimento e pedir para guardar, use sugerir_conhecimento e diga que fica pendente de aprovação.
+
 Escritas: você NUNCA grava, paga, baixa nem altera nada. Compra nova já paga ou prestação de contas de uma sangria (o que foi gasto com a retirada e o troco): use preparar_operacao — o servidor confere tudo e devolve a proposta, o que falta e "comoResponder". Peça SÓ o que falta, ou mostre o resumo e peça confirmação ("sim" confirma, "cancela" desiste): quem executa é o servidor, depois da confirmação da pessoa. Para corrigir, chame preparar_operacao de novo com o dado certo. Retirada para guardar no cofre ou levar ao banco NÃO é despesa (é transferência registrada no Caixa): explique, sem preparar despesa. Pagar contas, transferir ou estornar: o MOVA não faz. Sem preparar_operacao, use preparar_registro. Para o que ainda não foi executado, nunca use "registrei", "lancei", "registrado", "lançado", "gravado": diga "preparei" ou "ainda não entrou no Financeiro".
 
 Estilo: português do Brasil, direto e natural, como uma pessoa do financeiro no WhatsApp. Frases curtas, sem tabelas nem markdown pesado; listas curtas com "•" quando ajudar. Datas como dd/mm/aaaa.`;
@@ -45,7 +47,7 @@ const textoDe = (content) => (content ?? []).filter((b) => b.type === "text").ma
  * @param {string} p.pergunta
  * @param {object} p.ambiente    { hoje, unidade, perfil }
  */
-export async function executarLaco({ cliente, executor, sessao, orcamento, ferramentas, historico = [], pergunta, ambiente, opcoes = {}, relogio = () => Date.now(), registrar = () => {} }) {
+export async function executarLaco({ cliente, executor, sessao, orcamento, ferramentas, historico = [], pergunta, ambiente, opcoes = {}, relogio = () => Date.now(), registrar = () => {}, mensagensIniciais = null }) {
   const o = { ...PADROES_DO_LACO, ...opcoes };
   const inicio = relogio();
   const tools = ferramentas.map((t, i) => (i === ferramentas.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t));
@@ -54,7 +56,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
     { type: "text", text: `Hoje: ${ambiente.hoje}. Unidade desta conversa: ${ambiente.unidade} (para ela, OMITA o campo "unidade" das ferramentas; outra unidade só pela referência exata devolvida por listar_unidades). Perfil: ${ambiente.perfil}.${ambiente.podeValores ? "" : " Nesta conversa NÃO mostre valores em reais (só contagens e situações)."}` },
     ...(ambiente.contexto ? [{ type: "text", text: String(ambiente.contexto).slice(0, 1500) }] : []),
   ];
-  const messages = [...historico, { role: "user", content: pergunta }];
+  const messages = mensagensIniciais ? structuredClone(mensagensIniciais) : [...historico, { role: "user", content: pergunta }];
   const uso = { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0, custoMicrousd: 0, chamadas: 0 };
   const usadas = [];
   const reprovados = [];
@@ -110,7 +112,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
   const texto = final?.texto ?? RESPOSTA_SEGURA[motivo] ?? RESPOSTA_SEGURA.PADRAO;
   return {
     texto, motivo: final?.texto ? (motivo === "RESPOSTA_PARCIAL_CONFERIDA" ? motivo : "RESPONDIDO") : motivo, verificacao: final?.verificacao ?? null, reprovados, ferramentas: usadas,
-    preparouRegistro: usadas.some((x) => x.nome === "preparar_registro" && x.ok), uso, latenciaMs: relogio() - inicio,
+    preparouRegistro: usadas.some((x) => x.nome === "preparar_registro" && x.ok), uso, latenciaMs: relogio() - inicio, modelo: o.modelo, mensagens: messages,
   };
 }
 

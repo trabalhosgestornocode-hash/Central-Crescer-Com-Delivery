@@ -1,0 +1,546 @@
+{
+  "versao": "2026-11-24.1",
+  "observacao": "Corpo inicial do conhecimento do sistema, extraído da documentação versionada do repositório. Entra PENDENTE; regra/política/decisão só vale depois de aprovação humana.",
+  "itens": [
+    {
+      "chave": "sistema.visao-geral",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "O que é o Crescer com Delivery e seus módulos",
+      "palavras": [
+        "sistema",
+        "módulos",
+        "plataforma",
+        "telas",
+        "menu",
+        "funcionalidades"
+      ],
+      "origem": "docs/ARQUITETURA.md (corpo 2026-11-24.1)",
+      "conteudo": "O Crescer com Delivery é a plataforma de gestão das unidades (lojas) de uma empresa: cada organização tem várias unidades e cada pessoa entra com um perfil que define o que pode ver e fazer. Principais áreas: Dashboard Executivo e dashboards do iFood (vendas, pedidos, desempenho); Financeiro (Central Financeira: contas a pagar e a receber, caixa e bancos, conciliação, importações, DRE gerencial, fechamento do mês); Operação (Checklist Operacional, Entregadores Próprios); Produtos, fichas técnicas, CMV e insumos; Parser de delivery e Foody (entregas e taxas dos entregadores); Comunicação (WhatsApp e Central de conversas); Configurações (usuários, perfis, unidades, integrações). O backend é o dono da verdade: as telas e o MOVA usam os serviços oficiais, nunca o banco direto."
+    },
+    {
+      "chave": "mova.o-que-faz",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "O que o MOVA faz e o que ele não faz",
+      "palavras": [
+        "mova",
+        "assistente",
+        "whatsapp",
+        "pode",
+        "consegue",
+        "lançar",
+        "confirmar"
+      ],
+      "origem": "docs/mova-core/06-f3-f4-matriz-e-conhecimento.md (corpo 2026-11-24.1)",
+      "conteudo": "O MOVA é o assistente do Crescer com Delivery no WhatsApp. Ele conversa, consulta os dados oficiais (contas a pagar, vendas, caixa e bancos, DRE, pendências, entregadores, documentos), explica como o sistema funciona e PREPARA alguns lançamentos: compra nova já paga (com comprovante) e prestação de contas de sangria. Nada entra no Financeiro sem a confirmação ('sim') da mesma pessoa que pediu, com permissão de lançar naquela unidade e dentro da política aprovada; acima do limite ou sem política, a proposta vai para revisão humana na Central. O MOVA não transfere dinheiro, não estorna, não exclui, não paga conta sem comprovante e não aprova regras. Ele só diz que registrou depois que o Financeiro confirma a transação."
+    },
+    {
+      "chave": "mova.vincular-whatsapp",
+      "tipo": "PROCEDIMENTO",
+      "titulo": "Como vincular o WhatsApp à conta da plataforma",
+      "palavras": [
+        "vincular",
+        "vínculo",
+        "código",
+        "whatsapp",
+        "conta",
+        "desvincular",
+        "revogar"
+      ],
+      "origem": "docs/mova-core/06-f3-f4-matriz-e-conhecimento.md (corpo 2026-11-24.1)",
+      "conteudo": "Em Configurações → Usuários e acesso → WhatsApp (MOVA), a própria pessoa gera um código de vínculo. Ela abre a conversa PRIVADA com o MOVA (não o grupo) e envia 'vincular' seguido do código. O código vale 10 minutos e só pode ser usado uma vez. Só quem está na lista autorizada do MOVA consegue se vincular. O vínculo não dá permissão nova: o MOVA usa as permissões que o perfil tem na plataforma, calculadas na hora. Quem administra usuários pode aprovar um vínculo (pessoa da lista → perfil) e revogar; a revogação vale imediatamente. Para desvincular o próprio WhatsApp, use o botão na mesma tela."
+    },
+    {
+      "chave": "metodologia.tres-visoes",
+      "tipo": "METODOLOGIA",
+      "titulo": "Fluxo de caixa, DRE gerencial e competência: três visões diferentes",
+      "palavras": [
+        "fluxo de caixa",
+        "dre",
+        "competência",
+        "caixa",
+        "regime",
+        "diferença",
+        "resultado"
+      ],
+      "origem": "docs/financeiro-2-0/dre-gerencial-referencia.md (corpo 2026-11-24.1)",
+      "conteudo": "O sistema separa três visões que nunca se misturam. Fluxo de caixa: o dinheiro que efetivamente entrou e saiu, pela data do movimento (extrato e livro-caixa). DRE gerencial: o resultado do período, em que cada categoria tem um critério — caixa (entra no mês do pagamento), competência (entra no mês a que a despesa se refere, pelo valor original) ou fora da DRE. DRE por competência contábil: só depois de a contabilidade validar a metodologia. Cada resultado sai rotulado com a visão e a versão das regras. Categoria sem regra deixa o resultado PARCIAL. Por isso um mês pode ter lucro na DRE e saldo de caixa menor (ou o contrário): vendas recebidas depois, contas pagas em outro mês, parcelas e repasses."
+    },
+    {
+      "chave": "metodologia.faturamento-liquido-x-recebido",
+      "tipo": "METODOLOGIA",
+      "titulo": "Por que o faturamento líquido é diferente do dinheiro recebido",
+      "palavras": [
+        "faturamento líquido",
+        "recebido",
+        "repasse",
+        "dinheiro",
+        "diferença",
+        "taxas",
+        "bruto",
+        "deduções"
+      ],
+      "origem": "docs/financeiro-v2/38-ifood-oficial-e-conta-nas-propostas.md; financeiro-v2/36-taxas-stone-na-dre.md (corpo 2026-11-24.1)",
+      "conteudo": "Faturamento bruto é o total vendido; faturamento líquido é o bruto menos as deduções (descontos, cancelamentos, comissões e taxas das plataformas e da maquininha). O dinheiro recebido é outra coisa: depende de QUANDO cada canal repassa. No iFood, o saldo do recebível é o faturamento líquido da plataforma e é liquidado pelos repasses — nunca é um depósito no dia da venda. Na Stone, a tarifa efetivamente cobrada entra como despesa (Taxas Stone) e o dinheiro cai conforme o prazo contratado ou a antecipação. Por isso, num mesmo período, o líquido apurado e o que entrou no banco diferem por: repasses ainda não recebidos, recebimentos de vendas de períodos anteriores, taxas, ajustes e cancelamentos. A conciliação mostra o que já foi recebido e o que está pendente."
+    },
+    {
+      "chave": "metodologia.indicadores-da-dre",
+      "tipo": "METODOLOGIA",
+      "titulo": "Como os indicadores da DRE gerencial são calculados",
+      "palavras": [
+        "margem",
+        "margem de contribuição",
+        "ponto de equilíbrio",
+        "resultado",
+        "indicadores",
+        "cmv",
+        "despesas fixas",
+        "variáveis"
+      ],
+      "origem": "docs/financeiro-2-0/dre-gerencial-referencia.md (corpo 2026-11-24.1)",
+      "conteudo": "Fórmulas da DRE gerencial: faturamento líquido = bruto − deduções; custos totais = CMV + entregas; margem de contribuição (MC) = líquido − custos totais − despesas variáveis; MC% = MC ÷ bruto; resultado = MC − despesas fixas; ponto de equilíbrio = despesas fixas ÷ MC%; ponto de equilíbrio financeiro = (fixas + parcelas de dívida) ÷ MC%. Sem cadastro de dívidas, o ponto de equilíbrio financeiro fica INDISPONÍVEL, nunca zero. Pago acima do valor original (juros, multa) não entra pela competência até ser classificado. Conta cancelada não entra."
+    },
+    {
+      "chave": "metodologia.competencia-e-homologacao",
+      "tipo": "METODOLOGIA",
+      "titulo": "Competência do mês, fechamento e homologação",
+      "palavras": [
+        "competência",
+        "homologada",
+        "homologação",
+        "fechamento",
+        "fechar o mês",
+        "preliminar",
+        "pendências"
+      ],
+      "origem": "docs/financeiro-v2/14-configuracoes-documentos-fechamento.md; financeiro-v2/21-fechamento-baixa-bancaria.md (corpo 2026-11-24.1)",
+      "conteudo": "Cada registro tem a sua competência: venda e despesa pela competência econômica, movimentação bancária pela data efetiva, título pela competência do fato. O mês passa por estados: ABERTA → FECHAMENTO PRELIMINAR → (com pendências documentadas) → FECHAMENTO HOMOLOGADO. A homologação só acontece sem impedimentos: divergências de conciliação, importações em validação ou pendentes, classificação provisória (a classificar), pendências que exigem documentação sem a decisão registrada. Homologado, o mês recusa escritas que o alterem (COMPETENCIA_HOMOLOGADA) e a apuração fica guardada numa versão imutável. Para saber o que falta para fechar um mês, consulte as pendências e o fechamento da competência."
+    },
+    {
+      "chave": "procedimento.o-que-falta-fechar-o-mes",
+      "tipo": "PROCEDIMENTO",
+      "titulo": "O que falta para fechar o mês (como verificar)",
+      "palavras": [
+        "fechar o mês",
+        "fechamento",
+        "falta",
+        "pendências",
+        "homologar",
+        "competência"
+      ],
+      "origem": "docs/financeiro-v2/21-fechamento-baixa-bancaria.md (corpo 2026-11-24.1)",
+      "conteudo": "Para fechar o mês: 1) importar todos os extratos e relatórios do período (bancos, Stone, iFood, SAIPOS, 99Food) e confirmar as importações; 2) conferir o calendário de faturamento de cada canal (dias sem registro, conferência pendente, divergência); 3) conciliar as movimentações bancárias com as contas e recebíveis; 4) classificar o que está 'a classificar'; 5) documentar as pendências que exigem decisão; 6) passar para fechamento preliminar e, sem impedimentos, homologar. O MOVA lista as pendências reais da competência pela consulta oficial — a lista muda a cada lançamento, por isso ela é sempre consultada na hora."
+    },
+    {
+      "chave": "funcionamento.canais-de-faturamento",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Canais de faturamento e de onde vem cada um",
+      "palavras": [
+        "canais",
+        "faturamento",
+        "presencial",
+        "anota aí",
+        "ifood",
+        "99food",
+        "saipos",
+        "balcão"
+      ],
+      "origem": "docs/financeiro-v2/39-canais-de-faturamento-diagnostico.md (corpo 2026-11-24.1)",
+      "conteudo": "O faturamento é separado em quatro canais, cada um da sua fonte: Presencial (balcão) e Anota Aí vêm da SAIPOS; iFood vem dos relatórios oficiais do iFood; 99Food vem dos relatórios oficiais da 99Food. Há taxas por operadora com vigência, fechamento manual de caixa, cards por modalidade e bandeira e a consolidação na Visão Geral e na DRE. O relatório de formas de pagamento da SAIPOS não informa o canal (mistura os quatro), por isso não serve sozinho para o faturamento por canal."
+    },
+    {
+      "chave": "decisao.ifood-pelo-demonstrativo",
+      "tipo": "DECISAO",
+      "titulo": "O faturamento do iFood vem do demonstrativo oficial, não da SAIPOS",
+      "palavras": [
+        "ifood",
+        "demonstrativo",
+        "saipos",
+        "faturamento ifood",
+        "fonte"
+      ],
+      "origem": "docs/financeiro-v2/38-ifood-oficial-e-conta-nas-propostas.md (decisão do proprietário registrada no documento) (corpo 2026-11-24.1)",
+      "conteudo": "Decisão: o canal iFood usa o relatório (demonstrativo) oficial do iFood como fonte do faturamento, não a integração SAIPOS. Pedidos iFood que aparecem na SAIPOS servem só para conferência, nunca como faturamento. A diferença entre SAIPOS e iFood fica como pendência documental; nada é lançado para fazer as fontes coincidirem."
+    },
+    {
+      "chave": "funcionamento.demonstrativo-ifood",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Como o demonstrativo do iFood entra no Financeiro",
+      "palavras": [
+        "demonstrativo ifood",
+        "repasse",
+        "comissão",
+        "recebível",
+        "mensalidade",
+        "taxa online"
+      ],
+      "origem": "docs/financeiro-v2/38-ifood-oficial-e-conta-nas-propostas.md (corpo 2026-11-24.1)",
+      "conteudo": "Registrar o demonstrativo do iFood faz tudo numa transação: lança a receita do canal iFood (vendas do demonstrativo) e um recebível iFood com as retenções — comissões, taxa do pagamento online, mensalidade e serviços/promoções (estes como 'a classificar', porque o demonstrativo não decompõe). Ajuste positivo entra como outras receitas. O demonstrativo precisa fechar (vendas − taxas − serviços e promoções + ajustes = líquido informado), é idempotente por período e tem granularidade única: não convive com vendas iFood vindas da SAIPOS no mesmo período. O saldo do recebível é liquidado pelos repasses do iFood."
+    },
+    {
+      "chave": "funcionamento.taxas-stone",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Taxas da Stone na DRE",
+      "palavras": [
+        "stone",
+        "taxa",
+        "tarifa",
+        "maquininha",
+        "cartão",
+        "taxas stone"
+      ],
+      "origem": "docs/financeiro-v2/36-taxas-stone-na-dre.md; financeiro-v2/35-taxas-contratadas-stone.md (corpo 2026-11-24.1)",
+      "conteudo": "A tarifa da Stone entra na DRE pela soma EXATA das tarifas efetivamente cobradas no relatório da Stone, uma única vez por importação e competência, na categoria Taxas Stone (despesa de processamento). Reconhecer de novo ou reimportar o mesmo arquivo não lança nada novo. Nem o bruto nem o líquido da Stone viram receita: o faturamento continua sendo o dos canais. A taxa contratada (por modalidade × bandeira, com vigência) serve para conferir transação a transação; se faltar, aparece como pendência de conferência."
+    },
+    {
+      "chave": "funcionamento.calendario-de-faturamento",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Calendário de controle de faturamento: o que cada estado do dia significa",
+      "palavras": [
+        "calendário",
+        "dia",
+        "sem registro",
+        "divergência",
+        "conciliado",
+        "pendente",
+        "sem movimento"
+      ],
+      "origem": "docs/financeiro-v2/47-calendario-de-controle-de-faturamento.md (corpo 2026-11-24.1)",
+      "conteudo": "Cada canal tem um calendário mensal. Estados do dia: Sem registro (dia elegível sem informação); Faturamento provisório (venda manual provisória); Fechamento manual registrado; Relatório importado; Conferência pendente (proposta aberta, taxa/operadora/bandeira pendente, recebimento não confirmado, repasse pendente); Divergência (duas fontes discordam); Conciliado (recebido igual ao esperado, sem pendência); Sem movimento confirmado (dia marcado sem operação, com justificativa). Hoje e dias futuros nunca são atrasados. Dias sem operação são configuráveis por data e por dia da semana, por canal. No iFood o demonstrativo cobre um período e não é repartido por dia."
+    },
+    {
+      "chave": "procedimento.compra-ja-paga",
+      "tipo": "PROCEDIMENTO",
+      "titulo": "Como registrar uma compra que já foi paga",
+      "palavras": [
+        "compra",
+        "já paguei",
+        "paga",
+        "comprovante",
+        "pix",
+        "lançar compra",
+        "registrar compra"
+      ],
+      "origem": "docs/mova-pagamento-por-comprovante-ativacao.md (corpo 2026-11-24.1)",
+      "conteudo": "Compra nova já paga é UMA conta nova, já quitada: nunca baixa uma conta antiga do mesmo fornecedor. Pelo MOVA: mande o comprovante (foto ou PDF) e diga o que comprou, de quem, quanto e quando pagou. O MOVA confere o fornecedor (usa o cadastrado; se for novo, avisa), a categoria e a política, mostra a proposta e pergunta só o que faltar; você responde 'sim' para confirmar ou 'cancela'. Confirmado, o Financeiro cria a conta e o pagamento por comprovante numa única transação. A conciliação bancária fica pendente até a saída aparecer no extrato; quando aparecer, ela é ligada ao MESMO pagamento (sem segunda despesa). Pela Central: lance a conta e registre o pagamento com o comprovante."
+    },
+    {
+      "chave": "funcionamento.pagamento-por-comprovante",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Pagamento por comprovante e conciliação depois",
+      "palavras": [
+        "pagamento por comprovante",
+        "baixa",
+        "conciliação",
+        "extrato",
+        "comprovante",
+        "pix"
+      ],
+      "origem": "docs/mova-pagamento-por-comprovante-ativacao.md (corpo 2026-11-24.1)",
+      "conteudo": "O pagamento por comprovante quita a conta sem criar movimentação bancária: a conciliação fica pendente. Quando o extrato chega, a saída é ligada à mesma baixa — nunca vira segunda baixa, segunda saída ou segunda despesa; a DRE reconhece a despesa uma única vez, pela conta. O mesmo comprovante (mesmo arquivo) ou a mesma transação (mesmo identificador do Pix) não servem para duas contas: o Financeiro recusa e nada é gravado. Reverter é só pelo responsável, com estorno oficial."
+    },
+    {
+      "chave": "politica.mova-pagamento-por-comprovante",
+      "tipo": "POLITICA",
+      "titulo": "Política de pagamento por comprovante pelo MOVA (Açaí no Grau Saci)",
+      "palavras": [
+        "política",
+        "limite",
+        "açaí",
+        "automático",
+        "aprovação humana",
+        "fracionamento"
+      ],
+      "origem": "docs/mova-pagamento-por-comprovante-ativacao.md (política aprovada pelo proprietário em 22/11/2026, conforme o documento) (corpo 2026-11-24.1)",
+      "conteudo": "Unidade: Açaí no Grau Saci (política por unidade, nunca por empresa). Pagamento por comprovante pelo MOVA com limite de R$ 1.000,00 por pagamento; acima do limite, aprovação humana na Central. Pagamentos ao mesmo favorecido somam para o limite (anti-fracionamento). Comprovante ambíguo, duplicado, agendado, pendente, cancelado, ilegível ou suspeito nunca é baixado automaticamente. A aprovação da política, sozinha, não liga nada: depende de homologação, permissões e das chaves de ativação."
+    },
+    {
+      "chave": "procedimento.sangria",
+      "tipo": "PROCEDIMENTO",
+      "titulo": "O que acontece quando fazemos uma sangria (retirada do caixa)",
+      "palavras": [
+        "sangria",
+        "retirada",
+        "troco",
+        "prestação de contas",
+        "caixa",
+        "dinheiro do caixa"
+      ],
+      "origem": "docs/financeiro-v2/sangrias-como-despesa-paga.md; mova-core F4 (prestação de sangria) (corpo 2026-11-24.1)",
+      "conteudo": "Sangria é uma retirada de dinheiro do caixa físico. Na prestação de contas, a retirada sozinha ainda não é despesa: ela fica 'aguardando destino' até alguém dizer o que foi feito com o dinheiro. Despesa paga com o dinheiro da retirada vira uma conta quitada CONTRA a própria saída da sangria (nenhuma segunda saída de caixa). Troco devolvido volta como entrada no mesmo caixa. O pendente (retirado − despesas − troco) é calculado pelo sistema e nunca fica negativo; a prestação pode ser parcial e completada depois, com comprovantes chegando mais tarde. Se o caixa da retirada já foi fechado, o troco volta no caixa aberto do dia — o caixa antigo não é reaberto e nada é lançado com data retroativa. Retirada para guardar no cofre ou depositar no banco é transferência, não despesa. Atenção: se a unidade já lança as retiradas importadas da SAIPOS como despesas genéricas 'Sangrias', a mesma retirada não deve ser prestada de novo (a escolha do fluxo por unidade depende de definição do responsável)."
+    },
+    {
+      "chave": "funcionamento.sangrias-saipos",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Retiradas da SAIPOS lançadas como despesas pagas em dinheiro",
+      "palavras": [
+        "saipos",
+        "retiradas",
+        "sangrias",
+        "importar",
+        "outras despesas"
+      ],
+      "origem": "docs/financeiro-v2/sangrias-como-despesa-paga.md (corpo 2026-11-24.1)",
+      "conteudo": "Importar o relatório da SAIPOS não lança nada. Na importação confirmada há o bloco 'Lançar as retiradas como despesas pagas em dinheiro': cada retirada aparece como Nova, Já lançada à mão (mesma data e valor de uma conta do fornecedor Sangrias) ou Já lançada pela importação. Confirmado, cada retirada nova vira conta do fornecedor Sangrias, categoria Outras despesas, paga em dinheiro saindo do Caixa da loja na data da retirada — atômico e idempotente por retirada. Reforço e transferência não viram despesa. Exige exatamente um caixa físico ativo e a permissão de registrar."
+    },
+    {
+      "chave": "procedimento.caixa-fisico",
+      "tipo": "PROCEDIMENTO",
+      "titulo": "Abrir e fechar o caixa físico",
+      "palavras": [
+        "abrir caixa",
+        "fechar caixa",
+        "caixa físico",
+        "contado",
+        "esperado",
+        "reforço",
+        "diferença de caixa"
+      ],
+      "origem": "docs/financeiro-v2/11-contas-caixa-fluxo.md (corpo 2026-11-24.1)",
+      "conteudo": "O caixa físico funciona por sessões: abre-se o caixa com o valor contado; durante o dia registram-se as operações (sangria, reforço, entradas); no fechamento informa-se o valor contado e o sistema compara com o esperado (abertura + entradas − saídas), mostrando a diferença. Reforço é dinheiro que entra no caixa (não é receita); transferência entre caixa e banco não é despesa nem receita. Caixa fechado não recebe operações novas; para registrar algo depois, usa-se o caixa aberto do dia."
+    },
+    {
+      "chave": "funcionamento.contas-a-pagar",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Contas a pagar: lançar, pagar e vincular o pagamento do extrato",
+      "palavras": [
+        "contas a pagar",
+        "conta",
+        "vencimento",
+        "pagar",
+        "parcela",
+        "boleto",
+        "fornecedor",
+        "vincular"
+      ],
+      "origem": "docs/financeiro-v2/21-fechamento-baixa-bancaria.md (corpo 2026-11-24.1)",
+      "conteudo": "Cada conta a pagar tem fornecedor, categoria, competência, emissão, vencimento, valor e situação (em aberto, parcial, quitada, cancelada). 'Registrar pagamento' cria a saída e a baixa numa transação. Se a saída já está no extrato importado, use 'Vincular pagamento do extrato': liga a conta à saída existente, sem criar outra. Conta manual muito parecida com uma gerada automaticamente (ex.: entregadores) faz o sistema parar e perguntar, para evitar pagar duas vezes. O calendário e a DRE usam as mesmas contas."
+    },
+    {
+      "chave": "funcionamento.categoria-de-uma-conta",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Por que uma conta aparece numa categoria",
+      "palavras": [
+        "categoria",
+        "classificação",
+        "plano de contas",
+        "reclassificar",
+        "a classificar",
+        "por que essa conta"
+      ],
+      "origem": "docs/financeiro-2-0/dre-gerencial-referencia.md; financeiro-v2/36-taxas-stone-na-dre.md (corpo 2026-11-24.1)",
+      "conteudo": "A categoria de uma conta vem de quem a lançou: escolhida na Central ao lançar, sugerida pela categoria habitual do fornecedor, definida pela regra da importação (ex.: Taxas Stone, Sangrias → Outras despesas, entregadores) ou deixada 'a classificar' quando a fonte não decompõe. A categoria define a linha da DRE e o critério (caixa, competência ou fora da DRE). Dá para reclassificar pela tela da conta enquanto a competência não estiver homologada; homologada, a mudança é recusada. Para saber a categoria e a origem de uma conta específica, consulte o detalhe da conta."
+    },
+    {
+      "chave": "funcionamento.plano-de-contas",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Plano de contas e categorias",
+      "palavras": [
+        "plano de contas",
+        "categoria",
+        "grupo",
+        "insumos",
+        "embalagens",
+        "despesa"
+      ],
+      "origem": "docs/financeiro-v2/03-modelo-e-invariantes.md (corpo 2026-11-24.1)",
+      "conteudo": "O plano de contas é uma árvore: grupos (ex.: Custos operacionais) com categorias dentro (ex.: Insumos, Descartáveis e embalagens). Só as categorias finais aceitam lançamento. Cada categoria tem natureza (despesa ou receita) e pode exigir documento. Cada unidade tem o seu plano; o MOVA lê o plano oficial na hora para sugerir a categoria."
+    },
+    {
+      "chave": "funcionamento.entregadores-proprios",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Rotina de pagamento dos entregadores próprios",
+      "palavras": [
+        "entregadores",
+        "motoboys",
+        "semana",
+        "fechamento semanal",
+        "demonstrativo",
+        "nota fiscal",
+        "pagar entregador"
+      ],
+      "origem": "docs/financeiro-v2/52-entregadores-proprios.md (corpo 2026-11-24.1)",
+      "conteudo": "Em Operação → Entregadores Próprios a equipe vê a semana inteira: cards por entregador com o acumulado por dia e o que falta pagar. Durante a semana o valor é provisório (acompanha o parser de entregas e ainda não é dívida). Na segunda-feira, a partir das 06h, a semana fecha sozinha se a apuração estiver completa; dia sem dados, triagem ou cancelamento em revisão seguram o fechamento. No fechamento nasce uma conta a pagar por entregador, unidade e semana, com vencimento na quarta-feira; reprocessar nunca cria segunda conta. O demonstrativo lista entregas, ajustes e total. Cada semana guarda seus documentos (notas e recibos). A baixa exige a conta 'Liberada para pagamento'."
+    },
+    {
+      "chave": "integracao.foody",
+      "tipo": "INTEGRACAO",
+      "titulo": "Foody e o parser de delivery (entregas e taxas)",
+      "palavras": [
+        "foody",
+        "parser",
+        "entregas",
+        "planilha",
+        "taxa do entregador",
+        "coleta"
+      ],
+      "origem": "docs/financeiro-v2/52-entregadores-proprios.md; foody-automacao-matriz-aceite.md (corpo 2026-11-24.1)",
+      "conteudo": "As entregas da logística própria vêm de duas fontes: a planilha do parser de delivery e a API da Foody. Por dia vale uma fonte só, e a planilha prevalece. A coleta da Foody reprocessa os três dias anteriores a cada 6 horas. A taxa do entregador não é o valor cobrado do cliente. Cancelamentos são classificados em recebe taxa, não recebe ou revisar. Correções manuais sobrevivem às reimportações. Todas as leituras filtram organização e unidade."
+    },
+    {
+      "chave": "integracao.ifood",
+      "tipo": "INTEGRACAO",
+      "titulo": "Integração com o iFood (pedidos, eventos e financeiro)",
+      "palavras": [
+        "ifood",
+        "pedidos",
+        "integração",
+        "conexão",
+        "loja",
+        "eventos",
+        "repasse"
+      ],
+      "origem": "docs/ifood-order-autoatendimento.md; ifood-integracao-fase1.md (corpo 2026-11-24.1)",
+      "conteudo": "Cada unidade conecta a sua loja do iFood por autoatendimento na plataforma. A integração recebe os pedidos (Order) e os eventos de status (Events) para os dashboards; o financeiro do iFood entra pelo demonstrativo oficial importado no Financeiro. Ações sobre pedidos (confirmar, cancelar) seguem autorização própria por loja."
+    },
+    {
+      "chave": "integracao.saipos",
+      "tipo": "INTEGRACAO",
+      "titulo": "Relatórios da SAIPOS",
+      "palavras": [
+        "saipos",
+        "relatório",
+        "vendas por período",
+        "formas de pagamento",
+        "importar"
+      ],
+      "origem": "docs/financeiro-v2/39-canais-de-faturamento-diagnostico.md; financeiro-v2/41-leitor-saipos-vendas-por-periodo.md (corpo 2026-11-24.1)",
+      "conteudo": "Da SAIPOS vêm o faturamento Presencial e Anota Aí, pelo relatório 'Vendas por período' (uma linha por pedido, com canal, tipo do pedido, turno, data e pagamento), e as retiradas de caixa. O relatório de formas de pagamento não informa o canal. Toda importação passa por prévia, impressão digital do arquivo (o mesmo arquivo não entra duas vezes), deduplicação, confirmação e aplicação."
+    },
+    {
+      "chave": "funcionamento.importacoes",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Como funcionam as importações de extratos e relatórios",
+      "palavras": [
+        "importação",
+        "importar",
+        "extrato",
+        "prévia",
+        "rejeitada",
+        "duplicado",
+        "arquivo"
+      ],
+      "origem": "docs/financeiro-v2/13-importacoes-conferencias.md; financeiro-v2/48-importacoes-por-canal.md (corpo 2026-11-24.1)",
+      "conteudo": "Importar um extrato ou relatório: envia o arquivo, o sistema mostra a prévia (o que será criado, o que já existe, o que conflita), confere a impressão digital do arquivo e a identidade de cada linha para não duplicar, e só aplica depois da confirmação. Linhas que viram lançamento podem passar por propostas e aprovação. Um arquivo rejeitado pode ser reenviado como nova tentativa. Nada importado muda um mês homologado."
+    },
+    {
+      "chave": "funcionamento.conciliacao",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Conciliação bancária",
+      "palavras": [
+        "conciliação",
+        "conciliar",
+        "extrato",
+        "movimentação",
+        "divergência",
+        "recebimento"
+      ],
+      "origem": "docs/financeiro-v2/14-configuracoes-documentos-fechamento.md (corpo 2026-11-24.1)",
+      "conteudo": "Conciliar é ligar cada movimentação do extrato ao que ela representa: o pagamento de uma conta, o recebimento de uma venda ou de um repasse, uma transferência. As decisões são confirmar, rejeitar, marcar divergência ou aguardar documento. Divergência aberta impede homologar o mês. A competência da conciliação é a do fato mais recente entre os registros ligados."
+    },
+    {
+      "chave": "funcionamento.checklist-operacional",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Checklist Operacional",
+      "palavras": [
+        "checklist",
+        "rotina",
+        "tarefas",
+        "alertas",
+        "abertura",
+        "fechamento da loja"
+      ],
+      "origem": "docs/checklist-operacional-2-entrega.md (corpo 2026-11-24.1)",
+      "conteudo": "O Checklist Operacional organiza as rotinas da loja (abertura, durante o dia, fechamento) por unidade, com responsáveis, horários e evidências. Há alertas preventivos (antes do prazo) e finais (prazo vencido). Funciona também em unidades sem iFood."
+    },
+    {
+      "chave": "funcionamento.agente-crescer",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Análises da plataforma: Dashboard Executivo, CMV, insumos e cancelamentos",
+      "palavras": [
+        "dashboard executivo",
+        "cmv",
+        "produto",
+        "insumo",
+        "cancelamentos",
+        "diagnóstico",
+        "ficha técnica"
+      ],
+      "origem": "docs/agente-crescer.md (corpo 2026-11-24.1)",
+      "conteudo": "O MOVA também consulta, pelas ferramentas autorizadas da plataforma (só leitura), o Dashboard Executivo e o diagnóstico, a composição de custo por produto (CMV pela ficha técnica), o cruzamento produto ↔ insumo, o parser de delivery e os cancelamentos (resumo mensal, lista e explicação de cada um). Bonificação mensal, vendas da plataforma e Martin Brower ficaram de fora por decisão de produto (dados ainda não confiáveis o suficiente). Essas consultas exigem o WhatsApp vinculado à conta e respeitam o perfil."
+    },
+    {
+      "chave": "metodologia.cmv",
+      "tipo": "METODOLOGIA",
+      "titulo": "CMV e margem por produto",
+      "palavras": [
+        "cmv",
+        "custo da mercadoria",
+        "margem",
+        "ficha técnica",
+        "preço",
+        "produto"
+      ],
+      "origem": "docs/agente-crescer.md (corpo 2026-11-24.1)",
+      "conteudo": "O CMV de um produto vem da ficha técnica: a soma do custo de cada insumo na quantidade usada, com o custo atual do insumo. A margem compara o preço de venda com esse custo. Ficha incompleta ou insumo sem custo deixa o CMV parcial (a resposta precisa dizer isso). Na DRE, o CMV do período vem das compras/consumo lançados nas categorias de custo."
+    },
+    {
+      "chave": "metodologia.reduzir-custos",
+      "tipo": "METODOLOGIA",
+      "titulo": "Como analisar e reduzir custos operacionais (roteiro)",
+      "palavras": [
+        "reduzir custos",
+        "economizar",
+        "custos operacionais",
+        "despesas",
+        "analisar",
+        "cortar gastos"
+      ],
+      "origem": "docs/financeiro-2-0/dre-gerencial-referencia.md; agente-crescer.md (corpo 2026-11-24.1)",
+      "conteudo": "Roteiro de análise com os dados do sistema: 1) na DRE, ver quais linhas mais pesam sobre o faturamento líquido e como mudaram entre meses; 2) CMV: produtos com maior custo e menor margem pela ficha técnica, e insumos que mais subiram; 3) taxas por canal (comissões do iFood, tarifas da Stone): o canal mais caro por venda; 4) entregas: custo por entrega dos entregadores próprios × taxa cobrada; 5) despesas fixas recorrentes por fornecedor; 6) cancelamentos e perdas. Cada recomendação deve citar o número consultado; o que não estiver disponível no sistema é dito como tal."
+    },
+    {
+      "chave": "funcionamento.fornecedores",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "O que o sistema guarda sobre um fornecedor",
+      "palavras": [
+        "fornecedor",
+        "informações",
+        "cadastro",
+        "histórico",
+        "contas do fornecedor"
+      ],
+      "origem": "docs/financeiro-v2/03-modelo-e-invariantes.md (corpo 2026-11-24.1)",
+      "conteudo": "Cada fornecedor é uma contraparte cadastrada na unidade (nome e tipo). O que se sabe dele vem das contas: contas em aberto e pagas, valores, vencimentos, categoria habitual, documentos anexados (notas, boletos, comprovantes) e pagamentos conciliados. O MOVA consulta essas informações na hora; nomes parecidos são tratados como ambíguos até a pessoa dizer qual é."
+    },
+    {
+      "chave": "funcionamento.documentos",
+      "tipo": "FUNCIONAMENTO",
+      "titulo": "Documentos e comprovantes",
+      "palavras": [
+        "documentos",
+        "comprovante",
+        "nota fiscal",
+        "boleto",
+        "anexo",
+        "arquivo"
+      ],
+      "origem": "docs/financeiro-v2/20-documentos-desempenho-acessibilidade.md; mova-retencao-documentos.md (corpo 2026-11-24.1)",
+      "conteudo": "Comprovantes, notas e boletos ficam guardados no cofre de documentos do Financeiro, ligados à conta, ao pagamento ou à semana dos entregadores. Arquivo substituído não é apagado. O mesmo arquivo não comprova dois pagamentos. Documentos enviados ao MOVA seguem a política de retenção do MOVA."
+    },
+    {
+      "chave": "glossario.retirada-reforco-transferencia",
+      "tipo": "GLOSSARIO",
+      "titulo": "Retirada, reforço, transferência e troco",
+      "palavras": [
+        "retirada",
+        "reforço",
+        "transferência",
+        "troco",
+        "sangria",
+        "suprimento"
+      ],
+      "origem": "docs/financeiro-v2/sangrias-como-despesa-paga.md (corpo 2026-11-24.1)",
+      "conteudo": "Retirada (sangria): dinheiro que sai do caixa físico. Reforço (suprimento): dinheiro que entra no caixa para troco — não é receita. Transferência: dinheiro que passa do caixa para o banco ou cofre (ou o contrário) — não é despesa nem receita. Troco devolvido: a parte de uma retirada que volta ao caixa depois da compra."
+    }
+  ]
+}
