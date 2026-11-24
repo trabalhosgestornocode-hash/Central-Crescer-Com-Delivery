@@ -6,13 +6,13 @@
 // O escopo (organização, unidade, usuário) NUNCA vem do modelo: é injetado pelo executor a partir da conversa autorizada.
 // Nada aqui inventa capacidade: ferramenta sem fonte no núcleo não existe no catálogo; o que não existe é dito como indisponível.
 import { COMPETENCIA, DATA, REFERENCIA, TEXTO_CURTO } from "./esquema.js";
-import { combina, resolverEntidade } from "./resolucao.js";
+import { resolverEntidade } from "./resolucao.js";
+import { bate, itemAPagar, todasAsPaginas } from "./leituras.js";
+export { bate, itemAPagar, todasAsPaginas };
 import { FERRAMENTA_ANALISAR } from "./analise.js"; // F2 (import circular seguro: analise só usa os auxiliares daqui em tempo de chamada)
 
 const UNIDADE = { ...REFERENCIA, description: "SÓ para OUTRA unidade: a referência exata (ex.: ref_2) devolvida por listar_unidades. Para a unidade desta conversa, OMITA este campo. Nunca invente referência." };
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-// F3: o casamento termo × cadastro é a camada de resolução (flexão, acento, digitação, abreviação, sufixo societário)
-export const bate = (termo, ...textos) => combina(termo, ...textos);
 /** Mais de um registro DIFERENTE (fornecedor/entregador) combina igualmente com o nome pedido? Então a ferramenta avisa. */
 function ambiguidadeDeNome(termo, nomes) {
   const distintos = [...new Set(nomes.filter(Boolean))].map((nome) => ({ nome }));
@@ -23,29 +23,12 @@ function ambiguidadeDeNome(termo, nomes) {
 const mesDe = (d) => String(d ?? "").slice(0, 7);
 const rotulo = (o) => o?.nome ?? o?.fornecedor?.nome ?? o?.contraparte?.nome ?? o?.entregador?.nome ?? o?.entregadorNome ?? o?.descricao ?? o?.titulo ?? o?.canal ?? o?.codigo ?? null;
 
-/** Lê TODAS as páginas de uma consulta paginada (teto de páginas: nunca uma varredura sem fim). */
-export async function todasAsPaginas(porta, op, escopo, entrada, { tamanho = 100, maxPaginas = 20 } = {}) {
-  const itens = [];
-  let primeira = null;
-  for (let pagina = 1; pagina <= maxPaginas; pagina++) {
-    const r = await porta.ler(op, escopo, { ...entrada, pagina, tamanho });
-    primeira ??= r;
-    itens.push(...(r?.itens ?? []));
-    if (!r?.paginacao || pagina >= r.paginacao.paginas) return { ...primeira, itens, truncado: false };
-  }
-  return { ...primeira, itens, truncado: true };
-}
-
 // ------------------------------------------------------------------------------------------------ fatos para o verificador
 /** Fato = um valor que a resposta pode citar, com o que ele SIGNIFICA. */
 const fato = (valorCentavos, significado, { entidade = null, periodo = null } = {}) => (Number.isInteger(valorCentavos) ? { valorCentavos, significado, entidade, periodo } : null);
 const fatos = (...xs) => xs.flat().filter(Boolean);
 
-export const itemAPagar = (t) => ({
-  id: t.id, fornecedor: t.fornecedor?.nome ?? null, descricao: t.descricao ?? null, categoria: t.categoria?.nome ?? t.categoria?.codigo ?? null,
-  competencia: t.competencia ?? null, vencimento: t.vencimento ?? null, situacao: t.situacao, vencido: Boolean(t.vencido),
-  valorCentavos: t.valorOriginalCentavos ?? t.valorCentavos ?? null, pagoCentavos: t.pagoCentavos ?? null, saldoCentavos: t.saldoCentavos ?? null,
-});
+
 
 // --------------------------------------------------------------------------------------------------------- definições
 export const FERRAMENTAS = [

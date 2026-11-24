@@ -139,13 +139,13 @@ function coletarNumeros(o, sessao, prof = 0) {
   if (prof > 5 || !o || typeof o !== "object") return;
   const ns = [];
   for (const [k, v] of Object.entries(o)) {
-    if (Number.isInteger(v) && !k.endsWith("Centavos")) ns.push(v);
+    if (Number.isFinite(v) && !k.endsWith("Centavos")) ns.push(v); // F3: decimais também (percentuais e indicadores das ferramentas)
     else if (v && typeof v === "object") coletarNumeros(v, sessao, prof + 1);
   }
   if (ns.length) sessao.fatos.push({ valorCentavos: null, numeros: ns, ferramenta: null });
 }
 
 /** Sessão de UMA requisição, ligada à memória da conversa (referências persistem na conversa, fatos e cache por requisição). */
-export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId }) {
-  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
+export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje = null }) {
+  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
 }
