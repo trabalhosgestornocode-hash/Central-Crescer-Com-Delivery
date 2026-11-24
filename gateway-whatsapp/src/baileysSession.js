@@ -1060,9 +1060,13 @@ export function criarSessaoBaileys({
     }
     if (automatica && shutdownLocalSolicitado) return; // processo encerrando — nunca reabre
     if (status === STATUS_CONEXAO.LOGGED_OUT) {
-      // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito,
-      // nunca automático.
-      status = STATUS_CONEXAO.DISCONNECTED;
+      // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito
+      // (resetarSessao / "Trocar número conectado"), nunca automático e nunca
+      // pelo /connect: o auth state salvo foi invalidado pelo WhatsApp (401),
+      // então reabrir socket com ele só devolve 401 de novo e NUNCA emite QR.
+      // Recusa com erro claro (410) em vez de rebaixar para DISCONNECTED.
+      if (automatica) return;
+      throw erro(CODIGOS.LOGGED_OUT, "sessão encerrada pelo WhatsApp (loggedOut): use o reset (Trocar número conectado) para gerar um novo QR");
     }
     // A decisão do operador (/connect) substitui qualquer reconexão automática
     // que estivesse pendente.
