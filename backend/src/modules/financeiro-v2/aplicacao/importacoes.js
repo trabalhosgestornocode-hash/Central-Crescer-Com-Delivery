@@ -107,6 +107,9 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
     return { analise, novos, jaImportados, conflitos, divergencias, erros: analise.erros, paraSubstituir: contradicoes.ausentes, impressao, resumo };
   }
 
+  // A 1ª tentativa mantém a chave de sempre (as já gravadas não mudam); as seguintes, só após uma tentativa rejeitada, levam o número.
+  const chaveDaImportacao = (documentoId, tipoRelatorio, n) => `importacao:${documentoId}:${tipoRelatorio}${n > 1 ? `:t${n}` : ""}`;
+
   async function registrarNegado(ctx, documentoId, erro) {
     try {
       await acessosNegados.registrar({
@@ -140,11 +143,17 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
           if (![...CONCLUIDAS, E.PRONTO_PARA_IMPORTAR].includes(anterior.estado)) falhar(CODIGO.IMPORTACAO_INVALIDA, "Só uma importação pronta ou importada pode ser substituída.", { estado: anterior.estado });
           documentoAnterior = await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, anterior.documentoId, "Documento anterior");
         }
+        let tentativa = 1;
         let documento = await tx.buscarPorChave(cx, TIPO.DOCUMENTO, chaveDoc);
         if (documento) {
           if (documento.origem !== c.fonte) falhar(CODIGO.IMPORTACAO_INVALIDA, "Este mesmo arquivo já está registrado como documento de outra fonte.");
-          const existente = await tx.buscarPorChave(cx, TIPO.IMPORTACAO, `importacao:${documento.id}:${c.tipoRelatorio}`);
-          if (existente) return { importacao: existente, previa: existente.previa, repetido: true };
+          // Mesmo arquivo já recebido devolve a importação existente. EXCEÇÃO: uma tentativa REJEITADA não bloqueia o arquivo —
+          // o erro costuma ser dos parâmetros (ex.: período declarado errado), e o arquivo é o mesmo. Nova tentativa = nova importação.
+          for (let n = 1; ; n += 1) {
+            const existente = await tx.buscarPorChave(cx, TIPO.IMPORTACAO, chaveDaImportacao(documento.id, c.tipoRelatorio, n));
+            if (!existente) { tentativa = n; break; }
+            if (existente.estado !== E.REJEITADO) return { importacao: existente, previa: existente.previa, repetido: true };
+          }
         } else {
           documento = await b.criar(tx, cx, TIPO.DOCUMENTO, {
             origem: c.fonte, arquivoId: guardado.arquivoId, hashSha256: guardado.hashSha256, tipo: adaptador.tipoDocumento,
@@ -158,7 +167,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
           fonte: c.fonte, tipoRelatorio: c.tipoRelatorio, formato: c.tipoMime, documentoId: documento.id, periodoInicio: c.periodoInicio,
           periodoFim: c.periodoFim, estado: E.RECEBIDO, compatibilidade: "SINTETICA", previa: null, impressaoPrevia: null, relatorio: null,
           substituiImportacaoId: anterior?.id ?? null, substituidaPorId: null, confirmadoPor: null, confirmadoEm: null, justificativa: null,
-          chaveIdempotencia: `importacao:${documento.id}:${c.tipoRelatorio}`, impressao: null,
+          chaveIdempotencia: chaveDaImportacao(documento.id, c.tipoRelatorio, tentativa), impressao: null,
         });
         imp = await b.alterar(tx, cx, TIPO.IMPORTACAO, imp, { estado: E.EM_VALIDACAO }, EVENTO_HISTORICO.IMPORTACAO);
         const previa = await montarPrevia(tx, cx, imp, adaptador, c.conteudo);
