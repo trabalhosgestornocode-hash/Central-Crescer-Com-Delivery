@@ -112,8 +112,22 @@ const CAMPO_DO_PEDIDO = Object.freeze({ [C.ENTRADA]: "entrada", [C.PROMOCAO_LOJA
  * @param {boolean} [o.conferirSaldos] confere o saldo informado (só faz sentido dentro de um único arquivo)
  * @param {Map<string,string>} [o.classificacoes] chave da pendência → código da categoria decidida
  */
+/**
+ * Loja "principal" da unidade = a de mais movimentos. As chaves de repasse dela ficam no formato de sempre (sem a loja), para
+ * os repasses já gravados continuarem os mesmos; as demais lojas da unidade (ex.: Subway Saladas) têm repasse próprio, com a
+ * loja na chave — o iFood paga cada loja separadamente.
+ */
+export function lojaPrincipal(registros) {
+  const n = new Map();
+  for (const r of registros) { const l = r.dados?.estabelecimento ?? ""; n.set(l, (n.get(l) ?? 0) + 1); }
+  return [...n.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0]?.[0] ?? "";
+}
+
 export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, classificacoes = new Map() } = {}) {
   const divergencias = [];
+  const principal = lojaPrincipal(registros);
+  const ultimoDia = registros.reduce((m, r) => { const d = r.data ?? r.dataReferencia; return d > m ? d : m; }, "");
+  const pedidosEmAndamento = [];
   const pedidos = new Map();
   const dias = new Map();
   const classificadosDoDia = new Map();
@@ -152,8 +166,9 @@ export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, c
     if (saldo.informado !== informado) divergencias.push({ codigo: DIVERGENCIA.TOTAL_NAO_CONFERE, mensagem: `Saldo ${d.idSaldo} com valores diferentes entre as linhas.`, linha: r.linha });
     if (d.impactaRepasse) saldo.soma += r.valorCentavos;
     saldos.set(d.idSaldo, saldo);
-    const chaveRepasse = `${d.apuracaoInicio}|${d.apuracaoFim}|${d.repasseEsperado}`;
-    const repasse = repasses.get(chaveRepasse) ?? { apuracaoInicio: d.apuracaoInicio, apuracaoFim: d.apuracaoFim, dataPrevista: d.repasseEsperado, previstoCentavos: 0, saldos: new Set(), situacao: "PREVISTO" };
+    const loja = d.estabelecimento && d.estabelecimento !== principal ? d.estabelecimento : null;
+    const chaveRepasse = `${loja ? `${loja}|` : ""}${d.apuracaoInicio}|${d.apuracaoFim}|${d.repasseEsperado}`;
+    const repasse = repasses.get(chaveRepasse) ?? { loja, apuracaoInicio: d.apuracaoInicio, apuracaoFim: d.apuracaoFim, dataPrevista: d.repasseEsperado, previstoCentavos: 0, saldos: new Set(), situacao: "PREVISTO" };
     if (d.impactaRepasse) repasse.previstoCentavos += r.valorCentavos;
     repasse.saldos.add(d.idSaldo);
     repasses.set(chaveRepasse, repasse);
@@ -201,6 +216,14 @@ export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, c
       listaDePedidos.push({ pedido, data: dia, cancelado, semVenda: true, itensCentavos: 0 });
       continue;
     }
+    // Pedido EM ANDAMENTO: do último dia do relatório, ainda sem a entrada do pagamento (o iFood já lançou taxas, mas não a
+    // venda). Não vira receita nem despesa agora — entra no próximo relatório; só o líquido acompanha o repasse previsto.
+    if (!cancelado && p.entrada === 0 && p.data === ultimoDia) {
+      pedidosEmAndamento.push({ pedido: p.curto ?? pedido, data: p.data, liquidoCentavos: financeiro });
+      noDia(dia, { movimentos: p.movimentos, sobDemandaCentavos: p.sobDemanda, anunciosCentavos: p.anuncios, liquidoCentavos: financeiro + p.sobDemanda + p.anuncios });
+      listaDePedidos.push({ pedido, data: dia, cancelado: false, semVenda: false, emAndamento: true, itensCentavos: 0 });
+      continue;
+    }
     situacoes[cancelado ? "CANCELADO_TOTAL" : p.fatos.has("cancelamento parcial") ? "CANCELADO_PARCIAL" : "VENDA"] += 1;
     cestaInformadaCentavos += p.cestaCentavos;
     if (cancelado && financeiro) divergencias.push({ codigo: DIVERGENCIA.LINHA_NAO_FECHA, mensagem: `Pedido ${p.curto ?? pedido} cancelado com saldo restante: conferir antes de aplicar.` });
@@ -223,7 +246,7 @@ export function consolidarConciliacaoIfood(registros, { conferirSaldos = true, c
     divergencias,
     pedidos: listaDePedidos,
     resumo: {
-      movimentos: registros.length, situacoes, cestaInformadaCentavos, total, recebidoDiretoCentavos, pedidosRecebidosDireto: pedidosRecebidosDireto.size, repassePrevistoCentavos, saldos: saldos.size,
+      movimentos: registros.length, situacoes, cestaInformadaCentavos, total, pedidosEmAndamento, lojaPrincipal: principal, recebidoDiretoCentavos, pedidosRecebidosDireto: pedidosRecebidosDireto.size, repassePrevistoCentavos, saldos: saldos.size,
       pendenciasDeClassificacao: [...pendentes.values()].filter((p) => p.valorCentavos !== 0).sort((a, x) => a.chave.localeCompare(x.chave)),
       dias: [...dias.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([data, v]) => ({ data, ...v, classificados: classificadosDoDia.get(data) ?? {}, ciclos: [...(ciclosDoDia.get(data) ?? [])].sort() })),
       repasses: [...repasses.values()].sort((a, b) => a.dataPrevista.localeCompare(b.dataPrevista)).map((r) => ({ ...r, saldos: r.saldos.size })),
