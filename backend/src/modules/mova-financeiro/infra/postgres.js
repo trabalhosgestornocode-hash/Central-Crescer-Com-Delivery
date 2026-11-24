@@ -216,9 +216,38 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                  on conflict (mensagem_id) do update set leitura = excluded.leitura, grupo_jid = excluded.grupo_jid, criada_em = now(), resolvida_em = null`, [mensagemId, grupoId, pendente.evento.eventoId, JSON.stringify({ evento: pendente.evento, saida: pendente.saida, ...(pendente.divergencia ? { divergencia: pendente.divergencia } : {}) })]);
       },
       /** Resolução ATÔMICA: duas respostas simultâneas à mesma pergunta não retomam o documento duas vezes. */
-      async tomarPendente(mensagemId) {
-        const r = await q("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1 and resolvida_em is null returning leitura, grupo_jid", [mensagemId]);
-        return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
+      /**
+       * 24/11: `podeConfirmar(eventoOriginal)` decide se QUEM responde pode retomar a pendência (a mesma pessoa autorizada).
+       * Recusada: a pendência NÃO é consumida (`{ outroParticipante: true }`) — continua aberta para quem perguntou.
+       * Tudo na MESMA transação com a linha travada: duas respostas simultâneas nunca retomam duas vezes.
+       */
+      async tomarPendente(mensagemId, { podeConfirmar = () => true, validadeMs = null } = {}) {
+        return emTransacao(pool, async (tx) => {
+          const r = (await tx(`select mensagem_id, leitura, grupo_jid, ($2::bigint is null or criada_em >= now() - ($2::bigint * interval '1 millisecond')) as valida
+                                 from mova.mensagem_pendente where mensagem_id = $1 and resolvida_em is null for update`, [mensagemId, validadeMs])).rows[0];
+          if (!r) return null;
+          if (!podeConfirmar(r.leitura?.evento, r.leitura)) return { outroParticipante: true };
+          if (!r.valida) return { expirada: true }; // revisão 24/11: a validade vale também quando se cita o DOCUMENTO
+          await tx("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1", [r.mensagem_id]);
+          return { grupoId: r.grupo_jid, pendente: r.leitura };
+        });
+      },
+      /**
+       * 24/11 (citação exata): a pendência ABERTA do evento `eventoId` NESTA conversa — usada quando a pessoa cita a PERGUNTA do MOVA
+       * (a pendência é guardada pelo id da mensagem original; a pergunta tem outro id). Atômica. Fora da validade (relógio do banco)
+       * NÃO é retomada: devolve `{ expirada: true }` e a pendência continua aberta para a revisão humana.
+       */
+      async tomarPendenteDoEvento({ eventoId, grupoId, validadeMs, podeConfirmar = () => true }) {
+        return emTransacao(pool, async (tx) => {
+          const r = (await tx(`select mensagem_id, leitura, grupo_jid, criada_em >= now() - make_interval(secs => $3::double precision / 1000) as valida
+                                 from mova.mensagem_pendente where evento_id = $1 and grupo_jid = $2 and resolvida_em is null
+                                order by criada_em desc limit 1 for update`, [eventoId, grupoId, validadeMs])).rows[0];
+          if (!r) return null;
+          if (!podeConfirmar(r.leitura?.evento, r.leitura)) return { outroParticipante: true }; // antes da validade: não revela nada a quem não pode
+          if (!r.valida) return { expirada: true };
+          await tx("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1", [r.mensagem_id]);
+          return { grupoId: r.grupo_jid, pendente: r.leitura };
+        });
       },
       /**
        * 15A — memória curta: a pendência MAIS RECENTE da MESMA conversa e do MESMO participante, dentro da validade. O prazo
@@ -461,6 +490,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q("select id from mova.resposta where estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE' order by seq limit 100")).rows.map((r) => r.id);
       },
       /** Eco de uma resposta do próprio agente (id do provedor registrado no envio) ⇒ nunca reprocessar. */
+      /** 24/11: de qual evento é a resposta do MOVA que a pessoa CITOU (id do provedor confirmado pelo Gateway/relé), nesta conversa. */
+      async origemDaResposta({ providerMessageId, grupoId }) {
+        if (!providerMessageId || providerMessageId === "SEM_ID") return null;
+        const r = await q("select evento_id as \"eventoId\", resposta_a as \"respostaA\" from mova.resposta where provider_message_id = $1 and grupo_jid = $2", [providerMessageId, grupoId]);
+        return r.rows[0] ?? null;
+      },
       async ehRespostaPropria(mensagemId) {
         return (await q("select 1 from mova.resposta where provider_message_id = $1", [mensagemId])).rowCount > 0;
       },

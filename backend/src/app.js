@@ -15,7 +15,7 @@ import { corsOptions, helmetOptions, headersComplementares, LIMITES_CORPO, emPro
 import { limiteDeTaxa } from "./shared/rateLimit.js";
 import { RATE_LIMIT } from "./config/limites.js";
 import { montarWhatsappGatewayRouter } from "./modules/comunicacao/gateway/whatsappGateway.bootstrap.js";
-import { criarRouterMovaIsolado } from "./modules/fv2-integracao/mova.js";
+import { criarRouterMovaIsolado, estadoMova } from "./modules/fv2-integracao/mova.js";
 import { lerEstadoEvents } from "./modules/ifood/ifoodEventsEstado.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -106,8 +106,16 @@ export function createApp() {
   // Saúde do WEB SERVICE: sempre 200 enquanto o processo responde. `ifoodEvents` é só o estado do subsistema
   // embarcado (disabled/starting/active/waiting_lease/degraded/stopping) — Events degradado NUNCA vira 5xx aqui.
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, service: "subway-saci", ts: new Date().toISOString(), csp: cspEmModoBloqueio ? "enforce" : "report-only", ifoodEvents: lerEstadoEvents().estado, ...versaoPublicada() })
+    res.json({ ok: true, service: "subway-saci", ts: new Date().toISOString(), csp: cspEmModoBloqueio ? "enforce" : "report-only", ifoodEvents: lerEstadoEvents().estado, mova: estadoMova().estado, ...versaoPublicada() })
   );
+
+  // 24/11: saúde ESPECÍFICA do MOVA. O /health geral continua 200 (é o probe do Render: derrubá-lo reiniciaria o backend todo),
+  // mas não afirma que o MOVA está operacional. 200 só com o MOVA ATIVO (ou desligado de propósito); 503 montando, re-tentando ou falho.
+  // Sem segredo nem dado de negócio: só o estado, a categoria e o código da última falha.
+  app.get("/health/mova", (_req, res) => {
+    const e = estadoMova();
+    res.status(e.estado === "ATIVO" || e.estado === "DESLIGADO" ? 200 : 503).json({ ok: e.estado === "ATIVO", ...e });
+  });
 
   // Config pública para o frontend inicializar o Supabase Auth (chave anon é pública por design)
   app.get("/api/config", (_req, res) =>
