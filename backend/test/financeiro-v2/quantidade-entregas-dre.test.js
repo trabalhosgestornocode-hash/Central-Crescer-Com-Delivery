@@ -69,3 +69,24 @@ test("DRE: as cobranças diárias de sob demanda do iFood viram um nó próprio 
   assert.equal(g.casa({ fonte: { idExterno: "ifood-conciliacao:2026-11-02:COMISSOES:v1" } }), false);
   assert.equal(g.casa({ fonte: null }), false);
 });
+
+test("DRE: Entrega Sob Demanda fica junto das outras linhas de entrega (irmã de Comissões), com o mesmo total da linha", async () => {
+  const { nucleo: n } = montar({ relogio: () => new Date("2026-11-20T15:00:00Z"), plano: "SUBWAY" });
+  const c = ctx();
+  const forn = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Plataforma (sintética)" });
+  const conta = (categoria, valor, descricao, extra = {}) => n.registrarObrigacao(c, { contraparteId: forn.id, valorOriginalCentavos: valor, categoria, descricao, competencia: "2026-11", dataEmissao: "2026-11-05", vencimento: "2026-11-05", ...extra });
+  await conta("COMISSOES_DE_PLATAFORMA", 50000, "Comissões da plataforma (sintético)");
+  await conta("ENTREGAS_TERCEIRIZADAS", 30000, "Empresa de entregas (10 ENTREGAS)");
+  await conta("COMISSOES_DE_PLATAFORMA", 1199, "Entrega sob demanda contratada no iFood de 2026-11-02", { fonte: { sistema: "IFOOD", idExterno: "ifood-conciliacao:2026-11-02:ENTREGA_SOB_DEMANDA:v1" } });
+  const dre = (await n.apurarCompetencia(c, { competencia: "2026-11" })).dre;
+  const linha = dre.linhas.find((l) => l.codigo === "DESPESAS_OPERACIONAIS");
+  const achar = (nos, pred, pai = null) => { for (const no of nos) { if (pred(no)) return { no, pai }; const r = achar(no.filhos ?? [], pred, no); if (r) return r; } return null; };
+  const sob = achar(linha.componentes, (x) => x.referencias?.grupo === "ENTREGA_SOB_DEMANDA");
+  const comissoes = achar(linha.componentes, (x) => x.referencias?.categoria === "COMISSOES_DE_PLATAFORMA");
+  const terceirizadas = achar(linha.componentes, (x) => x.referencias?.categoria === "ENTREGAS_TERCEIRIZADAS");
+  assert.equal(sob.pai.id, terceirizadas.pai.id, "mesmo pai das Entregas terceirizadas");
+  assert.equal(sob.pai.id, comissoes.pai.id, "irmã de Comissões, não dentro dela");
+  assert.equal(Math.abs(sob.no.valorCentavos), 1199);
+  assert.equal(Math.abs(comissoes.no.valorCentavos), 50000, "Comissões sem a sob demanda");
+  assert.equal(Math.abs(linha.valorCentavos), 50000 + 30000 + 1199, "total da linha inalterado");
+});
