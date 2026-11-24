@@ -9,6 +9,7 @@ import { operacoesDeFechamentoManual } from "./fechamentoManual.js";
 import { operacoesDoCanalSaipos } from "./canalSaipos.js";
 import { operacoesDeMovimentosDeCaixa } from "./movimentosDeCaixa.js";
 import { operacoesDeSangriasComoDespesa } from "./sangriasComoDespesa.js";
+import { operacoesDePrestacaoDeSangria } from "./prestacaoDeSangria.js";
 import { operacoesDoCanalPlataforma } from "./canalPlataforma.js";
 import { operacoesDoCalendarioFaturamento } from "./calendarioFaturamento.js";
 import { operacoesDeImportacoesPorCanal } from "./importacoesPorCanal.js";
@@ -40,6 +41,7 @@ import { operacoesDeReclassificacao } from "./reclassificacao.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
 import { operacoesDeBaixaPorComprovante } from "./baixaPorComprovante.js";
+import { operacoesDeDespesaPagaPorComprovante } from "./despesaPagaPorComprovante.js";
 import { operacoesDeBaixaAgrupada } from "./baixaAgrupada.js";
 import { operacoesDeEntregadoresProprios } from "./entregadoresProprios.js";
 import { operacoesDeExtras } from "./extrasEntregadores.js";
@@ -89,6 +91,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeBaixaPorExtrato(base),
     ...operacoesDeBaixaPorComprovante(base),
+    ...operacoesDeDespesaPagaPorComprovante(base, { cofre }),
     ...operacoesDeBaixaAgrupada(base),
     ...operacoesDeEntregadoresProprios(base, { acessosNegados, ...(entregadores ?? {}) }),
     ...operacoesDeExtras(base),
@@ -100,6 +103,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDoCanalSaipos(base),
     ...operacoesDeMovimentosDeCaixa(base),
     ...operacoesDeSangriasComoDespesa(base),
+    ...operacoesDePrestacaoDeSangria(base),
     ...operacoesDoCanalPlataforma(base),
     ...operacoesDoCalendarioFaturamento(base),
     ...operacoesDeImportacoesPorCanal(base, { fontes }),

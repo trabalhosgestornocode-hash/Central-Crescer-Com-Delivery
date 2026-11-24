@@ -14,6 +14,25 @@ const nomeDaConta = (t) => {
   return d && f ? `${d} (${f})` : d || f || "fornecedor a identificar";
 };
 
+/**
+ * 24/11 — RESUMO CONSOLIDADO da compra nova paga por comprovante: o que o MOVA entendeu e o que registra (ou propõe). Só dados da
+ * leitura validada e do comando (descrição já mascarada), nunca o texto recebido cru. `x.intactas` = contas em aberto do mesmo
+ * favorecido que NÃO foram baixadas (o comprovante foi tratado como compra nova).
+ */
+const linhasDaCompra = (p, x = {}) => {
+  const e = p.comando?.entrada ?? {}; const l = p.leitura ?? {};
+  const tx = l.idTransacao ? `, transação …${String(l.idTransacao).slice(-6)}` : "";
+  const comp = p.datas?.competencia ? `${p.datas.competencia.slice(5, 7)}/${p.datas.competencia.slice(0, 4)}` : "a confirmar na revisão";
+  return [
+    x.descricao ? `• Descrição: ${String(x.descricao).slice(0, 60)}` : null, // só a descrição curta já filtrada pelo motor, nunca a legenda
+    `• Pago em ${dataBr(p.datas?.caixa)}${l.instituicao ? ` (banco de origem: ${String(l.instituicao).slice(0, 40)})` : ""}${tx}`,
+    l.favorecido ? `• Favorecido: ${String(l.favorecido).slice(0, 60)}` : null,
+    x.unidade ? `• Unidade: ${String(x.unidade).slice(0, 60)}` : null,
+    `• Competência: ${comp} · Categoria: ${x.categoriaDefinida && e.categoria ? e.categoria : "a classificar na revisão"}`,
+    ...(x.intactas ?? []).slice(0, 3).map((t) => `• Não mexi na conta em aberto de ${nomeDaConta(t)} (${reais(t.saldoCentavos)}).`),
+  ].filter(Boolean).join("\n");
+};
+
 export const RESPOSTA = Object.freeze({
   /** Pergunta padrão definida pelo proprietário (Execução 02). Responder a esta mensagem retoma o documento. */
   unidadeNaoIdentificada: (nomes) => `Esse lançamento pertence à ${nomes.length > 1 ? `${nomes.slice(0, -1).join(", ")} ou ${nomes.at(-1)}` : nomes[0]}?`,
@@ -58,6 +77,11 @@ export const RESPOSTA = Object.freeze({
   confirmacaoDeOutroParticipante: () => "Essa pergunta é sobre um documento enviado por outra pessoa; só quem enviou pode responder. Nada foi registrado.",
   perguntaDesatualizada: (antes, agora, mudou = ["saldo"]) => `A conta mudou desde a minha pergunta (${mudou.length === 1 && mudou[0] === "saldo" && Number.isInteger(antes) ? `o saldo era ${reais(antes)} e agora é ${reais(agora)}` : `mudou: ${mudou.join(", ")}`}). Não continuo com uma resposta dada para outra situação: reenvie o comprovante que eu confiro de novo. Nada foi registrado.`,
   pendenciaExpirada: () => "Essa pergunta ficou sem resposta por muito tempo e eu não continuo operações antigas sem conferir de novo. Reenvie o documento (ou a informação) que eu refaço a conferência. Nada foi registrado.",
+  // 24/11: diferença grande demais para ser juros da única conta do favorecido ⇒ a pergunta é se é uma COMPRA NOVA ("sim" = nova).
+  perguntaCompraNovaOuConta: (t, valor) => `O comprovante é de ${reais(valor)} e a conta em aberto de ${nomeDaConta(t)} tem ${reais(t.saldoCentavos)}: a diferença (${reais(valor - t.saldoCentavos)}) é grande demais para ser juros. É uma compra nova, já paga? (Responda "sim" para eu registrar a compra nova paga, ou "é dessa conta" se for o pagamento dela.) Nada foi registrado.`,
+  // 24/11: compra nova sem descrição nem categoria identificável: pergunta só o que falta.
+  perguntaDescricao: (valor) => `Recebi o comprovante de ${reais(valor)}. O que foi comprado? (Ex.: "brownies".) Com a descrição eu registro a compra paga e sugiro a categoria. Nada foi registrado.`,
+  naoEntendiDescricao: () => "Não entendi o que foi comprado. Responda só a descrição (ex.: \"brownies\" ou \"embalagens\"), para eu continuar. Nada foi registrado.",
   naoEntendiDivergencia: () => "Não entendi a resposta. Responda \"sim\", \"não\", o número da conta ou \"outra compra\", para eu continuar. Nada foi registrado.",
   pagoComJuros: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)} = conta de ${reais(r.principalCentavos)} + juros de ${reais(r.encargoCentavos)}. Comprovante anexado. Conciliação bancária: pendente (o extrato ainda não confirma). Não criei segunda conta nem segundo pagamento.`,
   perguntaSemelhantePaga: (t) => `Já existe um pagamento de ${reais(t.valorOriginalCentavos)} para ${nomeDaConta(t)} registrado${t.vencimento ? ` (vencimento ${dataBr(t.vencimento)})` : ""}. Este comprovante é do mesmo pagamento? (Responda "sim" — não registro de novo —, ou "outra compra".) Nada foi registrado.`,
@@ -67,7 +91,7 @@ export const RESPOSTA = Object.freeze({
   fonteOficial: (canais) => `Receita não é lançada pelo MOVA: cada canal tem fonte oficial (${canais}). Este documento fica só como evidência.`,
   fonteNaoConfirmada: () => "As fontes de faturamento desta unidade ainda não estão confirmadas no Financeiro. Nada foi registrado.",
   propostaBaixa: (p) => `Proposta ${curto(p.id)} criada para revisão: baixa ${p.parcial ? "PARCIAL " : ""}de ${reais(p.valorCentavos)} na conta a pagar existente (pagamento em ${dataBr(p.datas.caixa)}). Nada foi lançado ainda.`,
-  propostaDespesaPaga: (p) => `Proposta ${curto(p.id)} criada para revisão: despesa paga de ${reais(p.valorCentavos)} (competência ${p.datas.competencia}, caixa em ${dataBr(p.datas.caixa)}). Não achei conta a pagar correspondente. Nada foi lançado ainda.`,
+  propostaDespesaPaga: (p, x = {}) => `Proposta ${curto(p.id)} criada para revisão: compra nova já paga de ${reais(p.valorCentavos)} (competência ${p.datas.competencia ?? "a confirmar"}, caixa em ${dataBr(p.datas.caixa)}).${p.comando?.entrada ? `\n${linhasDaCompra(p, x)}\n` : " "}Ao confirmar no Centro Financeiro, a conta e o pagamento entram juntos (uma despesa, uma baixa). Nada foi lançado ainda.`,
   // 24/11: boleto/nota → Contas a Pagar e nota vinculada à conta existente.
   contaRegistrada: (p, r) => `Conta a pagar registrada: ${reais(p.valorCentavos)}${r?.favorecido ? ` para ${r.favorecido}` : ""}, vencimento ${dataBr(r?.vencimento ?? p.datas?.vencimento)} (competência ${r?.competencia ?? p.datas?.competencia}). Documento anexado; a conta está em aberto no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
   notaParaVincular: (p, t) => `Esta nota é da conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Proposta ${curto(p.id)}: anexar a nota a essa conta, sem lançar nada novo.`,
@@ -89,7 +113,7 @@ export const RESPOSTA = Object.freeze({
   // Execução 17 — situações separadas: PAGO POR COMPROVANTE (conciliação bancária pendente) nunca é "conciliado".
   pagoPorComprovante: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Situação: pago por comprovante. Conciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   // 23/11 — despesa SEM conta prévia: a conta foi registrada e paga por comprovante na mesma rotina.
-  despesaPagaPorComprovante: (p, r) => `Despesa registrada e paga por comprovante: ${reais(p.valorCentavos)} (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Conta a pagar nova${r?.despesaCriada === false ? " (já existia, reaproveitada)" : ""}, categoria a classificar na revisão. Conciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  despesaPagaPorComprovante: (p, r, x = {}) => `Despesa registrada e paga por comprovante: ${reais(p.valorCentavos)} (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Uma despesa e uma baixa, juntas${r?.despesaCriada === false ? " (já existia, reaproveitada)" : ""}.\n${linhasDaCompra(p, x)}\nConciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   comprovanteAguardandoConfirmacao: (p) => `Proposta ${curto(p.id)}: comprovante de ${reais(p.valorCentavos)} conferido (transação concluída). Falta a confirmação de um responsável para registrar como pago por comprovante; a conciliação bancária ficará pendente até o extrato. Nada foi lançado ainda.`,
   comprovanteEmRevisao: (situacao) => `O comprovante ficou para conferência humana (${({ DOCUMENTO_INCONSISTENTE: "dados incompletos ou incertos na leitura", DOCUMENTO_ILEGIVEL: "documento ilegível", DOCUMENTO_SUSPEITO: "arquivo com sinais de alteração", COMPROVANTE_DUPLICADO: "comprovante já recebido" })[situacao] ?? "não deu para confirmar a conclusão da transação"}).`,
   comprovanteNaoConcluido: (situacao) => ({

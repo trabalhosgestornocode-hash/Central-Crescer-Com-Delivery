@@ -26,6 +26,9 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   registrarObrigacaoDocumental: "REGISTRAR_OBRIGACAO",
   // 23/11: pagamento por comprovante COM encargo (juros/multa confirmados) — ação estreita `registrar_juros` (migração 0031).
   registrarPagamentoComEncargo: ["BAIXAR_POR_COMPROVANTE", "REGISTRAR_JUROS"], // exige as DUAS ações (o contexto leva só [ver, as duas])
+  // 24/11: compra NOVA já paga — conta + comprovante + pagamento por comprovante numa ÚNICA transação do Financeiro (as mesmas
+  // três ações que a sequência antiga já exigia; nenhuma concessão nova).
+  registrarDespesaPagaPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO"],
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

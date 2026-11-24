@@ -68,3 +68,28 @@
 3. Render: `MOVA_IA_SOMENTE_DOCUMENTOS=0` (hoje padrão `true`). Pré-requisitos já existentes: `MOVA_IA_HABILITADA=1`, `ANTHROPIC_API_KEY`, orçamento em `mova.orcamento_ia`.
 4. Homologar com conversas reais da gerência (grupo/privado autorizados) e acompanhar `MOVA_IA_LEITURA` (latência/falhas) e `mova.consumo_ia`.
 5. Reversão imediata: `MOVA_IA_SOMENTE_DOCUMENTOS=1` ou desligar "ia" em `mova.controle`.
+
+---
+
+## 6. Fase 3 (24/11/2026, branch `feat/mova-despesa-ja-paga`, empilhada no PR #203) — compra nova já paga por comprovante
+
+**Caso real (23/11):** comprovante Pix de **R$ 259,00** dos brownies + conta antiga em aberto "BROWNIE ANDRESSA" de **R$ 81,00**. O MOVA perguntou "a diferença são juros dessa conta?" e não entendeu "Outra compra". A intenção era **cadastrar uma compra nova e registrá-la paga no mesmo dia** — não conciliar a conta antiga.
+
+**O que mudou na conversa (interpretação pelo sentido, não lista de palavras):**
+- **Pergunta pendente como contexto da leitura.** Quando o MOVA espera resposta desta pessoa (`mova.mensagem_pendente`, 10 min), a mensagem seguinte é lida junto com o texto da pergunta (linha de sistema `PERGUNTA PENDENTE DO MOVA`). Vale só para mensagem **sem citação**; quem cita a pergunta do MOVA é retomado pela citação exata do PR #203, e citar outra mensagem nunca liga à pendência mais recente. A IA devolve dois campos novos do contrato estrito: `finalidadePagamento` (`COMPRA_NOVA` · `CONTA_EXISTENTE` · `JUROS` · `PARCIAL`) e `descricaoCompra` (até 6 palavras, da fala da pessoa, nunca o favorecido). O **backend** decide o desfecho (`desfechoPorFinalidade`): a IA nunca escolhe conta nem valor.
+- **Determinístico primeiro (custo zero):** "Outra compra", "sim", "É uma compra nova", "Outra compra de brownies", "Compra de brownies", "juros", "é dessa conta", e descrição curta ("brownies") resolvem sem IA. Frases como "Lança como pago hoje", "Cadastra essa despesa", "Já foi pago pelo Pix", "Não tem conta cadastrada ainda", "Pode criar a conta e dar baixa" e "Comprei brownies e já paguei" (como resposta) vão a **uma** leitura de IA. Com pergunta pendente, os atalhos de consulta não capturam a frase ("Já foi pago pelo Pix" virava consulta da conta "pelo pix").
+- **A mesma intenção na legenda do comprovante** (ou na leitura do documento) leva direto à despesa paga, sem pergunta.
+- **Diferença grande demais para juros** (> 50% da conta; o caso real é 220%) ⇒ a pergunta passa a ser **"É uma compra nova, já paga?"**; diferenças plausíveis continuam com a pergunta de juros (e o teto de 10% do Financeiro para registrar juros sem revisão continua valendo).
+- **Descrição ausente** (sem legenda e sem categoria) ⇒ "O que foi comprado?"; a descrição pode vir em mensagem posterior.
+- **Valor igual não prova que é a mesma despesa.** Com compra nova declarada, a conta antiga do favorecido não é baixada e aparece no resumo ("Não mexi na conta em aberto de …"). Se já existe um **pagamento** igual (favorecido, valor e data), o MOVA pergunta antes de duplicar; o mesmo identificador de transação é barrado (`TRANSACAO_JA_RECEBIDA`).
+- **Resumo consolidado** na proposta e na confirmação: descrição (só a lida e filtrada, nunca a legenda crua), data do pagamento + banco de origem + final da transação, favorecido, unidade, competência e categoria (do plano de contas da unidade, ou "a classificar na revisão").
+
+**Financeiro 2.0 — operação atômica nova** `registrarDespesaPagaPorComprovante` (`financeiro-v2/aplicacao/despesaPagaPorComprovante.js`), composta dos serviços existentes numa **única transação**: registrar a obrigação (documental pela identidade operacional, ou humana) → guardar a ficha/vínculo do comprovante → `pagarPorComprovante` (liquidação integral, conciliação `PENDENTE`). Uma compra paga = **uma despesa + a sua baixa**; competência ≠ data do pagamento; **nenhuma saída bancária** é criada — o extrato posterior concilia sem duplicar (testes DP-4, A2-H9/H10). Falha em qualquer passo não deixa nada. Sem migração nova (as regras RLS da 0029/0030 já cobrem; conferido no PostgreSQL real, DP-7). O MOVA (`execucao.registrarDespesaPaga`) e a aprovação no Centro Financeiro passaram a usar essa operação.
+
+**Permissões, confirmações e consumo:** inalterados. Escrita automática só com política `DESPESA_DOCUMENTAL` e as chaves de escrita; sem elas, só proposta para o Centro Financeiro (aprovação pelo grupo continua bloqueada). Teto de IA o mesmo (US$ 10); no máximo uma leitura por resposta.
+
+**Chave nova (padrão DESLIGADA):** `MOVA_IA_RESPOSTAS_PENDENTES=1`. Em produção a IA lê só documentos (`MOVA_IA_SOMENTE_DOCUMENTOS` ligado); sem esta chave, as respostas livres que dependem de IA recebem "não entendi" e o caminho determinístico segue funcionando. Com ela, **só** o texto que responde a uma pergunta pendente vai à IA; texto solto continua sem IA.
+
+**Testes:** `test/financeiro-v2/despesa-paga-por-comprovante.test.js` (DP-1..7) e `test/mova-financeiro/compra-nova-paga.test.js` (BR-1..12: caso real, as 9 frases como resposta e como legenda, descrição posterior curta/longa, valor igual, pagamento repetido, mensagem que não responde, regras puras e contrato).
+
+**Para ativar em produção (nada feito, depende de autorização):** merge do PR #203 e deste PR (merge = deploy); chaves de escrita/política já são as do Exec.17 (hoje desligadas); opcional `MOVA_IA_RESPOSTAS_PENDENTES=1`. Pendência conhecida (anterior a esta mudança): A2-H9/H10 falham só no modo `FV2_REPOSITORIO=postgres`, também no commit base.

@@ -127,6 +127,13 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         pendentes.delete(chave);
         return { grupoId: x.grupoId, pendente: x.pendente };
       },
+      /** 24/11 — a mesma pendência da memória curta, só lida (não resolve). */
+      async verPendenteRecente({ grupoId, participanteId, validadeMs }) {
+        const desde = new Date(relogio().getTime() - validadeMs);
+        const [id, p] = [...pendentes.entries()].filter(([, x]) => x.grupoId === grupoId && x.pendente?.evento?.participanteId === participanteId && x.criadaEm >= desde)
+          .sort((a, b) => b[1].criadaEm - a[1].criadaEm)[0] ?? [];
+        return id ? { mensagemId: id, grupoId: p.grupoId, pendente: p.pendente } : null;
+      },
       /** 15A — memória curta (mesma regra do Postgres): mais recente da mesma conversa e participante, depois de `desde`. */
       async tomarPendenteRecente({ grupoId, participanteId, validadeMs }) {
         const desde = new Date(relogio().getTime() - validadeMs);

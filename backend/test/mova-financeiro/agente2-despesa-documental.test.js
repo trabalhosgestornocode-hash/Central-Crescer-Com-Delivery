@@ -18,7 +18,7 @@ const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao:
 const POLITICA = (x = {}) => ({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante Pix concluído até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01", ...x });
 const CRIAR = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento"];
-const ESCRITAS = ["enviarEvidencia", "registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
+const ESCRITAS = ["registrarDespesaPagaPorComprovante", "enviarEvidencia", "registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 
 async function despesa({ responder = () => PIX(), concessao = CRIAR, politica = {}, criarDespesas = true, falhar = null } = {}) {
   const s = await cenario({
@@ -57,8 +57,9 @@ t("A2-H1 despesa INEXISTENTE até R$ 1.000 (Pix concluído, política DESPESA_DO
   assert.equal((await s.saidas()).length, 0, "nenhuma saída bancária fictícia");
   assert.equal((await s.liquidacoes()).length, 1, "uma única baixa");
   assert.equal((await s.despesas()).length, 1, "a despesa entra UMA vez na DRE");
-  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarObrigacaoDocumental", "enviarEvidencia", "registrarPagamentoPorComprovante"]);
-  for (const x of s.escritas()) assert.equal(x.permissoes.length, 2, "identidade operacional só com [ver, ação]");
+  // 24/11: conta + comprovante + pagamento numa ÚNICA operação atômica do Financeiro (antes: três chamadas separadas).
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarDespesaPagaPorComprovante"]);
+  for (const x of s.escritas()) assert.equal(x.permissoes.length, 4, "identidade operacional só com [ver + as três ações da operação]");
   const [op] = await s.mova.armazenamento.operacoes.listar(s.escopo);
   assert.deepEqual([op.operacao, op.estado, op.executadaPor], ["DESPESA_DOCUMENTAL", "EXECUTADA", OPERADOR]);
   const txt = await s.resposta();
@@ -84,17 +85,17 @@ t("A2-H3 chave de criação DESLIGADA, sem concessão de registrar_obrigacao ou 
   }
 });
 
-t("A2-H4 falha de escrita e NOVA TENTATIVA: a conta criada é reaproveitada (mesma fonte), uma conta e uma baixa", async () => {
-  const s = await despesa({ falhar: { op: "registrarPagamentoPorComprovante", vezes: 1 } });
+t("A2-H4 falha de escrita e NOVA TENTATIVA: operação atômica — nada sobra da falha; a nova tentativa grava conta e baixa juntas", async () => {
+  const s = await despesa({ falhar: { op: "registrarDespesaPagaPorComprovante", vezes: 1 } });
   await s.enviar(gw({ texto: "MOVA paguei o gás da alfa", doc: pdf("H4") }));
   assert.equal((await s.ultima()).decisao, "PROPOSTA", "falhou: volta para revisão");
-  assert.equal((await s.contas()).length, 1, "a conta ficou registrada");
+  assert.equal((await s.contas()).length, 0, "24/11: nenhuma conta em aberto sobra da falha (antes ficava registrada sem pagamento)");
   assert.equal((await s.liquidacoes()).length, 0);
   const [p] = await s.propostas();
   assert.equal(p.estado, "AGUARDANDO_REVISAO");
   const r = await s.mova.execucao.aposDespesaNova(p, s.escopo);
   assert.equal(r.situacao, "PAGO_POR_COMPROVANTE");
-  assert.equal(r.resultado.despesaCriada, false, "mesma fonte: conta reaproveitada");
+  assert.equal(r.resultado.despesaCriada, true, "a conta nasce agora, junto com a baixa");
   assert.deepEqual([(await s.contas()).length, (await s.liquidacoes()).length, (await s.despesas()).length, (await s.saidas()).length], [1, 1, 1, 0]);
 });
 
