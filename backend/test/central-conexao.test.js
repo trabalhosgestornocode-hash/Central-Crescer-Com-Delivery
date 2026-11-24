@@ -646,3 +646,43 @@ describe("auditoria e sigilo", () => {
     assert.ok(!/auth|creds|signal|token|hmac/i.test(txt));
   });
 });
+
+describe("sessão encerrada pelo WhatsApp (loggedOut): Conectar reinicia sozinho, sem botão extra", () => {
+  const erro410 = () => Object.assign(new Error("BAILEYS_GATEWAY_HTTP_410: WHATSAPP_GATEWAY_LOGGED_OUT"), { codigo: "WHATSAPP_GATEWAY_LOGGED_OUT", status: 410 });
+  /** Gateway que recusa CONECTAR enquanto não houver reset (o reset do teste cai em conexaoEncerrar). */
+  const gatewayEncerrado = () => {
+    const g = gatewayFalso();
+    g.live = { ...g.live, status: "LOGGED_OUT" };
+    g.svc.conexaoConectar = async () => {
+      g.chamadas.push("conectar");
+      if (g.live.status === "LOGGED_OUT") throw erro410();
+      g.live = { ...g.live, status: "CONNECTING" }; return { ok: true };
+    };
+    g.svc.conexaoEncerrar = async () => { g.chamadas.push("reset"); g.live = { ...g.live, status: "DISCONNECTED", qrDisponivel: false }; return { ok: true }; };
+    return g;
+  };
+
+  test("iniciar(): recusa 410 -> RESET na mesma operação -> conecta de novo; nenhuma trava fica pendente", async () => {
+    const g = gatewayEncerrado();
+    const m = montar({ g });
+    const { operacaoId } = await iniciar(OP, m.deps);
+    assert.ok(operacaoId);
+    assert.deepEqual(g.chamadas.filter((c) => c === "conectar" || c === "reset"), ["conectar", "reset", "conectar"]);
+    assert.equal(g.live.status, "CONNECTING");
+    const ident = m.db.tabelas.whatsapp_identidade[0];
+    assert.equal(ident.operacao_id, operacaoId, "a operação segue aberta para o assistente");
+    assert.ok(!ident.efeito_token, "nenhum efeito pendente/incerto (não pode exigir reconciliação)");
+  });
+
+  test("se o reset também recusar com 410: erro claro, operação encerrada e nova tentativa NÃO cai em 'operação em andamento'", async () => {
+    const g = gatewayEncerrado();
+    g.svc.conexaoEncerrar = async () => { g.chamadas.push("reset"); return { ok: true }; }; // reset 'não adiantou': continua LOGGED_OUT
+    const m = montar({ g });
+    await rejeita(() => iniciar(OP, m.deps), 409, "SESSAO_ENCERRADA");
+    const ident = m.db.tabelas.whatsapp_identidade[0];
+    assert.ok(!ident.efeito_token, "a recusa 410 é determinística: não vira efeito incerto");
+    assert.ok(!ident.operacao_id, "operação encerrada: o operador pode tentar de novo na hora");
+    g.live = { ...g.live, status: "DISCONNECTED" };
+    await iniciar(OP, m.deps);
+  });
+});
