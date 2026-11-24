@@ -144,6 +144,8 @@ export function lerConfiguracaoMova(env) {
       // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
       // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
       iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
+      // 24/11: com a IA só de documentos, permite ler a RESPOSTA em texto a uma pergunta pendente do MOVA (padrão DESLIGADA).
+      iaRespostasPendentes: sim(env.MOVA_IA_RESPOSTAS_PENDENTES),
       identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
     // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
     envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null,
@@ -206,7 +208,12 @@ export async function exigirBancoDaOperacao(pool, marcador) {
 /** Extrator quando a IA está DESLIGADA: nada vai a provedor externo; o evento falha com código claro (não é transitório). */
 export const EXTRATOR_DESLIGADO = Object.freeze({ async extrair() { throw Object.assign(new Error("IA_DESLIGADA"), { codigo: "IA_DESLIGADA" }); } });
 /** Piloto documental: a IA só recebe mensagens COM arquivo; texto solto segue como se a IA estivesse desligada (sem custo). */
-export const extratorSoDeDocumentos = (extrator) => Object.freeze({ async extrair(e) { return e?.midia ? extrator.extrair(e) : EXTRATOR_DESLIGADO.extrair(e); } });
+// 24/11: exceção ESTREITA (chave própria, padrão DESLIGADA): o texto que RESPONDE a uma pergunta pendente do MOVA a esta pessoa
+// ("Lança como pago hoje", "Cadastra essa despesa") pode ser lido — uma leitura por resposta, no MESMO orçamento/teto. Texto solto
+// continua sem IA.
+export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } = {}) => Object.freeze({ async extrair(e) {
+  return e?.midia || (respostasPendentes && e?.contexto?.perguntaPendente) ? extrator.extrair(e) : EXTRATOR_DESLIGADO.extrair(e);
+} });
 
 /**
  * Monta o MOVA sobre o pool do schema `mova` e o repositório do Financeiro. Testável: tudo injetável.
@@ -242,7 +249,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const extratorIa = cfg.ia && criarClienteIa
     ? criarExtratorAnthropic({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), obterEvidencia, relogio, ...(cfg.modeloIa ? { modelo: cfg.modeloIa } : {}) })
     : EXTRATOR_DESLIGADO;
-  const extrator = extratorIa !== EXTRATOR_DESLIGADO && cfg.iaSomenteDocumentos === true ? extratorSoDeDocumentos(extratorIa) : extratorIa;
+  const extrator = extratorIa !== EXTRATOR_DESLIGADO && cfg.iaSomenteDocumentos === true ? extratorSoDeDocumentos(extratorIa, { respostasPendentes: cfg.iaRespostasPendentes === true }) : extratorIa;
   // 15A: respostas naturais — desligadas por padrão; exigem IA ligada e passam pelo MESMO orçamento/teto do extrator.
   const redator = cfg.ia && cfg.respostasNaturais && cfg.iaSomenteDocumentos !== true && criarClienteIa
     ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })

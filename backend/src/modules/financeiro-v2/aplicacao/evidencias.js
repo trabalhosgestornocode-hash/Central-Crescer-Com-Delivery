@@ -21,17 +21,66 @@ import { exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos } from "../
 
 const TIPOS_DE_EVIDENCIA = Object.freeze(["NOTA_FISCAL", "BOLETO", "COMPROVANTE", "CONTRATO", "DEMONSTRATIVO_REPASSE", "EXTRATO_BANCARIO", "RELATORIO_PROCESSADOR", "OUTRO"]);
 
-function validarEnvio(e) {
-  semCamposDesconhecidos(e, ["arquivo", "tipo", "descricao", "competencia", "vinculo"], "envio");
+/** Arquivo + ficha (sem o destino): também usado pela despesa paga por comprovante, cujo destino nasce na mesma transação. */
+export function validarArquivoDeEvidencia(e) {
   semCamposDesconhecidos(e.arquivo, ["conteudo", "nome", "tipoMime"], "arquivo");
-  semCamposDesconhecidos(e.vinculo, ["registroTipo", "registroId"], "vinculo");
   const formato = exigirFormatoDeEvidencia({ conteudo: e.arquivo?.conteudo, tipoMime: e.arquivo?.tipoMime, nomeArquivo: e.arquivo?.nome });
   return {
     conteudo: e.arquivo.conteudo, formato,
     tipo: exigirUmDe(e.tipo, TIPOS_DE_EVIDENCIA.filter((t) => TIPO_DOCUMENTO[t]), "tipo"),
     descricao: exigirTexto(e.descricao, "descricao", { max: 300 }),
     competencia: e.competencia === undefined || e.competencia === null || e.competencia === "" ? null : exigirCompetencia(e.competencia),
+  };
+}
+
+function validarEnvio(e) {
+  semCamposDesconhecidos(e, ["arquivo", "tipo", "descricao", "competencia", "vinculo"], "envio");
+  semCamposDesconhecidos(e.vinculo, ["registroTipo", "registroId"], "vinculo");
+  return {
+    ...validarArquivoDeEvidencia(e),
     vinculo: { registroTipo: exigirUmDe(e.vinculo?.registroTipo, VINCULAVEIS, "vinculo.registroTipo"), registroId: exigirUuid(e.vinculo?.registroId, "vinculo.registroId") },
+  };
+}
+
+/** Passo 2 do protocolo: guarda no cofre e LÊ DE VOLTA conferindo o hash (fora da transação do banco). */
+export async function guardarNoCofreConferido(cofre, escopo, c) {
+  const g = await cofre.guardar(escopo, { conteudo: c.conteudo, tipoMime: c.formato.tipoMime });
+  const lido = await cofre.ler(escopo, g.arquivoId);
+  if (lido.hashSha256 !== g.hashSha256) falhar(CODIGO.DOCUMENTO_ADULTERADO, "O arquivo guardado não confere com o enviado.");
+  return g;
+}
+
+/**
+ * Passo 3 do protocolo, DENTRO de uma transação já aberta: confere o arquivo no cofre, grava (ou reaproveita, pelo hash) a ficha e
+ * o vínculo com o registro. O registro precisa existir no escopo da transação (pode ter nascido nela).
+ */
+export async function gravarFichaEVinculo(b, tx, c3, { cofre, guardado: g, envio: c }) {
+  await b.obterOuFalhar(tx, c3, c.vinculo.registroTipo, c.vinculo.registroId, "Registro da pendência");
+  const escopo = { organizacaoId: c3.organizacaoId, unidadeId: c3.unidadeId };
+  if (!(await cofre.existe(escopo, g.arquivoId))) falhar(CODIGO.COFRE_INDISPONIVEL, "O arquivo não está no cofre: nada foi registrado.");
+  const chave = `sha256:${g.hashSha256}`;
+  let documento = await tx.buscarPorChave(c3, TIPO.DOCUMENTO, chave);
+  const documentoNovo = !documento;
+  if (!documento) {
+    documento = await b.criar(tx, c3, TIPO.DOCUMENTO, {
+      origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: c.tipo, competencia: c.competencia, recebidoEm: b.hoje(),
+      substituiId: null, descricao: c.descricao, versaoDocumento: 1, substituidoPorId: null, responsavelId: c3.usuarioId,
+      chaveIdempotencia: chave, impressao: null, enviadoPelaInterface: true, nomeOriginalSeguro: c.formato.nome,
+      tipoMime: c.formato.tipoMime, tamanhoBytes: c.formato.tamanhoBytes, conteudoAtivo: c.formato.conteudoAtivo,
+    }, `Evidência enviada pela interface: ${c.descricao}`);
+  }
+  const chaveVinculo = `${documento.id}|${c.vinculo.registroTipo}|${c.vinculo.registroId}`;
+  let vinculo = await tx.buscarPorChave(c3, TIPO.VINCULO_DOCUMENTAL, chaveVinculo);
+  const vinculoNovo = !vinculo;
+  if (!vinculo) {
+    vinculo = await b.criar(tx, c3, TIPO.VINCULO_DOCUMENTAL, { documentoId: documento.id, registroTipo: c.vinculo.registroTipo, registroId: c.vinculo.registroId, chaveIdempotencia: chaveVinculo, finalidade: c.descricao }, c.descricao);
+  }
+  return {
+    documento: { id: documento.id, tipo: documento.tipo, descricao: documento.descricao, versao: documento.versaoDocumento, recebidoEm: documento.recebidoEm },
+    vinculo: { id: vinculo.id, registroTipo: vinculo.registroTipo, registroId: vinculo.registroId },
+    repetido: !documentoNovo && !vinculoNovo, documentoReaproveitado: !documentoNovo,
+    validacao: { formato: c.formato.formato, tamanhoBytes: c.formato.tamanhoBytes, hashConferido: true, conteudoAtivo: c.formato.conteudoAtivo, nome: c.formato.nome },
+    efeito: "Documento guardado e vinculado. Anexar não comprova sozinho a classificação nem a conciliação: a decisão continua sendo da operação própria, com permissão e histórico.",
   };
 }
 
@@ -51,38 +100,9 @@ export function operacoesDeEvidencias(b, { cofre }) {
       // 1. o destino precisa existir NESTE escopo antes de qualquer arquivo ser guardado
       await b.consultar(ctx, (c2, tx) => b.obterOuFalhar(tx, c2, c.vinculo.registroTipo, c.vinculo.registroId, "Registro da pendência"));
       // 2. cofre: duas fases + leitura conferida
-      const g = await co.guardar(escopoDe(cx), { conteudo: c.conteudo, tipoMime: c.formato.tipoMime });
-      const lido = await co.ler(escopoDe(cx), g.arquivoId);
-      if (lido.hashSha256 !== g.hashSha256) falhar(CODIGO.DOCUMENTO_ADULTERADO, "O arquivo guardado não confere com o enviado.");
+      const g = await guardarNoCofreConferido(co, escopoDe(cx), c);
       // 3. ficha + vínculo numa transação
-      return b.executar(ctx, ACAO.ENVIAR_DOCUMENTO, async (c3, tx) => {
-        await b.obterOuFalhar(tx, c3, c.vinculo.registroTipo, c.vinculo.registroId, "Registro da pendência");
-        if (!(await co.existe(escopoDe(c3), g.arquivoId))) falhar(CODIGO.COFRE_INDISPONIVEL, "O arquivo não está no cofre: nada foi registrado.");
-        const chave = `sha256:${g.hashSha256}`;
-        let documento = await tx.buscarPorChave(c3, TIPO.DOCUMENTO, chave);
-        const documentoNovo = !documento;
-        if (!documento) {
-          documento = await b.criar(tx, c3, TIPO.DOCUMENTO, {
-            origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: c.tipo, competencia: c.competencia, recebidoEm: b.hoje(),
-            substituiId: null, descricao: c.descricao, versaoDocumento: 1, substituidoPorId: null, responsavelId: c3.usuarioId,
-            chaveIdempotencia: chave, impressao: null, enviadoPelaInterface: true, nomeOriginalSeguro: c.formato.nome,
-            tipoMime: c.formato.tipoMime, tamanhoBytes: c.formato.tamanhoBytes, conteudoAtivo: c.formato.conteudoAtivo,
-          }, `Evidência enviada pela interface: ${c.descricao}`);
-        }
-        const chaveVinculo = `${documento.id}|${c.vinculo.registroTipo}|${c.vinculo.registroId}`;
-        let vinculo = await tx.buscarPorChave(c3, TIPO.VINCULO_DOCUMENTAL, chaveVinculo);
-        const vinculoNovo = !vinculo;
-        if (!vinculo) {
-          vinculo = await b.criar(tx, c3, TIPO.VINCULO_DOCUMENTAL, { documentoId: documento.id, registroTipo: c.vinculo.registroTipo, registroId: c.vinculo.registroId, chaveIdempotencia: chaveVinculo, finalidade: c.descricao }, c.descricao);
-        }
-        return {
-          documento: { id: documento.id, tipo: documento.tipo, descricao: documento.descricao, versao: documento.versaoDocumento, recebidoEm: documento.recebidoEm },
-          vinculo: { id: vinculo.id, registroTipo: vinculo.registroTipo, registroId: vinculo.registroId },
-          repetido: !documentoNovo && !vinculoNovo, documentoReaproveitado: !documentoNovo,
-          validacao: { formato: c.formato.formato, tamanhoBytes: c.formato.tamanhoBytes, hashConferido: true, conteudoAtivo: c.formato.conteudoAtivo, nome: c.formato.nome },
-          efeito: "Documento guardado e vinculado. Anexar não comprova sozinho a classificação nem a conciliação: a decisão continua sendo da operação própria, com permissão e histórico.",
-        };
-      });
+      return b.executar(ctx, ACAO.ENVIAR_DOCUMENTO, (c3, tx) => gravarFichaEVinculo(b, tx, c3, { cofre: co, guardado: g, envio: c }));
     },
 
     /** Conferência cofre × fichas: arquivos sem ficha (envio interrompido) e fichas sem arquivo. Nada é apagado. */

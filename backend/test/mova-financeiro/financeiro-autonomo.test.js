@@ -19,7 +19,7 @@ const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao:
 const POLITICA = (x = {}) => ({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante Pix concluído até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01", ...x });
 const CONCESSAO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento"];
-const ESCRITAS = ["enviarEvidencia", "registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
+const ESCRITAS = ["registrarDespesaPagaPorComprovante", "enviarEvidencia", "registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 
 async function autonomo({ responder, politica = {}, concessao = CONCESSAO } = {}) {
   const s = await cenario({
@@ -57,7 +57,7 @@ t("AUT-A compra NOVA (brownies): sem conta do favorecido → cria a conta com a 
   assert.match(conta.descricao, /brownies/i, "descrição vem da legenda");
   assert.deepEqual([(await s.contas()).length, (await s.liquidacoes()).length, (await s.despesas()).length, (await s.saidas()).length], [1, 1, 1, 0]);
   assert.equal(await s.saldo(conta.id), 0);
-  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarObrigacaoDocumental", "enviarEvidencia", "registrarPagamentoPorComprovante"]);
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarDespesaPagaPorComprovante"], "24/11: uma operação atômica");
   assert.equal((await s.respostas()).length, 1, "uma resposta, sem 'posso cadastrar?'");
   assert.doesNotMatch(await s.resposta(), /posso|confirma/i);
   assert.match(await s.resposta(), /Despesa registrada e paga por comprovante: R\$ 108,00/);
@@ -93,14 +93,14 @@ t("AUT-C valor MAIOR que o saldo: pergunta objetiva (juros?), nada gravado; 'sim
 
 t("AUT-C2 valor maior e a resposta é 'outra compra': NÃO presume juros; cria a despesa nova e não toca na conta existente", async () => {
   const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
-  const o = await s.conta("2026-10-20", 5000);
+  const o = await s.conta("2026-10-20", 9000); // diferença de 20%: plausível como juros, a pergunta é a de juros
   await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C2") }));
   assert.equal((await s.ultima()).motivo, "VALOR_MAIOR_QUE_SALDO");
   await s.enviar(gw({ texto: "outra compra", grupo: FIN }));
   const h = await s.ultima();
   assert.equal(h.decisao, "EXECUTADO");
   assert.equal((await s.contas()).length, 2, "a conta nova entrou ao lado da existente");
-  assert.equal(await s.saldo(o.obrigacoes[0].id), 5000, "a conta existente ficou intacta");
+  assert.equal(await s.saldo(o.obrigacoes[0].id), 9000, "a conta existente ficou intacta");
   assert.deepEqual([(await s.liquidacoes()).length, (await s.saidas()).length], [1, 0]);
 });
 
@@ -114,7 +114,7 @@ const abertas = async (s) => Number((await s.banco.pool.query("select count(*)::
 
 t("AUT-C3 (produção 23/11) 'Outra compra' CITANDO a pergunta do MOVA (não o comprovante): resolução EXATA pela resposta citada → continua a operação", async () => {
   const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
-  const o = await s.conta("2026-10-20", 5000);
+  const o = await s.conta("2026-10-20", 9000); // diferença de 20%: plausível como juros, a pergunta é a de juros
   await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C3") }));
   assert.equal((await s.ultima()).motivo, "VALOR_MAIOR_QUE_SALDO");
   await entregar(s, "3EB0PERGUNTADOMOVA0001");
@@ -123,7 +123,7 @@ t("AUT-C3 (produção 23/11) 'Outra compra' CITANDO a pergunta do MOVA (não o c
   assert.notEqual(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
   assert.equal(h.decisao, "EXECUTADO");
   assert.equal((await s.contas()).length, 2, "a conta nova entrou ao lado da existente");
-  assert.equal(await s.saldo(o.obrigacoes[0].id), 5000, "a conta existente ficou intacta");
+  assert.equal(await s.saldo(o.obrigacoes[0].id), 9000, "a conta existente ficou intacta");
   assert.deepEqual((await relacoes(s)).map((x) => x.motivo), ["RESPOSTA_CITANDO_PERGUNTA"]);
 });
 
