@@ -22,6 +22,8 @@ const PAPEL_EXIBICAO = "exibicao";
 const PERMISSAO_ADMIN = "usuarios.gerenciar";
 const COMANDO_VINCULAR = /^\s*(?:mova[\s,:]+)?vincular\s+(\d{6})\s*$/i;
 
+/** Administrador de vínculos: permissão usuarios.gerenciar NA organização da sessão; impersonação não administra vínculos. */
+const ehAdmin = (acesso, organizacaoId) => Boolean(acesso && !acesso.impersonando && acesso.empresa?.id === organizacaoId && (acesso.permissoes ?? []).includes(PERMISSAO_ADMIN));
 const mascarar = (s) => (s ? `${String(s).slice(0, 4)}…${String(s).slice(-3)}` : null);
 const hashCodigo = (codigo, sal) => createHash("sha256").update(`${sal}:${codigo}`).digest("hex");
 
@@ -45,6 +47,7 @@ export function criarRepositorioDeIdentidadeMemoria() {
     },
     async revogar(id, dados) { const v = vinculos.get(id); if (!v || v.estado !== ESTADO_VINCULO.ATIVO) return null; Object.assign(v, { estado: ESTADO_VINCULO.REVOGADO, ...dados }); return { ...v }; },
     async obterVinculo(id) { const v = vinculos.get(id); return v ? { ...v } : null; },
+    async vinculosDaOrganizacao(organizacaoId) { return [...vinculos.values()].filter((v) => v.organizacaoId === organizacaoId).map((v) => ({ ...v })); },
     async guardarDesafio(d) { for (const [k, x] of desafios) if (x.perfilId === d.perfilId && x.organizacaoId === d.organizacaoId) desafios.delete(k); desafios.set(d.id, { ...d }); },
     /** Consome ATOMICAMENTE (uso único) o desafio da organização com este hash. */
     async consumirDesafio({ organizacaoId, id }) {
@@ -124,7 +127,7 @@ export function criarServicoDeIdentidade({ identificarParticipante, plataforma, 
 
     /** (b) aprovação por administrador (rota autenticada; `acessoDoAdmin` é o req.acesso da sessão dele). */
     async aprovarPorAdmin({ acessoDoAdmin, adminContaId, organizacaoId, entrada, perfilId }) {
-      if (!acessoDoAdmin || acessoDoAdmin.impersonando || acessoDoAdmin.empresa?.id !== organizacaoId || !(acessoDoAdmin.permissoes ?? []).includes(PERMISSAO_ADMIN)) return { ok: false, motivo: "SEM_PERMISSAO_DE_ADMINISTRAR_VINCULOS" };
+      if (!ehAdmin(acessoDoAdmin, organizacaoId)) return { ok: false, motivo: "SEM_PERMISSAO_DE_ADMINISTRAR_VINCULOS" };
       const chave = chaveCanonica(entrada, organizacaoId);
       if (!chave) return { ok: false, motivo: "ENTRADA_INVALIDA" };
       const p = await perfilVinculavel({ perfilId, organizacaoId });
@@ -134,6 +137,31 @@ export function criarServicoDeIdentidade({ identificarParticipante, plataforma, 
         auditar("VINCULO_CRIADO", { vinculoId: v.id, chave: mascarar(chave), perfil: mascarar(perfilId), metodo: v.metodo, por: mascarar(adminContaId) });
         return { ok: true, vinculoId: v.id };
       } catch (e) { if (e.codigo === "JA_VINCULADO") return { ok: false, motivo: "JA_VINCULADO" }; throw e; }
+    },
+
+    /** Administração (rota autenticada): vínculos da organização + entradas da lista ainda sem vínculo. Nada em claro além do necessário. */
+    async listarParaAdmin({ acessoDoAdmin, organizacaoId, entradas = [] }) {
+      if (!ehAdmin(acessoDoAdmin, organizacaoId)) return { ok: false, motivo: "SEM_PERMISSAO_DE_ADMINISTRAR_VINCULOS" };
+      const vs = await repositorio.vinculosDaOrganizacao(organizacaoId);
+      const ativos = new Map(vs.filter((v) => v.estado === ESTADO_VINCULO.ATIVO).map((v) => [v.chave, v]));
+      return { ok: true,
+        vinculos: vs.map((v) => ({ id: v.id, perfilId: v.perfilId, metodo: v.metodo, estado: v.estado, criadoEm: v.criadoEm, revogadoEm: v.revogadoEm ?? null, motivoRevogacao: v.motivoRevogacao ?? null })),
+        entradas: entradas.map((e) => { const chave = chaveCanonica(e, organizacaoId); const v = chave ? ativos.get(chave) : null; return { entradaId: e.id ?? e.pessoaId ?? null, nome: e.nome ?? null, vinculoId: v?.id ?? null, perfilId: v?.perfilId ?? null }; }) };
+    },
+
+    /** "Meu vínculo": o próprio perfil logado vê se está vinculado (sem dados de outras pessoas). */
+    async meuVinculo({ perfilId, organizacaoId }) {
+      const v = (await repositorio.vinculosDaOrganizacao(organizacaoId)).find((x) => x.perfilId === perfilId && x.estado === ESTADO_VINCULO.ATIVO) ?? null;
+      return v ? { vinculado: true, vinculoId: v.id, metodo: v.metodo, criadoEm: v.criadoEm } : { vinculado: false };
+    },
+
+    /** Revogação pela ROTA: só o administrador da organização ou o próprio dono do vínculo. Impersonação nunca. */
+    async revogarAutorizado({ acesso, contaId, organizacaoId, vinculoId, motivo = "REVOGADO" }) {
+      const v = await repositorio.obterVinculo(vinculoId);
+      if (!v || v.organizacaoId !== organizacaoId) return { ok: false, motivo: "VINCULO_NAO_ENCONTRADO" };
+      const dono = !acesso?.impersonando && acesso?.perfilId && acesso.perfilId === v.perfilId;
+      if (!dono && !ehAdmin(acesso, organizacaoId)) { auditar("REVOGACAO_RECUSADA", { vinculoId, por: mascarar(contaId) }); return { ok: false, motivo: "SEM_PERMISSAO_DE_ADMINISTRAR_VINCULOS" }; }
+      return this.revogar({ vinculoId, por: contaId, motivo: dono ? "REVOGADO_PELO_TITULAR" : String(motivo).slice(0, 120) });
     },
 
     async revogar({ vinculoId, por, motivo = "REVOGADO" }) {

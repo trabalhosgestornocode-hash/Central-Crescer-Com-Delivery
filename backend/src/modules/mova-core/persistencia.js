@@ -51,6 +51,10 @@ export function criarRepositorioDeIdentidadePostgres(pool, { janelaTentativasMs 
       return vinculoDaLinha(rows[0]) ?? null;
     },
     async obterVinculo(id) { const { rows } = await pool.query("select * from mova.core_vinculo where id = $1", [id]); return vinculoDaLinha(rows[0]) ?? null; },
+    async vinculosDaOrganizacao(organizacaoId) {
+      const { rows } = await pool.query("select * from mova.core_vinculo where organizacao_id = $1 order by criado_em desc limit 500", [organizacaoId]);
+      return rows.map(vinculoDaLinha);
+    },
     /** Um desafio vigente por perfil: o anterior é SUBSTITUÍDO (marcado), na mesma transação do novo. */
     async guardarDesafio(d) {
       await emTransacao(pool, async (c) => {

@@ -20,6 +20,7 @@ import { el, escapeHtml, toast } from "./utils.js";
 import { state } from "./state.js";
 import { icon } from "./icons.js";
 import { definirLimitesCmv } from "./cmvConfig.js";
+import { montarWhatsappMova } from "./configuracoesWhatsappMova.js";
 import {
   obterUsuarios, criarUsuario, atualizarUsuario, excluirUsuario, listarConvitesUsuario, revogarConviteUsuario,
   obterTabelasComerciaisUnidade, alterarTabelaComercialUnidade,
@@ -208,14 +209,14 @@ const CATEGORIAS = [
   { id: "unidade-empresa", icone: "store", titulo: "Unidade e empresa", desc: "Dados da loja, fuso e horário de funcionamento.", secoes: ["unidade", "fuso"] },
   { id: "metas-operacao", icone: "target", titulo: "Metas e operação", desc: "CMV, metas, Tabelas Comerciais, condições comerciais por canal e atalhos dos módulos.", secoes: ["cmv", "precos", "condicoes", "atalhos"] },
   { id: "notificacoes", icone: "bell", titulo: "Notificações", desc: "Quem recebe os avisos, consentimentos e histórico.", secoes: ["notificacoes"] },
-  { id: "usuarios-acesso", icone: "users", titulo: "Usuários e acesso", desc: "Equipe, cargos e convites.", secoes: ["usuarios"] },
+  { id: "usuarios-acesso", icone: "users", titulo: "Usuários e acesso", desc: "Equipe, cargos, convites e o WhatsApp do MOVA.", secoes: ["usuarios", "whatsapp"] },
   { id: "integracoes", icone: "link", titulo: "Integrações", desc: "Estado das conexões.", secoes: ["integracoes", "foody"] },
   { id: "seguranca-privacidade", icone: "shield-check", titulo: "Segurança e privacidade", desc: "Sua senha, 2FA e privacidade.", secoes: ["seguranca", "privacidade"] },
   { id: "preferencias", icone: "sliders-horizontal", titulo: "Preferências", desc: "Aparência e dados deste dispositivo.", secoes: ["aparencia", "backup"] },
 ];
 const SECAO_TITULO = {
   unidade: "Dados da Unidade", fuso: "Fuso e horário de funcionamento", cmv: "Metas e Limites de CMV", precos: "Tabelas Comerciais", condicoes: "Condições comerciais",
-  atalhos: "Configurações dos módulos", notificacoes: "Central de Notificações", usuarios: "Usuários e Permissões",
+  atalhos: "Configurações dos módulos", notificacoes: "Central de Notificações", usuarios: "Usuários e Permissões", whatsapp: "WhatsApp (MOVA)",
   integracoes: "Integrações", foody: "Foody Delivery", seguranca: "Segurança", privacidade: "Privacidade", aparencia: "Aparência",
   backup: "Configurações deste dispositivo",
 };
@@ -960,6 +961,8 @@ const DETALHES = {
   atalhos: (root) => desenharAtalhos(root),
   notificacoes: (root) => montarCentralNotificacoes(root, { confirmarDialogo, carregarProtegido }),
   usuarios: (root) => montarUsuarios(root),
+  // MOVA CORE F2: some sozinha quando o vínculo está desligado no servidor (MOVA_CORE_VINCULO_HABILITADO).
+  whatsapp: (root) => montarWhatsappMova(root, { confirmarDialogo }),
   integracoes: (root) => carregarIntegracoes(root),
   // Some sozinha (a seção inteira) quando a administração Foody está desligada no servidor ou sem permissão.
   foody: (root) => montarFoody(root, { confirmarDialogo, carregarProtegido }),

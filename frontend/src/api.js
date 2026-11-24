@@ -655,3 +655,11 @@ export async function foodySincronizar({ competencias, motivo = null }, chave) {
 }
 export const foodyDecidir = (conexaoId, foodyUid, operacao, motivo) =>
   postJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/${idFoody(foodyUid)}/decisao`, { operacao, motivo });
+
+// MOVA CORE F2 — vínculo do WhatsApp com a conta (a rota só existe com MOVA_CORE_VINCULO_HABILITADO=1; desligada ⇒ 404 e a seção some).
+const MOVA_VINCULO = "/api/v1/mova/vinculo";
+export const movaVinculoMeu = () => getJson(`${MOVA_VINCULO}/meu`);
+export const movaVinculoGerarCodigo = () => postJson(`${MOVA_VINCULO}/codigo`, {});
+export const movaVinculoRevogar = (vinculoId, motivo = null) => postJson(`${MOVA_VINCULO}/revogar`, { vinculoId, motivo });
+export const movaVinculoAdmin = () => getJson(`${MOVA_VINCULO}/admin`);
+export const movaVinculoAprovar = (entradaId, perfilId) => postJson(`${MOVA_VINCULO}/admin/aprovar`, { entradaId, perfilId });

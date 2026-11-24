@@ -980,3 +980,34 @@ export function contextoAtual(req) {
     servidorEm: new Date().toISOString(),
   };
 }
+
+/**
+ * MOVA CORE (F2, vínculo do WhatsApp): acesso de UM perfil a uma empresa (e opcionalmente a uma unidade), calculado AGORA com
+ * as MESMAS regras de `selecionarContexto` (vínculo de empresa por perfil, acesso efetivo da unidade, empresa bloqueada,
+ * permissões do papel, módulos da empresa ∩ unidade). Sem sessão, sem token, sem auditoria de login: só leitura.
+ * Devolve null quando o perfil não alcança a empresa/unidade (mesma recusa silenciosa do contexto).
+ * @param {{perfilId:string, organizacaoId:string, unidadeId?:string|null}} p
+ */
+export async function acessoDoPerfilParaMova({ perfilId, organizacaoId, unidadeId = null }, deps = {}) {
+  const buscarVinculoOrg = deps.buscarVinculoOrgDoPerfil ?? buscarVinculoOrgDoPerfil;
+  const checarUnidade = deps.acessoEfetivoDaUnidade ?? acessoEfetivoDaUnidade;
+  const lerPerfil = deps.lerPerfil ?? (async (id) => (await supabase.from("perfis_operacionais").select("id, conta_id, ativo").eq("id", id).maybeSingle()).data ?? null);
+  const unidadesDaOrg = deps.unidadesDaOrg ?? buscarUnidadesAtivasDaOrg;
+  const perfil = await lerPerfil(perfilId);
+  if (!perfil || perfil.ativo === false) return null;
+  const vinculoOrg = await buscarVinculoOrg({ perfilId, organizacaoId });
+  const papelDaEmpresa = vinculoOrg?.organizacoes ? vinculoOrg.papel : null;
+  let papel = papelDaEmpresa; let unidades = [];
+  if (unidadeId) {
+    const a = await checarUnidade({ perfilId, unidadeId, organizacaoId, papelDaEmpresa });
+    if (!a.autorizado) return null;
+    papel = a.papel; unidades = [a.unidade.id];
+  } else {
+    if (!papelDaEmpresa) return null;
+    unidades = (await unidadesDaOrg(organizacaoId)).map((u) => u.id);
+  }
+  const status = vinculoOrg?.organizacoes?.status ?? (deps.statusDaEmpresa ? await deps.statusDaEmpresa(organizacaoId) : null);
+  if (STATUS_BLOQUEANTES[status] || !papel) return null;
+  const modulos = unidadeId ? await (deps.modulosDaUnidade ?? modulosEfetivosDaUnidade)(organizacaoId, unidadeId) : await (deps.modulosDaEmpresa ?? modulosDaEmpresa)(organizacaoId);
+  return { contaId: perfil.conta_id, perfilId, papel, permissoes: permissoesDoPapel(papel), modulos, unidades, ativo: true, impersonando: false };
+}
