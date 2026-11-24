@@ -22,7 +22,8 @@ Como trabalhar:
 - Quando a pessoa usar "ele", "isso", "essa conta", resolva pelo que foi dito antes na conversa. Se a pergunta mudar de assunto, trate como assunto novo.
 - Se faltar algo essencial e não der para deduzir com segurança (qual unidade, qual pessoa, qual período), faça UMA pergunta curta de esclarecimento em vez de chutar.
 - Explicar "por que" algo aconteceu: mostre o que os dados indicam (quais contas, quais itens mudaram) e diga que é o que os registros mostram, não uma certeza de causa.
-- Comparar unidades: use listar_unidades e consulte cada uma; só unidades da lista.
+- Comparar unidades: use listar_unidades e consulte TODAS as unidades no MESMO passo (chamadas em paralelo); só unidades da lista.
+- Não repita uma consulta que já voltou nesta conversa; use o resultado que você já tem. Você tem poucos passos: planeje as consultas antes.
 
 Escritas: nesta fase você NÃO registra, paga, baixa nem altera nada. Quando a pessoa informar um pagamento, retirada ou compra, use preparar_registro e explique o que foi entendido, o que falta e o caminho. Nunca diga que registrou, anotou ou lançou.
 
@@ -52,6 +53,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
   const messages = [...historico, { role: "user", content: pergunta }];
   const uso = { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0, custoMicrousd: 0, chamadas: 0 };
   const usadas = [];
+  const reprovados = [];
   let correcaoFeita = false;
   let final = null;
   let motivo = null;
@@ -75,7 +77,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
     if (r.stop_reason === "tool_use") {
       const pedidos = r.content.filter((b) => b.type === "tool_use");
       const resultados = await Promise.all(pedidos.map((b) => executor.executar(sessao, b)));
-      pedidos.forEach((b, i) => usadas.push({ nome: b.name, ok: resultados[i].ok, codigo: resultados[i].codigo ?? null }));
+      pedidos.forEach((b, i) => usadas.push({ nome: b.name, ok: resultados[i].ok, codigo: resultados[i].codigo ?? null, passo, argumentos: b.input }));
       messages.push({ role: "assistant", content: r.content }); // blocos (inclusive raciocínio) devolvidos SEM alteração
       messages.push({ role: "user", content: pedidos.map((b, i) => ({ type: "tool_result", tool_use_id: b.id, content: resultados[i].conteudo, ...(resultados[i].ok ? {} : { is_error: true }) })) });
       continue;
@@ -88,6 +90,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
     const v = verificarFidelidade(texto, { fatos: sessao.fatos, unidades: sessao.unidadesPermitidas.map((x) => x.nome) });
     if (v.ok) { final = { texto, verificacao: v }; break; }
     registrar({ tipo: "MOVA_CORE_VERIFICADOR_REPROVOU", requisicaoId: sessao.requisicaoId, violacoes: v.violacoes.map((x) => x.tipo) });
+    reprovados.push({ texto, violacoes: v.violacoes }); // diagnóstico interno (avaliação/sombra) — NUNCA enviado
     if (correcaoFeita || passo === o.maxPassos) { final = { texto: null, verificacao: v }; motivo = "VERIFICADOR_REPROVOU"; break; }
     correcaoFeita = true;
     messages.push({ role: "assistant", content: r.content });
@@ -96,7 +99,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
   if (!final && !motivo) motivo = "PASSOS_ESGOTADOS";
   const texto = final?.texto ?? RESPOSTA_SEGURA[motivo] ?? RESPOSTA_SEGURA.PADRAO;
   return {
-    texto, motivo: final?.texto ? "RESPONDIDO" : motivo, verificacao: final?.verificacao ?? null, ferramentas: usadas,
+    texto, motivo: final?.texto ? "RESPONDIDO" : motivo, verificacao: final?.verificacao ?? null, reprovados, ferramentas: usadas,
     preparouRegistro: usadas.some((x) => x.nome === "preparar_registro" && x.ok), uso, latenciaMs: relogio() - inicio,
   };
 }

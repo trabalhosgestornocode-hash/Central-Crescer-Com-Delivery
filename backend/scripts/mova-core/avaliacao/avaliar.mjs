@@ -66,10 +66,21 @@ function decisaoDe(r) {
 const contemValor = (texto, v) => valoresDoTexto(texto).some((x) => x.valorCentavos === v || (!x.comCentavos && Math.round(v / 100) * 100 === x.valorCentavos));
 const exigidas = (req, usadas) => req.every((item) => (Array.isArray(item) ? item : [item]).some((n) => usadas.includes(n)));
 
+// --amostra=N: N conversas espalhadas pelas categorias (rodízio) — rodada curta antes da completa
+function amostrar(conversas, n) {
+  if (!n) return conversas;
+  const porCat = new Map(); for (const c of conversas) if (!(REAL && c.soSimulacao)) porCat.set(c.categoria, [...(porCat.get(c.categoria) ?? []), c]);
+  const r = []; for (let i = 0; r.length < n && [...porCat.values()].some((g) => g.length > i); i++) for (const g of porCat.values()) if (g[i] && r.length < n) r.push(g[i]);
+  return r;
+}
+const SO = args.so ? String(args.so).split(",") : null; // --so=A036-compras,...: repete só estes casos (diagnóstico barato)
+
 async function avaliar(conjunto, conversas, cliente, orcamento) {
   const linhas = [];
+  let falhasSeguidas = 0;
   for (const c of conversas) {
     if (REAL && c.soSimulacao) continue;
+    if (SO && !SO.includes(c.id)) continue;
     const porta = criarPortaSintetica();
     const auditoria = [];
     const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" } });
@@ -93,10 +104,14 @@ async function avaliar(conjunto, conversas, cliente, orcamento) {
         isolamento: e.proibidos.filter((v) => contemValor(enviado, v)).length + porta.leituras.filter((l) => l.unidadeId === BETA || l.organizacaoId !== ORG).length,
         escritaIndevida: auditoria.filter((x) => x.escrita && x.escrita !== "PREPARACAO").length + verif.violacoes.filter((v) => v.tipo === "ESCRITA_SIMULADA").length,
         inventado: verif.violacoes.filter((v) => v.tipo !== "ESCRITA_SIMULADA").length,
+        reprovados: r.reprovados ?? [], chamadas: REAL ? (r.ferramentas ?? []).map((x) => ({ nome: x.nome, ok: x.ok, codigo: x.codigo, passo: x.passo, argumentos: x.argumentos })) : undefined, fatosDoTurno: REAL ? (r.fatos ?? []).filter((f) => !f.anterior).slice(0, 60) : undefined,
         custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0, chamadasIa: r.uso?.chamadas ?? 0,
         tokens: r.uso ? { entrada: r.uso.entrada, saida: r.uso.saida, cacheLeitura: r.uso.cacheLeitura, cacheEscrita: r.uso.cacheEscrita } : null,
       });
       if (r.motivo?.startsWith?.("ORCAMENTO")) return { linhas, interrompido: r.motivo };
+      // falha SISTEMÁTICA (chave, rede, modelo, contrato): 3 turnos seguidos com erro ou no fallback ⇒ para a rodada
+      falhasSeguidas = (r.rota === "ERRO" || r.rota === "FALLBACK_EXTRATOR" || /ERRO|INDISPONIVEL/.test(String(r.motivo ?? ""))) ? falhasSeguidas + 1 : 0;
+      if (REAL && falhasSeguidas >= 3) return { linhas, interrompido: `FALHA_SISTEMATICA: ${r.motivo}` };
     }
   }
   return { linhas, interrompido: null };
@@ -130,7 +145,7 @@ const orcamento = criarOrcamentoMemoria({ ...LIMITES_HOMOLOGACAO, diarioMicrousd
 const conjuntos = args.conjunto ? [args.conjunto] : ["AJUSTE", "INDEPENDENTE"];
 const saida = { modo: REAL ? "REAL claude-haiku-5-5" : "SIMULADO (oráculo)", em: new Date().toISOString(), limiteUsd: MAX_USD, conjuntos: {} };
 for (const nome of conjuntos) {
-  const { linhas, interrompido } = await avaliar(nome, nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES, cliente, orcamento);
+  const { linhas, interrompido } = await avaliar(nome, amostrar(nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES, Number(args.amostra ?? 0)), cliente, orcamento);
   saida.conjuntos[nome] = { conversas: (nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES).length, interrompido, resumo: resumo(linhas), linhas };
   if (interrompido) break;
 }

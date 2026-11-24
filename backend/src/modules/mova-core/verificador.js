@@ -10,10 +10,12 @@ const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho
 const CLASSES = [
   { nome: "EM_ABERTO", termos: /\b(devemos|deve|devendo|em aberto|a pagar|falta pagar|pendente de pagamento|divida)\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|RESUMO:.*pagar)/i.test(s) },
   { nome: "VENCIDO", termos: /\bvencid[oa]s?\b|\batrasad[oa]s?\b/, aceita: (s) => /^(A_PAGAR_VENCIDO|A_PAGAR|RESUMO:.*venc|A_RECEBER)/i.test(s) },
-  { nome: "PAGO", termos: /\b(pago|pagos|paga|pagas|pagamos|paguei|foi pago|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:)/i.test(s) },
+  { nome: "PAGO", termos: /\b(pago|pagos|paga|pagas|pagamos|paguei|pagou|pagaram|foi pago|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:)/i.test(s) },
   { nome: "VENDAS", termos: /\b(faturamento|faturou|faturamos|vendemos|vendas|vendeu)\b/, aceita: (s) => /^(VENDAS:|DRE:|RESUMO:.*(fatur|venda|receita))/i.test(s) },
   { nome: "SALDO", termos: /\bsaldo\b/, aceita: (s) => /^(SALDO_|DIFERENCA_DE_SALDO|RESUMO:.*saldo|A_PAGAR|A_RECEBER|FLUXO:)/i.test(s) },
   { nome: "RECEBER", termos: /\b(a receber|receberemos|repasse)\b/, aceita: (s) => /^(A_RECEBER|RECEBIDO|RESUMO:.*receb)/i.test(s) },
+  // avaliação real 24/11: "vencida em 22/11, valor de R$ 264,00, com R$ 100,00 já pagos" — o valor TOTAL da conta
+  { nome: "VALOR_DA_CONTA", termos: /\b(valor( original| total| da conta)?|total da conta)\b/, aceita: (s) => /^(VALOR_DAS_CONTAS|A_PAGAR|PAGO|ENTREGADOR_)/i.test(s) },
 ];
 const ESCRITA_AFIRMADA = /\b(registrei|lancei|anotei|baixei|dei baixa|foi registrad[oa]|ficou registrad[oa]|registrad[oa] com sucesso|ja (esta|foi) lancad[oa]|lancamento feito)\b/;
 
@@ -29,6 +31,9 @@ export function valoresDoTexto(texto) {
   return r;
 }
 
+const FIM_DE_FRASE = /\n|[.!?;](?=\s)/g;
+const AGREGADO = /^(todas|todos|bancos|total|consolidad)/i;
+const FALA_DE_TOTAL = /\b(total|consolidad[oa]|somando|soma|ao todo|juntos?)\b/;
 const escapar = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const casaValor =(f, v) => f.valorCentavos !== null && (Math.abs(f.valorCentavos) === v.valorCentavos || (!v.comCentavos && Math.round(Math.abs(f.valorCentavos) / 100) * 100 === v.valorCentavos));
 const contem = (seg, nome) => { const n = norm(nome).trim(); if (n.length < 3) return false; return n.split(/\s+/).filter((w) => w.length >= 3).every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(seg)); };
@@ -56,9 +61,12 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
   valores.forEach((v, i) => {
     const candidatos = monetarios.filter((f) => casaValor(f, v));
     if (!candidatos.length) { violacoes.push({ tipo: "VALOR_SEM_FONTE", valor: v.texto }); return; }
-    // segmento: do valor anterior até o próximo (a "frase" que descreve ESTE valor)
-    const ini = i > 0 ? valores[i - 1].fim : Math.max(0, texto.lastIndexOf("\n", v.inicio));
-    const fim = i < valores.length - 1 ? valores[i + 1].inicio : texto.length;
+    // segmento: a FRASE/LINHA deste valor, entre o valor anterior e o próximo (avaliação real 24/11: em listas, o nome da linha
+    // seguinte ficava "mais perto" e o valor era atribuído a ele)
+    const limiteAntes = Math.max(0, ...[...texto.slice(0, v.inicio).matchAll(FIM_DE_FRASE)].map((m) => m.index + m[0].length));
+    const depois = [...texto.slice(v.fim).matchAll(FIM_DE_FRASE)][0];
+    const ini = Math.max(i > 0 ? valores[i - 1].fim : 0, limiteAntes);
+    const fim = Math.min(i < valores.length - 1 ? valores[i + 1].inicio : texto.length, depois ? v.fim + depois.index : texto.length);
     const seg = norm(texto.slice(ini, fim));
     if (candidatos.some((f) => f.derivado || f.significado === "INFORMADO_PELA_PESSOA")) return; // cálculo do próprio código / valor que a pessoa disse
 
@@ -67,10 +75,11 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
 
     // a entidade que descreve ESTE valor é a citada MAIS PERTO dele dentro do segmento (evita "X no caixa… e no banco Y")
     const posValor = v.inicio - ini;
-    const distancia = (e) => { const w = norm(e).split(/\s+/).find((x) => x.length >= 3) ?? ""; let melhor = Infinity; for (const m of seg.matchAll(new RegExp(`\\b${escapar(w)}`, "g"))) melhor = Math.min(melhor, Math.abs(m.index - posValor)); return melhor; };
+    const distancia = (e) => { const w = norm(e).split(/\s+/).find((x) => x.length >= 3) ?? ""; let melhor = Infinity; for (const m of seg.matchAll(new RegExp(`\\b${escapar(w)}`, "g"))) melhor = Math.min(melhor, m.index <= posValor ? posValor - m.index : (m.index - posValor) * 3); return melhor; }; // o nome ANTES do valor o descreve ("• Atacadão: R$ 540")
     const citadas = entidadesConhecidas.filter((e) => contem(seg, e)).map((e) => [e, distancia(e)]).sort((a, b) => a[1] - b[1]);
     const entidadesCitadas = citadas.length ? citadas.filter(([, d]) => d === citadas[0][1]).map(([e]) => e) : [];
-    if (entidadesCitadas.length && candidatos.every((f) => f.entidade) && !candidatos.some((f) => entidadesCitadas.some((e) => norm(e) === norm(f.entidade) || contem(norm(f.entidade), e) || contem(norm(e), f.entidade)))) {
+    const agregadoComoTotal = candidatos.some((f) => !f.entidade || AGREGADO.test(norm(f.entidade))) && FALA_DE_TOTAL.test(seg);
+    if (!agregadoComoTotal && entidadesCitadas.length && candidatos.every((f) => f.entidade) && !candidatos.some((f) => entidadesCitadas.some((e) => norm(e) === norm(f.entidade) || contem(norm(f.entidade), e) || contem(norm(e), f.entidade)))) {
       violacoes.push({ tipo: "ENTIDADE_TROCADA", valor: v.texto, detalhe: entidadesCitadas.join(",") });
     }
 
@@ -78,9 +87,12 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
     const mesesFatos = candidatos.map((f) => mesDoPeriodo(f.periodo));
     if (meses.length && mesesFatos.every((m) => m !== null) && !mesesFatos.some((m) => meses.includes(m))) violacoes.push({ tipo: "PERIODO_TROCADO", valor: v.texto, detalhe: meses.join(",") });
 
-    const classes = CLASSES.filter((c) => c.termos.test(seg));
-    // a classe mais próxima do valor decide (o texto antes do número costuma nomear o que ele é)
-    if (classes.length && !classes.some((c) => candidatos.some((f) => c.aceita(f.significado)))) violacoes.push({ tipo: "SIGNIFICADO_TROCADO", valor: v.texto, detalhe: classes.map((c) => c.nome).join(",") });
+    // a classe cujo termo está MAIS PERTO do valor decide (o texto antes do número nomeia o que ele é; depois pesa 3×):
+    // "vencida em 22/11, valor de R$ 264" → VALOR_DA_CONTA; "valor vencido de R$ 264" → VENCIDO
+    const pertoDe = (c) => { let melhor = Infinity; for (const m of seg.matchAll(new RegExp(c.termos.source, "g"))) { const p = m.index + m[0].length; melhor = Math.min(melhor, p <= posValor ? posValor - p : (m.index - posValor) * 3); } return melhor; };
+    const classes = CLASSES.filter((c) => c.termos.test(seg)).map((c) => [c, pertoDe(c)]).sort((a, b) => a[1] - b[1]);
+    const decide = classes.length ? classes.filter(([, d]) => d === classes[0][1]).map(([c]) => c) : [];
+    if (decide.length && !decide.some((c) => candidatos.some((f) => c.aceita(f.significado)))) violacoes.push({ tipo: "SIGNIFICADO_TROCADO", valor: v.texto, detalhe: decide.map((c) => c.nome).join(",") });
   });
 
   // afirmação de escrita: só vale se NÃO vier negada ("não registrei", "nada foi registrado")
