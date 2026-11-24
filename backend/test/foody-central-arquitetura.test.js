@@ -127,7 +127,7 @@ describe("consumidores controlados", () => {
       "../foody/foody.seguranca.js", "../foody/foody.sync.manual.js"]);
     for (const i of imports) assert.doesNotMatch(i, /whatsapp|notifica|comunicacao|checklist|agente|parser|dashboard/i, i);
     const s = semComentarios(fonte);
-    assert.doesNotMatch(s, /fetch\(|setInterval|setTimeout|executarCiclo|criarAgendador|\.(insert|update|upsert|delete|rpc)\(|\.from\(/);
+    assert.doesNotMatch(s, /\bfetch\(|setInterval|setTimeout|executarCiclo|criarAgendador|\.(insert|update|upsert|delete|rpc)\(|\.from\(/);
     assert.match(s, /router\.use\(semCache, semImpersonacao, requirePermissao\(PERMISSOES\.INTEGRACOES_GERENCIAR\)\)/);
     // O orquestrador manual: flags de administração E de coleta, admin da titular, limites e trava de concorrência.
     const manual = semComentarios(readFileSync(join(MODULO, "foody.sync.manual.js"), "utf8"));

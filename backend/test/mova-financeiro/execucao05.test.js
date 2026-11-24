@@ -199,8 +199,9 @@ test("21 reversão de código: migrações só ADITIVAS no schema próprio (nada
   for (const f of readdirSync(pasta)) {
     const sql = readFileSync(new URL(f, pasta), "utf8").replace(/--.*$/gm, "");
     // DELETE/TRUNCATE só em tabelas do schema mova (ex.: expurgo de evidências); DROP só de restrição/coluna-nula/função/gatilho próprios.
-    for (const m of sql.matchAll(/(deletes+from|truncate(?:s+table)?)s+([a-z_."]+)/gi)) assert.match(m[2].toLowerCase(), /^mova./, `${f}: ${m[0]}`);
-    for (const m of sql.matchAll(/drops+(w+)/gi)) assert.match(m[1].toLowerCase(), /^(constraint|not|function|trigger|policy|index)$/, `${f}: ${m[0]}`);
+    // "truncate on ..." é PRIVILÉGIO (revoke delete, truncate on all tables in schema mova), não comando: fica fora.
+    for (const m of sql.matchAll(/\b(delete\s+from|truncate(?:\s+table)?)\s+(?!on\b)([a-z_."]+)/gi)) assert.match(m[2].toLowerCase(), /^mova\./, `${f}: ${m[0]}`);
+    for (const m of sql.matchAll(/\bdrop\s+(\w+)/gi)) assert.match(m[1].toLowerCase(), /^(constraint|not|function|trigger|policy|index)$/, `${f}: ${m[0]}`);
     assert.doesNotMatch(sql, /\b(public|financeiro_v2|auth)\.\w+/i, `${f} não toca outros schemas`);
     assert.doesNotMatch(sql, /\bdrop\s+(table|schema)\b/i, `${f} sem DROP destrutivo`);
   }
