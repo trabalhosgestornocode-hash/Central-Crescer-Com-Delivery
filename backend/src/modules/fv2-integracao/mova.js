@@ -384,14 +384,36 @@ function obterPoolRele(env) {
   poolReleUnico.on("error", () => {});
   return poolReleUnico;
 }
+/**
+ * 24/11 (produção: deploy 03:04Z, `MOVA_MONTAGEM_FALHOU 53300`): no deploy, a instância antiga ainda segura conexões e o banco pode
+ * recusar novas (excesso de conexões, reinício). Antes, a montagem falhava UMA vez no boot e o MOVA ficava parado até o próximo deploy.
+ * Falha TRANSITÓRIA de banco/rede agora agenda nova tentativa (15 s, 30 s, 60 s… até 5 min, sem limite de tentativas);
+ * falha de configuração/segurança (banco errado, marcador, papel) continua parando de vez.
+ */
+export const CODIGOS_TRANSITORIOS_DE_MONTAGEM = Object.freeze(["53300", "57P01", "57P02", "57P03", "08000", "08001", "08003", "08006", "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND", "EAI_AGAIN"]);
+const ESPERA_MONTAGEM_MS = Object.freeze({ inicial: 15_000, maxima: 5 * 60_000 });
+let novaTentativa = null;
 /** Worker + enviador em laço (server.js, depois do listen). Desligado por padrão; nunca derruba o backend. */
-export async function iniciarMovaEmbutido({ env, log = () => {} }) {
+export async function iniciarMovaEmbutido({ env, log = () => {}, montar = (o) => movaDaPlataforma(o), agendar = (fn, ms) => { const h = setTimeout(fn, ms); h.unref?.(); return h; }, tentativa = 0 }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado) return { habilitado: false, motivo: cfg.motivo };
   // Fase B: só recebimento pelo relé (sem processamento) também inicia — o consumidor enfileira no MOVA, o worker fica parado.
   if (!cfg.processamento && !(env.MOVA_RELE_DATABASE_URL && cfg.recebimento)) return { habilitado: false, motivo: "PROCESSAMENTO_DESLIGADO" };
-  const m = await movaDaPlataforma({ env, registrar: (e) => log("warn", "mova.evento", e) });
-  if (!m) return { habilitado: false, motivo: "MOVA_NAO_MONTADO" };
+  let codigoFalha = null;
+  const m = await montar({ env, registrar: (e) => { if (e?.tipo === "MOVA_MONTAGEM_FALHOU") codigoFalha = String(e.codigo ?? ""); log("warn", "mova.evento", e); } });
+  if (!m) {
+    if (!CODIGOS_TRANSITORIOS_DE_MONTAGEM.includes(codigoFalha)) return { habilitado: false, motivo: "MOVA_NAO_MONTADO" };
+    const esperaMs = Math.min(ESPERA_MONTAGEM_MS.inicial * 2 ** tentativa, ESPERA_MONTAGEM_MS.maxima);
+    if (novaTentativa) clearTimeout(novaTentativa);
+    novaTentativa = agendar(() => {
+      novaTentativa = null;
+      iniciarMovaEmbutido({ env, log, montar, agendar, tentativa: tentativa + 1 })
+        .then((r) => { if (r.habilitado) log("warn", "mova.evento", { tipo: "MOVA_MONTADO_APOS_NOVA_TENTATIVA", tentativas: tentativa + 2 }); })
+        .catch(() => {});
+    }, esperaMs);
+    log("warn", "mova.evento", { tipo: "MOVA_MONTAGEM_NOVA_TENTATIVA", codigo: codigoFalha, emMs: esperaMs, tentativa: tentativa + 1 });
+    return { habilitado: false, motivo: "MOVA_NAO_MONTADO", retentando: true, codigo: codigoFalha, emMs: esperaMs };
+  }
   m.worker?.iniciar();
   if (env.MOVA_RELE_DATABASE_URL && cfg.recebimento && !consumidorRele) {
     consumidorRele = criarConsumidorRele({ pool: obterPoolRele(env), receptor: m.mova.receptor, segredo: env.MOVA_GATEWAY_SECRET, controle: m.controle, registrar: (e) => log("warn", "mova.rele", e) });
@@ -401,6 +423,7 @@ export async function iniciarMovaEmbutido({ env, log = () => {} }) {
   return { habilitado: true, envio: m.enviador.habilitado, rele: Boolean(consumidorRele) };
 }
 export async function pararMovaEmbutido({ env }) {
+  if (novaTentativa) { clearTimeout(novaTentativa); novaTentativa = null; }
   consumidorRele?.parar(); consumidorRele = null;
   if (laco) { clearInterval(laco); laco = null; }
   const m = instancia ? await instancia : null;
