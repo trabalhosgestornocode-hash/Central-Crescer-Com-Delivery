@@ -47,6 +47,8 @@ const PEDIDO_DE_APROVACAO = /^\s*(aprov[ao]r?|aprovad[oa]|aplic[ao]r?|pode\s+apr
 // é barrado pelo backend antes da IA. "paguei" (relato) não casa: só imperativo/pedido.
 /** 15A: validade da memória curta (esclarecimento sem citação). */
 export const MEMORIA_CURTA_MS = 10 * 60 * 1000;
+/** 24/11: validade de uma pendência retomada por CITAÇÃO da pergunta do MOVA (a conta é relida de qualquer forma). */
+export const PENDENCIA_CITADA_VALIDADE_MS = 72 * 60 * 60 * 1000;
 const PALAVRAS_DE_LIGACAO = new Set(["e", "eh", "a", "o", "da", "do", "de", "na", "no", "em", "foi", "unidade", "loja", "mova", "pra", "para", "sim", "ok", "hml"]);
 const PEDIDO_DE_EXECUCAO = [
   /\b(fa[çc]a|faz|efetue|realize|execute|agende|programe|mande)\s+(o|a|os|as|um|uma)?\s*(pagamento|pix|transfer[eê]ncia|ted|doc)s?\b/i,
@@ -233,9 +235,21 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
       // 5. Mensagem relacionada: texto respondendo a um documento que aguarda esclarecimento (atômico; sobrevive a reinício).
       if (evento.respostaA && evento.tipo === "TEXTO") {
-        const pend = await a.mensagens.tomarPendente(evento.respostaA);
+        let pend = await a.mensagens.tomarPendente(evento.respostaA);
+        let motivoRelacao = "ESCLARECIMENTO_RECEBIDO";
+        // 24/11 — CITAÇÃO EXATA: a pessoa citou a PERGUNTA do MOVA (outro id que o do documento). A resposta do MOVA guarda o id
+        // confirmado pelo provedor e o EVENTO que a gerou: a pendência é a desse evento, nesta conversa. Nada de aproximação: citação
+        // de uma resposta sem pendência não retoma outra operação; pendência fora da validade não continua sem nova conferência.
+        if (!pend?.pendente && typeof a.saida.origemDaResposta === "function" && typeof a.mensagens.tomarPendenteDoEvento === "function") {
+          const origem = await a.saida.origemDaResposta({ providerMessageId: evento.respostaA, grupoId: evento.grupoId });
+          if (origem?.eventoId) {
+            pend = await a.mensagens.tomarPendenteDoEvento({ eventoId: origem.eventoId, grupoId: evento.grupoId, validadeMs: PENDENCIA_CITADA_VALIDADE_MS });
+            motivoRelacao = "RESPOSTA_CITANDO_PERGUNTA";
+            if (pend?.expirada) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PENDENCIA_EXPIRADA", resposta: RESPOSTA.pendenciaExpirada(), extra: { retomou: null, citou: "PERGUNTA_DO_MOVA" } });
+          }
+        }
         if (pend?.pendente) {
-          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_RECEBIDO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null });
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
           return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
@@ -243,11 +257,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
       // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
       // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
-      // 24/11: a pendência é guardada pelo id da mensagem ORIGINAL (o comprovante); quem responde citando a PERGUNTA do MOVA cita
-      // outro id e o passo 5 não a encontra. Uma citação que não achou pendência segue as mesmas regras da memória curta (antes,
-      // "Outra compra" citando a pergunta caía em CONVERSA_SEM_PEDIDO_FINANCEIRO e a pergunta ficava aberta).
-      const ehUnidade = evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
-      const ehRespostaCurta = evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
+      // 24/11: SÓ sem citação. Uma mensagem que CITA algo e não achou pendência exata (passo 5) nunca é ligada por aproximação
+      // à pendência mais recente — citar uma consulta antiga com "sim" não pode confirmar outra operação.
+      const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
+      const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
       if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
         const pend = await a.mensagens.tomarPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
         if (pend?.pendente && !pend.pendente.divergencia && !ehUnidade) {

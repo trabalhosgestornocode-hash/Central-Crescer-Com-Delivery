@@ -221,6 +221,23 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
       /**
+       * 24/11 (citação exata): a pendência ABERTA do evento `eventoId` NESTA conversa — usada quando a pessoa cita a PERGUNTA do MOVA
+       * (a pendência é guardada pelo id da mensagem original; a pergunta tem outro id). Atômica. Fora da validade (relógio do banco)
+       * NÃO é retomada: devolve `{ expirada: true }` e a pendência continua aberta para a revisão humana.
+       */
+      async tomarPendenteDoEvento({ eventoId, grupoId, validadeMs }) {
+        const r = await q(`update mova.mensagem_pendente set resolvida_em = now()
+                            where mensagem_id = (select mensagem_id from mova.mensagem_pendente
+                                                  where evento_id = $1 and grupo_jid = $2 and resolvida_em is null
+                                                    and criada_em >= now() - make_interval(secs => $3::double precision / 1000)
+                                                  order by criada_em desc limit 1 for update skip locked)
+                              and resolvida_em is null
+                          returning leitura, grupo_jid`, [eventoId, grupoId, validadeMs]);
+        if (r.rows[0]) return { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura };
+        const velha = await q("select 1 from mova.mensagem_pendente where evento_id = $1 and grupo_jid = $2 and resolvida_em is null limit 1", [eventoId, grupoId]);
+        return velha.rowCount ? { expirada: true } : null;
+      },
+      /**
        * 15A — memória curta: a pendência MAIS RECENTE da MESMA conversa e do MESMO participante, dentro da validade. O prazo
        * usa o relógio do BANCO (o mesmo de criada_em) — nunca compara dois relógios.
        * Atômica (FOR UPDATE SKIP LOCKED + resolvida_em): nunca retomada duas vezes. Nada de outra conversa ou participante.
@@ -461,6 +478,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q("select id from mova.resposta where estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE' order by seq limit 100")).rows.map((r) => r.id);
       },
       /** Eco de uma resposta do próprio agente (id do provedor registrado no envio) ⇒ nunca reprocessar. */
+      /** 24/11: de qual evento é a resposta do MOVA que a pessoa CITOU (id do provedor confirmado pelo Gateway/relé), nesta conversa. */
+      async origemDaResposta({ providerMessageId, grupoId }) {
+        if (!providerMessageId || providerMessageId === "SEM_ID") return null;
+        const r = await q("select evento_id as \"eventoId\", resposta_a as \"respostaA\" from mova.resposta where provider_message_id = $1 and grupo_jid = $2", [providerMessageId, grupoId]);
+        return r.rows[0] ?? null;
+      },
       async ehRespostaPropria(mensagemId) {
         return (await q("select 1 from mova.resposta where provider_message_id = $1", [mensagemId])).rowCount > 0;
       },

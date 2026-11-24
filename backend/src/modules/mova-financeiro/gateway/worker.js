@@ -119,7 +119,7 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
     const aguardando = await armazenamento.saida.aguardandoRele();
     if (!aguardando.length) return;
     for (const s of await rele.estados(aguardando)) {
-      if (s.estado === "ENVIADA") await armazenamento.saida.marcarEnviada(s.id, s.providerMessageId ?? "SEM_ID");
+      if (s.estado === "ENVIADA") await armazenamento.saida.marcarEnviada(s.id, s.providerMessageId ?? null) // 24/11: sem id, fica nulo (a coluna é UNIQUE; "SEM_ID" repetido falharia);
       else if (s.estado === "INCERTA") { await armazenamento.saida.marcarFalhaDeEnvio(s.id, "ENVIO_INCERTO", { final: true }); registrar({ tipo: "MOVA_ENVIO_INCERTO" }); }
       else if (s.estado === "FALHOU" || s.estado === "CANCELADA") await armazenamento.saida.marcarFalhaDeEnvio(s.id, String(s.codigo ?? s.estado).slice(0, 60), { final: true });
     }
