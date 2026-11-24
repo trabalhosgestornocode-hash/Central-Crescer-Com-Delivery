@@ -75,6 +75,22 @@ test("arquivo inválido é REJEITADO e nunca grava; arquivo repetido devolve a m
   assert.equal(r2.importacao.id, r1.importacao.id);
 });
 
+test("arquivo REJEITADO por parâmetro errado pode ser reenviado com o período certo (nova tentativa); pronto/importado continua devolvendo o existente", async () => {
+  const { nucleo } = montar();
+  const conteudo = saiposVendas(PEDIDOS);
+  const errada = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(conteudo, { periodoInicio: "2026-09-10", periodoFim: "2026-09-30" }));
+  assert.equal(errada.importacao.estado, "REJEITADO");
+  const certa = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(conteudo));
+  assert.equal(certa.repetido, false);
+  assert.equal(certa.importacao.estado, "PRONTO_PARA_IMPORTAR");
+  assert.notEqual(certa.importacao.id, errada.importacao.id);
+  assert.equal(certa.importacao.documentoId, errada.importacao.documentoId, "mesmo documento (mesmo arquivo)");
+  const de_novo = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(conteudo));
+  assert.equal(de_novo.repetido, true);
+  assert.equal(de_novo.importacao.id, certa.importacao.id);
+  assert.equal((await confirmar(nucleo, certa)).importacao.estado, "IMPORTADO");
+});
+
 test("registro já importado por OUTRO arquivo não duplica; mesma origem com conteúdo diferente vira pendência sem gravar", async () => {
   const { nucleo } = montar();
   const a = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(saiposVendas(PEDIDOS)));
