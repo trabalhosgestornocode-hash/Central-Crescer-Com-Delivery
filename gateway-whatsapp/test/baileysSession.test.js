@@ -1545,6 +1545,52 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
     assert.equal(fabricaSocket.criados.length, 0);
   });
 
+  test("conectar() manual com LOGGED_OUT persistido (processo reiniciado, memória zerada) -> recusa 410, nunca abre socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "LOGGED_OUT", desiredConnectionState: "DISCONNECTED" }));
+    const authAdapter = authAdapterRestoreOk();
+    authAdapter.carregar = mock.fn(authAdapter.carregar);
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerFalso(),
+    });
+
+    await assert.rejects(() => sessao.conectar({ persistirIntencaoConectada: true }), (e) => e.codigo === "WHATSAPP_GATEWAY_LOGGED_OUT" && e.status === 410);
+
+    assert.equal(authAdapter.carregar.mock.calls.length, 0, "não pode nem carregar o auth invalidado");
+    assert.equal(fabricaSocket.criados.length, 0);
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+  });
+
+  test("conectar() manual com status persistido DISCONNECTED (depois do reset) -> segue normalmente", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "DISCONNECTED" }));
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerFalso(),
+    });
+
+    await sessao.conectar();
+
+    assert.equal(fabricaSocket.criados.length, 1);
+  });
+
+  test("conectar() manual: falha ao ler o estado persistido NÃO bloqueia (fail-open)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => { throw new Error("backend fora"); });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerFalso(),
+    });
+
+    await sessao.conectar();
+
+    assert.equal(fabricaSocket.criados.length, 1);
+  });
+
   test("sem auth state nenhum salvo (carregar()=false) -> NOOP, nunca gera QR", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
@@ -1624,11 +1670,12 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
       authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
     });
-    await sessao.conectar(); // manual — já em CONNECTING
+    await sessao.conectar(); // manual — já em CONNECTING (o /connect lê o estado persistido uma vez, p/ barrar LOGGED_OUT)
+    const consultasDoConnect = backendClient.obterEstadoSessao.mock.calls.length;
 
     await sessao._restaurarSessaoSePossivel();
 
-    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, 0, "nem chega a consultar — já há socket em andamento");
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, consultasDoConnect, "o restore nem chega a consultar — já há socket em andamento");
     assert.equal(fabricaSocket.criados.length, 1, "nenhum segundo socket");
   });
 
