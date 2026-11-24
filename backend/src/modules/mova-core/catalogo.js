@@ -179,7 +179,7 @@ export const FERRAMENTAS = [
       const tot = r?.totais ?? {};
       return { dados: { prazoHoras: r?.prazoHoras ?? null, totais: tot, itens, nota: "Pendente NÃO é despesa: é dinheiro que saiu do caixa e ainda não teve destino informado." },
         fatos: fatos(fato(tot.retiradoCentavos, "SANGRIA:retirado"), fato(tot.pendenteCentavos, "SANGRIA:pendente"),
-          itens.flatMap((x) => [fato(x.retiradoCentavos, "SANGRIA:retirado", { entidade: x.descricao, periodo: x.data }), fato(x.pendenteCentavos, "SANGRIA:pendente", { entidade: x.descricao, periodo: x.data }),
+          itens.flatMap((x) => [fato(x.retiradoCentavos, "SANGRIA:retirado", { entidade: x.descricao, periodo: x.data }), fato(x.pendenteCentavos, x.estado === "ATRASADA" ? "SANGRIA:pendente_atrasada" : "SANGRIA:pendente", { entidade: x.descricao, periodo: x.data }),
             fato(x.despesasCentavos, "SANGRIA:despesas", { entidade: x.descricao, periodo: x.data }), fato(x.trocoCentavos, "SANGRIA:troco", { entidade: x.descricao, periodo: x.data }),
             ...x.despesas.map((d) => fato(d.valorCentavos, "SANGRIA:despesa", { entidade: d.descricao, periodo: x.data }))])) };
     },

@@ -6,7 +6,7 @@
 //   • DOCUMENTACAO_DO_SISTEMA   — como o sistema funciona, aprovado;
 //   • DOCUMENTACAO_EM_REVISAO   — como o sistema funciona, ainda PENDENTE de aprovação: pode explicar o funcionamento citando
 //                                 "pela documentação do sistema", nunca como regra da empresa.
-// Regra, política, decisão ou particularidade PENDENTE nunca chega ao modelo (não é oficial). A IA pode SUGERIR conhecimento
+// Regra, política, decisão ou particularidade PENDENTE só chega ao modelo como PROPOSTA_PENDENTE (nunca como oficial). A IA pode SUGERIR conhecimento
 // (fica PENDENTE, marcado como sugestão da IA); só uma pessoa com permissão aprova, e nunca quem sugeriu.
 import { randomUUID } from "node:crypto";
 import { radical } from "./resolucao.js";
@@ -224,14 +224,14 @@ export function criarServicoDeConhecimento({ repositorio = criarRepositorioDeCon
     /**
      * Recuperação textual + estruturada: termos da pergunta (radicais) × título/palavras-chave (peso 3) e conteúdo (peso 1);
      * escopo mais específico (unidade > empresa > sistema) desempata e SOBREPÕE o mais geral da mesma chave; vigência conferida;
-     * normativo pendente fica de fora. Devolve no máximo `limite` trechos com a autoridade de cada um.
+     * normativo pendente vem SÓ como PROPOSTA_PENDENTE (nunca como regra; a versão aprovada da chave tem precedência). Devolve no máximo `limite` trechos com a autoridade de cada um.
      */
     async buscar({ organizacaoId, unidadeId, pergunta, hoje = new Date(relogio()).toISOString().slice(0, 10), limite = 4, tipos = null }) {
       const termos = termosDaPergunta(pergunta);
       if (!termos.length) return [];
       const lista = await repositorio.candidatos({ organizacaoId, unidadeId, termos, palavras: palavrasDaPergunta(pergunta) });
       const vigente = (x) => (!x.vigenteDe || x.vigenteDe <= hoje) && (!x.vigenteAte || x.vigenteAte >= hoje);
-      const usavel = (x) => vigente(x) && (x.estado === "APROVADO" || (x.estado === "PENDENTE" && TIPOS_DOCUMENTAIS.has(x.tipo))) && (!tipos || tipos.includes(x.tipo));
+      const usavel = (x) => vigente(x) && (x.estado === "APROVADO" || x.estado === "PENDENTE") && (!tipos || tipos.includes(x.tipo));
       // a versão que vale de cada chave: aprovada > pendente mais nova; escopo específico sobrepõe o geral
       const porChave = new Map();
       const peso = (x) => (x.unidadeId ? 4 : x.organizacaoId ? 2 : 0) + (x.estado === "APROVADO" ? 1 : 0);
@@ -244,7 +244,7 @@ export function criarServicoDeConhecimento({ repositorio = criarRepositorioDeCon
       };
       return [...porChave.values()].map((x) => ({ x, p: pontuar(x) })).filter(({ p }) => p >= 2).sort((a, b) => b.p - a.p).slice(0, limite).map(({ x }) => ({
         ref: `${x.chave}@v${x.versao}`, chave: x.chave, versao: x.versao, tipo: x.tipo, titulo: x.titulo, conteudo: x.conteudo, origem: x.origem, responsavel: x.responsavel, escopo: escopoDe(x),
-        autoridade: x.estado === "APROVADO" ? (TIPOS_DOCUMENTAIS.has(x.tipo) ? "DOCUMENTACAO_DO_SISTEMA" : "REGRA_APROVADA") : "DOCUMENTACAO_EM_REVISAO",
+        autoridade: x.estado === "APROVADO" ? (TIPOS_DOCUMENTAIS.has(x.tipo) ? "DOCUMENTACAO_DO_SISTEMA" : "REGRA_APROVADA") : TIPOS_DOCUMENTAIS.has(x.tipo) ? "DOCUMENTACAO_EM_REVISAO" : "PROPOSTA_PENDENTE",
         aprovadoPor: x.estado === "APROVADO" ? x.aprovadoPor : null, vigencia: { de: x.vigenteDe, ate: x.vigenteAte },
       }));
     },
@@ -273,7 +273,7 @@ export function ferramentasDeConhecimento() {
         const itens = await sessao.conhecimento.buscar({ organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, pergunta: args.pergunta, hoje: sessao.hoje ?? undefined });
         if (!itens.length) return { situacao: "SEM_REGISTROS", dados: { itens: [], comoUsar: "Não há conhecimento registrado sobre isso. Explique só o que for conhecimento geral, dizendo que é explicação geral (não regra da empresa), ou diga que não há regra registrada. Nunca invente regra interna." } };
         return {
-          dados: { itens, comoUsar: "Formule a resposta com as SUAS palavras a partir destes trechos, adaptada à pergunta. REGRA_APROVADA = regra oficial da empresa (pode dizer 'a regra aprovada é…'). DOCUMENTACAO_DO_SISTEMA = como o sistema funciona. DOCUMENTACAO_EM_REVISAO = funcionamento descrito na documentação ainda sem aprovação: diga 'pela documentação do sistema', nunca 'a regra da empresa é'. Números atuais (saldo, contas, vendas) NÃO estão aqui: use as ferramentas de consulta." },
+          dados: { itens, comoUsar: "Formule a resposta com as SUAS palavras a partir destes trechos, adaptada à pergunta. REGRA_APROVADA = regra oficial da empresa (pode dizer 'a regra aprovada é…'). DOCUMENTACAO_DO_SISTEMA = como o sistema funciona. DOCUMENTACAO_EM_REVISAO = funcionamento descrito na documentação ainda sem aprovação: diga 'pela documentação do sistema', nunca 'a regra da empresa é'. PROPOSTA_PENDENTE = regra/política AINDA NÃO APROVADA: só pode ser citada como proposta pendente de aprovação ('ainda não há regra oficial; existe uma proposta de…'), NUNCA como regra, prazo ou limite oficial. Números atuais (saldo, contas, vendas) NÃO estão aqui: use as ferramentas de consulta." },
           fatos: itens.flatMap((x) => fatosDoTexto(x.conteudo, x.titulo)),
         };
       },

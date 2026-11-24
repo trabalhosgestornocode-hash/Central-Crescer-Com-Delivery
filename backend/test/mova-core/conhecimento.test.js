@@ -46,10 +46,10 @@ test("CN-02 aprovação HUMANA com permissão, nunca de quem sugeriu nem da IA; 
   assert.deepEqual((await s.eventos(v1.id)).map((e) => e.acao), ["SUGERIDO", "APROVADO", "SUBSTITUIDO"]);
 });
 
-test("CN-03 busca: normativo pendente nunca aparece; documental pendente = 'em revisão'; revogação vale na hora; vigência; escopo da unidade sobrepõe o geral; outra empresa não vê", async () => {
+test("CN-03 busca: normativo pendente só como PROPOSTA_PENDENTE; documental pendente = 'em revisão'; revogação vale na hora; vigência; escopo da unidade sobrepõe o geral; outra empresa não vê", async () => {
   const s = criarServicoDeConhecimento();
   await s.sugerir({ ...BASE, chave: "politica.limite", tipo: "POLITICA", titulo: "Limite do MOVA", conteudo: "Limite de R$ 1.000,00 por pagamento pelo MOVA; acima, revisão humana." });
-  assert.equal((await buscar(s, "qual o limite de pagamento do mova")).length, 0, "política pendente não é oficial");
+  assert.deepEqual((await buscar(s, "qual o limite de pagamento do mova")).map((x) => x.autoridade), ["PROPOSTA_PENDENTE"], "política pendente só aparece como PROPOSTA, nunca como regra");
   const doc = await s.sugerir({ ...BASE, chave: "caixa.conferir" });
   const [d] = await buscar(s, "como conferir o caixa");
   assert.equal(d.autoridade, "DOCUMENTACAO_EM_REVISAO");
@@ -79,16 +79,16 @@ test("CN-04 CORPO do sistema: carga idempotente; as 8 perguntas gerais encontram
     "Quais informações temos sobre esse fornecedor?": "funcionamento.fornecedores",
     "Como posso reduzir nossos custos operacionais?": "metodologia.reduzir-custos",
     "como vinculo meu whatsapp ao mova?": "mova.vincular-whatsapp",
-    "de onde vem o faturamento do ifood?": null, // decisão pendente não aparece; o funcionamento sim
+    "de onde vem o faturamento do ifood?": null, // decisão pendente só como PROPOSTA; o funcionamento aparece
   };
   for (const [pergunta, chave] of Object.entries(esperado)) {
     const r = await buscar(s, pergunta);
     if (chave) assert.ok(r.slice(0, 2).some((x) => x.chave === chave), `${pergunta} ⇒ ${r.map((x) => x.chave).join(", ")}`);
-    else assert.ok(!r.some((x) => x.chave === "decisao.ifood-pelo-demonstrativo") && r.some((x) => x.chave.includes("ifood")), `${pergunta} ⇒ ${r.map((x) => x.chave).join(", ")}`);
-    assert.ok(r.every((x) => x.autoridade === "DOCUMENTACAO_EM_REVISAO"), "tudo do corpo ainda está em revisão");
+    else assert.ok(r.some((x) => x.chave.includes("ifood")) && r.filter((x) => x.chave === "decisao.ifood-pelo-demonstrativo").every((x) => x.autoridade === "PROPOSTA_PENDENTE"), `${pergunta} ⇒ ${r.map((x) => x.chave).join(", ")}`);
+    assert.ok(r.every((x) => (x.tipo === "DECISAO" || x.tipo === "POLITICA" ? x.autoridade === "PROPOSTA_PENDENTE" : x.autoridade === "DOCUMENTACAO_EM_REVISAO")), "nada do corpo é regra antes da aprovação");
   }
   const pol = (await s.listar({})).find((x) => x.chave === "politica.mova-pagamento-por-comprovante");
-  assert.ok(!(await buscar(s, "qual o limite da política de pagamento por comprovante do açaí")).some((x) => x.chave === pol.chave));
+  assert.ok((await buscar(s, "qual o limite da política de pagamento por comprovante do açaí")).filter((x) => x.chave === pol.chave).every((x) => x.autoridade === "PROPOSTA_PENDENTE"));
   await s.aprovar({ id: pol.id, por: "proprietario", podeAprovar: true });
   const [p] = (await buscar(s, "qual o limite da política de pagamento por comprovante do açaí")).filter((x) => x.chave === pol.chave);
   assert.equal(p.autoridade, "REGRA_APROVADA");

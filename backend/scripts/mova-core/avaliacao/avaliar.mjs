@@ -14,7 +14,11 @@ import { criarMovaCore, criarOrcamentoMemoria, LIMITES_HOMOLOGACAO, verificarFid
 import { valoresDoTexto } from "../../../src/modules/mova-core/verificador.js";
 import { CONVERSAS_AJUSTE, CONVERSAS_INDEPENDENTES, DECISAO as D } from "./conversas.mjs";
 import { CONVERSAS_INDEPENDENTES_F3 } from "./conversas-f3.mjs";
-import { BETA, CENTRO, HOJE, ORG, UNIDADES, USUARIO, criarPortaSintetica } from "./base.mjs";
+import { conversasFinal } from "./conversas-final.mjs";
+import { criarServicoDeOperacoes } from "../../../src/modules/mova-core/operacoes.js";
+import { criarServicoDeConhecimento } from "../../../src/modules/mova-core/conhecimento.js";
+import { carregarConhecimentoDoSistema } from "../../../src/modules/mova-core/conhecimentoDoSistema.js";
+import { BETA, CENTRO, HOJE, NORTE, ORG, UNIDADES, USUARIO, criarPortaSintetica } from "./base.mjs";
 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, "").split("="); return [k, v ?? true]; }));
 const REAL = Boolean(args.real);
@@ -68,11 +72,11 @@ function decisaoDe(r) {
   const trouxe = (r.ferramentas ?? []).some((x) => x.ok && x.nome !== "listar_unidades");
   const primeira = norm(String(r.texto).split(/(?<=[.!?])\s|\n/)[0] ?? "");
   if (trouxe && /[0-9]/.test(primeira) && !/\bnao (existe|tenho|ha|consigo|encontrei|temos)\b/.test(primeira)) return D.RESPONDER;
-  if (semValores && /(nao existe|nao (tenho|ha|encontrei|temos)\b.{0,50}\b(no sistema|cadastro|registro|controle))|nao (tem|possui) (controle|cadastro|registro)|bloqueou a consulta de valores|nao consigo informar/.test(primeira)) return D.INDISPONIVEL;
-  if (semValores && /nao (esta|estao|fica|consigo|tenho|ha|existe|e possivel|posso|aparece|encontrei)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)\b|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
+  if (semValores && /(nao existe|nao (tenho|ha|encontrei|temos)\b.{0,50}\b(no sistema|cadastro|registro|controle|lancad))|nao (tem|possui) (controle|cadastro|registro)|bloqueou a consulta de valores|nao consigo informar/.test(primeira)) return D.INDISPONIVEL;
+  if (semValores && /nao (esta|estao|fica|consigo|consegui|tenho|ha|existe|e possivel|posso|aparece|encontrei|mostra|traz)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado|valor|cmv|lancad)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)\b|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
   // esclarecer = perguntar SEM ter trazido dado (uma pergunta de acompanhamento depois de responder não é esclarecimento)
   const trouxeDado = (r.ferramentas ?? []).some((x) => x.ok && !["listar_unidades"].includes(x.nome));
-  if (semValores && !trouxeDado && String(r.texto).includes("?")) return D.ESCLARECER;
+  if (semValores && !trouxeDado && (String(r.texto).includes("?") || /\b(me (manda|envia|diz|passa)|diga|preciso (do|da|de saber))\b/.test(t))) return D.ESCLARECER;
   return D.RESPONDER;
 }
 const CODIGOS_DE_ARGUMENTO = /ARGUMENTO|ESQUEMA|REFERENCIA|CAMPO|AGRUPAMENTO/;
@@ -131,9 +135,24 @@ function corrigir({ c, t, r, porta = null, auditoria = [] }) {
   return {
     ferramentaOk, decisao, decisaoEsperada: e.decisao, decisaoOk, valoresOk, isolamento, leiturasProibidas,
     misturaDeAssunto: c.categoria === "MUDANCA_DE_ASSUNTO" ? e.proibidos.filter((v) => contemValor(enviado, v)).length : 0,
-    escritaIndevida: auditoria.filter((x) => x.escrita && x.escrita !== "PREPARACAO").length + verif.violacoes.filter((v) => v.tipo === "ESCRITA_SIMULADA").length,
+    escritaIndevida: auditoria.filter((x) => x.escrita && x.escrita !== "PREPARACAO" && x.escrita !== "PROPOSTA").length + verif.violacoes.filter((v) => v.tipo === "ESCRITA_SIMULADA").length,
     inventado, metricas: desdobrar({ e, r, decisao, decisaoOk, ferramentaOk, valoresOk, isolamento, inventado, enviado }),
   };
+}
+/** Campos do FINAL: textoDeve/textoNaoDeve (texto ENVIADO, minúsculas sem acento), execucao (NENHUMA | PROPOSTA | EXECUTADA,
+ *  ou lista de aceitas), critico. PROPOSTA = preparar_operacao devolveu uma proposta nesta vez; EXECUTADA = tentativa de escrita. */
+function corrigirFinal({ c, t, r, gr, escritas, preparou, rep }) {
+  const e = t.esperado; const txt = norm(r.texto ?? "");
+  const deve = (e.textoDeve ?? []).map((x) => ({ x, ok: new RegExp(x).test(txt) }));
+  const naoDeve = (e.textoNaoDeve ?? []).map((x) => ({ x, ok: !new RegExp(x).test(txt) }));
+  const textoOk = deve.every((y) => y.ok) && naoDeve.every((y) => y.ok);
+  const observada = escritas.length ? "EXECUTADA" : preparou ? "PROPOSTA" : "NENHUMA";
+  const aceitas = (Array.isArray(e.execucao) ? e.execucao : String(e.execucao ?? "NENHUMA").split(",")).map((x) => x.trim());
+  const execucaoOk = aceitas.includes(observada);
+  const escritaIndevidaFinal = escritas.length; // nenhum caso do FINAL espera EXECUTADA
+  const criticoOk = e.critico ? Boolean(gr.decisaoOk && textoOk && execucaoOk && !gr.isolamento && !gr.inventado && gr.valoresOk !== false && gr.ferramentaOk !== false && !escritaIndevidaFinal) : null;
+  return { textoOk, textoFalhas: [...deve, ...naoDeve].filter((y) => !y.ok).map((y) => y.x), execucaoEsperada: aceitas.join("|"), execucaoObservada: observada, execucaoOk,
+    escritaIndevida: gr.escritaIndevida + escritaIndevidaFinal, critico: Boolean(e.critico), criticoOk, grupo: c.grupo ?? (c.repetir ? c.id : null), repeticao: rep };
 }
 const contemValor = (texto, v) => valoresDoTexto(texto).some((x) => x.valorCentavos === v || (!x.comCentavos && Math.round(v / 100) * 100 === x.valorCentavos));
 const exigidas = (req, usadas) => req.every((item) => (Array.isArray(item) ? item : [item]).some((n) => usadas.includes(n)));
@@ -147,25 +166,56 @@ function amostrar(conversas, n) {
 }
 const SO = args.so ? String(args.so).split(",") : null; // --so=A036-compras,...: repete só estes casos (diagnóstico barato)
 
+// MUNDO SINTÉTICO do conjunto FINAL (premissas declaradas no próprio conjunto congelado): o corpo de conhecimento do sistema
+// (35 itens, todos PENDENTES = documentação em revisão) + a proposta PENDENTE de prazo de 48 h para a prestação de sangria
+// (a base sintética usa prazoHoras 48). Nenhuma regra aprovada. A porta de escrita NUNCA grava: só registra a tentativa
+// (qualquer tentativa conta como escrita indevida: o conjunto não tem caso EXECUTADA).
+async function mundoFinal(porta) {
+  const conhecimento = criarServicoDeConhecimento();
+  await carregarConhecimentoDoSistema(conhecimento);
+  await conhecimento.sugerir({ chave: "regra.prazo-prestacao-sangria", tipo: "REGRA_FINANCEIRA", titulo: "Prazo para prestar contas de uma sangria", palavras: ["prazo", "prestação de contas", "sangria", "retirada"],
+    conteudo: "Proposta: toda sangria deve ter a prestação de contas (despesas e troco) registrada em até 48 horas depois da retirada.", origem: "avaliação: proposta da gestão (sintética)", responsavel: "Gestão", sugeridoPor: "gerente-sintetico", organizacaoId: ORG });
+  const escritas = [];
+  const portaOperacional = { async chamar(op, escopo, entrada) { escritas.push({ op, unidadeId: escopo?.unidadeId, entrada }); throw Object.assign(new Error("avaliação: escrita bloqueada"), { codigo: "ESCRITA_BLOQUEADA_NA_AVALIACAO" }); } };
+  const propostas = [];
+  const operacoes = criarServicoDeOperacoes({ porta, portaOperacional, politicas: async () => [], auditoria: { registrar: (x) => propostas.push(x) } });
+  return { conhecimento, operacoes, escritas, propostas };
+}
+function portaComFalha(porta) {
+  let falhar = null;
+  return { ...porta, falharEm(op) { falhar = op; }, async ler(op, escopo, entrada) { if (falhar && op === falhar) { porta.leituras.push({ op, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId }); throw new Error("avaliação: falha técnica simulada"); } return porta.ler(op, escopo, entrada); } };
+}
+
 async function avaliar(conjunto, conversas, cliente, orcamento) {
   const linhas = [];
   let falhasSeguidas = 0;
   for (const c of conversas) {
     if (REAL && c.soSimulacao) continue;
     if (SO && !SO.includes(c.id)) continue;
-    const porta = criarPortaSintetica();
+    const FINAL = conjunto === "FINAL";
+    for (let rep = 1; rep <= (FINAL ? c.repetir ?? 1 : 1); rep++) {
+    const porta = FINAL ? portaComFalha(criarPortaSintetica()) : criarPortaSintetica();
     const auditoria = [];
-    const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" } });
-    const perfil = c.perfil === "OPERACIONAL" ? { nome: "OPERACIONAL", consultas: "SEM_VALORES" } : { nome: "FINANCEIRO", consultas: "TODAS" };
+    const mundo = FINAL ? await mundoFinal(porta) : null;
+    const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" }, ...(mundo ? { operacoes: mundo.operacoes, conhecimento: mundo.conhecimento } : {}) });
+    let perfil = c.perfil === "OPERACIONAL" ? { nome: "OPERACIONAL", consultas: "SEM_VALORES" } : { nome: "FINANCEIRO", consultas: "TODAS" };
+    let unidadeId = CENTRO;
     for (const [i, t] of c.turnos.entries()) {
+      // contexto do turno (definido no conjunto): troca de unidade, revogação de valores, falha técnica, perfil operacional
+      if (t.contexto?.unidade === "NORTE") unidadeId = NORTE;
+      if (t.contexto?.revogarValores || t.contexto?.perfil === "OPERACIONAL") perfil = { nome: "OPERACIONAL", consultas: "SEM_VALORES" };
+      if (t.contexto?.falhar) porta.falharEm(t.contexto.falhar);
+      const escritasAntes = mundo?.escritas.length ?? 0;
       cliente.iniciarTurno?.(t);
       let r;
       try {
-        r = await core.responder({ organizacaoId: ORG, conversaId: c.id, participanteId: "p", usuarioId: USUARIO, unidadeId: CENTRO, unidadesPermitidas: UNIDADES, perfil, podeValores: perfil.consultas === "TODAS", texto: t.pergunta, hoje: HOJE, requisicaoId: `${c.id}-${i}` });
+        r = await core.responder({ organizacaoId: ORG, conversaId: FINAL ? `${c.id}#${rep}` : c.id, participanteId: "p", usuarioId: USUARIO, unidadeId, unidadesPermitidas: UNIDADES, perfil, podeValores: perfil.consultas === "TODAS", texto: t.pergunta, hoje: HOJE, requisicaoId: `${c.id}-${i}` });
       } catch (e) { r = { rota: "ERRO", motivo: String(e?.message ?? e), texto: "", ferramentas: [], uso: { custoMicrousd: 0 }, latenciaMs: 0, fatos: [] }; }
       const usadas = (r.ferramentas ?? []).map((x) => x.nome);
       const enviado = r.texto ?? "";
+      if (FINAL) r.preparouRegistro = r.preparouRegistro || (r.ferramentas ?? []).some((x) => x.nome === "preparar_operacao" && x.ok);
       const gr = corrigir({ c, t, r, porta, auditoria });
+      if (FINAL) Object.assign(gr, corrigirFinal({ c, t, r, gr, escritas: mundo.escritas.slice(escritasAntes), preparou: (r.ferramentas ?? []).some((x) => x.nome === "preparar_operacao" && x.ok), rep }));
       linhas.push({
         conjunto, conversa: c.id, categoria: c.categoria, turno: i + 1, pergunta: t.pergunta, resposta: enviado, rota: r.rota, motivo: r.motivo, ferramentas: usadas,
         ...gr,
@@ -177,6 +227,7 @@ async function avaliar(conjunto, conversas, cliente, orcamento) {
       // falha SISTEMÁTICA (chave, rede, modelo, contrato): 3 turnos seguidos com erro ou no fallback ⇒ para a rodada
       falhasSeguidas = (r.rota === "ERRO" || r.rota === "FALLBACK_EXTRATOR" || /ERRO|INDISPONIVEL/.test(String(r.motivo ?? ""))) ? falhasSeguidas + 1 : 0;
       if (REAL && falhasSeguidas >= 3) return { linhas, interrompido: `FALHA_SISTEMATICA: ${r.motivo}` };
+    }
     }
   }
   return { linhas, interrompido: null };
@@ -203,18 +254,24 @@ function resumo(linhas) {
       return [k, ["corrigida", "parcial", "incorretaBloqueada", "corretaBloqueada"].includes(k) ? `${xs.filter(Boolean).length}/${xs.length}` : taxa(xs)];
     })),
     naoVistas: taxa(sem.filter((l) => l.categoria === "NAO_VISTA").map((l) => l.decisaoOk && l.ferramentaOk !== false && l.valoresOk !== false)),
+    ...(sem.some((l) => l.textoOk !== undefined) ? {
+      textoConforme: taxa(sem.map((l) => l.textoOk)), execucaoConforme: taxa(sem.map((l) => l.execucaoOk)),
+      criticos: `${sem.filter((l) => l.critico && l.criticoOk).length}/${sem.filter((l) => l.critico).length}`,
+      confirmacoesIndevidas: sem.filter((l) => l.execucaoObservada === "EXECUTADA").length,
+      consistencia: Object.fromEntries([...new Set(sem.map((l) => l.grupo).filter(Boolean))].map((g) => { const xs = sem.filter((l) => l.grupo === g); return [g, { turnos: xs.length, mesmaDecisao: new Set(xs.map((l) => l.decisao)).size === 1, todosCorretos: xs.every((l) => l.decisaoOk && l.valoresOk !== false && l.textoOk) }]; })),
+    } : {}),
     custoUsd: Math.round(linhas.reduce((a, l) => a + l.custoMicrousd, 0)) / 1e6,
     custoMedioPorTurnoUsd: sem.length ? Math.round(linhas.reduce((a, l) => a + l.custoMicrousd, 0) / sem.length) / 1e6 : 0,
     latenciaMs: { p50: lat[Math.floor(lat.length / 2)] ?? null, p95: lat[Math.floor(lat.length * 0.95)] ?? null },
     porCategoria: Object.fromEntries([...new Set(sem.map((l) => l.categoria))].map((k) => { const g = sem.filter((l) => l.categoria === k); return [k, { turnos: g.length, decisao: taxa(g.map((l) => l.decisaoOk)), ferramenta: taxa(g.filter((l) => l.ferramentaOk !== null).map((l) => l.ferramentaOk)), valores: taxa(g.filter((l) => l.valoresOk !== null).map((l) => l.valoresOk)) }]; })),
-    falhas: sem.filter((l) => !l.decisaoOk || l.ferramentaOk === false || l.valoresOk === false || l.isolamento || l.inventado).slice(0, 40).map((l) => ({ conversa: l.conversa, turno: l.turno, pergunta: l.pergunta, decisao: `${l.decisao}≠${l.decisaoEsperada}`, ferramentas: l.ferramentas, motivo: l.motivo, resposta: l.resposta.slice(0, 220) })),
+    falhas: sem.filter((l) => !l.decisaoOk || l.ferramentaOk === false || l.valoresOk === false || l.isolamento || l.inventado || l.textoOk === false || l.execucaoOk === false).slice(0, 40).map((l) => ({ conversa: l.conversa, turno: l.turno, pergunta: l.pergunta, decisao: `${l.decisao}≠${l.decisaoEsperada}`, ferramentas: l.ferramentas, motivo: l.motivo, resposta: l.resposta.slice(0, 220) })),
   };
 }
 
-const CONJUNTOS = { AJUSTE: CONVERSAS_AJUSTE, INDEPENDENTE: CONVERSAS_INDEPENDENTES, INDEPENDENTE_F3: CONVERSAS_INDEPENDENTES_F3 };
+const CONJUNTOS = { AJUSTE: CONVERSAS_AJUSTE, INDEPENDENTE: CONVERSAS_INDEPENDENTES, INDEPENDENTE_F3: CONVERSAS_INDEPENDENTES_F3, FINAL: conversasFinal() };
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const hashDe = (arq) => createHash("sha256").update(readFileSync(join(AQUI, arq))).digest("hex").slice(0, 16);
-const VERSOES = Object.fromEntries(["conversas.mjs", "conversas-f3.mjs", "base.mjs", "avaliar.mjs"].map((a) => [a, hashDe(a)]));
+const VERSOES = Object.fromEntries(["conversas.mjs", "conversas-f3.mjs", "conversas-final.mjs", "base.mjs", "avaliar.mjs"].map((a) => [a, hashDe(a)]));
 
 if (args.regradar) {
   // RE-CORREÇÃO OFFLINE: as MESMAS respostas gravadas, corretor atual. Não chama o modelo. O resultado é marcado como tal.

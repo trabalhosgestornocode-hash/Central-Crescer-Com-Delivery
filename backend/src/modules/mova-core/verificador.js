@@ -11,8 +11,8 @@ const CLASSES = [
   { nome: "EM_ABERTO", termos: /\b(devemos|deve|devendo|(?<!contas )a pagar|falta pagar|faltam pagar|pendente de pagamento|divida|restantes?|(ainda )?(nao|sem) (foi )?(pago|paga|pagos|pagas|pagamento)|(nada|nenhuma?) (foi )?(pago|paga))\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|RESUMO:.*pagar)/i.test(s) },
   // "em aberto" sozinho vale para pagar E receber ("total em aberto: R$ 27.900" de contas a receber); "devemos" continua só pagar
   { nome: "ABERTO", termos: /\b(em aberto|pendentes?|saldo a receber)\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|A_RECEBER|RESUMO:.*(pagar|receb))/i.test(s) },
-  { nome: "VENCIDO", termos: /\bvencid[oa]s?\b|\batrasad[oa]s?\b/, aceita: (s) => /^(A_PAGAR_VENCIDO|A_PAGAR|RESUMO:.*venc|A_RECEBER)/i.test(s) },
-  { nome: "PAGO", termos: /(?<!\b(nao|sem|nada|nenhuma?) (foi )?)\b(pago|pagos|paga|pagas|pagamos|paguei|pagou|pagaram|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:)/i.test(s) },
+  { nome: "VENCIDO", termos: /\bvencid[oa]s?\b|\batrasad[oa]s?\b/, aceita: (s) => /^(A_PAGAR_VENCIDO|A_PAGAR|RESUMO:.*venc|A_RECEBER|SANGRIA:pendente_atrasada)/i.test(s) },
+  { nome: "PAGO", termos: /(?<!\b(nao|sem|nada|nenhuma?) (foi )?)\b(pago|pagos|paga|pagas|pagamos|paguei|pagou|pagaram|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:|PROPOSTA:(valor|despesa|total|troco)|SANGRIA:despesa)/i.test(s) },
   { nome: "VENDAS", termos: /\b(faturamento|faturou|faturamos|vendemos|vendas|vendeu)\b/, aceita: (s) => /^(VENDAS:|DRE:|RESUMO:.*(fatur|venda|receita))/i.test(s) },
   { nome: "SALDO", termos: /\b(saldo|informado|contado)\b/, aceita: (s) => /^(SALDO_|DIFERENCA_DE_SALDO|RESUMO:.*saldo|A_PAGAR|A_RECEBER|FLUXO:)/i.test(s) },
   { nome: "RECEBER", termos: /\b(a receber|receberemos|repasse)\b/, aceita: (s) => /^(A_RECEBER|RECEBIDO|RESUMO:.*receb|ENTREGADOR_A_PAGAR)/i.test(s) }, // "o entregador tem R$ 99 a receber" = o que a loja deve a ele
