@@ -221,11 +221,13 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
        * Recusada: a pendência NÃO é consumida (`{ outroParticipante: true }`) — continua aberta para quem perguntou.
        * Tudo na MESMA transação com a linha travada: duas respostas simultâneas nunca retomam duas vezes.
        */
-      async tomarPendente(mensagemId, { podeConfirmar = () => true } = {}) {
+      async tomarPendente(mensagemId, { podeConfirmar = () => true, validadeMs = null } = {}) {
         return emTransacao(pool, async (tx) => {
-          const r = (await tx("select mensagem_id, leitura, grupo_jid from mova.mensagem_pendente where mensagem_id = $1 and resolvida_em is null for update", [mensagemId])).rows[0];
+          const r = (await tx(`select mensagem_id, leitura, grupo_jid, ($2::bigint is null or criada_em >= now() - ($2::bigint * interval '1 millisecond')) as valida
+                                 from mova.mensagem_pendente where mensagem_id = $1 and resolvida_em is null for update`, [mensagemId, validadeMs])).rows[0];
           if (!r) return null;
-          if (!podeConfirmar(r.leitura?.evento)) return { outroParticipante: true };
+          if (!podeConfirmar(r.leitura?.evento, r.leitura)) return { outroParticipante: true };
+          if (!r.valida) return { expirada: true }; // revisão 24/11: a validade vale também quando se cita o DOCUMENTO
           await tx("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1", [r.mensagem_id]);
           return { grupoId: r.grupo_jid, pendente: r.leitura };
         });
@@ -241,7 +243,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                                  from mova.mensagem_pendente where evento_id = $1 and grupo_jid = $2 and resolvida_em is null
                                 order by criada_em desc limit 1 for update`, [eventoId, grupoId, validadeMs])).rows[0];
           if (!r) return null;
-          if (!podeConfirmar(r.leitura?.evento)) return { outroParticipante: true }; // antes da validade: não revela nada a quem não pode
+          if (!podeConfirmar(r.leitura?.evento, r.leitura)) return { outroParticipante: true }; // antes da validade: não revela nada a quem não pode
           if (!r.valida) return { expirada: true };
           await tx("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1", [r.mensagem_id]);
           return { grupoId: r.grupo_jid, pendente: r.leitura };
