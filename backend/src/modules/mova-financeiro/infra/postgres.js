@@ -252,6 +252,17 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                           returning leitura, grupo_jid`, [grupoId, participanteId, validadeMs]);
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
+      /**
+       * 24/11 — a MESMA pendência da memória curta, só LIDA (não resolve): a resposta livre ("comprei brownies e já paguei") é lida
+       * pela IA com a pergunta como contexto e só então retomada, atomicamente, por `tomarPendente(mensagemId)`.
+       */
+      async verPendenteRecente({ grupoId, participanteId, validadeMs }) {
+        const r = await q(`select mensagem_id, leitura, grupo_jid from mova.mensagem_pendente
+                            where grupo_jid = $1 and resolvida_em is null and criada_em >= now() - make_interval(secs => $3::double precision / 1000)
+                              and leitura->'evento'->>'participanteId' = $2
+                            order by criada_em desc limit 1`, [grupoId, participanteId, validadeMs]);
+        return r.rows[0] ? { mensagemId: r.rows[0].mensagem_id, grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
+      },
     }),
     /**
      * Agente 2 — CONTINUIDADE por participante e conversa: depois de uma resposta do MOVA, a próxima mensagem da MESMA pessoa na

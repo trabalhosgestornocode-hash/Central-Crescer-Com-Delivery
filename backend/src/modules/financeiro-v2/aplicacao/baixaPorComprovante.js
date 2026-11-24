@@ -56,6 +56,14 @@ function validarBaixaPorComprovante(e) {
   };
 }
 
+/** 24/11 — dados do PAGAMENTO da despesa paga por comprovante (a conta e o documento nascem na mesma operação). */
+export function validarPagamentoDaDespesaPaga(e) {
+  semCamposDesconhecidos(e ?? {}, ["dataPagamento", "idTransacao", "justificativa", "confirmar"], "pagamento");
+  const idTransacao = e.idTransacao === undefined || e.idTransacao === null || e.idTransacao === "" ? null : String(e.idTransacao).trim();
+  if (idTransacao !== null && !ID_TRANSACAO.test(idTransacao)) falhar(CODIGO.ENTRADA_INVALIDA, "Identificador de transação inválido.", { campo: "idTransacao" });
+  return { dataPagamento: exigirData(e.dataPagamento, "dataPagamento"), idTransacao, justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }), confirmar: e.confirmar === true };
+}
+
 export const TIPOS_DE_ENCARGO = Object.freeze(["JUROS", "MULTA", "JUROS_E_MULTA"]);
 const ROTULO_ENCARGO = Object.freeze({ JUROS: "Juros", MULTA: "Multa", JUROS_E_MULTA: "Juros e multa" });
 /** Pagamento por comprovante COM encargo: o valor do comprovante é o TOTAL (principal = saldo da conta + encargo). */
@@ -100,7 +108,7 @@ export async function exigirSemComprovantePendente(tx, cx, obrigacaoId, valorCen
  * Corpo ÚNICO do pagamento por comprovante (com ou sem encargo): transacional e idempotente pelo documento. Com encargo, o
  * ajuste (juros/multa) e a liquidação nascem na MESMA transação; a repetição nunca lança o encargo de novo.
  */
-async function pagarPorComprovante(b, tx, cx, c) {
+export async function pagarPorComprovante(b, tx, cx, c) {
   const chave = chaveDoComprovante(c);
   await tx.travar(cx, chave, "EXCLUSIVA");
   const ja = await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, chave);

@@ -75,7 +75,9 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
       const referencia = relogio().toISOString().slice(0, 10);
       const cv = contexto.conversa;
       const linhaConversa = cv?.consulta ? `\nCONTEXTO DA CONVERSA (sistema; última pergunta desta pessoa): consulta=${cv.consulta}; unidade=${cv.unidade ?? "-"}; período=${cv.periodo ?? "-"}.` : "";
-      const system = `${entrada.instrucoes}\nDATA DE REFERÊNCIA (hoje): ${referencia}. Unidades possíveis: ${(contexto.unidades ?? []).join("; ") || "não informadas"}.${linhaConversa}`;
+      // 24/11: a pergunta que o MOVA fez a ESTA pessoa e ainda espera resposta (texto do SISTEMA, sem dado do usuário).
+      const linhaPendente = contexto.perguntaPendente ? `\nPERGUNTA PENDENTE DO MOVA (sistema; a mensagem pode ser a resposta): ${String(contexto.perguntaPendente).replace(/<<<|>>>/g, "").slice(0, 300)}` : "";
+      const system = `${entrada.instrucoes}\nDATA DE REFERÊNCIA (hoje): ${referencia}. Unidades possíveis: ${(contexto.unidades ?? []).join("; ") || "não informadas"}.${linhaConversa}${linhaPendente}`;
       let resposta;
       try {
         resposta = await cliente.beta.messages.create({

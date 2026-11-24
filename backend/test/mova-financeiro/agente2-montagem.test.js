@@ -98,4 +98,14 @@ test("Execução 17 — chaves novas: pagamento por comprovante DESLIGADO por pa
   assert.equal(chamadas, 0, "texto não chega à IA");
   await e.extrair({ texto: null, midia: { mime: "application/pdf", referencia: "r" } });
   assert.equal(chamadas, 1, "arquivo chega à IA");
+  // 24/11: resposta a pergunta pendente — só com a chave própria (padrão DESLIGADA)
+  assert.equal(cfg.iaRespostasPendentes, false);
+  assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_IA_RESPOSTAS_PENDENTES: "1" }).iaRespostasPendentes, true);
+  const resposta = { texto: "Lança como pago hoje", midia: null, contexto: { perguntaPendente: "o MOVA perguntou se é compra nova" } };
+  await assert.rejects(e.extrair(resposta), (x) => x.codigo === "IA_DESLIGADA");
+  const e2 = extratorSoDeDocumentos({ async extrair() { chamadas++; return { ok: true }; } }, { respostasPendentes: true });
+  await e2.extrair(resposta);
+  assert.equal(chamadas, 2, "com a chave, a resposta à pergunta pendente chega à IA");
+  await assert.rejects(e2.extrair({ texto: "quanto tenho a pagar?", midia: null, contexto: {} }), (x) => x.codigo === "IA_DESLIGADA");
+  assert.equal(chamadas, 2, "texto solto continua sem IA");
 });

@@ -71,6 +71,12 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     const entrada = { ...p.comando.entrada, ...(p.competenciaRevisada ? { competencia: p.competenciaRevisada } : {}), ...(categoria ? { categoria } : {}), fonte };
     await competenciaAberta(nucleo, ctx, entrada.competencia);
     await semDuplicata(nucleo, ctx, p, entrada);
+    if (p.tipo === "DESPESA_PAGA" && porComprovante) {
+      // 24/11: compra paga COM comprovante — conta + comprovante + pagamento numa operação ATÔMICA do Financeiro (nunca sobra
+      // conta em aberto se o pagamento for recusado; o extrato concilia depois a MESMA liquidação).
+      await competenciaAberta(nucleo, ctx, mes(p.comando.pagamento.dataEfetiva));
+      return execucao.registrarDespesaPaga({ proposta: p, escopo: escopo(ctx), entrada, dataPagamento: p.comando.pagamento.dataEfetiva, nivel: NIVEL.APLICAR_COM_CONFIRMACAO, executor: executorDaPessoa({ nucleo, ctx }) });
+    }
     const ob = await nucleo.registrarObrigacao(ctx, entrada);
     const obrigacaoId = ob.obrigacoes[0].id;
     if (p.tipo === "NOVA_OBRIGACAO") return { obrigacaoId, movimentacaoId: null };

@@ -8,7 +8,9 @@
 // objetiva resolve e a conversa continua sem segunda confirmação. A IA não decide nada aqui: respostas são interpretadas
 // por regras determinísticas.
 
-export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE" });
+// 24/11: NOVA_OU_CONTA — o comprovante supera MUITO o saldo da única conta do favorecido (diferença grande demais para ser juros):
+// a pergunta é "é uma compra nova?" ("sim" = compra nova). DESCRICAO — compra nova sem descrição nem categoria: "o que foi comprado?".
+export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE", NOVA_OU_CONTA: "NOVA_OU_CONTA", DESCRICAO: "DESCRICAO" });
 export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA: "NOVA", ESCOLHER: "ESCOLHER", MESMA: "MESMA", NAO_ENTENDI: "NAO_ENTENDI" });
 export const MAX_CANDIDATAS_NA_PERGUNTA = 5;
 
@@ -53,6 +55,12 @@ export function interpretarResposta(texto, pendencia) {
     if (SIM.test(t) || /^(sim|s|isso|mesmo|mesma|e o mesmo|e a mesma|ja foi|ja esta)\b/.test(t) || (numero && numero[1] === "1")) return { desfecho: DESFECHO.MESMA };
     return { desfecho: DESFECHO.NAO_ENTENDI };
   }
+  // 24/11: "É uma compra nova?" — aqui o "sim" é COMPRA NOVA; "não"/"é dessa conta"/"juros" é o pagamento da conta (com acréscimo).
+  if (pendencia.tipo === TIPO_DIVERGENCIA.NOVA_OU_CONTA) {
+    if (SIM.test(t) || (numero && numero[1] === "1") || (PALAVRA_NOVA.test(t) && !/\b(dessa|desta|mesma|mesmo)\b/.test(t))) return { desfecho: DESFECHO.NOVA };
+    if (NAO.test(t) || PALAVRA_JUROS.test(t) || /\b(dessa|desta|mesma|mesmo)\s+conta\b/.test(t) || (numero && numero[1] === "2")) return { desfecho: DESFECHO.JUROS };
+    return { desfecho: DESFECHO.NAO_ENTENDI };
+  }
   if (PALAVRA_NOVA.test(t) && !PALAVRA_JUROS.test(t) && !PALAVRA_PARCIAL.test(t)) return { desfecho: DESFECHO.NOVA };
   if (NAO.test(t)) return { desfecho: DESFECHO.NOVA };
   if (pendencia.tipo === TIPO_DIVERGENCIA.MAIOR) {
@@ -64,6 +72,54 @@ export function interpretarResposta(texto, pendencia) {
     if (numero && numero[1] === "2") return { desfecho: DESFECHO.NOVA };
   }
   return { desfecho: DESFECHO.NAO_ENTENDI };
+}
+
+/**
+ * 24/11 — a FINALIDADE lida semanticamente (IA) vira desfecho da pergunta pendente, só quando as regras determinísticas não
+ * entenderam. Cada finalidade só vale para a pergunta em que faz sentido (juros só no valor maior, parcial só no menor); fora disso,
+ * NAO_ENTENDI — a IA nunca escolhe conta (em VARIAS, "conta existente" sem o número continua sem entender).
+ */
+export function desfechoPorFinalidade(finalidade, pendencia) {
+  if (!finalidade || !pendencia) return { desfecho: DESFECHO.NAO_ENTENDI };
+  if (finalidade === "COMPRA_NOVA") return { desfecho: DESFECHO.NOVA };
+  const t = pendencia.tipo;
+  if (t === TIPO_DIVERGENCIA.SEMELHANTE && finalidade === "CONTA_EXISTENTE") return { desfecho: DESFECHO.MESMA };
+  if ((t === TIPO_DIVERGENCIA.MAIOR || t === TIPO_DIVERGENCIA.NOVA_OU_CONTA) && finalidade === "JUROS") return { desfecho: DESFECHO.JUROS };
+  if (t === TIPO_DIVERGENCIA.MENOR && finalidade === "PARCIAL") return { desfecho: DESFECHO.PARCIAL };
+  return { desfecho: DESFECHO.NAO_ENTENDI };
+}
+
+/**
+ * Percentual da conta acima do qual a diferença NÃO é plausível como juros/multa (conta muito atrasada pode passar de 10%, o teto
+ * do Financeiro para registrar SEM revisão — esse teto continua valendo para a execução). Caso real: R$ 178 sobre R$ 81 (220%).
+ */
+export const JUROS_PLAUSIVEL_PERCENTUAL = 50;
+/** A diferença (comprovante − saldo) cabe como juros/multa dessa conta? Acima do teto, o MOVA pergunta se é compra nova. */
+export const diferencaPlausivelComoJuros = ({ valorCentavos, saldoCentavos }) => valorCentavos - saldoCentavos <= Math.floor((saldoCentavos * JUROS_PLAUSIVEL_PERCENTUAL) / 100);
+
+/**
+ * Resposta à pergunta "o que foi comprado?" que já é, por si, uma descrição (determinística, sem IA): curta, sem pergunta, sem
+ * número e sem ser só "sim/não/ok". Senão null (a mensagem segue para a leitura semântica).
+ */
+export function descricaoDireta(texto) {
+  const bruto = String(texto ?? "").replace(/^\s*mova[\s,:-]*/i, "").trim();
+  const t = normalizar(bruto);
+  if (!t || bruto.length > 60 || /[?\d]/.test(bruto) || SIM.test(t) || NAO.test(t) || t.split(" ").length > 8) return null;
+  return bruto.replace(/[.!]+$/, "");
+}
+
+/** Texto CURTO (do sistema, sem dado do usuário) que descreve à IA a pergunta pendente desta pessoa. */
+export function descreverPendencia(pendencia) {
+  const v = Number.isInteger(pendencia?.valorCentavos) ? `R$ ${(pendencia.valorCentavos / 100).toFixed(2).replace(".", ",")}` : "o comprovante";
+  switch (pendencia?.tipo) {
+    case TIPO_DIVERGENCIA.MAIOR: return `o MOVA perguntou se o comprovante de ${v} paga uma conta já cadastrada com juros (a diferença) ou se é uma compra nova.`;
+    case TIPO_DIVERGENCIA.NOVA_OU_CONTA: return `o MOVA perguntou se o comprovante de ${v} é uma compra NOVA (a diferença para a conta cadastrada é grande demais para juros) ou o pagamento dessa conta.`;
+    case TIPO_DIVERGENCIA.MENOR: return `o MOVA perguntou se o comprovante de ${v} é pagamento PARCIAL de uma conta já cadastrada ou uma compra nova.`;
+    case TIPO_DIVERGENCIA.VARIAS: return `o MOVA listou ${pendencia.candidatas?.length ?? "várias"} contas cadastradas e perguntou qual o comprovante de ${v} paga (pelo número) ou se é compra nova.`;
+    case TIPO_DIVERGENCIA.SEMELHANTE: return `o MOVA perguntou se o comprovante de ${v} é o MESMO pagamento/conta já registrado ou uma compra nova.`;
+    case TIPO_DIVERGENCIA.DESCRICAO: return `o MOVA perguntou o que foi comprado com o comprovante de ${v} (a resposta é a descrição da compra nova).`;
+    default: return null;
+  }
 }
 
 /**

@@ -40,6 +40,7 @@ import { operacoesDeReclassificacao } from "./reclassificacao.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
 import { operacoesDeBaixaPorComprovante } from "./baixaPorComprovante.js";
+import { operacoesDeDespesaPagaPorComprovante } from "./despesaPagaPorComprovante.js";
 import { operacoesDeBaixaAgrupada } from "./baixaAgrupada.js";
 import { operacoesDeEntregadoresProprios } from "./entregadoresProprios.js";
 import { operacoesDeExtras } from "./extrasEntregadores.js";
@@ -89,6 +90,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeBaixaPorExtrato(base),
     ...operacoesDeBaixaPorComprovante(base),
+    ...operacoesDeDespesaPagaPorComprovante(base, { cofre }),
     ...operacoesDeBaixaAgrupada(base),
     ...operacoesDeEntregadoresProprios(base, { acessosNegados, ...(entregadores ?? {}) }),
     ...operacoesDeExtras(base),

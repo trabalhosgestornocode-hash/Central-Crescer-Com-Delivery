@@ -27,7 +27,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaU
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
@@ -109,7 +109,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return { decisao, motivo, propostaId, resposta };
   }
 
-  async function lerDocumento(evento, grupo, conversa = null) {
+  async function lerDocumento(evento, grupo, conversa = null, { perguntaPendente = null } = {}) {
     if (!evento.midia && !evento.texto) return { ok: true, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } };
     // Contexto de conversa = SÓ a mensagem respondida (respostaA), do MESMO grupo. Mensagens apenas próximas no tempo nunca entram.
     const citada = evento.respostaA ? await a.eventos.obter(evento.respostaA, evento.grupoId) : null;
@@ -121,6 +121,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const r = conversa.contexto ?? {};
       contexto.conversa = { consulta: conversa.consulta, unidade: un?.nome ?? null, periodo: r.competencia ?? ((r.periodoInicio || r.periodoFim) ? `${r.periodoInicio ?? "?"} a ${r.periodoFim ?? "?"}` : null) };
     }
+    // 24/11: a pergunta que o MOVA fez a esta pessoa e ainda espera resposta (texto do sistema; só para texto sem documento).
+    if (perguntaPendente && !evento.midia) contexto.perguntaPendente = perguntaPendente;
     const t0 = Date.now();
     let bruta;
     try {
@@ -212,6 +214,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (!participante) return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "PARTICIPANTE_NAO_AUTORIZADO" });
     const daPessoa = participante.aberto ? grupo : { ...grupo, unidades: participante.unidades }; // unidades que ESTA pessoa pode tratar
     const conversa = typeof a.conversas?.obter === "function" ? await a.conversas.obter({ grupoId: evento.grupoId, participanteId: evento.participanteId }) : null;
+    // 24/11: pergunta de divergência/descrição pendente DESTA pessoa (só lida), para a resposta LIVRE ser interpretada pela leitura.
+    let pendenteSemantico = null;
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -271,6 +275,24 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
+      // 5c. 24/11 — resposta LIVRE a uma pergunta de divergência ou de descrição ("comprei brownies e já paguei", "brownies"): a
+      // pendência DESTA pessoa (mesma conversa, 10 min) é só LIDA. Descrição curta responde sozinha (sem IA); o resto segue para a
+      // leitura — a MESMA chamada de IA que a mensagem já teria — com a pergunta como contexto, e só é retomada se a leitura
+      // responder a ela. Nada de lista de palavras: o sentido vem da leitura, a decisão continua determinística.
+      // Só SEM citação (mesma regra da memória curta): quem cita outra mensagem e não achou a pendência exata não é ligado à mais recente.
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia && String(evento.texto ?? "").length <= 300 && typeof a.mensagens.verPendenteRecente === "function") {
+        const visto = await a.mensagens.verPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
+        if (visto?.pendente?.divergencia) {
+          const descricao = visto.pendente.divergencia.tipo === TIPO_DIVERGENCIA.DESCRICAO ? descricaoDireta(evento.texto) : null;
+          if (descricao) {
+            const pend = await a.mensagens.tomarPendente(visto.mensagemId);
+            if (pend?.pendente) {
+              await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "DESCRICAO_RECEBIDA", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
+              return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, porEvento: evento.eventoId, participanteId: evento.participanteId, descricao } });
+            }
+          } else pendenteSemantico = visto;
+        }
+      }
     }
 
     // Agente 2 — arquivo recusado no receptor ANTES de qualquer gravação (perfil, formato, tamanho, cadastro revogado): só a resposta.
@@ -306,7 +328,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     let interpretacao = "IA";
     // Agente 2 — comando simples (sem IA, sem custo): "MOVA, contas a pagar da semana". Só período ("e a semana que vem?") =
     // continuação da consulta anterior DESTA pessoa nesta conversa; sem consulta anterior, segue para a IA.
-    if (!saida && comandosDeterministicos && evento.tipo === "TEXTO" && !evento.midia) {
+    // 24/11: com uma pergunta do MOVA PENDENTE para esta pessoa, a frase é lida no contexto dela (atalhos de consulta ignoram o
+    // contexto: "Já foi pago pelo Pix" viraria a consulta "a conta 'pelo pix' já foi paga?").
+    if (!saida && comandosDeterministicos && evento.tipo === "TEXTO" && !evento.midia && !pendenteSemantico) {
       const cmd = interpretarComando(evento.texto, hoje());
       if (cmd && !cmd.soPeriodo) { saida = cmd.saida; interpretacao = "COMANDO"; }
       else if (cmd?.soPeriodo && conversa?.consulta) { saida = Object.freeze({ ...cmd.saida, consulta: conversa.consulta }); interpretacao = "CONTINUIDADE";
@@ -317,19 +341,30 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     // Conversa natural sem IA (custo zero): "só as vencidas", "agora por fornecedor", "nas duas" e "e na Subway?" repetem a consulta
     // anterior DESTA pessoa nesta conversa (janela curta). A unidade continua vindo da regra determinística (nunca do histórico).
-    if (!saida && !esclarecimento && conversa?.consulta && evento.tipo === "TEXTO" && !evento.midia) {
+    if (!saida && !esclarecimento && !pendenteSemantico && conversa?.consulta && evento.tipo === "TEXTO" && !evento.midia) {
       const seg = interpretarSeguimento(evento.texto, conversa)
         ?? (/^\s*(e|mas)\b/i.test(evento.texto ?? "") && ehEsclarecimentoDeUnidade(evento.texto, daPessoa) ? saidaDeContinuacao(conversa.consulta, conversa) : null);
       if (seg) { saida = seg; interpretacao = "CONTINUIDADE"; }
     }
     if (!saida) {
-      const lida = await lerDocumento(evento, daPessoa, conversa);
+      const lida = await lerDocumento(evento, daPessoa, conversa, { perguntaPendente: pendenteSemantico ? descreverPendencia(pendenteSemantico.pendente.divergencia) : null });
       // Execução 13C: a IA recusar NÃO é falha de leitura nem controle de acesso — vira bloqueio explícito, sem nova chamada.
       if (!lida.ok && lida.codigo === "IA_RECUSOU") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IA_RECUSOU", resposta: RESPOSTA.pedidoNaoAtendido(), injecao });
       // 16A: orçamento esgotado/indisponível ou IA desligada NÃO é "mensagem mal escrita" — não pede para reenviar.
       if (!lida.ok && IA_PAUSADA.includes(lida.codigo)) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: RESPOSTA.iaPausada(), injecao });
       if (!lida.ok) return concluir(evento, { decisao: DECISAO.FALHA_LEITURA, motivo: lida.motivo, resposta: respostaDaFalhaDeLeitura(lida, evento), injecao });
       saida = lida.saida;
+      // 24/11 — a leitura RESPONDEU à pergunta pendente (finalidade, ou a descrição pedida): retoma a operação ORIGINAL do
+      // comprovante (atômico: só uma vez). A finalidade só vira desfecho onde faz sentido (desfechoPorFinalidade); nada é escolhido pela IA.
+      const pendDiv = pendenteSemantico?.pendente?.divergencia;
+      if (pendDiv && (saida.finalidadePagamento || (pendDiv.tipo === TIPO_DIVERGENCIA.DESCRICAO && saida.descricaoCompra))) {
+        const pend = await a.mensagens.tomarPendente(pendenteSemantico.mensagemId);
+        if (pend?.pendente) {
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "RESPOSTA_DE_DIVERGENCIA_POR_INTERPRETACAO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, porEvento: evento.eventoId, participanteId: evento.participanteId,
+            finalidade: saida.finalidadePagamento ?? null, descricao: saida.descricaoCompra ?? null } });
+        }
+      }
       // A IA marcou que a mensagem depende da pergunta anterior e não trouxe consulta própria: repete a consulta da conversa (com o
       // mesmo período, se a mensagem não trouxe outro). Só consulta: nenhuma outra intenção é reescrita.
       if (saida.continuacao === true && !saida.consulta && conversa?.consulta && ["CONSULTAR", "OUTRA", "DESCONHECIDA"].includes(saida.intencao) && !saida.valorCentavos) {
@@ -558,11 +593,25 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const legenda = evento.midia ? legendaDoDocumento(evento.texto) : null; // legenda da mensagem original: descrição e evidência (entrada não confiável)
     let candidatas = saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor);
     let forcarNova = false; let contaEscolhida = null; let parcialConfirmado = false;
+    // 24/11 — o que a PESSOA disse sobre a finalidade e o que comprou (lido semanticamente; a resposta a uma pergunta prevalece
+    // sobre a legenda do documento). "Compra nova" declarada não é presumida pela ausência de conta nem negada por valor igual.
+    const finalidadeDaLegenda = evento.midia && !esclarecimento?.divergencia ? saida.finalidadePagamento ?? null : null;
+    const novaDeclarada = finalidadeDaLegenda === "COMPRA_NOVA";
+    let descricaoInformada = esclarecimento?.descricao ?? saida.descricaoCompra ?? null;
+    if (novaDeclarada) forcarNova = true;
+    if (finalidadeDaLegenda === "PARCIAL") parcialConfirmado = true;
 
     // 23/11 — RESPOSTA a uma pergunta de divergência: a operação CONTINUA (sem segunda confirmação) conforme o que a pessoa disse.
     if (esclarecimento?.divergencia) {
       const pend = esclarecimento.divergencia;
-      const desf = interpretarResposta(esclarecimento.texto, pend);
+      // 24/11: pergunta "o que foi comprado?" — a resposta é a DESCRIÇÃO (curta e direta, ou lida pela IA); a compra é nova.
+      if (pend.tipo === TIPO_DIVERGENCIA.DESCRICAO) {
+        descricaoInformada = esclarecimento.descricao ?? descricaoDireta(esclarecimento.texto);
+        if (!descricaoInformada) return perguntar(ctx, pend, RESPOSTA.naoEntendiDescricao(), "DESCRICAO_NAO_ENTENDIDA");
+      }
+      let desf = pend.tipo === TIPO_DIVERGENCIA.DESCRICAO ? { desfecho: DESFECHO.NOVA } : interpretarResposta(esclarecimento.texto, pend);
+      // 24/11: as regras curtas não entenderam ⇒ vale o SENTIDO lido da resposta (só onde ele faz sentido; a IA nunca escolhe conta).
+      if (desf.desfecho === DESFECHO.NAO_ENTENDI) desf = desfechoPorFinalidade(esclarecimento.finalidade, pend);
       // O saldo pode ter mudado entre a pergunta e a resposta: a conta é relida pelo id, nunca usada do que foi guardado.
       const porId = (id) => abertas.find((t) => t.id === id) ?? null;
       if (desf.desfecho === DESFECHO.NAO_ENTENDI) return perguntar(ctx, pend, RESPOSTA.naoEntendiDivergencia(), "RESPOSTA_NAO_ENTENDIDA");
@@ -614,7 +663,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         if (parcialConfirmado || legendaIndicaParcial(legenda)) return baixa(casamento.conta);
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MENOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMenor(casamento.conta, valor), "VALOR_MENOR_QUE_SALDO", [casamento.conta]);
       }
-      if (casamento.caso === "MAIOR") return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MAIOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMaior(casamento.conta, valor), "VALOR_MAIOR_QUE_SALDO", [casamento.conta]);
+      if (casamento.caso === "MAIOR") {
+        // 24/11 (caso real dos brownies: comprovante R$ 259 × conta de R$ 81): diferença grande demais para ser juros não vira a
+        // pergunta "são juros?" — a pergunta objetiva passa a ser "é uma compra nova?" (o "sim" registra a compra nova paga).
+        if (!contaEscolhida && !diferencaPlausivelComoJuros({ valorCentavos: valor, saldoCentavos: casamento.conta.saldoCentavos })) {
+          return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.NOVA_OU_CONTA, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaCompraNovaOuConta(casamento.conta, valor), "DIFERENCA_GRANDE_DEMAIS_PARA_JUROS", [casamento.conta]);
+        }
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MAIOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMaior(casamento.conta, valor), "VALOR_MAIOR_QUE_SALDO", [casamento.conta]);
+      }
       if (casamento.caso === "VARIAS") {
         const proximas = [...casamento.candidatas].sort((x, y) => Math.abs(x.saldoCentavos - valor) - Math.abs(y.saldoCentavos - valor)).slice(0, MAX_CANDIDATAS_NA_PERGUNTA);
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
@@ -622,8 +678,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     // Nenhuma conta do favorecido (ou a pessoa disse "outra compra"): compra NOVA — mas a AUSÊNCIA de conta do mesmo favorecido não é,
     // sozinha, prova de compra nova: antes, procura o mesmo pagamento já registrado e conta aberta de outro fornecedor com o mesmo valor.
-    if (!forcarNova && !esclarecimento?.divergencia) {
-      const semelhantes = buscarSemelhantes({ todas: await porta.contasAPagarTodas(escopo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
+    // 24/11: com "compra nova" DECLARADA, ainda se confere o pagamento IGUAL já registrado (mesmo favorecido, mesmo valor, data
+    // próxima — possível reenvio do mesmo comprovante); conta aberta de outro fornecedor com o mesmo valor não é perguntada.
+    if (!esclarecimento?.divergencia && (!forcarNova || novaDeclarada)) {
+      const achados = buscarSemelhantes({ todas: await porta.contasAPagarTodas(escopo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
+      const semelhantes = novaDeclarada ? achados.filter((x) => x.situacao === "PAGA") : achados;
       if (semelhantes.length) {
         const [primeiro] = semelhantes;
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.SEMELHANTE, valorCentavos: valor, candidatas: [{ id: primeiro.conta.id, situacao: primeiro.situacao }] },
@@ -635,20 +694,34 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;
     const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
-    const categoria = await categoriaDaDespesa(escopo, saida, legenda);
-    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento, descricao: legenda ? mascararDadosSensiveis(legenda).slice(0, 120) : null, categoria });
+    // 24/11: a descrição é o que a PESSOA disse que comprou (legenda, mensagem posterior ou resposta à pergunta), lido pela IA; sem
+    // ela, a legenda inteira. A categoria vem do plano da unidade casando com essa descrição (uma só categoria; senão "a classificar").
+    const textoDaCompra = [legenda, descricaoInformada].filter(Boolean).join(" ") || null;
+    const categoria = await categoriaDaDespesa(escopo, saida, textoDaCompra);
+    const descricao = descricaoInformada ?? legenda;
+    // Compra nova pelo comprovante sem descrição e sem categoria: pergunta SÓ o que foi comprado (uma vez), em vez de lançar às cegas.
+    if (evento.midia && !descricao && !categoria && esclarecimento?.divergencia?.tipo !== TIPO_DIVERGENCIA.DESCRICAO) {
+      return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.DESCRICAO, valorCentavos: valor, candidatas: [] }, RESPOSTA.perguntaDescricao(valor), "DESCRICAO_DA_COMPRA_AUSENTE");
+    }
+    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
+    // Resumo consolidado: unidade, categoria e as contas em aberto do MESMO favorecido que este comprovante NÃO baixou.
+    // A resposta NUNCA repete o texto recebido: só a descrição CURTA lida pela IA, mascarada e sem sinal de instrução, aparece.
+    const descricaoExibivel = descricaoInformada && !sinaisDeInjecao(descricaoInformada) ? mascararDadosSensiveis(descricaoInformada).slice(0, 60) : null;
+    const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [] };
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
       datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento }, competenciaPendente: !competencia,
       // Execução 17: com comprovante, a aplicação registra a conta e o pagamento POR COMPROVANTE (nenhuma saída bancária
       // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
-      comando: { operacao: evento.midia ? "registrarObrigacao+registrarPagamentoPorComprovante" : "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
-    }, comAvisoDeCompetencia(RESPOSTA.propostaDespesaPaga, competencia), {
+      // 24/11: com comprovante, a conta e o pagamento entram numa ÚNICA operação atômica (registrarDespesaPagaPorComprovante).
+      comando: { operacao: evento.midia ? "registrarDespesaPagaPorComprovante" : "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
+      ...(novaDeclarada || esclarecimento?.divergencia ? { compraNovaDeclarada: true } : {}),
+    }, comAvisoDeCompetencia((p) => RESPOSTA.propostaDespesaPaga(p, resumo), competencia), {
       // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.
       posCriacao: execucao?.criarDespesas && evento.midia ? async (p) => {
         const r = await execucao.aposDespesaNova(p, escopo);
-        return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado) } : r;
+        return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
       } : null,
     });
   }
