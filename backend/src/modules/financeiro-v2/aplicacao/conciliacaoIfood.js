@@ -9,6 +9,7 @@
 //   - valor sem regra conhecida bloqueia a aplicação até uma decisão autorizada: nada some da DRE e nenhuma categoria é presumida;
 //   - aplicar de novo não duplica. Se um relatório complementar mudar um dia, a versão anterior é cancelada (nunca apagada);
 //   - competência fechada não muda sem aviso: a aplicação é recusada até a competência ser reaberta pelo fluxo próprio.
+import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import {
   ESTADO_IMPORTACAO as E, EVENTO_HISTORICO, NATUREZA_LANCAMENTO as N, RELACAO_CORRESPONDENCIA, SITUACAO_CORRESPONDENCIA, SITUACAO_LANCAMENTO, SITUACAO_MOVIMENTACAO,
@@ -46,9 +47,14 @@ const COMPONENTES = Object.freeze([
   { componente: "ANUNCIOS", campo: "anunciosCentavos", sinal: -1, categorias: ["ANUNCIOS_IFOOD", "ANUNCIOS_E_DIVULGACAO"], descricao: "Anúncios no iFood" },
 ]);
 
-const chaveDoRepasse = (r) => `${r.apuracaoInicio}|${r.apuracaoFim}|${r.dataPrevista}`;
-const idDoRepasse = (r, versao) => `${PREFIXO_REPASSE}${r.apuracaoInicio}:${r.apuracaoFim}:${r.dataPrevista}:v${versao}`;
-const repasseDoId = (id) => { const [ini, fim, prev, v] = id.slice(PREFIXO_REPASSE.length).split(":"); return { chave: `${ini}|${fim}|${prev}`, apuracaoInicio: ini, apuracaoFim: fim, dataPrevista: prev, versao: Number(v.slice(1)) }; };
+// Repasse por LOJA: a loja principal mantém o formato antigo (sem loja); outra loja da unidade leva o id dela na chave.
+const chaveDoRepasse = (r) => `${r.loja ? `${r.loja}|` : ""}${r.apuracaoInicio}|${r.apuracaoFim}|${r.dataPrevista}`;
+const idDoRepasse = (r, versao) => `${PREFIXO_REPASSE}${r.loja ? `${r.loja}:` : ""}${r.apuracaoInicio}:${r.apuracaoFim}:${r.dataPrevista}:v${versao}`;
+const repasseDoId = (id) => {
+  const partes = id.slice(PREFIXO_REPASSE.length).split(":");
+  const [loja, ini, fim, prev, v] = partes.length === 5 ? partes : [null, ...partes];
+  return { chave: `${loja ? `${loja}|` : ""}${ini}|${fim}|${prev}`, loja, apuracaoInicio: ini, apuracaoFim: fim, dataPrevista: prev, versao: Number(v.slice(1)) };
+};
 const eRepasseConciliado = (r) => String(r.fonte?.idExterno ?? "").startsWith(PREFIXO_REPASSE);
 const dataBR = (d) => d.split("-").reverse().join("/");
 const soma = (lista, f) => lista.reduce((s, x) => s + (f(x) ?? 0), 0);
@@ -167,11 +173,12 @@ export function operacoesDaConciliacaoIfood(b) {
     for (const codigo of x.c.categorias) if (await b.categoriaPorCodigo(tx, cx, codigo)) return b.categoriaLancavel(tx, cx, codigo);
     return falhar(CODIGO.CATEGORIA_INVALIDA, "O plano de contas da unidade não tem categoria para este lançamento do iFood.", { componente: x.componente });
   }
+  // Saldo devedor de períodos anteriores (dívida da loja com o iFood de antes) pode ir para "títulos anteriores" (fora da DRE).
   // Unidade que usa o SWF (Subway) não vende pelo Anota AI: a categoria não é oferecida (o plano de contas não muda).
   const categoriasClassificaveis = async (tx, cx) => {
     const swf = unidadeUsaSwf(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"));
     return (await tx.listar(cx, TIPO.CATEGORIA))
-      .filter((c) => c.ativa && c.aceitaLancamento && [N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) && !NAO_CLASSIFICAVEIS.includes(c.codigo) && !(swf && c.codigo === "VENDA_ANOTA_AI"));
+      .filter((c) => c.ativa && c.aceitaLancamento && ([N.RECEITA, N.DEDUCAO, N.DESPESA].includes(c.natureza) || c.codigo === CATEGORIA_TITULOS_ANTERIORES) && !NAO_CLASSIFICAVEIS.includes(c.codigo) && !(swf && c.codigo === "VENDA_ANOTA_AI"));
   };
 
   /** O que a aplicação faria agora. Não grava: a prévia e a aplicação usam exatamente este plano. */
@@ -236,6 +243,7 @@ export function operacoesDaConciliacaoIfood(b) {
     for (const r of recebiveis) { const { chave, versao: v } = repasseDoId(r.fonte.idExterno); versaoRepasse.set(chave, Math.max(versaoRepasse.get(chave) ?? 0, v)); }
     const repasses = { criar: [], manter: [], cancelar: [] };
     const avisos = [];
+    for (const p of resumo.pedidosEmAndamento ?? []) avisos.push({ codigo: "PEDIDO_EM_ANDAMENTO", mensagem: `Pedido ${p.pedido} de ${dataBR(p.data)} ainda sem a entrada do pagamento no relatório: fica de fora agora e entra no próximo relatório.` });
     const ciclosAtuais = new Set(resumo.repasses.map(chaveDoRepasse));
     for (const r of resumo.repasses) {
       const k = chaveDoRepasse(r);
@@ -364,7 +372,7 @@ export function operacoesDaConciliacaoIfood(b) {
         for (const r of p.repasses.criar) {
           await n.registrarRecebivel(cx, {
             processador: "IFOOD", canal: "IFOOD", brutoCentavos: r.previstoCentavos, retencoes: [], dataPrevista: r.dataPrevista, competencia: r.apuracaoInicio.slice(0, 7), documentoIds: [imp.documentoId],
-            descricao: `Repasse previsto iFood — apuração de ${r.apuracaoInicio} a ${r.apuracaoFim}`, fonte: { sistema: "IFOOD", idExterno: idDoRepasse(r, r.versao) },
+            descricao: `Repasse previsto iFood${r.loja ? ` (loja ${r.loja.slice(0, 8)})` : ""} — apuração de ${r.apuracaoInicio} a ${r.apuracaoFim}`, fonte: { sistema: "IFOOD", idExterno: idDoRepasse(r, r.versao) },
           });
         }
         return { importacaoId, ...resumoDoPlano(p), repetido: !p.criar.length && !p.cancelar.length && !p.repasses.criar.length && !p.repasses.cancelar.length };
