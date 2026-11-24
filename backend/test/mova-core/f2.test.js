@@ -279,7 +279,9 @@ test("AN-02 analisar entre unidades: unidade sem concessão fica de fora (relida
   const c = criarMovaCore({ porta: f.porta, cliente, orcamento: criarOrcamentoMemoria() });
   await c.responder({ organizacaoId: ORG_A, conversaId: "g", participanteId: "p", usuarioId: USUARIO, unidadeId: UNI_A, unidadesPermitidas: UNIDADES, perfil: PERFIL_FIN, podeValores: true, texto: "despesas das duas lojas", hoje: "2026-11-24" });
   const resultado = JSON.parse(cliente.pedidos.at(-1).messages.at(-1).content[0].content);
-  assert.deepEqual(resultado.unidadesSemPermissao, ["Alfa Norte"]);
+  assert.deepEqual(resultado.cobertura.unidadesSemPermissao, ["Alfa Norte"]);
+  assert.equal(resultado.cobertura.completa, false, "F3: recorte sem a outra unidade não é total consolidado");
+  assert.match(resultado.cobertura.aviso, /RECORTE PARCIAL/);
   assert.ok(!f.chamadas.some((x) => x.unidadeId === UNI_A2), "nenhuma leitura da unidade sem concessão");
   const c2 = criarMovaCore({ porta: f.porta, cliente: clienteRoteirizado([[usar("analisar", { metrica: "DESPESAS", competencias: ["2026-11"], sql: "select * from x" })], [usar("analisar", { metrica: "LUCRO_SECRETO", competencias: ["2026-11"] })], [falar("não deu")]]), orcamento: criarOrcamentoMemoria() });
   const r2 = await c2.responder({ organizacaoId: ORG_A, conversaId: "g2", participanteId: "p", usuarioId: USUARIO, unidadeId: UNI_A, unidadesPermitidas: UNIDADES, perfil: PERFIL_FIN, podeValores: true, texto: "x", hoje: "2026-11-24" });

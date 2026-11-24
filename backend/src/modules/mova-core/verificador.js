@@ -38,6 +38,7 @@ export function valoresDoTexto(texto) {
 }
 
 const FIM_DE_FRASE = /\n|[.!?;](?=\s)/g;
+const PERCENTUAL = /(?<![\d,.])(\d{1,4}(?:[.,]\d{1,2})?)\s?%/g;
 const AGREGADO = /^(todas|todos|bancos|total|consolidad)/i;
 const FALA_DE_TOTAL = /\b(total|consolidad[oa]|somando|soma|ao todo|juntos?|(entre )?(bancos? e caixa|caixa e bancos?))\b/;
 /** ")" sem "(" correspondente no trecho: o trecho atravessa o fim de um parêntese (o que está do outro lado é de outro valor). */
@@ -109,6 +110,16 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
     const decide = classes.length ? classes.filter(([, d]) => d === classes[0][1]).map(([c]) => c) : [];
     if (decide.length && !decide.some((c) => candidatos.some((f) => c.aceita(f.significado)))) violacoes.push({ tipo: "SIGNIFICADO_TROCADO", valor: v.texto, detalhe: decide.map((c) => c.nome).join(",") });
   });
+
+  // F3 — PERCENTUAIS também vêm do backend: cada "x%" da resposta precisa existir num fato (variação, participação, indicador)
+  // ou num número devolvido por ferramenta (como valor ou fração). Percentual "de cabeça" é reprovado.
+  const percentuaisConhecidos = fatos.flatMap((f) => [f.percentual, ...(Array.isArray(f.numeros) ? f.numeros : [])]).filter((x) => Number.isFinite(x));
+  for (const m of texto.matchAll(PERCENTUAL)) {
+    const p = Number(m[1].replace(",", "."));
+    const casas = (m[1].split(/[.,]/)[1] ?? "").length;
+    const tol = casas ? 0.5 * 10 ** -casas + 1e-9 : 0.5;
+    if (!percentuaisConhecidos.some((x) => Math.abs(Math.abs(x) - p) <= tol || Math.abs(Math.abs(x * 100) - p) <= tol)) violacoes.push({ tipo: "PERCENTUAL_SEM_FONTE", valor: m[0] });
+  }
 
   // afirmação de escrita: só vale se NÃO vier negada ("não registrei", "nada foi registrado")
   for (const m of n.matchAll(new RegExp(ESCRITA_AFIRMADA.source, "g"))) {

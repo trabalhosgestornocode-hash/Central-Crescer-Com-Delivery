@@ -121,7 +121,7 @@ export function resolverEntidade(termo, candidatos, { preferidos = [] } = {}) {
  * o modelo continua interpretando a pergunta; este bloco só lembra o que cada coisa É no sistema.
  */
 export const GLOSSARIO_BASE = Object.freeze({
-  versao: "2026-11-24.1",
+  versao: "2026-11-24.2",
   origem: "MOVA CORE F3 — regras do Financeiro 2.0 (docs/financeiro-2-0) e achados das avaliações reais",
   aprovadoPor: null, // pendente de aprovação do proprietário (F5)
   conceitos: Object.freeze([
@@ -133,6 +133,11 @@ export const GLOSSARIO_BASE = Object.freeze({
       explicacao: "Dinheiro colocado no caixa físico (ex.: troco). Não é venda nem receita.", confundirCom: ["ENTRADA_DE_CAIXA", "RECEITA"] },
     { id: "RETIRADA_DE_CAIXA", expressoes: ["sangria", "retirada do caixa", "tirou do caixa", "retirada de dinheiro", "pegou dinheiro do caixa"], natureza: "MOVIMENTO_DE_CAIXA", ferramentas: ["movimentos_do_caixa_fisico"],
       explicacao: "Saída de dinheiro do caixa físico. Só vira DESPESA quando a destinação é confirmada (compra com comprovante); pode ser guarda ou transferência.", confundirCom: ["DESPESA"] },
+    // avaliação real F3 (rodada 1): "despesas operacionais de novembro" foi respondida com a soma das contas da competência; é a
+    // LINHA DA DRE (apuração gerencial), que tem metodologia própria. Expressão mais longa vence a mais curta (ver `conceitos`).
+    { id: "LINHA_DO_RESULTADO", expressoes: ["despesas operacionais", "despesa operacional", "resultado operacional", "resultado do mês", "lucro", "prejuízo", "margem", "cmv", "custo da mercadoria vendida", "faturamento bruto", "dre"],
+      natureza: "APURACAO", ferramentas: ["resultado_do_mes"],
+      explicacao: "Linha da DRE gerencial da competência (apuração oficial). NÃO é a soma das contas a pagar do mês: use resultado_do_mes e cite a linha pelo nome.", confundirCom: ["DESPESA"] },
     { id: "DESPESA", expressoes: ["despesa", "gasto", "gastamos", "custo", "compra", "aquisição", "comprou"], natureza: "OBRIGACAO", ferramentas: ["contas_a_pagar", "analisar"],
       explicacao: "Obrigação reconhecida pela COMPETÊNCIA (o que se gastou no mês), paga ou não. Não é o mesmo que o pagamento.", confundirCom: ["PAGAMENTO", "RETIRADA_DE_CAIXA"] },
     { id: "PAGAMENTO", expressoes: ["pagamento", "pagamos", "pago", "quitado", "liquidação", "baixa"], natureza: "PAGAMENTO", ferramentas: ["contas_a_pagar", "analisar"],
@@ -161,20 +166,24 @@ export const GLOSSARIO_BASE = Object.freeze({
 /** Resolve os conceitos financeiros prováveis de uma pergunta (para orientar o modelo e o verificador). */
 export function criarResolvedorDeConceitos({ glossario = GLOSSARIO_BASE } = {}) {
   const indice = glossario.conceitos.map((c) => ({ c, exps: c.expressoes.map((e) => tokens(e)) }));
-  function presente(pergunta, toks) {
-    const ps = tokens(pergunta);
-    // a expressão aparece em sequência (tolerando flexão/erro de digitação em cada palavra)
+  /** Trechos [início, fim) da pergunta onde a expressão aparece em sequência (tolerando flexão/erro de digitação em cada palavra). */
+  function trechos(ps, toks) {
     // conceito: erro de digitação só em palavra longa (≥ 6 letras) — "caixa" e "baixa" são coisas diferentes
     const ok = (p, t) => { const n = combinaPalavra(p, t); return n >= 0.85 || (n >= 0.75 && Math.min(p.length, t.length) >= 6); };
-    for (let i = 0; i + toks.length <= ps.length; i++) if (toks.every((t, k) => ok(ps[i + k], t))) return true;
-    return false;
+    const r = [];
+    for (let i = 0; i + toks.length <= ps.length; i++) if (toks.every((t, k) => ok(ps[i + k], t))) r.push([i, i + toks.length]);
+    return r;
   }
   return Object.freeze({
     versao: glossario.versao,
     conceitos(pergunta) {
-      const achados = indice.filter(({ exps }) => exps.some((toks) => toks.length && presente(pergunta, toks))).map(({ c }) => c);
-      // quando um conceito e o que ele costuma ser confundido aparecem juntos, os dois ficam (a pessoa pode estar comparando)
-      return achados;
+      const ps = tokens(pergunta);
+      const achados = indice.map(({ c, exps }) => ({ c, ts: exps.flatMap((toks) => (toks.length ? trechos(ps, toks) : [])) })).filter((x) => x.ts.length);
+      // EXPRESSÃO MAIS ESPECÍFICA VENCE: um conceito cujos trechos estão TODOS dentro de um trecho mais longo de outro sai
+      // ("despesas operacionais" é linha do resultado, não "despesa" genérica). Conceitos em trechos diferentes ficam todos
+      // (a pessoa pode estar comparando: "reforço" × "entrada").
+      const dentro = (a, b) => b[0] <= a[0] && a[1] <= b[1] && b[1] - b[0] > a[1] - a[0];
+      return achados.filter((x) => !x.ts.every((t) => achados.some((y) => y !== x && y.ts.some((u) => dentro(t, u))))).map((x) => x.c);
     },
     /** Bloco curto para o contexto do modelo: o que cada conceito citado É no sistema e com o que não confundir. */
     orientacao(pergunta) {

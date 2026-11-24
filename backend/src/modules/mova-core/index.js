@@ -61,7 +61,7 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
     const fatosDaMemoria = memoria.fatosValidos
       ? memoria.fatosValidos(conversa, { pergunta: String(e.texto ?? ""), unidadeId: e.unidadeId, ferramentasPermitidas: new Set(Object.keys(catalogoDaVez)) })
       : conversa.fatos;
-    const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId });
+    const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId, hoje: e.hoje ?? null });
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
     const orientacao = conceitos.orientacao(String(e.texto ?? ""));

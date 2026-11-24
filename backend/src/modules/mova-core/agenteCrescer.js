@@ -47,6 +47,28 @@ function fatosGenericos(o, nome, prof = 0, entidade = null, acc = []) {
 }
 
 /**
+ * F3 — CMV SÓ COMO VÁLIDO QUANDO OS DADOS DA UNIDADE PERMITEM. Produto com ficha técnica INCOMPLETA ou margem DESATUALIZADA:
+ * custo, CMV e lucro saem dos dados (viram null) com o motivo — o modelo não tem número para afirmar e o verificador não aceita
+ * nenhum. O ranking não traz a situação da ficha: os valores ficam (são da view oficial), com o aviso de que não foram conferidos.
+ */
+const CAMPOS_CMV = ["custoTotal", "margemReais", "cmvPercentual", "lucroLiquido", "custoTotalProduto"];
+export function validarCmv(nome, r) {
+  if (!r || typeof r !== "object") return r;
+  if (nome === "consultar_produto_cmv" && r.produto) {
+    const fichaOk = r.produto.possuiFichaTecnicaCompleta === true;
+    const precos = (r.produto.precos ?? []).map((p) => {
+      if (fichaOk && !p.desatualizado) return p;
+      return { ...p, ...Object.fromEntries(CAMPOS_CMV.filter((k) => k in p).map((k) => [k, null])), cmvNaoValidado: !fichaOk ? "FICHA_TECNICA_INCOMPLETA" : "MARGEM_DESATUALIZADA" };
+    });
+    const invalidos = precos.filter((p) => p.cmvNaoValidado).length;
+    return { ...r, produto: { ...r.produto, precos, ...(fichaOk ? {} : { custoTotalProduto: null }) },
+      ...(invalidos ? { avisoMova: `CMV NÃO VALIDADO em ${invalidos} de ${precos.length} preço(s): ${!fichaOk ? `ficha técnica ${r.produto.statusFicha ?? "incompleta"}` : "margem desatualizada"}. Não apresente custo, CMV ou lucro como válidos; diga o que falta (completar a ficha / recalcular).` } : {}) };
+  }
+  if (nome === "listar_produtos_cmv") return { ...r, avisoMova: "Ranking pela tabela comercial indicada, SEM conferir a ficha técnica de cada produto: para afirmar o CMV de um produto como válido, consulte esse produto." };
+  return r;
+}
+
+/**
  * @param {Array} registro entradas { definicao, executar, access:{module,permission}, mode, risk }
  * @param {{resolverAcesso:(escopo)=>Promise<object|null>, permitidas?:string[]}} opcoes
  * @returns {Array} ferramentas no formato do catálogo
@@ -66,7 +88,7 @@ export function ferramentasDoAgenteCrescer(registro, { resolverAcesso, permitida
       async executar({ escopo, args }) {
         const acesso = await resolverAcesso(escopo); // RE-resolvido a cada chamada: revogação vale no meio da conversa
         if (!acesso || (acessoInicial !== undefined && !acessoAlcanca(acesso, e.definicao.name))) return { erro: "SEM_ACESSO_NA_PLATAFORMA", dados: { mensagem: "Esta pessoa não tem acesso a esse módulo." }, fatos: [] };
-        const r = await e.executar(args, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, acesso });
+        const r = validarCmv(e.definicao.name, await e.executar(args, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, acesso }));
         return { dados: r, fatos: fatosGenericos(r, e.definicao.name) };
       },
     }));

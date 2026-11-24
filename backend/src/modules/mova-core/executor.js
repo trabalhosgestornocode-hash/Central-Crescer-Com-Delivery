@@ -12,6 +12,25 @@
 import { validarEsquema, ErroDeArgumento } from "./esquema.js";
 import { ErroDeReferencia } from "./referencias.js";
 
+const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+/** "R$ 1.234,56" a partir de centavos (o mesmo formato que o verificador lê). */
+export const emReais = (c) => BRL.format(c / 100).replace(/\u00a0/g, " ");
+/**
+ * F3 — VALORES JÁ EM REAIS PARA O MODELO: todo campo inteiro `xxxCentavos` ganha o irmão `xxxEmReais` formatado pelo CÓDIGO.
+ * Na avaliação real, a maior fonte de correção era a conversão de centavos feita de cabeça (R$ 8.230,00 no lugar de R$ 82.300,00).
+ * Os centavos continuam (são o que `calcular` recebe); os fatos do verificador não mudam.
+ */
+export function comReais(o, prof = 0) {
+  if (prof > 8 || o === null || typeof o !== "object") return o;
+  if (Array.isArray(o)) return o.map((x) => comReais(x, prof + 1));
+  const r = {};
+  for (const [k, v] of Object.entries(o)) {
+    r[k] = comReais(v, prof + 1);
+    if (/Centavos$/.test(k) && Number.isInteger(v)) r[k.replace(/Centavos$/, "EmReais")] = emReais(v);
+  }
+  return r;
+}
+
 export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12 });
 const ACAO_VER = "financeiro_v2.ver";
 
@@ -106,7 +125,7 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     // inteiros não-monetários (entregas, quantidades) também podem entrar em `calcular`
     coletarNumeros(r.dados, sessao);
 
-    let conteudo = JSON.stringify({ unidade: unidade?.nome ?? null, ...dados });
+    let conteudo = JSON.stringify({ unidade: unidade?.nome ?? null, ...(f.valores === false ? dados : comReais(dados)) });
     if (conteudo.length > limites.maxCaracteres) conteudo = `${conteudo.slice(0, limites.maxCaracteres)}…[resultado cortado: refine o filtro]`;
     auditoria.registrar({ ...registro, ok: true, ms: relogio() - inicio, caracteres: conteudo.length, fatos: (r.fatos ?? []).length, escrita: f.escrita ?? null });
     return { ok: true, conteudo, ferramenta: nome, unidadeId };
@@ -139,13 +158,13 @@ function coletarNumeros(o, sessao, prof = 0) {
   if (prof > 5 || !o || typeof o !== "object") return;
   const ns = [];
   for (const [k, v] of Object.entries(o)) {
-    if (Number.isInteger(v) && !k.endsWith("Centavos")) ns.push(v);
+    if (Number.isFinite(v) && !k.endsWith("Centavos")) ns.push(v); // F3: decimais também (percentuais e indicadores das ferramentas)
     else if (v && typeof v === "object") coletarNumeros(v, sessao, prof + 1);
   }
   if (ns.length) sessao.fatos.push({ valorCentavos: null, numeros: ns, ferramenta: null });
 }
 
 /** Sessão de UMA requisição, ligada à memória da conversa (referências persistem na conversa, fatos e cache por requisição). */
-export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId }) {
-  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
+export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje = null }) {
+  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, hoje, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
 }
