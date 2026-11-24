@@ -17,7 +17,7 @@ const MIGRACOES = join(RAIZ, "migracoes");
 const DESTINO = join(RAIZ, "producao");
 
 export const TABELAS_ESPERADAS = Object.freeze([
-  "aprovacao", "auditoria", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
+  "aprovacao", "auditoria", "core_desafio_vinculo", "core_memoria_conversa", "core_tentativa_vinculo", "core_vinculo", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
   "entregador_envio", "evento", "evidencia", "fila", "grupo_autorizado", "grupo_membros", "grupo_unidade", "instancia_gateway",
   "mensagem_pendente", "nota_entregador", "operacao_executada", "orcamento_ia", "orcamento_ia_alerta", "orcamento_ia_politica", "participante", "participante_autorizado",
   "politica_autonomia", "proposta", "resposta", "unidade_sem_grupo", "mova_migracao",
@@ -81,7 +81,7 @@ end $$;
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
 export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"]); // conferido em produção 24/11 (nome + sha256); 0015 entra pelo atualizar.sql
 /** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 autorizada em 23/11 com a 0012 (PR #188). */
-export const ADIADAS_EM_PRODUCAO = Object.freeze([]);
+export const ADIADAS_EM_PRODUCAO = Object.freeze(["0019"]); // 0019 (MOVA CORE: vínculo e memória): só no banco ISOLADO de homologação até autorização específica
 
 /**
  * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as

@@ -64,7 +64,7 @@ export function criarRepositorioDeIdentidadeMemoria() {
  * @param {object} deps.plataforma { acessoDoPerfil({perfilId, organizacaoId, unidadeId}) → {contaId, perfilId, papel, permissoes, modulos, unidades, ativo}|null }
  *        — o mesmo cálculo do contexto do navegador (vínculo do perfil com a empresa, unidade, permissões do papel, módulos efetivos)
  */
-export function criarServicoDeIdentidade({ identificarParticipante, plataforma, repositorio = criarRepositorioDeIdentidadeMemoria(), auditoria = { registrar() {} }, relogio = () => Date.now(), limites = LIMITES_IDENTIDADE, gerarCodigo = () => String(randomInt(0, 10 ** limites.digitos)).padStart(limites.digitos, "0") }) {
+export function criarServicoDeIdentidade({ identificarParticipante, plataforma, repositorio = criarRepositorioDeIdentidadeMemoria(), auditoria = { registrar() {} }, aoRevogar = null, relogio = () => Date.now(), limites = LIMITES_IDENTIDADE, gerarCodigo = () => String(randomInt(0, 10 ** limites.digitos)).padStart(limites.digitos, "0") }) {
   if (typeof identificarParticipante !== "function" || typeof plataforma?.acessoDoPerfil !== "function") throw new TypeError("identidade exige o reconhecimento pela lista e a porta da plataforma");
   const auditar = (acao, dados) => auditoria.registrar({ tipo: "MOVA_CORE_IDENTIDADE", acao, em: new Date(relogio()).toISOString(), ...dados });
 
@@ -88,7 +88,7 @@ export function criarServicoDeIdentidade({ identificarParticipante, plataforma, 
       if (p.acesso.contaId && contaId && p.acesso.contaId !== contaId) return { ok: false, motivo: "PERFIL_DE_OUTRA_CONTA" };
       const codigo = gerarCodigo(); const sal = randomUUID();
       const expiraEm = relogio() + limites.codigoMs;
-      await repositorio.guardarDesafio({ id: randomUUID(), organizacaoId, perfilId, contaId: p.acesso.contaId ?? contaId, sal, codigoHash: hashCodigo(codigo, sal), expiraEm });
+      await repositorio.guardarDesafio({ id: randomUUID(), organizacaoId, perfilId, contaId: p.acesso.contaId ?? contaId, sal, codigoHash: hashCodigo(codigo, sal), criadoEm: relogio(), expiraEm });
       auditar("CODIGO_GERADO", { perfil: mascarar(perfilId), organizacaoId, expiraEm: new Date(expiraEm).toISOString() });
       return { ok: true, codigo, expiraEm: new Date(expiraEm).toISOString(), instrucao: `No WhatsApp, na conversa PRIVADA com o MOVA, envie: vincular ${codigo}` };
     },
@@ -110,7 +110,7 @@ export function criarServicoDeIdentidade({ identificarParticipante, plataforma, 
       const candidatos = await repositorio.desafiosDaOrganizacao(quem.organizacaoId);
       const alvo = candidatos.find((d) => hashCodigo(m[1], d.sal) === d.codigoHash) ?? null;
       if (!alvo) { auditar("VINCULO_RECUSADO", { chave: mascarar(chave), motivo: "CODIGO_INVALIDO" }); return { ok: false, motivo: "CODIGO_INVALIDO" }; }
-      const d = await repositorio.consumirDesafio({ organizacaoId: quem.organizacaoId, id: alvo.id });
+      const d = await repositorio.consumirDesafio({ organizacaoId: quem.organizacaoId, id: alvo.id, agora: relogio() });
       if (!d) return { ok: false, motivo: "CODIGO_INVALIDO" }; // outro uso chegou antes (uso único)
       if (relogio() > d.expiraEm) { auditar("VINCULO_RECUSADO", { chave: mascarar(chave), motivo: "CODIGO_EXPIRADO" }); return { ok: false, motivo: "CODIGO_EXPIRADO" }; }
       const p = await perfilVinculavel({ perfilId: d.perfilId, organizacaoId: d.organizacaoId }); // revalida no momento do vínculo
@@ -138,7 +138,11 @@ export function criarServicoDeIdentidade({ identificarParticipante, plataforma, 
 
     async revogar({ vinculoId, por, motivo = "REVOGADO" }) {
       const v = await repositorio.revogar(vinculoId, { revogadoPor: por, revogadoEm: new Date(relogio()).toISOString(), motivoRevogacao: motivo });
-      if (v) auditar("VINCULO_REVOGADO", { vinculoId, por: mascarar(por), motivo });
+      if (v) {
+        auditar("VINCULO_REVOGADO", { vinculoId, por: mascarar(por), motivo });
+        // efeito imediato também na memória: fatos obtidos com o acesso da plataforma não sobrevivem à revogação
+        try { await aoRevogar?.(v); } catch { auditar("VINCULO_REVOGADO_SEM_LIMPAR_MEMORIA", { vinculoId }); }
+      }
       return { ok: Boolean(v) };
     },
 

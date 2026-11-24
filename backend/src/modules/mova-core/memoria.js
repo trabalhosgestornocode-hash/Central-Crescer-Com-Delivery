@@ -17,7 +17,7 @@
 import { criarReferencias } from "./referencias.js";
 import { valoresDoTexto } from "./verificador.js";
 
-export const PADROES_DA_MEMORIA = Object.freeze({ fioMs: 24 * 60 * 60 * 1000, fatoValidoMs: 10 * 60 * 1000, maxTurnosNoAssunto: 6, maxTurnosNoFio: 60, maxAssuntos: 12, maxArquivo: 30, maxEntidades: 40 });
+export const PADROES_DA_MEMORIA = Object.freeze({ fioMs: 24 * 60 * 60 * 1000, retencaoMs: 30 * 24 * 60 * 60 * 1000, fatoValidoMs: 10 * 60 * 1000, maxTurnosNoAssunto: 6, maxTurnosNoFio: 60, maxAssuntos: 12, maxArquivo: 30, maxEntidades: 40 });
 
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 const palavras = (s) => norm(s).split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
@@ -40,13 +40,39 @@ export function semValores(texto) {
   for (const v of valoresDoTexto(t).sort((a, b) => b.inicio - a.inicio)) t = `${t.slice(0, v.inicio)}[valor]${t.slice(v.fim)}`;
   return t;
 }
+/** Referências de duas cópias do fio (conflito de escrita): as do banco valem; as novas desta requisição entram junto. */
+function mesclarReferencias(doBanco, daRequisicao) {
+  const a = doBanco.exportar(); const b = daRequisicao.exportar();
+  const conhecidas = new Set(a.itens.map(([ref]) => ref));
+  const itens = [...a.itens, ...b.itens.filter(([ref, uuid, u]) => !conhecidas.has(ref) && !a.itens.some(([, x, y]) => x === uuid && y === u))];
+  return criarReferencias({ n: Math.max(a.n, b.n), itens });
+}
 const primeiraFrase = (t) => semValores(String(t ?? "").split(/(?<=[.!?])\s|\n/)[0]).slice(0, 160);
 
-/** Repositório em memória (ambiente isolado). Persistente: tabela mova_core.memoria_conversa (migração NÃO aplicada). */
+/**
+ * Repositório em memória (ambiente isolado e testes). O persistente é criarRepositorioDeMemoriaPostgres (persistencia.js,
+ * tabela mova.core_memoria_conversa da 0019). Contrato: ler → {estado, versao}|null; gravar com versaoEsperada (compare-and-set:
+ * null = a linha ainda não existe) → {ok, versao}; apagar(chave, motivo) apaga o CONTEÚDO.
+ */
 export function criarRepositorioDeMemoriaEmMemoria() {
   const m = new Map();
-  return Object.freeze({ async ler(chave) { return m.get(chave) ?? null; }, async gravar(chave, estado) { m.set(chave, estado); }, async apagar(chave) { m.delete(chave); }, tamanho: () => m.size });
+  return Object.freeze({
+    async ler(chave) { const x = m.get(chave); if (!x) return null; return { estado: x.apagada ? null : structuredClone(x.estado), versao: x.versao }; },
+    async gravar(chave, estado, { versaoEsperada = null } = {}) {
+      const x = m.get(chave);
+      if ((x?.versao ?? null) !== versaoEsperada) return { ok: false, versao: x?.versao ?? null };
+      const versao = (x?.versao ?? 0) + 1; m.set(chave, { estado: structuredClone(estado), versao }); return { ok: true, versao };
+    },
+    async apagar(chave, motivo = "PEDIDO") { const x = m.get(chave); if (x) m.set(chave, { estado: null, versao: x.versao + 1, apagada: motivo }); return Boolean(x); },
+    tamanho: () => m.size,
+  });
 }
+
+/** Naturezas que descrevem a POSIÇÃO de algo (mudam com o tempo): pergunta sobre o estado atual ⇒ consulta nova, sempre. */
+export const NATUREZAS_DE_POSICAO = Object.freeze(["OBRIGACAO", "PAGAMENTO", "SALDO", "RECEBIVEL", "RECEBIMENTO", "MOVIMENTO_DE_CAIXA", "FLUXO_DE_CAIXA"]);
+const POSICAO_ATUAL = /\b(agora|atual|atualmente|hoje|ainda|continua|ja (foi|foram|esta|estao|pagou|pagaram|caiu|entrou)|situacao|status|posicao|como (esta|estao|ficou|ficaram)|em aberto|falta(m)? pagar|quanto falta|saldo|(foi|foram) (pag|quitad|liquidad|recebid)\w*|pagou|pagaram|quitou|venceu|vencid\w*)\b/;
+/** A pergunta pede a posição ATUAL (saldo, se já foi pago, o que está em aberto…)? */
+export const perguntaSobrePosicaoAtual = (pergunta) => POSICAO_ATUAL.test(norm(pergunta));
 
 /**
  * @param {object} [deps]
@@ -65,9 +91,13 @@ export function criarMemoriaEmCamadas({ repositorio = criarRepositorioDeMemoriaE
     const chave = `${organizacaoId}|${conversaId}|${participanteId}`;
     const agora = relogio();
     let c = vivas.get(chave);
-    if (!c) {
-      const salvo = await repositorio.ler(chave);
-      c = { chave, organizacaoId, conversaId, participanteId, fio: salvo?.fio ?? novoFio(agora), arquivo: salvo?.arquivo ?? [], referencias: criarReferencias(salvo?.mapaDeReferencias), cache: new Map() };
+    // repositório PERSISTENTE (vários processos, reinício): relê a cada requisição — o que vale é o banco, nunca a cópia do processo
+    if (!c || repositorio.persistente) {
+      const bruto = await repositorio.ler(chave);
+      // contrato novo {estado, versao}; repositório antigo devolvia o estado direto (sem versão: grava sem compare-and-set)
+      const lido = bruto && ("versao" in bruto || "estado" in bruto) ? bruto : bruto ? { estado: bruto, versao: undefined } : null;
+      const salvo = lido?.estado ?? null;
+      c = { chave, organizacaoId, conversaId, participanteId, versao: lido?.versao ?? null, fio: salvo?.fio ?? novoFio(agora), arquivo: salvo?.arquivo ?? [], referencias: criarReferencias(salvo?.mapaDeReferencias), cache: c?.cache ?? new Map() };
       vivas.set(chave, c);
     }
     if (agora - c.fio.ultimaEm > o.fioMs) { // fio vencido: arquiva só os resumos dos assuntos (sem valores) e começa outro
@@ -100,7 +130,22 @@ export function criarMemoriaEmCamadas({ repositorio = criarRepositorioDeMemoriaE
     return { assunto: novo, retomado: false, novo: true };
   }
 
-  async function registrarTurno(c, { pergunta, resposta, ferramentas = [], fatos = [], esclarecimentoPedido = false }) {
+  async function registrarTurno(c, turno, tentativa = 0) {
+    aplicarTurno(c, turno);
+    if (c.versao === undefined) { await repositorio.gravar(c.chave, { fio: c.fio, arquivo: c.arquivo, mapaDeReferencias: c.referencias.exportar?.() ?? null }); return; } // repositório antigo
+    const r = await repositorio.gravar(c.chave, { fio: c.fio, arquivo: c.arquivo, mapaDeReferencias: c.referencias.exportar?.() ?? null }, { versaoEsperada: c.versao ?? null, organizacaoId: c.organizacaoId, conversaId: c.conversaId, participanteId: c.participanteId, expiraEm: relogio() + o.retencaoMs });
+    if (r?.ok === false) {
+      // outro processo gravou antes (duas mensagens da mesma pessoa ao mesmo tempo): relê e reaplica ESTE turno por cima
+      if (tentativa >= 2) throw Object.assign(new Error("memória: conflito de escrita persistente"), { codigo: "MEMORIA_CONFLITO" });
+      const lido = await repositorio.ler(c.chave);
+      const salvo = lido?.estado ?? null;
+      Object.assign(c, { versao: lido?.versao ?? null, fio: salvo?.fio ?? novoFio(relogio()), arquivo: salvo?.arquivo ?? [], referencias: mesclarReferencias(criarReferencias(salvo?.mapaDeReferencias), c.referencias) });
+      return registrarTurno(c, turno, tentativa + 1);
+    }
+    if (r?.versao != null) c.versao = r.versao;
+  }
+
+  function aplicarTurno(c, { pergunta, resposta, ferramentas = [], fatos = [], esclarecimentoPedido = false }) {
     const agora = relogio();
     c.fio.ultimaEm = agora;
     const nomesFerramentas = ferramentas.map((f) => (typeof f === "string" ? f : f.nome));
@@ -130,11 +175,30 @@ export function criarMemoriaEmCamadas({ repositorio = criarRepositorioDeMemoriaE
     if (c.fio.turnos.length > o.maxTurnosNoFio) c.fio.turnos.shift();
     // fatos: guardados com o instante da consulta; só os "frescos" voltam como fonte (ver fatosValidos)
     c.fio.fatos = [...c.fio.fatos, ...novos.map((f) => ({ ...f, consultadoEm: f.consultadoEm ?? agora, anterior: true }))].slice(-300);
-    await repositorio.gravar(c.chave, { fio: c.fio, arquivo: c.arquivo, mapaDeReferencias: c.referencias.exportar?.() ?? null });
   }
 
-  /** Fatos que ainda podem ser citados sem nova consulta (frescos). Os demais exigem consultar de novo. */
-  function fatosValidos(c) { const agora = relogio(); return c.fio.fatos.filter((f) => agora - (f.consultadoEm ?? 0) <= o.fatoValidoMs); }
+  /**
+   * Fatos que ainda podem ser citados sem nova consulta. A memória guarda CONTEXTO, nunca substitui a fonte oficial:
+   *  - só os frescos (≤ fatoValidoMs);
+   *  - pergunta sobre a POSIÇÃO ATUAL (saldo, já foi pago, em aberto…) ⇒ nenhum fato de posição: consulta nova SEMPRE;
+   *  - unidade da conversa mudou ⇒ fatos de outra unidade não valem;
+   *  - ferramenta que a pessoa NÃO alcança agora (vínculo revogado, permissão retirada) ⇒ seus fatos não valem.
+   */
+  function fatosValidos(c, { pergunta = "", unidadeId = null, ferramentasPermitidas = null } = {}) {
+    const agora = relogio();
+    const posicao = perguntaSobrePosicaoAtual(pergunta);
+    return c.fio.fatos.filter((f) => agora - (f.consultadoEm ?? 0) <= o.fatoValidoMs
+      && !(posicao && NATUREZAS_DE_POSICAO.includes(f.natureza))
+      && !(unidadeId && f.unidadeId && f.unidadeId !== unidadeId)
+      && !(ferramentasPermitidas && f.ferramenta && !ferramentasPermitidas.has(f.ferramenta)));
+  }
+
+  /** EXCLUSÃO a pedido (ou por revogação): apaga o conteúdo do fio desta pessoa nesta conversa; a próxima mensagem começa do zero. */
+  async function esquecer({ organizacaoId, conversaId, participanteId }, motivo = "PEDIDO") {
+    const chave = `${organizacaoId}|${conversaId}|${participanteId}`;
+    vivas.delete(chave);
+    return repositorio.apagar(chave, motivo);
+  }
 
   /** Histórico (mensagens da API) só do assunto em que a pergunta se encaixa — nunca o fio inteiro. */
   function historico(c, pergunta = "") {
@@ -188,5 +252,5 @@ export function criarMemoriaEmCamadas({ repositorio = criarRepositorioDeMemoriaE
     return `Contexto recuperado da conversa (NÃO é fonte de valores: qualquer número precisa de consulta agora):\n- ${linhas.join("\n- ")}`;
   }
 
-  return Object.freeze({ obter, registrarTurno, historico, recuperar, fatosValidos, assuntoAtual, opcoes: o, tamanho: () => vivas.size });
+  return Object.freeze({ obter, registrarTurno, historico, recuperar, fatosValidos, esquecer, assuntoAtual, opcoes: o, tamanho: () => vivas.size });
 }

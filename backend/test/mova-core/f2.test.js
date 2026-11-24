@@ -101,11 +101,16 @@ test("MEM-05 a memória NÃO é fonte de saldo: depois de 10 min o valor antigo 
   assert.notEqual(velho.motivo, "RESPONDIDO", "valor de 11 min atrás sem nova consulta não sai");
   assert.doesNotMatch(velho.texto, /462/);
   const k2 = await cena({ relogio: relogioManual(), roteiro: [
-    [usar("contas_a_pagar", { termo: "Matheus", situacao: "TODAS_EM_ABERTO" })], [falar("Devemos R$ 462,00 ao Matheus Rocha.")], [falar("Ainda devemos R$ 462,00 ao Matheus.")],
+    [usar("contas_a_pagar", { termo: "Matheus", situacao: "TODAS_EM_ABERTO" })], [falar("Devemos R$ 462,00 ao Matheus Rocha.")], [falar("Eram R$ 462,00 ao Matheus Rocha.")],
+    [falar("Ainda devemos R$ 462,00 ao Matheus.")], [falar("Ainda devemos R$ 462,00 ao Matheus.")], [falar("Ainda devemos R$ 462,00 ao Matheus.")],
   ] });
   await k2.perguntar("Quanto devemos ao Matheus?");
   k2.relogio.avancar(4 * MIN);
-  assert.equal((await k2.perguntar("e ao Matheus, ainda devemos aquilo?")).motivo, "RESPONDIDO", "dentro de 10 min o fato ainda vale");
+  assert.equal((await k2.perguntar("repete o valor do Matheus pra eu anotar")).motivo, "RESPONDIDO", "dentro de 10 min o fato ainda vale para REPETIR");
+  // F2.1 (§6): pergunta sobre a POSIÇÃO ATUAL consulta de novo SEMPRE — mesmo dentro dos 10 min, o fato de posição não serve
+  const atual = await k2.perguntar("e ao Matheus, ainda devemos aquilo?");
+  assert.notEqual(atual.motivo, "RESPONDIDO", "posição atual sem nova consulta não sai");
+  assert.doesNotMatch(String(atual.texto ?? ""), /462/);
 });
 
 test("MEM-06 resumos e perguntas guardadas sem valores; esclarecimento vira DECISÃO; pendências e base aprovada entram no contexto", async () => {
