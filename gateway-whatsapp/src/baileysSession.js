@@ -1060,9 +1060,13 @@ export function criarSessaoBaileys({
     }
     if (automatica && shutdownLocalSolicitado) return; // processo encerrando — nunca reabre
     if (status === STATUS_CONEXAO.LOGGED_OUT) {
-      // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito,
-      // nunca automático.
-      status = STATUS_CONEXAO.DISCONNECTED;
+      // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito
+      // (resetarSessao / "Trocar número conectado"), nunca automático e nunca
+      // pelo /connect: o auth state salvo foi invalidado pelo WhatsApp (401),
+      // então reabrir socket com ele só devolve 401 de novo e NUNCA emite QR.
+      // Recusa com erro claro (410) em vez de rebaixar para DISCONNECTED.
+      if (automatica) return;
+      throw erro(CODIGOS.LOGGED_OUT, "sessão encerrada pelo WhatsApp (loggedOut): use o reset (Trocar número conectado) para gerar um novo QR");
     }
     // A decisão do operador (/connect) substitui qualquer reconexão automática
     // que estivesse pendente.
@@ -1072,6 +1076,22 @@ export function criarSessaoBaileys({
 
     conectandoAgora = true;
     try {
+      // O `status` em memória some num restart/deploy; o LOGGED_OUT PERSISTIDO no backend não. Sem esta leitura, um /connect
+      // logo após um restart reabre o socket com o auth invalidado (401 de novo, sem QR) e deixa a operação aberta.
+      // O reset termina com heartbeat DISCONNECTED, então o caminho correto (Trocar número) não é bloqueado.
+      // Falha de leitura NÃO bloqueia (fail-open): é só proteção de UX; o 401 continua tratado como antes.
+      if (!automatica && leaseManager && typeof backendClient.obterEstadoSessao === "function") {
+        const contextoLease = leaseManager.contexto();
+        if (contextoLease) {
+          let persistido = null;
+          try { persistido = await backendClient.obterEstadoSessao(contextoLease); } catch { /* segue */ }
+          if (persistido?.status === STATUS_CONEXAO.LOGGED_OUT) {
+            status = STATUS_CONEXAO.LOGGED_OUT;
+            throw erro(CODIGOS.LOGGED_OUT, "sessão encerrada pelo WhatsApp (loggedOut persistido): use o reset (Trocar número conectado) para gerar um novo QR");
+          }
+          if (epoca !== cancelamentos) return; // cancelada (desconectar/reset/lease) durante a leitura
+        }
+      }
       await conectarInterno({ persistirIntencaoConectada, automatica, epoca });
     } finally {
       conectandoAgora = false;

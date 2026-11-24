@@ -3,7 +3,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const recusa = () => Object.assign(new Error("Operação de conexão obsoleta ou indisponível."), { status: 409, statusCode: 409, codigo: "OPERACAO_INVALIDA" });
 
 // Recusas anteriores a qualquer efeito externo (guardas no início de conectar/desconectar/resetar): provadamente sem efeito.
-const DETERMINISTICOS = new Set([CODIGOS.SEM_LEASE, CODIGOS.JA_CONECTADO, CODIGOS.NAO_CONECTADO]);
+// LOGGED_OUT: conectar() recusa (410) uma sessão encerrada pelo WhatsApp ANTES de tocar em socket/auth — sem isso a recusa viraria
+// "efeito incerto" e travaria a conexão (sem expirar) até uma reconciliação manual.
+const DETERMINISTICOS = new Set([CODIGOS.SEM_LEASE, CODIGOS.JA_CONECTADO, CODIGOS.NAO_CONECTADO, CODIGOS.LOGGED_OUT]);
 const deterministico = (e) => e?.antesDoEfeito === true || DETERMINISTICOS.has(e?.codigo);
 
 /** Token consumido no PostgreSQL ANTES do efeito. Sem ACK a trava persiste; timeout não autoriza takeover. */

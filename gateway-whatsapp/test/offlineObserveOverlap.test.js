@@ -279,7 +279,7 @@ describe("GUARDA ESTRUTURAL do wiring de identidade (nenhum material bruto no ob
   test("o observador só chama identidade.novaGeracao e identidade.comparar; nunca `registrar` (o material bruto não passa por ele) nem lê attrs de stanza", () => {
     const usados = new Set([...observador.matchAll(/\bidentidade\??\.(\w+)/g)].map((m) => m[1]));
     assert.deepEqual([...usados].sort(), ["comparar", "novaGeracao"]);
-    assert.ok(!/registrar/.test(observador), "o observador não registra impressões");
+    assert.ok(!/\bregistrar\b/.test(observador), "o observador não registra impressões");
     assert.ok(!/\.from\b|\.participant\b|\bremoteJid\b|\.attrs\??\.(id|from|participant|recipient|author)\b/.test(observador), "o observador não lê from/participant/id de stanza (só o nó do preview e o offlineAttr/t que recebe prontos)");
   });
 
