@@ -2,9 +2,9 @@
 // Dados SINTÉTICOS. Nada muda nos valores da DRE.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { contarEntregasProprias, contarEntregasSobDemanda, SITUACAO_QUANTIDADE as S } from "../../src/modules/financeiro-v2/aplicacao/quantidadesDeEntregas.js";
+import { contarEntregasProprias, contarEntregasSobDemanda, contarEntregasTerceirizadas, quantidadeNaDescricao, SITUACAO_QUANTIDADE as S } from "../../src/modules/financeiro-v2/aplicacao/quantidadesDeEntregas.js";
 import { GRUPOS_DE_APRESENTACAO } from "../../src/modules/financeiro-v2/dominio/apuracao.js";
-import { ESCOPOS_PADRAO, ctx, montar } from "./helpers/cenario.js";
+import { ESCOPOS_PADRAO, ORG_A, UNI_A2, ctx, montar } from "./helpers/cenario.js";
 import { criarNucleoFinanceiro, criarRepositorioMemoria } from "../../src/modules/financeiro-v2/index.js";
 
 const P = { inicio: "2026-11-01", fim: "2026-11-30" };
@@ -33,10 +33,28 @@ test("sob demanda: pedidos distintos com cobrança líquida; estorno integral n�
   assert.equal(contarEntregasSobDemanda([]).situacao, S.SEM_DADOS);
 });
 
-test("núcleo: terceirizadas sem fonte oficial (nunca zero); sem porta do parser = sem fonte; unidade isolada", async () => {
-  const { nucleo: n } = montar({ relogio: () => new Date("2026-11-20T15:00:00Z") });
+test("terceirizadas: quantidade da descrição de cada lançamento; sem quantidade = parcial; ajuste negativo não conta", () => {
+  assert.deepEqual(["HASTAG ENTREGAS DE 02/11 A 08/11 (159 ENTREGAS)", "Entregas 09/11 a 15/11 - 151 entregas", "1 entrega avulsa", "ENTREGAS DE 02/11 A 08/11", "Pagamento R$ 1.712,50"].map(quantidadeNaDescricao), [159, 151, 1, null, null]);
+  const l = (descricao, valorCentavos = 100, situacao = "ATIVO") => ({ descricao, valorCentavos, situacao });
+  const r = contarEntregasTerceirizadas([l("A (159 ENTREGAS)"), l("B (151 ENTREGAS)"), l("C (40 ENTREGAS)", 100, "CANCELADO"), l("Correção de valor", -50)]);
+  assert.deepEqual([r.situacao, r.quantidade, r.parcial, r.lancamentos], [S.COM_DADOS, 310, false, 2]);
+  const p = contarEntregasTerceirizadas([l("A (159 ENTREGAS)"), l("Nota da empresa de entregas")]);
+  assert.deepEqual([p.quantidade, p.parcial, p.semQuantidade], [159, true, 1]);
+  assert.equal(contarEntregasTerceirizadas([]).situacao, S.SEM_DADOS);
+  assert.equal(contarEntregasTerceirizadas([l("Nota da empresa de entregas")]).situacao, S.SEM_DADOS);
+});
+
+test("núcleo: terceirizadas pela descrição dos lançamentos da competência; sem porta do parser = sem fonte; unidade isolada", async () => {
+  const { nucleo: n } = montar({ relogio: () => new Date("2026-11-20T15:00:00Z"), plano: "SUBWAY" });
+  const vazio = await n.quantidadesDeEntregas(ctx(), { competencia: "2026-11" });
+  assert.deepEqual([vazio.linhas.ENTREGAS_TERCEIRIZADAS.situacao, vazio.linhas.ENTREGAS_TERCEIRIZADAS.quantidade], [S.SEM_DADOS, null]);
+  const forn = await n.registrarContraparte(ctx(), { tipo: "FORNECEDOR", nome: "Empresa de entregas (sintética)" });
+  for (const [d, q] of [["02/11 A 08/11", 159], ["09/11 A 15/11", 151]]) await n.registrarObrigacao(ctx(), { contraparteId: forn.id, valorOriginalCentavos: q * 1000, categoria: "ENTREGAS_TERCEIRIZADAS", descricao: `ENTREGAS DE ${d} (${q} ENTREGAS)`, competencia: "2026-11", dataEmissao: "2026-11-11", vencimento: "2026-11-11" });
+  await n.registrarObrigacao(ctx(), { contraparteId: forn.id, valorOriginalCentavos: 5000, categoria: "ENTREGAS_TERCEIRIZADAS", descricao: "ENTREGAS DE OUTUBRO (99 ENTREGAS)", competencia: "2026-10", dataEmissao: "2026-10-30", vencimento: "2026-10-30" });
   const r = await n.quantidadesDeEntregas(ctx(), { competencia: "2026-11" });
-  assert.deepEqual([r.linhas.ENTREGAS_TERCEIRIZADAS.situacao, r.linhas.ENTREGAS_TERCEIRIZADAS.quantidade], [S.SEM_FONTE, null]);
+  assert.deepEqual([r.linhas.ENTREGAS_TERCEIRIZADAS.situacao, r.linhas.ENTREGAS_TERCEIRIZADAS.quantidade, r.linhas.ENTREGAS_TERCEIRIZADAS.parcial], [S.COM_DADOS, 310, false]);
+  assert.equal((await n.quantidadesDeEntregas(ctx(ORG_A, UNI_A2), { competencia: "2026-11" })).linhas.ENTREGAS_TERCEIRIZADAS.situacao, S.SEM_DADOS);
+
   assert.equal(r.linhas.ENTREGADORES_PROPRIOS.situacao, S.SEM_FONTE);
   assert.equal(r.linhas.ENTREGA_SOB_DEMANDA.situacao, S.SEM_DADOS);
   const fonte = { apurar: async (p) => ({ disponivel: true, dias: [{ data: "2026-11-03", fonte: "foody" }], entregas: p.unidadeId === ctx().unidadeId ? [e("p1"), e("p2")] : [] }) };

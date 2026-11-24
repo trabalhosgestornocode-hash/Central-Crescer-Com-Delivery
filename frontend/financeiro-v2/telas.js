@@ -126,13 +126,13 @@ let seqNo = 0;
 // Quantidade de entregas da competência (rota /dre), mostrada entre o nome e o valor das linhas de entrega.
 let entregasDaDre = null;
 const LINHA_DE_ENTREGA = (no) => (["ENTREGADORES_PROPRIOS", "ENTREGAS_TERCEIRIZADAS"].includes(no.referencias?.categoria) ? no.referencias.categoria : no.referencias?.grupo === "ENTREGA_SOB_DEMANDA" ? "ENTREGA_SOB_DEMANDA" : null);
-const FONTE_ENTREGAS = Object.freeze({ FOODY: "parser Foody", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood" });
+const FONTE_ENTREGAS = Object.freeze({ FOODY: "parser Foody", IFOOD_CONCILIACAO: "Conciliação Financeira do iFood", DESCRICAO_DOS_LANCAMENTOS: "quantidade informada na descrição de cada lançamento" });
 export function quantidadeDeEntregas(q) {
   if (!q) return "";
   const fonte = FONTE_ENTREGAS[q.fonte] ?? "";
   if (q.situacao === "COM_DADOS") {
     const n = Number(q.quantidade).toLocaleString("pt-BR");
-    return `<span class="no-qtd" data-entregas="${esc(String(q.quantidade))}" title="Quantidade de entregas da competência (${esc(fonte)})${q.provisorio ? ". Há dia em aberto ou em revisão: número provisório" : ""}.">${esc(n)} ${q.quantidade === 1 ? "entrega" : "entregas"}${q.provisorio ? " (provisório)" : ""}</span>`;
+    return `<span class="no-qtd" data-entregas="${esc(String(q.quantidade))}" title="Quantidade de entregas da competência (${esc(fonte)})${q.provisorio ? ". Há dia em aberto ou em revisão: número provisório" : ""}${q.parcial ? `. ${q.semQuantidade} lançamento(s) sem a quantidade na descrição: total parcial` : ""}.">${esc(n)} ${q.quantidade === 1 ? "entrega" : "entregas"}${q.provisorio ? " (provisório)" : ""}${q.parcial ? " (parcial)" : ""}</span>`;
   }
   const t = { SEM_DADOS: ["sem dados de entregas", `Nenhum dado de entregas importado nesta competência${fonte ? ` (${fonte})` : ""}.`], SEM_FONTE: ["quantidade sem fonte", "Não há fonte oficial integrada com a quantidade de entregas desta linha."], INDISPONIVEL: ["quantidade indisponível", `A fonte (${fonte}) não respondeu agora.`] }[q.situacao];
   return t ? `<span class="no-qtd no-qtd--vazia" data-entregas="${esc(q.situacao)}" title="${esc(t[1])}">${esc(t[0])}</span>` : "";
