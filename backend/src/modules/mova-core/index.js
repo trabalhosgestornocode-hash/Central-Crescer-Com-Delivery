@@ -7,6 +7,7 @@ import { executarLaco, PADROES_DO_LACO } from "./laco.js";
 import { decidirRota, ROTA, RESPOSTAS_FIXAS } from "./roteador.js";
 import { criarMemoriaDeConversas } from "./conversa.js";
 import { criarMetricas } from "./metricas.js";
+import { criarResolvedorDeConceitos } from "./resolucao.js";
 
 export { CATALOGO, FERRAMENTAS, ROTA, decidirRota, definicoesParaApi };
 export { verificarFidelidade } from "./verificador.js";
@@ -15,6 +16,8 @@ export { ferramentasDoAgenteCrescer, PERMISSOES_DO_AGENTE_CRESCER } from "./agen
 export { criarMemoriaEmCamadas, PADROES_DA_MEMORIA } from "./memoria.js";
 export { criarServicoDeIdentidade, acessoDaPlataforma, chaveCanonica } from "./identidade.js";
 export { custoRealMicrousd, TARIFAS } from "./custo.js";
+export { resolverEntidade, criarResolvedorDeConceitos, GLOSSARIO_BASE, pontuar, radical } from "./resolucao.js";
+export { criarRepositorioDeIdentidadePostgres, criarRepositorioDeMemoriaPostgres } from "./persistencia.js";
 
 /**
  * @param {object} deps
@@ -23,7 +26,7 @@ export { custoRealMicrousd, TARIFAS } from "./custo.js";
  * @param {object} deps.orcamento   reservar/concluir/falhar (renovável em homologação; memória no ambiente isolado)
  * @param {Array}  [deps.ferramentasExtras] p.ex. ferramentasDoAgenteCrescer(...)
  */
-export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now() }) {
+export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null }) {
   const montar = (extras) => ({
     catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
     definicoes: [...definicoesParaApi(), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
@@ -31,6 +34,7 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
   const base = montar(ferramentasExtras);
   const catalogo = base.catalogo; const definicoes = base.definicoes;
   const metricas = criarMetricas();
+  const conceitos = criarResolvedorDeConceitos(glossario ? { glossario } : {});
   let seq = 0;
 
   /**
@@ -52,9 +56,16 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
     const { catalogo: catalogoDaVez, definicoes: definicoesDaVez } = daPessoa.length ? montar([...ferramentasExtras, ...daPessoa]) : base;
     const executor = criarExecutor({ catalogo: catalogoDaVez, porta, auditoria, relogio });
     // F2: só fatos FRESCOS voltam como fonte (a memória nunca responde saldo antigo)
-    const fatosDaMemoria = memoria.fatosValidos ? memoria.fatosValidos(conversa) : conversa.fatos;
+    // F2.1: e nunca fato de POSIÇÃO quando a pergunta é sobre o estado atual, nem de outra unidade, nem de ferramenta que a
+    // pessoa não alcança AGORA (vínculo revogado ou permissão retirada desde o turno anterior)
+    const fatosDaMemoria = memoria.fatosValidos
+      ? memoria.fatosValidos(conversa, { pergunta: String(e.texto ?? ""), unidadeId: e.unidadeId, ferramentasPermitidas: new Set(Object.keys(catalogoDaVez)) })
+      : conversa.fatos;
     const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId });
-    const contexto = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
+    const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
+    // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
+    const orientacao = conceitos.orientacao(String(e.texto ?? ""));
+    const contexto = [orientacao, recuperado].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const r = await executarLaco({
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),

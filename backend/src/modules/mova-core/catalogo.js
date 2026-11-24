@@ -6,11 +6,20 @@
 // O escopo (organização, unidade, usuário) NUNCA vem do modelo: é injetado pelo executor a partir da conversa autorizada.
 // Nada aqui inventa capacidade: ferramenta sem fonte no núcleo não existe no catálogo; o que não existe é dito como indisponível.
 import { COMPETENCIA, DATA, REFERENCIA, TEXTO_CURTO } from "./esquema.js";
+import { combina, resolverEntidade } from "./resolucao.js";
 import { FERRAMENTA_ANALISAR } from "./analise.js"; // F2 (import circular seguro: analise só usa os auxiliares daqui em tempo de chamada)
 
 const UNIDADE = { ...REFERENCIA, description: "SÓ para OUTRA unidade: a referência exata (ex.: ref_2) devolvida por listar_unidades. Para a unidade desta conversa, OMITA este campo. Nunca invente referência." };
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-export const bate = (termo, ...textos) => { const t = norm(termo).split(/\s+/).filter((w) => w.length >= 3); return t.length > 0 && t.every((w) => textos.some((x) => norm(x).includes(w))); };
+// F3: o casamento termo × cadastro é a camada de resolução (flexão, acento, digitação, abreviação, sufixo societário)
+export const bate = (termo, ...textos) => combina(termo, ...textos);
+/** Mais de um registro DIFERENTE (fornecedor/entregador) combina igualmente com o nome pedido? Então a ferramenta avisa. */
+function ambiguidadeDeNome(termo, nomes) {
+  const distintos = [...new Set(nomes.filter(Boolean))].map((nome) => ({ nome }));
+  if (distintos.length < 2) return null;
+  const r = resolverEntidade(termo, distintos);
+  return r.estado === "AMBIGUO" ? { termo, candidatos: r.candidatos.map((c) => c.nome).slice(0, 6), orientacao: "o termo combina com mais de um cadastro: pergunte qual (ou use o que a pessoa já esclareceu); não some os dois como se fossem um" } : null;
+}
 const mesDe = (d) => String(d ?? "").slice(0, 7);
 const rotulo = (o) => o?.nome ?? o?.fornecedor?.nome ?? o?.contraparte?.nome ?? o?.entregador?.nome ?? o?.entregadorNome ?? o?.descricao ?? o?.titulo ?? o?.canal ?? o?.codigo ?? null;
 
@@ -69,12 +78,13 @@ export const FERRAMENTAS = [
       let itens = (r.itens ?? []).filter((t) => t.situacao !== "CANCELADO").map(itemAPagar);
       if (args.situacao === "TODAS_EM_ABERTO") itens = itens.filter((t) => ["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO"].includes(t.situacao) || (t.saldoCentavos ?? 0) > 0);
       if (args.termo) itens = itens.filter((t) => bate(args.termo, t.fornecedor, t.descricao, t.categoria));
+      const ambiguidade = args.termo ? ambiguidadeDeNome(args.termo, itens.filter((t) => bate(args.termo, t.fornecedor)).map((t) => t.fornecedor)) : null;
       const soma = (k, f = () => true) => itens.filter(f).reduce((a, t) => a + (t[k] ?? 0), 0);
       const totais = { quantidade: itens.length, valorCentavos: soma("valorCentavos"), pagoCentavos: soma("pagoCentavos"), saldoCentavos: soma("saldoCentavos"), vencidoCentavos: soma("saldoCentavos", (t) => t.vencido) };
       const periodo = args.competencia ?? (args.vencimentoDe || args.vencimentoAte ? `${args.vencimentoDe ?? ""}..${args.vencimentoAte ?? ""}` : null);
       const ent = args.termo ?? null;
       return {
-        dados: { dataBase: r.dataBase ?? null, filtro: args, totais, itens: itens.slice(0, 40), itensOmitidos: Math.max(0, itens.length - 40), leituraTruncada: Boolean(r.truncado) },
+        dados: { dataBase: r.dataBase ?? null, filtro: args, totais, itens: itens.slice(0, 40), itensOmitidos: Math.max(0, itens.length - 40), leituraTruncada: Boolean(r.truncado), ...(ambiguidade ? { ambiguidade } : {}) },
         fatos: fatos(
           fato(totais.saldoCentavos, "A_PAGAR_EM_ABERTO", { entidade: ent, periodo }), fato(totais.vencidoCentavos, "A_PAGAR_VENCIDO", { entidade: ent, periodo }),
           fato(totais.pagoCentavos, "PAGO", { entidade: ent, periodo }), fato(totais.valorCentavos, "VALOR_DAS_CONTAS", { entidade: ent, periodo }),
@@ -277,9 +287,10 @@ export const FERRAMENTAS = [
         porDia: e.porDia ?? e.entregasPorDia ?? null, aPagarCentavos: e.totalCentavos ?? e.aPagarCentavos ?? e.valorCentavos ?? null, pagoCentavos: e.pagoCentavos ?? null, situacao: e.situacao ?? null,
       }));
       if (args.entregador) linhas = linhas.filter((e) => bate(args.entregador, e.nome, e.chave));
+      const ambiguidade = args.entregador ? ambiguidadeDeNome(args.entregador, linhas.map((e) => e.nome)) : null;
       const semana = r?.semana?.inicio ?? r?.semana ?? args.semana ?? null;
       const periodo = typeof semana === "string" ? semana : null;
-      return { dados: { semana: r?.semana ?? null, fechada: r?.fechada ?? r?.semana?.fechada ?? null, entregadores: linhas.slice(0, 40) },
+      return { dados: { semana: r?.semana ?? null, fechada: r?.fechada ?? r?.semana?.fechada ?? null, entregadores: linhas.slice(0, 40), ...(ambiguidade ? { ambiguidade } : {}) },
         fatos: linhas.flatMap((e) => [fato(e.aPagarCentavos, "ENTREGADOR_A_PAGAR", { entidade: e.nome, periodo }), fato(e.pagoCentavos, "ENTREGADOR_PAGO", { entidade: e.nome, periodo })]).filter(Boolean) };
     },
   },
