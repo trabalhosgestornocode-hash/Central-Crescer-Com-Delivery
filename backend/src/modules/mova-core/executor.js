@@ -52,7 +52,10 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
 
     let args;
     try { args = validarEsquema(f.esquema, chamada.input ?? {}); }
-    catch (e) { if (e instanceof ErroDeArgumento) return falhar("ARGUMENTO_INVALIDO", e.message); throw e; }
+    catch (e) {
+      if (e instanceof ErroDeArgumento) return falhar("ARGUMENTO_INVALIDO", /unidade/.test(e.caminho ?? "") ? `${e.message}. Para a unidade desta conversa, omita "unidade"; para outra, use a referência exata de listar_unidades.` : e.message);
+      throw e;
+    }
 
     // unidade alvo: só dentre as permitidas NESTA conversa (referência opaca de listar_unidades)
     let unidadeId = sessao.unidadeId;
@@ -74,8 +77,8 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
 
     const chave = `${nome}|${unidadeId}|${JSON.stringify(args)}`;
     const emCache = sessao.cache?.get(chave);
-    let r;
-    if (emCache && relogio() - emCache.em < limites.cacheMs && !f.local) { r = emCache.r; registro.cache = true; }
+    let r; let consultadoEm = relogio();
+    if (emCache && relogio() - emCache.em < limites.cacheMs && !f.local) { r = emCache.r; registro.cache = true; consultadoEm = emCache.em; } // do cache: vale a data da consulta ORIGINAL
     else {
       try {
         r = await comTempo(Promise.resolve(f.executar({ porta, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), limites.tempoMs);
@@ -96,7 +99,9 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     let dados = r.dados;
     if (nome === "listar_unidades") dados = { unidades: dados.unidades.map((u) => ({ ...u, id: sessao.referencias.opacar(u.id, "__unidades__") })) };
     else dados = sessao.referencias.opacar(dados, unidadeId);
-    for (const x of r.fatos ?? []) sessao.fatos.push({ ...x, unidadeId, unidade: unidade?.nome ?? null, ferramenta: nome });
+    // F2 — EVIDÊNCIA ESTRUTURADA: cada fato carrega fonte, instante da consulta, natureza e um id de evidência
+    for (const x of r.fatos ?? []) sessao.fatos.push({ ...x, unidadeId: x.unidadeId ?? unidadeId, unidade: x.unidade ?? unidade?.nome ?? null, ferramenta: nome, fonte: { ferramenta: nome, operacoes: f.ops ?? [] },
+      consultadoEm: x.derivado ? relogio() : consultadoEm, evidenciaId: `ev_${(sessao.evidencias = (sessao.evidencias ?? 0) + 1)}`, natureza: naturezaDe(x.significado), estado: estadoDe(x.significado) });
     if (r.numeros) sessao.fatos.push({ valorCentavos: null, numeros: r.numeros, ferramenta: nome });
     // inteiros não-monetários (entregas, quantidades) também podem entrar em `calcular`
     coletarNumeros(r.dados, sessao);
@@ -107,6 +112,27 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     return { ok: true, conteudo, ferramenta: nome, unidadeId };
   }
   return Object.freeze({ executar });
+}
+
+/** Natureza financeira do fato (não confundir despesa × pagamento, saldo × faturamento, receita × recebimento, sangria × despesa). */
+export function naturezaDe(s) {
+  const t = String(s ?? "");
+  if (/^PAGO|ENTREGADOR_PAGO/.test(t)) return "PAGAMENTO";
+  if (/^A_PAGAR|ENTREGADOR_A_PAGAR|^VALOR_DAS_CONTAS/.test(t)) return "OBRIGACAO";
+  if (/^A_RECEBER/.test(t)) return "RECEBIVEL";
+  if (/^RECEBIDO/.test(t)) return "RECEBIMENTO";
+  if (/^VENDAS:/.test(t)) return "FATURAMENTO";
+  if (/^DRE:/.test(t)) return "RESULTADO";
+  if (/^SALDO_|^DIFERENCA_DE_SALDO/.test(t)) return "SALDO";
+  if (/^FLUXO:/.test(t)) return "FLUXO_DE_CAIXA";
+  if (/RETIRADAS_DO_CAIXA|REFORCOS_DO_CAIXA|MOVIMENTO_DE_CAIXA/.test(t)) return "MOVIMENTO_DE_CAIXA";
+  if (/^CALCULO:/.test(t)) return "CALCULO";
+  return "OUTRO";
+}
+function estadoDe(s) {
+  const t = String(s ?? "");
+  if (/VENCIDO/.test(t)) return "VENCIDO"; if (/EM_ABERTO|A_PAGAR|A_RECEBER/.test(t)) return "EM_ABERTO"; if (/^PAGO|RECEBIDO|ENTREGADOR_PAGO/.test(t)) return "LIQUIDADO";
+  if (/INFORMADO/.test(t)) return "INFORMADO"; if (/CALCULADO/.test(t)) return "CALCULADO"; return null;
 }
 
 function coletarNumeros(o, sessao, prof = 0) {
@@ -120,6 +146,6 @@ function coletarNumeros(o, sessao, prof = 0) {
 }
 
 /** Sessão de UMA requisição, ligada à memória da conversa (referências persistem na conversa, fatos e cache por requisição). */
-export function novaSessao({ conversa, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId }) {
-  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, referencias: conversa.referencias, fatos: [...(conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
+export function novaSessao({ conversa, fatos = null, organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId }) {
+  return { organizacaoId, unidadeId, usuarioId, unidadesPermitidas, perfil, podeValores, requisicaoId, referencias: conversa.referencias, fatos: [...(fatos ?? conversa.fatos ?? [])], cache: conversa.cache, chamadas: 0 };
 }

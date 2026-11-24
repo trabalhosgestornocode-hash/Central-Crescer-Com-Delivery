@@ -1,7 +1,7 @@
 // MOVA CORE — F1: ponto de entrada. Junta roteador → laço de ferramentas → executor seguro → verificador, com orçamento,
 // continuidade mínima, auditoria, métricas e MODO SOMBRA. Não envia mensagens nem escreve nada: devolve a resposta para quem
 // chama decidir (na sombra, só registra a comparação com o motor atual).
-import { CATALOGO, FERRAMENTAS, definicoesParaApi } from "./catalogo.js";
+import { CATALOGO, FERRAMENTAS, OPERACOES_DO_CATALOGO, definicoesParaApi } from "./catalogo.js";
 import { criarExecutor, novaSessao } from "./executor.js";
 import { executarLaco, PADROES_DO_LACO } from "./laco.js";
 import { decidirRota, ROTA, RESPOSTAS_FIXAS } from "./roteador.js";
@@ -11,7 +11,9 @@ import { criarMetricas } from "./metricas.js";
 export { CATALOGO, FERRAMENTAS, ROTA, decidirRota, definicoesParaApi };
 export { verificarFidelidade } from "./verificador.js";
 export { criarOrcamentoMemoria, LIMITES_HOMOLOGACAO } from "./orcamentoMemoria.js";
-export { ferramentasDoAgenteCrescer } from "./agenteCrescer.js";
+export { ferramentasDoAgenteCrescer, PERMISSOES_DO_AGENTE_CRESCER } from "./agenteCrescer.js";
+export { criarMemoriaEmCamadas, PADROES_DA_MEMORIA } from "./memoria.js";
+export { criarServicoDeIdentidade, acessoDaPlataforma, chaveCanonica } from "./identidade.js";
 export { custoRealMicrousd, TARIFAS } from "./custo.js";
 
 /**
@@ -21,10 +23,13 @@ export { custoRealMicrousd, TARIFAS } from "./custo.js";
  * @param {object} deps.orcamento   reservar/concluir/falhar (renovável em homologação; memória no ambiente isolado)
  * @param {Array}  [deps.ferramentasExtras] p.ex. ferramentasDoAgenteCrescer(...)
  */
-export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras = [], memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now() }) {
-  const catalogo = { ...CATALOGO, ...Object.fromEntries(ferramentasExtras.map((f) => [f.nome, f])) };
-  const definicoes = [...definicoesParaApi(), ...ferramentasExtras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))];
-  const executor = criarExecutor({ catalogo, porta, auditoria, relogio });
+export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now() }) {
+  const montar = (extras) => ({
+    catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
+    definicoes: [...definicoesParaApi(), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
+  });
+  const base = montar(ferramentasExtras);
+  const catalogo = base.catalogo; const definicoes = base.definicoes;
   const metricas = criarMetricas();
   let seq = 0;
 
@@ -41,20 +46,27 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       return { requisicaoId, rota: rota.rota, motivo: rota.motivo, texto, ferramentas: [], uso: null, latenciaMs: 0 };
     }
     if (!e.unidadesPermitidas?.some((u) => u.id === e.unidadeId)) throw new TypeError("a unidade da conversa precisa estar entre as permitidas");
-    const conversa = memoria.obter({ organizacaoId: e.organizacaoId, conversaId: e.conversaId, participanteId: e.participanteId });
-    const sessao = novaSessao({ conversa, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId });
+    const conversa = await memoria.obter({ organizacaoId: e.organizacaoId, conversaId: e.conversaId, participanteId: e.participanteId });
+    // F2: ferramentas que dependem de QUEM é a pessoa (Agente Crescer só com vínculo resolvido AGORA pelo servidor)
+    const daPessoa = ferramentasDaPessoa ? (await ferramentasDaPessoa(e)) ?? [] : [];
+    const { catalogo: catalogoDaVez, definicoes: definicoesDaVez } = daPessoa.length ? montar([...ferramentasExtras, ...daPessoa]) : base;
+    const executor = criarExecutor({ catalogo: catalogoDaVez, porta, auditoria, relogio });
+    // F2: só fatos FRESCOS voltam como fonte (a memória nunca responde saldo antigo)
+    const fatosDaMemoria = memoria.fatosValidos ? memoria.fatosValidos(conversa) : conversa.fatos;
+    const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId });
+    const contexto = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const r = await executarLaco({
-      cliente, executor, sessao, orcamento, ferramentas: definicoes, historico: memoria.historico(conversa), pergunta: String(e.texto).slice(0, 2000),
-      ambiente: { hoje: e.hoje, unidade, perfil: e.perfil?.nome ?? "—", podeValores: e.podeValores }, opcoes: { ...PADROES_DO_LACO, ...opcoes }, relogio,
+      cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),
+      ambiente: { hoje: e.hoje, unidade, perfil: e.perfil?.nome ?? "—", podeValores: e.podeValores, contexto }, opcoes: { ...PADROES_DO_LACO, ...opcoes }, relogio,
       registrar: (x) => auditoria.registrar(x),
     });
-    memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: r.texto, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos });
+    await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: r.texto, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos, esclarecimentoPedido: r.motivo === "RESPONDIDO" && /\?\s*$/.test(String(r.texto ?? "")) && !(r.ferramentas ?? []).some((x) => x.ok) });
     auditoria.registrar({ tipo: "MOVA_CORE_RESPOSTA", requisicaoId, rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas.map((x) => x.nome), custoMicrousd: r.uso.custoMicrousd, latenciaMs: r.latenciaMs, verificador: r.verificacao?.ok ?? null });
     metricas.registrar({ rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas, uso: r.uso, latenciaMs: r.latenciaMs, verificacao: r.verificacao });
     return { requisicaoId, rota: rota.rota, ...r, fatos: sessao.fatos };
   }
-  return Object.freeze({ responder, metricas, catalogo, definicoes });
+  return Object.freeze({ responder, metricas, catalogo, definicoes, somenteLeitura: Boolean(porta?.[SOMENTE_LEITURA]) && orcamento?.ambiente === "ISOLADO" });
 }
 
 /**
@@ -62,6 +74,7 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
  * (rota, ferramentas, resposta resumida, custo, latência, verificador) para avaliação. Ligação em produção: só com autorização.
  */
 export function criarSombra({ core, registrar }) {
+  if (!core?.somenteLeitura) throw new TypeError("modo sombra só com núcleo montado por criarSombraIsolada (porta somente leitura + orçamento isolado)");
   return Object.freeze({
     async observar(entrada, legado = {}) {
       try {
@@ -76,4 +89,27 @@ export function criarSombra({ core, registrar }) {
       }
     },
   });
+}
+
+const SOMENTE_LEITURA = Symbol.for("mova-core.portaSomenteLeitura");
+/**
+ * F2 — PORTA SOMENTE LEITURA: só `ler` das operações do catálogo (todas consultas via b.consultar) e a leitura de permissões.
+ * Qualquer outra coisa (registrar, baixar, enviar, notificar…) não existe nesta porta: quem tentar recebe erro.
+ */
+export function portaSomenteLeitura(porta) {
+  const permitidas = new Set(OPERACOES_DO_CATALOGO);
+  const alvo = {
+    [SOMENTE_LEITURA]: true,
+    async ler(op, escopo, entrada) { if (!permitidas.has(op)) throw Object.assign(new Error(`operação fora da leitura do catálogo: ${op}`), { codigo: "SOMENTE_LEITURA" }); return porta.ler(op, escopo, entrada); },
+    permissoesDoUsuario: (escopo) => porta.permissoesDoUsuario(escopo),
+    ehErroDeRegra: (e) => porta.ehErroDeRegra?.(e) ?? false,
+  };
+  return new Proxy(Object.freeze(alvo), { get(t, k) { if (k in t) return t[k]; if (typeof k === "symbol") return undefined; return () => { throw Object.assign(new Error(`porta somente leitura: ${String(k)} não existe`), { codigo: "SOMENTE_LEITURA" }); }; } });
+}
+
+/** Núcleo para o MODO SOMBRA em homologação isolada: porta somente leitura, orçamento ISOLADO, sem ferramentas da pessoa. */
+export function criarSombraIsolada({ porta, cliente, orcamento, registrar, memoria, opcoes, relogio }) {
+  if (orcamento?.ambiente !== "ISOLADO") throw new TypeError("modo sombra exige orçamento ISOLADO (nunca o de produção)");
+  const core = criarMovaCore({ porta: portaSomenteLeitura(porta), cliente, orcamento, auditoria: { registrar }, memoria, opcoes, relogio });
+  return criarSombra({ core, registrar });
 }

@@ -8,10 +8,15 @@ export class ErroDeReferencia extends Error {
   constructor(ref) { super(`referência desconhecida: ${ref}`); this.codigo = "REFERENCIA_INVALIDA"; }
 }
 
-export function criarReferencias() {
+/** @param {{n:number, itens:Array<[string,string,string]>}|null} [salvo] mapa exportado (F2: persistido com a memória do fio) */
+export function criarReferencias(salvo = null) {
   const porUuid = new Map(); // uuid → ref
   const porRef = new Map(); // ref → { uuid, unidadeId }
   let n = 0;
+  if (salvo?.itens) {
+    for (const [ref, uuid, unidadeId] of salvo.itens) if (REF.test(ref) && UUID.test(uuid)) { porRef.set(ref, { uuid, unidadeId }); porUuid.set(`${unidadeId}|${uuid.toLowerCase()}`, ref); }
+    n = Number.isInteger(salvo.n) ? salvo.n : porRef.size;
+  }
   function opacar(valor, unidadeId) {
     if (typeof valor === "string" && UUID.test(valor)) {
       const chave = `${unidadeId}|${valor.toLowerCase()}`;
@@ -33,5 +38,6 @@ export function criarReferencias() {
     if (valor && typeof valor === "object") return Object.fromEntries(Object.entries(valor).map(([k, v]) => [k, resolver(v, unidadeId)]));
     return valor;
   }
-  return Object.freeze({ opacar, resolver, total: () => porRef.size });
+  const exportar = () => ({ n, itens: [...porRef.entries()].map(([ref, r]) => [ref, r.uuid, r.unidadeId]) });
+  return Object.freeze({ opacar, resolver, exportar, total: () => porRef.size });
 }

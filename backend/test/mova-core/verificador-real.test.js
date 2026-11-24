@@ -63,3 +63,50 @@ test("VR-06 'vencida, valor de R$ 264,00, com R$ 100,00 já pagos' (total da con
   const ruim = "• Laticínios Serra: valor vencido de R$ 264,00.";
   assert.ok(verificarFidelidade(ruim, { fatos: ATENCAO, unidades: UNIDADES }).violacoes.some((x) => x.tipo === "SIGNIFICADO_TROCADO"));
 });
+
+test("VR-07 (rodada real completa) negação, descritor colado depois do valor, 'em contas a pagar' e 'valor informado'", () => {
+  const ent = [f(46200, "ENTREGADOR_A_PAGAR", "Matheus Rocha"), f(46200, "A_PAGAR_EM_ABERTO", "Matheus Rocha"), f(39900, "ENTREGADOR_PAGO", "Matheus Rocha")];
+  assert.deepEqual(verificarFidelidade("• Semana de 16/11: 42 entregas, R$ 462,00, ainda não pago. Vence em 25/11.", { fatos: ent }).violacoes, []);
+  const br = [f(32000, "PAGO", "Doce Brownie Ltda"), f(32000, "VALOR_DAS_CONTAS", "Doce Brownie Ltda"), f(18500, "A_PAGAR_EM_ABERTO", "Doce Brownie Ltda"), f(18500, "VALOR_DAS_CONTAS", "Doce Brownie Ltda"), f(50500, "VALOR_DAS_CONTAS", "brownie")];
+  assert.deepEqual(verificarFidelidade("Total do mês: R$ 505,00, sendo R$ 320,00 pagos e R$ 185,00 a pagar.", { fatos: br }).violacoes, []);
+  assert.deepEqual(verificarFidelidade("No mês, o brownie somou R$ 505,00 em contas a pagar.", { fatos: br }).violacoes, []);
+  assert.deepEqual(verificarFidelidade("O valor informado no fim do dia 23/11 foi R$ 400,00.", { fatos: CAIXA }).violacoes, []);
+  // e continuam barrados:
+  assert.ok(verificarFidelidade("Total do mês: R$ 505,00, sendo R$ 185,00 pagos e R$ 320,00 a pagar.", { fatos: br }).violacoes.some((x) => x.tipo === "SIGNIFICADO_TROCADO"));
+  assert.ok(verificarFidelidade("Semana de 09/11: R$ 399,00, ainda não pago.", { fatos: ent }).violacoes.some((x) => x.tipo === "SIGNIFICADO_TROCADO"));
+});
+
+// ---- avaliação real 2 (24/11, conjunto AJUSTE) ----
+const passa = (t, fatos) => assert.deepEqual(verificarFidelidade(t, { fatos, unidades: UNIDADES }).violacoes, [], t);
+const barra = (t, fatos, tipo = "SIGNIFICADO_TROCADO") => assert.ok(verificarFidelidade(t, { fatos, unidades: UNIDADES }).violacoes.some((v) => v.tipo === tipo), t);
+const BROWNIE = [f(32000, "PAGO", "Doce Brownie Ltda"), f(32000, "VALOR_DAS_CONTAS", "Doce Brownie Ltda"), f(18500, "A_PAGAR_EM_ABERTO", "Doce Brownie Ltda"), f(18500, "VALOR_DAS_CONTAS", "Doce Brownie Ltda")];
+
+test("VR-08 parêntese de OUTRO valor e termo da oração anterior não descrevem este valor", () => {
+  passa("Novembro tem duas compras: a 1ª quinzena (R$ 320,00, paga) e a 2ª quinzena (R$ 185,00, ainda em aberto).", BROWNIE);
+  passa("Desse valor, R$ 320,00 já foram pagos e R$ 185,00 estão em aberto.", BROWNIE);
+  passa("Já foram pagos R$ 320,00 e falta pagar R$ 185,00.", BROWNIE);
+  barra("Já foram pagos R$ 185,00 e falta pagar R$ 320,00.", BROWNIE);
+});
+
+test("VR-09 'colado depois' só sem vírgula; sufixo societário e plural; total entre banco e caixa", () => {
+  const LAT = [f(26400, "VALOR_DAS_CONTAS", "Laticínios Serra"), f(10000, "PAGO", "Laticínios Serra"), f(16400, "A_PAGAR_VENCIDO", "Laticínios Serra")];
+  passa("Laticínios Serra: valor original R$ 264,00, já pago R$ 100,00, saldo em aberto de R$ 164,00.", LAT);
+  passa("Laticínios Serra: R$ 164,00 restantes.", LAT);
+  barra("Laticínios Serra: R$ 264,00 restantes.", LAT);
+  passa("A vencer: Doce Brownie (R$ 185,00, vence 28/11).", BROWNIE);
+  passa("Também entrou 1 reforço de caixa, de R$ 200,00, que não entra na conta das sangrias.", [f(20000, "REFORCOS_DO_CAIXA", "reforços"), f(12500, "RETIRADAS_DO_CAIXA", "sangrias")]);
+  passa("Hoje há R$ 18.662,50 entre banco e caixa.", [f(1866250, "SALDO_CALCULADO", "todas as contas"), f(1825000, "SALDO_CALCULADO", "bancos")]);
+});
+
+test("VR-10 termo entre aspas é citado; valor operando de divisão; 'nenhuma paga'; 'o que foi registrado' não é escrita", () => {
+  const T = [f(584100, "VALOR_DAS_CONTAS"), f(574100, "A_PAGAR_EM_ABERTO")];
+  passa('Eu tinha chamado R$ 5.841,00 de "em aberto", mas esse é o valor total das contas.', T);
+  barra("Em aberto no total: R$ 5.841,00.", T);
+  passa("O valor por entrega é a média (R$ 418,00 ÷ 38).", [f(41800, "ENTREGADOR_PAGO", "Joana Prado")]);
+  passa("Vencem 3 contas, somando R$ 1.537,00, nenhuma paga ainda.", [f(153700, "A_PAGAR_EM_ABERTO")]);
+  passa("O CMV foi de R$ 29.900,00; é o que foi registrado no período.", [f(2990000, "DRE:cmvCentavos")]);
+  barra("Pronto, foi registrado: R$ 15,00 de grampos.", [f(1500, "INFORMADO_PELA_PESSOA")], "ESCRITA_SIMULADA");
+  passa("O repasse do iFood, no valor líquido de R$ 23.100,00, está previsto.", [f(2310000, "A_RECEBER", "IFOOD")]);
+  passa("Total em aberto: R$ 27.900,00 a receber.", [f(2790000, "A_RECEBER")]);
+  barra("Devemos R$ 27.900,00.", [f(2790000, "A_RECEBER")]);
+});

@@ -8,16 +8,22 @@ const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho
 
 /** Classes de significado reconhecidas no texto → significados de fato compatíveis. */
 const CLASSES = [
-  { nome: "EM_ABERTO", termos: /\b(devemos|deve|devendo|em aberto|a pagar|falta pagar|pendente de pagamento|divida)\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|RESUMO:.*pagar)/i.test(s) },
+  { nome: "EM_ABERTO", termos: /\b(devemos|deve|devendo|(?<!contas )a pagar|falta pagar|faltam pagar|pendente de pagamento|divida|restantes?|(ainda )?(nao|sem) (foi )?(pago|paga|pagos|pagas|pagamento)|(nada|nenhuma?) (foi )?(pago|paga))\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|RESUMO:.*pagar)/i.test(s) },
+  // "em aberto" sozinho vale para pagar E receber ("total em aberto: R$ 27.900" de contas a receber); "devemos" continua só pagar
+  { nome: "ABERTO", termos: /\b(em aberto|pendentes?|saldo a receber)\b/, aceita: (s) => /^(A_PAGAR|ENTREGADOR_A_PAGAR|A_RECEBER|RESUMO:.*(pagar|receb))/i.test(s) },
   { nome: "VENCIDO", termos: /\bvencid[oa]s?\b|\batrasad[oa]s?\b/, aceita: (s) => /^(A_PAGAR_VENCIDO|A_PAGAR|RESUMO:.*venc|A_RECEBER)/i.test(s) },
-  { nome: "PAGO", termos: /\b(pago|pagos|paga|pagas|pagamos|paguei|pagou|pagaram|foi pago|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:)/i.test(s) },
+  { nome: "PAGO", termos: /(?<!\b(nao|sem|nada|nenhuma?) (foi )?)\b(pago|pagos|paga|pagas|pagamos|paguei|pagou|pagaram|ja pago)\b/, aceita: (s) => /^(PAGO|ENTREGADOR_PAGO|INFORMADO_PELA_PESSOA|RESUMO:.*pag|DRE:)/i.test(s) },
   { nome: "VENDAS", termos: /\b(faturamento|faturou|faturamos|vendemos|vendas|vendeu)\b/, aceita: (s) => /^(VENDAS:|DRE:|RESUMO:.*(fatur|venda|receita))/i.test(s) },
-  { nome: "SALDO", termos: /\bsaldo\b/, aceita: (s) => /^(SALDO_|DIFERENCA_DE_SALDO|RESUMO:.*saldo|A_PAGAR|A_RECEBER|FLUXO:)/i.test(s) },
-  { nome: "RECEBER", termos: /\b(a receber|receberemos|repasse)\b/, aceita: (s) => /^(A_RECEBER|RECEBIDO|RESUMO:.*receb)/i.test(s) },
+  { nome: "SALDO", termos: /\b(saldo|informado|contado)\b/, aceita: (s) => /^(SALDO_|DIFERENCA_DE_SALDO|RESUMO:.*saldo|A_PAGAR|A_RECEBER|FLUXO:)/i.test(s) },
+  { nome: "RECEBER", termos: /\b(a receber|receberemos|repasse)\b/, aceita: (s) => /^(A_RECEBER|RECEBIDO|RESUMO:.*receb|ENTREGADOR_A_PAGAR)/i.test(s) }, // "o entregador tem R$ 99 a receber" = o que a loja deve a ele
   // avaliação real 24/11: "vencida em 22/11, valor de R$ 264,00, com R$ 100,00 já pagos" — o valor TOTAL da conta
-  { nome: "VALOR_DA_CONTA", termos: /\b(valor( original| total| da conta)?|total da conta)\b/, aceita: (s) => /^(VALOR_DAS_CONTAS|A_PAGAR|PAGO|ENTREGADOR_)/i.test(s) },
+  // F2: "médio/média/por entrega" só com resultado de DIVISÃO/MÉDIA calculada pelo código (um total dito como média é troca de natureza)
+  { nome: "MEDIA", termos: /\b(media|medio|em media|por entrega|por pedido|cada entrega|ticket)\b/, aceita: (s) => /^(CALCULO:(MEDIA|DIVISAO)|.*TICKET|.*MEDI[OA])/i.test(s) },
+  // F2: sangria/retirada de caixa só com movimento de caixa (não com despesa nem pagamento a fornecedor)
+  { nome: "MOVIMENTO_DE_CAIXA", termos: /\b(sangrias?|retiradas? de caixa|reforcos?( de caixa)?|suprimentos? de caixa)\b/, aceita: (s) => /^(SANGRIA|RETIRADA|REFORCO|MOVIMENTO|CAIXA|SALDO_|FLUXO:|INFORMADO_PELA_PESSOA)/i.test(s) },
+  { nome: "VALOR_DA_CONTA", termos: /\b(valor(?! (informado|calculado|contado))( original| total| da conta)?|total da conta|contas a pagar|somou|somaram)\b/, aceita: (s) => /^(VALOR_DAS_CONTAS|A_PAGAR|PAGO|ENTREGADOR_|A_RECEBER|RECEBIDO|VENDAS:|DRE:|RESUMO:|CALCULO:SOMA)/i.test(s) }, // "valor"/"somaram" são genéricos: só não aceitam saldo nem cálculo de outra natureza
 ];
-const ESCRITA_AFIRMADA = /\b(registrei|lancei|anotei|baixei|dei baixa|foi registrad[oa]|ficou registrad[oa]|registrad[oa] com sucesso|ja (esta|foi) lancad[oa]|lancamento feito)\b/;
+const ESCRITA_AFIRMADA = /\b(registrei|lancei|anotei|baixei|dei baixa|(?<!\b(que|como|quanto) )foi registrad[oa]|ficou registrad[oa]|registrad[oa] com sucesso|ja (esta|foi) lancad[oa]|lancamento feito)\b/;
 
 export function valoresDoTexto(texto) {
   const r = [];
@@ -33,10 +39,15 @@ export function valoresDoTexto(texto) {
 
 const FIM_DE_FRASE = /\n|[.!?;](?=\s)/g;
 const AGREGADO = /^(todas|todos|bancos|total|consolidad)/i;
-const FALA_DE_TOTAL = /\b(total|consolidad[oa]|somando|soma|ao todo|juntos?)\b/;
+const FALA_DE_TOTAL = /\b(total|consolidad[oa]|somando|soma|ao todo|juntos?|(entre )?(bancos? e caixa|caixa e bancos?))\b/;
+/** ")" sem "(" correspondente no trecho: o trecho atravessa o fim de um parêntese (o que está do outro lado é de outro valor). */
+const fechaSemAbrir = (s) => { let d = 0; for (const ch of s) { if (ch === "(") d++; else if (ch === ")") { if (d === 0) return true; d--; } } return false; };
+const raizDoNome = (w) => (w.length > 4 ? w.replace(/s$/, "") : w);
 const escapar = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const casaValor =(f, v) => f.valorCentavos !== null && (Math.abs(f.valorCentavos) === v.valorCentavos || (!v.comCentavos && Math.round(Math.abs(f.valorCentavos) / 100) * 100 === v.valorCentavos));
-const contem = (seg, nome) => { const n = norm(nome).trim(); if (n.length < 3) return false; return n.split(/\s+/).filter((w) => w.length >= 3).every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(seg)); };
+// sufixos societários não precisam aparecer ("Doce Brownie" cita "Doce Brownie Ltda"); plural tolerado ("reforço" cita "reforços")
+const SUFIXO_SOCIETARIO = new Set(["ltda", "eireli", "epp", "me", "s/a", "sa", "cia"]);
+const contem = (seg, nome) => { const n = norm(nome).trim(); if (n.length < 3) return false; return n.split(/\s+/).filter((w) => w.length >= 3 && !SUFIXO_SOCIETARIO.has(w)).map(raizDoNome).every((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`).test(seg)); };
 function mesesNoTexto(seg) {
   const ms = [];
   MESES.forEach((m, i) => { if (new RegExp(`\\b${m}\\b`).test(seg)) ms.push(i + 1); });
@@ -75,8 +86,8 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
 
     // a entidade que descreve ESTE valor é a citada MAIS PERTO dele dentro do segmento (evita "X no caixa… e no banco Y")
     const posValor = v.inicio - ini;
-    const distancia = (e) => { const w = norm(e).split(/\s+/).find((x) => x.length >= 3) ?? ""; let melhor = Infinity; for (const m of seg.matchAll(new RegExp(`\\b${escapar(w)}`, "g"))) melhor = Math.min(melhor, m.index <= posValor ? posValor - m.index : (m.index - posValor) * 3); return melhor; }; // o nome ANTES do valor o descreve ("• Atacadão: R$ 540")
-    const citadas = entidadesConhecidas.filter((e) => contem(seg, e)).map((e) => [e, distancia(e)]).sort((a, b) => a[1] - b[1]);
+    const distancia = (e) => { const w = raizDoNome(norm(e).split(/\s+/).find((x) => x.length >= 3 && !SUFIXO_SOCIETARIO.has(x)) ?? ""); let melhor = Infinity; for (const m of seg.matchAll(new RegExp(`\\b${escapar(w)}`, "g"))) { const antes = m.index <= posValor; if (fechaSemAbrir(antes ? seg.slice(m.index, posValor) : seg.slice(v.fim - ini, m.index))) continue; melhor = Math.min(melhor, antes ? posValor - m.index : (m.index - posValor) * 3); } return melhor; }; // o nome ANTES do valor o descreve ("• Atacadão: R$ 540"); do outro lado de um ")" é de outro valor
+    const citadas = entidadesConhecidas.filter((e) => contem(seg, e)).map((e) => [e, distancia(e)]).filter(([, d]) => d !== Infinity).sort((a, b) => a[1] - b[1]);
     const entidadesCitadas = citadas.length ? citadas.filter(([, d]) => d === citadas[0][1]).map(([e]) => e) : [];
     const agregadoComoTotal = candidatos.some((f) => !f.entidade || AGREGADO.test(norm(f.entidade))) && FALA_DE_TOTAL.test(seg);
     if (!agregadoComoTotal && entidadesCitadas.length && candidatos.every((f) => f.entidade) && !candidatos.some((f) => entidadesCitadas.some((e) => norm(e) === norm(f.entidade) || contem(norm(f.entidade), e) || contem(norm(e), f.entidade)))) {
@@ -89,8 +100,12 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
 
     // a classe cujo termo está MAIS PERTO do valor decide (o texto antes do número nomeia o que ele é; depois pesa 3×):
     // "vencida em 22/11, valor de R$ 264" → VALOR_DA_CONTA; "valor vencido de R$ 264" → VENCIDO
-    const pertoDe = (c) => { let melhor = Infinity; for (const m of seg.matchAll(new RegExp(c.termos.source, "g"))) { const p = m.index + m[0].length; melhor = Math.min(melhor, p <= posValor ? posValor - p : (m.index - posValor) * 3); } return melhor; };
-    const classes = CLASSES.filter((c) => c.termos.test(seg)).map((c) => [c, pertoDe(c)]).sort((a, b) => a[1] - b[1]);
+    // avaliação real 2 (24/11): termo que FECHA o parêntese de outro valor ("(R$ 320,00, paga) e … (R$ 185,00") não descreve este;
+    // "colado depois" só sem vírgula ("R$ 164,00 restantes"); com vírgula o termo pode ser do valor seguinte ("R$ 264,00, já pago R$ 100,00")
+    const posFim = v.fim - ini;
+    const pertoDe = (c) => { let melhor = Infinity; for (const m of seg.matchAll(new RegExp(c.termos.source, "g"))) { const p = m.index + m[0].length; if (/["“'‘]/.test(seg[m.index - 1] ?? "")) continue; /* termo entre aspas é CITADO, não afirmado */ if (p <= posValor) { if (fechaSemAbrir(seg.slice(p, posValor))) continue; if (i > 0 && ini === valores[i - 1].fim && m.index <= 3 && m.index < posValor - p) continue; /* colado ao valor ANTERIOR ("R$ 11,00 por entrega: R$ 99,00") */ if (i > 0 && ini === valores[i - 1].fim && /^\s*(e|,|;)\s*$/.test(seg.slice(p, posValor))) continue; /* fecha a oração do valor anterior ("R$ 320,00 já foram pagos e R$ 185,00 …") */ melhor = Math.min(melhor, posValor - p); } else { const vao = seg.slice(posFim, m.index); if (i < valores.length - 1 && fim === valores[i + 1].inicio && seg.length - p <= 3 && seg.length - p <= vao.length) continue; /* colado ao valor SEGUINTE ("R$ 320,00 e falta pagar R$ 185,00") */ melhor = Math.min(melhor, vao.length <= 3 && !/[,;(]/.test(vao) ? 0 : (m.index - posFim) * 3); } } return melhor; }; // colado DEPOIS ("R$ 185,00 a pagar") vale mais que tudo
+    const operando = /^\s*(÷|dividid[oa]s? por|\/\s*\d)/.test(texto.slice(v.fim)); // "R$ 418,00 ÷ 38": o valor é operando de uma conta mostrada, não tem natureza própria
+    const classes = operando ? [] : CLASSES.filter((c) => c.termos.test(seg)).map((c) => [c, pertoDe(c)]).filter(([, d]) => d !== Infinity).sort((a, b) => a[1] - b[1]);
     const decide = classes.length ? classes.filter(([, d]) => d === classes[0][1]).map(([c]) => c) : [];
     if (decide.length && !decide.some((c) => candidatos.some((f) => c.aceita(f.significado)))) violacoes.push({ tipo: "SIGNIFICADO_TROCADO", valor: v.texto, detalhe: decide.map((c) => c.nome).join(",") });
   });
@@ -101,4 +116,24 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
     if (!/\b(nao|nada|nenhum|ainda nao|sem)\b[^.]*$/.test(antes)) violacoes.push({ tipo: "ESCRITA_SIMULADA", detalhe: m[0] });
   }
   return { ok: violacoes.length === 0, violacoes, valores: valores.length };
+}
+
+/**
+ * F2 — RESPOSTA SEGURA QUE APROVEITA OS FATOS VÁLIDOS: das frases/linhas de um rascunho reprovado, mantém só as que não contêm
+ * nenhum valor reprovado nem afirmação de escrita, e o que sobrar tem de passar inteiro no verificador. Nada sobra ⇒ null.
+ */
+export function aproveitarFatosValidos(texto, violacoes, ctx) {
+  const ruins = new Set(violacoes.filter((v) => v.valor).map((v) => v.valor));
+  const escrita = violacoes.some((v) => v.tipo === "ESCRITA_SIMULADA");
+  const linhas = String(texto ?? "").split("\n");
+  const mantidas = [];
+  for (const linha of linhas) {
+    const frases = linha.split(/(?<=[.!?])\s+/);
+    const boas = frases.filter((f) => ![...ruins].some((r) => f.includes(r)) && !(escrita && ESCRITA_AFIRMADA.test(norm(f))));
+    if (boas.length === frases.length || boas.some((f) => valoresDoTexto(f).length)) mantidas.push(boas.join(" "));
+  }
+  const resto = mantidas.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (resto.length < 40) return null;
+  if (!verificarFidelidade(resto, ctx).ok) return null;
+  return `${resto}\n\n(Retirei uma parte que não consegui conferir com os dados. Se precisar dela, pergunte de novo de forma mais específica.)`;
 }
