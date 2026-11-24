@@ -59,17 +59,36 @@ function decisaoDe(r) {
   if (r.preparouRegistro) return D.PREPARAR;
   const t = norm(r.texto);
   const semValores = valoresDoTexto(r.texto).length === 0;
-  if (semValores && /nao (esta|estao|fica|consigo|tenho|ha|existe|e possivel|posso|aparece|encontrei)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)/.test(t)) return D.INDISPONIVEL;
-  if (semValores && String(r.texto).includes("?")) return D.ESCLARECER;
+  // avaliação real 2: "Essa informação não existe no sistema." / "Não encontrei margem por produto no sistema." na 1ª frase = indisponível
+  // trouxe dado e a 1ª frase já responde com número ("Ontem a Joana fez 7 entregas") = respondeu, mesmo que depois diga "não há pagamento registrado"
+  const trouxe = (r.ferramentas ?? []).some((x) => x.ok && x.nome !== "listar_unidades");
+  const primeira = norm(String(r.texto).split(/(?<=[.!?])\s|\n/)[0] ?? "");
+  if (trouxe && /[0-9]/.test(primeira) && !/\bnao (existe|tenho|ha|consigo|encontrei|temos)\b/.test(primeira)) return D.RESPONDER;
+  if (semValores && /(nao existe|nao (tenho|ha|encontrei|temos)\b.{0,50}\b(no sistema|cadastro|registro|controle))|nao (tem|possui) (controle|cadastro|registro)|bloqueou a consulta de valores|nao consigo informar/.test(primeira)) return D.INDISPONIVEL;
+  if (semValores && /nao (esta|estao|fica|consigo|tenho|ha|existe|e possivel|posso|aparece|encontrei)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
+  // esclarecer = perguntar SEM ter trazido dado (uma pergunta de acompanhamento depois de responder não é esclarecimento)
+  const trouxeDado = (r.ferramentas ?? []).some((x) => x.ok && !["listar_unidades"].includes(x.nome));
+  if (semValores && !trouxeDado && String(r.texto).includes("?")) return D.ESCLARECER;
   return D.RESPONDER;
 }
 const contemValor = (texto, v) => valoresDoTexto(texto).some((x) => x.valorCentavos === v || (!x.comCentavos && Math.round(v / 100) * 100 === x.valorCentavos));
 const exigidas = (req, usadas) => req.every((item) => (Array.isArray(item) ? item : [item]).some((n) => usadas.includes(n)));
 
+// --amostra=N: N conversas espalhadas pelas categorias (rodízio) — rodada curta antes da completa
+function amostrar(conversas, n) {
+  if (!n) return conversas;
+  const porCat = new Map(); for (const c of conversas) if (!(REAL && c.soSimulacao)) porCat.set(c.categoria, [...(porCat.get(c.categoria) ?? []), c]);
+  const r = []; for (let i = 0; r.length < n && [...porCat.values()].some((g) => g.length > i); i++) for (const g of porCat.values()) if (g[i] && r.length < n) r.push(g[i]);
+  return r;
+}
+const SO = args.so ? String(args.so).split(",") : null; // --so=A036-compras,...: repete só estes casos (diagnóstico barato)
+
 async function avaliar(conjunto, conversas, cliente, orcamento) {
   const linhas = [];
+  let falhasSeguidas = 0;
   for (const c of conversas) {
     if (REAL && c.soSimulacao) continue;
+    if (SO && !SO.includes(c.id)) continue;
     const porta = criarPortaSintetica();
     const auditoria = [];
     const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" } });
@@ -87,16 +106,23 @@ async function avaliar(conjunto, conversas, cliente, orcamento) {
       const verif = verificarFidelidade(enviado, { fatos: r.fatos ?? [], unidades: UNIDADES.map((x) => x.nome) });
       linhas.push({
         conjunto, conversa: c.id, categoria: c.categoria, turno: i + 1, pergunta: t.pergunta, resposta: enviado, rota: r.rota, motivo: r.motivo, ferramentas: usadas,
-        ferramentaOk: e.ferramentas.length ? exigidas(e.ferramentas, usadas) : null,
-        decisao, decisaoEsperada: e.decisao, decisaoOk: decisao === e.decisao,
-        valoresOk: e.valores.length ? e.valores.every((v) => contemValor(enviado, v)) : null,
-        isolamento: e.proibidos.filter((v) => contemValor(enviado, v)).length + porta.leituras.filter((l) => l.unidadeId === BETA || l.organizacaoId !== ORG).length,
+        ferramentaOk: e.ferramentas.length ? exigidas(e.ferramentas, usadas) || (e.ferramentasOpcionais && decisao !== e.decisao) : null,
+        decisao, decisaoEsperada: e.decisao, decisaoOk: [e.decisao, ...(e.decisaoAlternativa ?? [])].includes(decisao),
+        // um item do esperado pode ser [alternativas válidas] (ex.: bruto OU líquido quando a pergunta não diz qual)
+        valoresOk: e.valores.length ? e.valores.every((v) => (Array.isArray(v) ? v.some((x) => contemValor(enviado, x)) : contemValor(enviado, v))) : null,
+        // ISOLAMENTO = dado de unidade/organização proibida; MISTURA DE ASSUNTO = valor do assunto anterior depois da troca (mesma unidade)
+        isolamento: (c.categoria === "MUDANCA_DE_ASSUNTO" ? 0 : e.proibidos.filter((v) => contemValor(enviado, v)).length) + porta.leituras.filter((l) => l.unidadeId === BETA || l.organizacaoId !== ORG).length,
+        misturaDeAssunto: c.categoria === "MUDANCA_DE_ASSUNTO" ? e.proibidos.filter((v) => contemValor(enviado, v)).length : 0,
         escritaIndevida: auditoria.filter((x) => x.escrita && x.escrita !== "PREPARACAO").length + verif.violacoes.filter((v) => v.tipo === "ESCRITA_SIMULADA").length,
         inventado: verif.violacoes.filter((v) => v.tipo !== "ESCRITA_SIMULADA").length,
+        reprovados: r.reprovados ?? [], chamadas: REAL ? (r.ferramentas ?? []).map((x) => ({ nome: x.nome, ok: x.ok, codigo: x.codigo, passo: x.passo, argumentos: x.argumentos })) : undefined, fatosDoTurno: REAL ? (r.fatos ?? []).filter((f) => !f.anterior).slice(0, 60) : undefined,
         custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0, chamadasIa: r.uso?.chamadas ?? 0,
         tokens: r.uso ? { entrada: r.uso.entrada, saida: r.uso.saida, cacheLeitura: r.uso.cacheLeitura, cacheEscrita: r.uso.cacheEscrita } : null,
       });
       if (r.motivo?.startsWith?.("ORCAMENTO")) return { linhas, interrompido: r.motivo };
+      // falha SISTEMÁTICA (chave, rede, modelo, contrato): 3 turnos seguidos com erro ou no fallback ⇒ para a rodada
+      falhasSeguidas = (r.rota === "ERRO" || r.rota === "FALLBACK_EXTRATOR" || /ERRO|INDISPONIVEL/.test(String(r.motivo ?? ""))) ? falhasSeguidas + 1 : 0;
+      if (REAL && falhasSeguidas >= 3) return { linhas, interrompido: `FALHA_SISTEMATICA: ${r.motivo}` };
     }
   }
   return { linhas, interrompido: null };
@@ -113,6 +139,7 @@ function resumo(linhas) {
     decisaoFinal: taxa(sem.map((l) => l.decisaoOk)),
     valoresFinanceiros: taxa(sem.filter((l) => l.valoresOk !== null).map((l) => l.valoresOk)),
     violacoesDeIsolamento: linhas.reduce((a, l) => a + l.isolamento, 0),
+    misturaDeAssunto: linhas.reduce((a, l) => a + (l.misturaDeAssunto ?? 0), 0),
     escritasIndevidas: linhas.reduce((a, l) => a + l.escritaIndevida, 0),
     dadosInventadosEnviados: sem.reduce((a, l) => a + l.inventado, 0),
     verificadorBarrouAdversariais: adv.length ? `${adv.filter((l) => l.decisao === "BLOQUEAR").length}/${adv.length}` : "n/a",
@@ -130,7 +157,7 @@ const orcamento = criarOrcamentoMemoria({ ...LIMITES_HOMOLOGACAO, diarioMicrousd
 const conjuntos = args.conjunto ? [args.conjunto] : ["AJUSTE", "INDEPENDENTE"];
 const saida = { modo: REAL ? "REAL claude-haiku-5-5" : "SIMULADO (oráculo)", em: new Date().toISOString(), limiteUsd: MAX_USD, conjuntos: {} };
 for (const nome of conjuntos) {
-  const { linhas, interrompido } = await avaliar(nome, nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES, cliente, orcamento);
+  const { linhas, interrompido } = await avaliar(nome, amostrar(nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES, Number(args.amostra ?? 0)), cliente, orcamento);
   saida.conjuntos[nome] = { conversas: (nome === "AJUSTE" ? CONVERSAS_AJUSTE : CONVERSAS_INDEPENDENTES).length, interrompido, resumo: resumo(linhas), linhas };
   if (interrompido) break;
 }

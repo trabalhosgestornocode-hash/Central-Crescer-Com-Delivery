@@ -2,7 +2,7 @@
 // executadas em paralelo), até 6 passos. Antes de CADA chamada ao modelo: reserva de orçamento no pior caso (sem contar com
 // cache). Depois: custo real pelo uso informado. A resposta final passa pelo verificador de fidelidade; se reprovar, o modelo
 // tem UMA chance de corrigir com o motivo; reprovando de novo, sai uma resposta segura (sem os números não conferidos).
-import { verificarFidelidade } from "./verificador.js";
+import { aproveitarFatosValidos, verificarFidelidade } from "./verificador.js";
 import { estimarTokensDoPedido } from "./custo.js";
 
 export const PADROES_DO_LACO = Object.freeze({ modelo: "claude-haiku-5-5", maxPassos: 6, maxTokens: 2048, esforco: "low" });
@@ -13,16 +13,18 @@ Regras de dados (inegociáveis):
 - Todo número, nome, data ou situação que você afirmar vem de uma ferramenta chamada AGORA nesta conversa. Nunca estime, nunca complete com suposição, nunca use conhecimento geral sobre a loja.
 - Valores das ferramentas estão em CENTAVOS: 23000 = R$ 230,00. Escreva sempre "R$ 1.234,56".
 - Qualquer conta derivada (diferença, média, custo por entrega, variação) é feita pela ferramenta calcular, nunca de cabeça.
-- Se nenhuma ferramenta cobre o que foi perguntado, diga com clareza que essa informação não está disponível no sistema (sem inventar alternativa). Se a ferramenta falhou ou voltou vazia, diga isso.
+- Se nenhuma ferramenta cobre o que foi perguntado (ex.: salário, previsão, estoque), diga PRIMEIRO, com clareza, que essa informação não existe no sistema. Só depois, se ajudar, ofereça o dado mais próximo deixando claro que é outra coisa (ex.: "o que existe é o fechamento semanal de entregas, que não é salário"). Se a ferramenta falhou ou voltou vazia, diga isso.
 - Os identificadores ref_N são internos: use-os só nas chamadas de ferramenta, nunca na resposta.
 
 Como trabalhar:
 - Combine ferramentas livremente para responder perguntas novas; chame várias de uma vez quando forem independentes (ex.: mês atual e mês anterior).
 - "Esse mês", "mês passado", "ontem", "semana passada" são relativos à data de hoje informada abaixo.
 - Quando a pessoa usar "ele", "isso", "essa conta", resolva pelo que foi dito antes na conversa. Se a pergunta mudar de assunto, trate como assunto novo.
+- As suas respostas anteriores nesta conversa foram conferidas com as ferramentas na hora: não diga que não foram. Ao mudar de assunto, responda só o assunto novo (não retome nem reconsulte o anterior sem a pessoa pedir).
 - Se faltar algo essencial e não der para deduzir com segurança (qual unidade, qual pessoa, qual período), faça UMA pergunta curta de esclarecimento em vez de chutar.
 - Explicar "por que" algo aconteceu: mostre o que os dados indicam (quais contas, quais itens mudaram) e diga que é o que os registros mostram, não uma certeza de causa.
-- Comparar unidades: use listar_unidades e consulte cada uma; só unidades da lista.
+- Comparar unidades: use listar_unidades e consulte TODAS as unidades no MESMO passo (chamadas em paralelo); só unidades da lista.
+- Não repita uma consulta que já voltou nesta conversa; use o resultado que você já tem. Você tem poucos passos: planeje as consultas antes.
 
 Escritas: nesta fase você NÃO registra, paga, baixa nem altera nada. Quando a pessoa informar um pagamento, retirada ou compra, use preparar_registro e explique o que foi entendido, o que falta e o caminho. Nunca diga que registrou, anotou ou lançou.
 
@@ -47,11 +49,13 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
   const tools = ferramentas.map((t, i) => (i === ferramentas.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t));
   const system = [
     { type: "text", text: INSTRUCOES, cache_control: { type: "ephemeral" } },
-    { type: "text", text: `Hoje: ${ambiente.hoje}. Unidade desta conversa: ${ambiente.unidade}. Perfil: ${ambiente.perfil}.${ambiente.podeValores ? "" : " Nesta conversa NÃO mostre valores em reais (só contagens e situações)."}` },
+    { type: "text", text: `Hoje: ${ambiente.hoje}. Unidade desta conversa: ${ambiente.unidade} (para ela, OMITA o campo "unidade" das ferramentas; outra unidade só pela referência exata devolvida por listar_unidades). Perfil: ${ambiente.perfil}.${ambiente.podeValores ? "" : " Nesta conversa NÃO mostre valores em reais (só contagens e situações)."}` },
+    ...(ambiente.contexto ? [{ type: "text", text: String(ambiente.contexto).slice(0, 1500) }] : []),
   ];
   const messages = [...historico, { role: "user", content: pergunta }];
   const uso = { entrada: 0, saida: 0, cacheLeitura: 0, cacheEscrita: 0, custoMicrousd: 0, chamadas: 0 };
   const usadas = [];
+  const reprovados = [];
   let correcaoFeita = false;
   let final = null;
   let motivo = null;
@@ -75,7 +79,7 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
     if (r.stop_reason === "tool_use") {
       const pedidos = r.content.filter((b) => b.type === "tool_use");
       const resultados = await Promise.all(pedidos.map((b) => executor.executar(sessao, b)));
-      pedidos.forEach((b, i) => usadas.push({ nome: b.name, ok: resultados[i].ok, codigo: resultados[i].codigo ?? null }));
+      pedidos.forEach((b, i) => usadas.push({ nome: b.name, ok: resultados[i].ok, codigo: resultados[i].codigo ?? null, passo, argumentos: b.input }));
       messages.push({ role: "assistant", content: r.content }); // blocos (inclusive raciocínio) devolvidos SEM alteração
       messages.push({ role: "user", content: pedidos.map((b, i) => ({ type: "tool_result", tool_use_id: b.id, content: resultados[i].conteudo, ...(resultados[i].ok ? {} : { is_error: true }) })) });
       continue;
@@ -88,15 +92,22 @@ export async function executarLaco({ cliente, executor, sessao, orcamento, ferra
     const v = verificarFidelidade(texto, { fatos: sessao.fatos, unidades: sessao.unidadesPermitidas.map((x) => x.nome) });
     if (v.ok) { final = { texto, verificacao: v }; break; }
     registrar({ tipo: "MOVA_CORE_VERIFICADOR_REPROVOU", requisicaoId: sessao.requisicaoId, violacoes: v.violacoes.map((x) => x.tipo) });
+    reprovados.push({ texto, violacoes: v.violacoes }); // diagnóstico interno (avaliação/sombra) — NUNCA enviado
     if (correcaoFeita || passo === o.maxPassos) { final = { texto: null, verificacao: v }; motivo = "VERIFICADOR_REPROVOU"; break; }
     correcaoFeita = true;
     messages.push({ role: "assistant", content: r.content });
     messages.push({ role: "user", content: `[conferência automática] A resposta não bate com as consultas: ${v.violacoes.map((x) => `${x.tipo}${x.valor ? ` (${x.valor})` : ""}${x.detalhe ? `: ${x.detalhe}` : ""}`).join("; ")}. Refaça usando SOMENTE valores devolvidos pelas ferramentas, com a entidade, o período, a unidade e o significado corretos; se não tiver o dado, diga que não tem.` });
   }
   if (!final && !motivo) motivo = "PASSOS_ESGOTADOS";
+  // F2: reprovado duas vezes ⇒ aproveita as frases que PASSAM na conferência (em vez de descartar tudo)
+  if (!final?.texto && motivo === "VERIFICADOR_REPROVOU" && reprovados.length) {
+    const ultimo = reprovados.at(-1);
+    const parcial = aproveitarFatosValidos(ultimo.texto, ultimo.violacoes, { fatos: sessao.fatos, unidades: sessao.unidadesPermitidas.map((x) => x.nome) });
+    if (parcial) { final = { texto: parcial, verificacao: { ok: true, violacoes: [], parcial: true } }; motivo = "RESPOSTA_PARCIAL_CONFERIDA"; }
+  }
   const texto = final?.texto ?? RESPOSTA_SEGURA[motivo] ?? RESPOSTA_SEGURA.PADRAO;
   return {
-    texto, motivo: final?.texto ? "RESPONDIDO" : motivo, verificacao: final?.verificacao ?? null, ferramentas: usadas,
+    texto, motivo: final?.texto ? (motivo === "RESPOSTA_PARCIAL_CONFERIDA" ? motivo : "RESPONDIDO") : motivo, verificacao: final?.verificacao ?? null, reprovados, ferramentas: usadas,
     preparouRegistro: usadas.some((x) => x.nome === "preparar_registro" && x.ok), uso, latenciaMs: relogio() - inicio,
   };
 }

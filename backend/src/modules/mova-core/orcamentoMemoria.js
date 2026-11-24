@@ -13,6 +13,7 @@ export function criarOrcamentoMemoria(limites = LIMITES_HOMOLOGACAO, { totalMicr
   let n = 0;
   const soma = (f) => [...lancamentos.values()].filter(f).reduce((a, l) => a + l.custo, 0);
   return Object.freeze({
+    ambiente: "ISOLADO", // F2: o modo sombra só aceita orçamento isolado (nunca o renovável de produção)
     reservar({ modelo, requisicaoId, tokensDePrompt, maxTokens }) {
       const r = reservaPiorCaso({ modelo, tokensDePrompt, maxTokens });
       const req = [...lancamentos.values()].filter((l) => l.requisicaoId === requisicaoId);

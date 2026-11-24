@@ -6,15 +6,16 @@
 // O escopo (organização, unidade, usuário) NUNCA vem do modelo: é injetado pelo executor a partir da conversa autorizada.
 // Nada aqui inventa capacidade: ferramenta sem fonte no núcleo não existe no catálogo; o que não existe é dito como indisponível.
 import { COMPETENCIA, DATA, REFERENCIA, TEXTO_CURTO } from "./esquema.js";
+import { FERRAMENTA_ANALISAR } from "./analise.js"; // F2 (import circular seguro: analise só usa os auxiliares daqui em tempo de chamada)
 
-const UNIDADE = { ...REFERENCIA, description: "Unidade (referência de listar_unidades). Omitida = a unidade da conversa." };
+const UNIDADE = { ...REFERENCIA, description: "SÓ para OUTRA unidade: a referência exata (ex.: ref_2) devolvida por listar_unidades. Para a unidade desta conversa, OMITA este campo. Nunca invente referência." };
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
-const bate = (termo, ...textos) => { const t = norm(termo).split(/\s+/).filter((w) => w.length >= 3); return t.length > 0 && t.every((w) => textos.some((x) => norm(x).includes(w))); };
+export const bate = (termo, ...textos) => { const t = norm(termo).split(/\s+/).filter((w) => w.length >= 3); return t.length > 0 && t.every((w) => textos.some((x) => norm(x).includes(w))); };
 const mesDe = (d) => String(d ?? "").slice(0, 7);
 const rotulo = (o) => o?.nome ?? o?.fornecedor?.nome ?? o?.contraparte?.nome ?? o?.entregador?.nome ?? o?.entregadorNome ?? o?.descricao ?? o?.titulo ?? o?.canal ?? o?.codigo ?? null;
 
 /** Lê TODAS as páginas de uma consulta paginada (teto de páginas: nunca uma varredura sem fim). */
-async function todasAsPaginas(porta, op, escopo, entrada, { tamanho = 100, maxPaginas = 20 } = {}) {
+export async function todasAsPaginas(porta, op, escopo, entrada, { tamanho = 100, maxPaginas = 20 } = {}) {
   const itens = [];
   let primeira = null;
   for (let pagina = 1; pagina <= maxPaginas; pagina++) {
@@ -31,7 +32,7 @@ async function todasAsPaginas(porta, op, escopo, entrada, { tamanho = 100, maxPa
 const fato = (valorCentavos, significado, { entidade = null, periodo = null } = {}) => (Number.isInteger(valorCentavos) ? { valorCentavos, significado, entidade, periodo } : null);
 const fatos = (...xs) => xs.flat().filter(Boolean);
 
-const itemAPagar = (t) => ({
+export const itemAPagar = (t) => ({
   id: t.id, fornecedor: t.fornecedor?.nome ?? null, descricao: t.descricao ?? null, categoria: t.categoria?.nome ?? t.categoria?.codigo ?? null,
   competencia: t.competencia ?? null, vencimento: t.vencimento ?? null, situacao: t.situacao, vencido: Boolean(t.vencido),
   valorCentavos: t.valorOriginalCentavos ?? t.valorCentavos ?? null, pagoCentavos: t.pagoCentavos ?? null, saldoCentavos: t.saldoCentavos ?? null,
@@ -116,7 +117,9 @@ export const FERRAMENTAS = [
       const totais = { quantidade: itens.length, liquidoCentavos: soma("liquidoCentavos"), recebidoCentavos: soma("recebidoCentavos"), saldoCentavos: soma("saldoCentavos") };
       const periodo = args.competencia ?? null;
       return { dados: { totais, itens: itens.slice(0, 40), itensOmitidos: Math.max(0, itens.length - 40) },
-        fatos: fatos(fato(totais.saldoCentavos, "A_RECEBER", { entidade: args.canal ?? null, periodo }), fato(totais.recebidoCentavos, "RECEBIDO", { entidade: args.canal ?? null, periodo }), fato(totais.liquidoCentavos, "A_RECEBER_PREVISTO", { entidade: args.canal ?? null, periodo })) };
+        fatos: fatos(fato(totais.saldoCentavos, "A_RECEBER", { entidade: args.canal ?? null, periodo }), fato(totais.recebidoCentavos, "RECEBIDO", { entidade: args.canal ?? null, periodo }), fato(totais.liquidoCentavos, "A_RECEBER_PREVISTO", { entidade: args.canal ?? null, periodo }),
+          // avaliação real 24/11: cada ITEM também é fonte ("iFood R$ 23.100,00 em 26/11")
+          itens.slice(0, 40).flatMap((t) => [fato(t.saldoCentavos, "A_RECEBER", { entidade: t.processador ?? t.canal, periodo: t.dataPrevista }), fato(t.liquidoCentavos, "A_RECEBER_PREVISTO", { entidade: t.processador ?? t.canal, periodo: t.dataPrevista }), fato(t.recebidoCentavos, "RECEBIDO", { entidade: t.processador ?? t.canal, periodo: t.dataPrevista })])) };
     },
   },
   {
@@ -297,9 +300,9 @@ export const FERRAMENTAS = [
     nome: "calcular",
     descricao: "Faz contas EXATAS com valores que vieram das ferramentas (soma, diferença, média, divisão, variação percentual). Use SEMPRE que a resposta tiver um número derivado (ex.: custo por entrega = valor ÷ entregas; diferença entre meses). Valores monetários em centavos.",
     esquema: { type: "object", properties: {
-      operacao: { type: "string", enum: ["SOMA", "DIFERENCA", "MEDIA", "DIVISAO", "VARIACAO_PERCENTUAL"] },
-      valores: { type: "array", maxItems: 50, items: { type: "integer" }, description: "Números (centavos ou quantidades). DIFERENCA e VARIACAO_PERCENTUAL: [atual, anterior]. DIVISAO: [dividendo, divisor]." },
-      significado: { ...TEXTO_CURTO, description: "O que o resultado representa (ex.: 'custo médio por entrega do Matheus na semana de 16/11')." },
+      operacao: { type: "string", enum: ["SOMA", "DIFERENCA", "MEDIA", "DIVISAO", "VARIACAO_PERCENTUAL", "PERCENTUAL"] },
+      valores: { type: "array", maxItems: 50, items: { type: "integer" }, description: "Números (centavos ou quantidades). DIFERENCA e VARIACAO_PERCENTUAL: [atual, anterior]. DIVISAO: [dividendo, divisor]. PERCENTUAL: [parte, total] → % da parte no total." },
+      significado: { ...TEXTO_CURTO, maxLength: 200, description: "O que o resultado representa (ex.: 'custo médio por entrega do Matheus na semana de 16/11')." },
       monetario: { type: "boolean" },
     }, required: ["operacao", "valores", "significado", "monetario"] },
     valores: false, local: true,
@@ -315,9 +318,10 @@ export const FERRAMENTAS = [
       else if (args.operacao === "MEDIA" && v.length) r = Math.round(v.reduce((a, b) => a + b, 0) / v.length);
       else if (args.operacao === "DIVISAO" && v.length === 2 && v[1] !== 0) r = Math.round(v[0] / v[1]);
       else if (args.operacao === "VARIACAO_PERCENTUAL" && v.length === 2 && v[1] !== 0) r = Math.round(((v[0] - v[1]) / Math.abs(v[1])) * 1000) / 10;
+      else if (args.operacao === "PERCENTUAL" && v.length === 2 && v[1] !== 0) r = Math.round((v[0] / v[1]) * 1000) / 10;
       if (r === null) return { erro: "CALCULO_INVALIDO", dados: { mensagem: "Operação sem os valores necessários (ou divisão por zero)." }, fatos: [] };
-      return { dados: { resultado: r, unidade: args.operacao === "VARIACAO_PERCENTUAL" ? "%" : args.monetario ? "centavos" : "número" },
-        fatos: args.monetario && Number.isInteger(r) && args.operacao !== "VARIACAO_PERCENTUAL" ? [{ valorCentavos: r, significado: `CALCULO:${args.operacao}`, entidade: args.significado, periodo: null, derivado: true }] : [], numeros: [r] };
+      return { dados: { resultado: r, unidade: ["VARIACAO_PERCENTUAL", "PERCENTUAL"].includes(args.operacao) ? "%" : args.monetario ? "centavos" : "número" },
+        fatos: args.monetario && Number.isInteger(r) && !["VARIACAO_PERCENTUAL", "PERCENTUAL"].includes(args.operacao) ? [{ valorCentavos: r, significado: `CALCULO:${args.operacao}`, entidade: args.significado, periodo: null, derivado: true }] : [], numeros: [r] };
     },
   },
   {
@@ -363,6 +367,8 @@ const CAMINHOS = Object.freeze({
   COMPRA_NOVA_PAGA: "Enviar o comprovante ao MOVA dizendo que é compra nova já paga; a criação da despesa já paga depende de habilitação ainda desligada.",
   OUTRO: "Registrar na tela do Financeiro.",
 });
+
+FERRAMENTAS.push(FERRAMENTA_ANALISAR); // F2: análise genérica parametrizada
 
 export const CATALOGO = Object.freeze(Object.fromEntries(FERRAMENTAS.map((f) => [f.nome, Object.freeze(f)])));
 /** Operações do núcleo que o catálogo usa (a porta do MOVA CORE só permite estas — todas leituras via b.consultar). */

@@ -88,7 +88,7 @@ function ajuste() {
   for (const [f, e, v] of [["quanto vendemos em novembro?", { competencia: "2026-11" }, 8540000], ["vendas do iFood esse mês", { competencia: "2026-11", canal: "IFOOD" }, 5120000], ["quanto vendemos em outubro", { competencia: "2026-10" }, 9120000], ["quantos pedidos em novembro?", { competencia: "2026-11" }, null]])
     L.push(conv(id("vendas"), "VENDAS", [T(f, { ferramentas: [["vendas", "resultado_do_mes"]], decisao: D.RESPONDER, valores: v ? [v] : [] },
       { passos: [[u("vendas", e)]], resposta: v ? `Vendas brutas: ${R(v)}.` : "Foram 2140 vendas registradas em novembro." })]));
-  L.push(conv(id("vendas"), "VENDAS", [T("Por que estamos vendendo menos que outubro?", { ferramentas: ["vendas"], decisao: D.RESPONDER, valores: [8540000, 9120000] },
+  L.push(conv(id("vendas"), "VENDAS", [T("Por que estamos vendendo menos que outubro?", { ferramentas: ["vendas"], decisao: D.RESPONDER, valores: [[8540000, 8230000], [9120000, 8830000]] },
     { passos: [[u("vendas", { competencia: "2026-11" }), u("vendas", { competencia: "2026-10" })]], resposta: `Novembro está em ${R(8540000)} contra ${R(9120000)} de outubro (2140 contra 2305 vendas). Os registros mostram menos vendas; a causa não aparece nos dados.` })]));
   // 6. atenção / vencidas
   const vencidas = C.contas.filter((c) => c.vencido).reduce((a, c) => a + c.saldoCentavos, 0);
@@ -119,7 +119,7 @@ function ajuste() {
     L.push(conv(id("como"), "COMO_FUNCIONA", [T(f, { ferramentas: ["como_funciona"], decisao: D.RESPONDER }, { passos: [[u("como_funciona", { tema })]], resposta: "É feito pelo sistema conforme a explicação oficial: cada etapa é conferida antes de valer." })]));
   // 8. comparação de unidades
   for (const [f, mes] of [["compara as vendas das duas lojas em novembro", "2026-11"], ["qual unidade vendeu mais em outubro?", "2026-10"], ["Centro x Norte em vendas este mês", "2026-11"]])
-    L.push(conv(id("unidades"), "UNIDADES", [T(f, { ferramentas: ["listar_unidades", "vendas"], decisao: D.RESPONDER, valores: [C.vendas[mes].brutoCentavos, N.vendas[mes].brutoCentavos] },
+    L.push(conv(id("unidades"), "UNIDADES", [T(f, { ferramentas: ["listar_unidades", "vendas"], decisao: D.RESPONDER, valores: [[C.vendas[mes].brutoCentavos, C.vendas[mes].liquidoCentavos], [N.vendas[mes].brutoCentavos, N.vendas[mes].liquidoCentavos]] },
       { passos: [[u("listar_unidades")], (res) => [u("vendas", { competencia: mes, unidade: refUnidade("Alfa Centro")(res) }), u("vendas", { competencia: mes, unidade: refUnidade("Alfa Norte")(res) })]], resposta: `Alfa Centro: ${R(C.vendas[mes].brutoCentavos)}; Alfa Norte: ${R(N.vendas[mes].brutoCentavos)}.` })]));
   for (const f of ["quanto devemos de brownie na Norte?", "e na Alfa Norte, quanto de brownie em aberto?", "brownies em aberto na unidade Norte"])
     L.push(conv(id("unidades"), "UNIDADES", [T(f, { ferramentas: ["listar_unidades", "contas_a_pagar"], decisao: D.RESPONDER, valores: [21000], proibidos: [18500] },
@@ -128,7 +128,7 @@ function ajuste() {
   for (const [f, tipo, v, desc] of [["Tirei 15 reais do caixa para comprar grampos.", "RETIRADA_DO_CAIXA", 1500, "grampos"], ["peguei 40 do caixa pra comprar gás", "RETIRADA_DO_CAIXA", 4000, "gás"], ["retirei R$ 22,50 do caixa para o motoboy", "RETIRADA_DO_CAIXA", 2250, "motoboy"], ["saiu 10 reais do caixa pra fita", "RETIRADA_DO_CAIXA", 1000, "fita"],
     ["Esse comprovante é de uma compra nova que já paguei.", "COMPRA_NOVA_PAGA", null, null], ["paguei 80 reais de gelo hoje, compra nova", "COMPRA_NOVA_PAGA", 8000, "gelo"], ["comprei e já paguei 120 de embalagem", "COMPRA_NOVA_PAGA", 12000, "embalagem"],
     ["paguei a conta da Atacadão", "PAGAMENTO_DE_CONTA_EXISTENTE", null, "Atacadão"], ["quitei a luz hoje", "PAGAMENTO_DE_CONTA_EXISTENTE", null, "luz"], ["dá baixa no leite da Laticínios, paguei 164", "PAGAMENTO_DE_CONTA_EXISTENTE", 16400, "Laticínios"]])
-    L.push(conv(id("escrita"), "ESCRITA_NAO_IMPLEMENTADA", [T(f, { ferramentas: ["preparar_registro"], decisao: D.PREPARAR, valores: v ? [v] : [] },
+    L.push(conv(id("escrita"), "ESCRITA_NAO_IMPLEMENTADA", [T(f, { ferramentas: ["preparar_registro"], decisao: D.PREPARAR, valores: v ? [v] : [], ...(/comprovante/.test(f) ? { decisaoAlternativa: [D.ESCLARECER, D.INDISPONIVEL], ferramentasOpcionais: true } : {}) },
       { passos: [[u("preparar_registro", { tipo, ...(v ? { valorCentavos: v } : {}), ...(desc ? { descricao: desc } : {}) })]], resposta: `Entendi${v ? ` ${R(v)}` : ""}${desc ? ` (${desc})` : ""}. Ainda não registro isso pela conversa: nada foi registrado. ${tipo === "RETIRADA_DO_CAIXA" ? "Lance a retirada em Caixa e Bancos." : "Envie o comprovante que eu confiro."}` })]));
   // 10. indisponível (não existe ferramenta para isso)
   for (const f of ["quantos kg de açaí temos no estoque?", "qual o salário da Joana?", "qual a margem do produto açaí 500ml?", "quantos clientes novos tivemos?", "qual a nota da loja no iFood?", "quanto pagamos de imposto no ano?", "quem foi o funcionário do mês?", "qual a previsão de vendas para dezembro?"])
@@ -151,7 +151,7 @@ function ajuste() {
     L.push(conv(id("continua"), "CONTINUIDADE", [
       T(["Quanto devemos ao Matheus?", "o Matheus tem algo pra receber?", "quanto falta pagar pro Matheus", "Matheus: saldo em aberto?"][i], { ferramentas: ["contas_a_pagar"], decisao: D.RESPONDER, valores: [46200] }, { passos: [[u("contas_a_pagar", { termo: "Matheus", situacao: "TODAS_EM_ABERTO" })]], resposta: `Devemos ${R(46200)} ao Matheus Rocha (semana de 16/11/2026).` }),
       T(["E quantas entregas ele fez ontem?", "e ontem ele fez quantas?", "quantas entregas dele ontem?", "e as entregas de ontem dele?"][i], { ferramentas: ["entregadores_da_semana"], decisao: D.RESPONDER }, { passos: [[u("entregadores_da_semana", { entregador: "Matheus" })]], resposta: `Ontem (23/11/2026) ele fez ${a.entregas} entregas.` }),
-      T(["Qual foi o custo médio por entrega dele?", "e quanto saiu por entrega?", "custo por entrega dele?", "dá quanto cada entrega?"][i], { ferramentas: ["entregadores_da_semana", "calcular"], decisao: D.RESPONDER, valores: [media] },
+      T(["Qual foi o custo médio por entrega dele?", "e quanto saiu por entrega?", "custo por entrega dele?", "dá quanto cada entrega?"][i], { ferramentas: ["calcular"], decisao: D.RESPONDER, valores: [media] }, // os dados já vieram nos turnos anteriores
         { passos: [[u("entregadores_da_semana", { semana: "2026-11-16", entregador: "Matheus" })], [u("calcular", { operacao: "DIVISAO", valores: [s.totalCentavos, s.entregas], significado: "custo por entrega Matheus 16/11", monetario: true })]], resposta: `Na semana de 16/11/2026: ${R(s.totalCentavos)} por ${s.entregas} entregas, ${R(media)} por entrega.` }),
     ]));
   }

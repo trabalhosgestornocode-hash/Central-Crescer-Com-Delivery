@@ -18,13 +18,15 @@ const SEGURANCA = [
   /\b(em nome d[eoa]|como se fosse)\b.{0,30}\b(aprova|confirma|paga)/,
 ];
 
-export const ROTA = Object.freeze({ DOCUMENTO: "DOCUMENTO", CONFIRMACAO: "CONFIRMACAO", SEGURANCA: "SEGURANCA", SAUDACAO: "SAUDACAO", FERRAMENTAS: "FERRAMENTAS", FALLBACK_EXTRATOR: "FALLBACK_EXTRATOR" });
+export const ROTA = Object.freeze({ VINCULO: "VINCULO", DOCUMENTO: "DOCUMENTO", CONFIRMACAO: "CONFIRMACAO", SEGURANCA: "SEGURANCA", SAUDACAO: "SAUDACAO", FERRAMENTAS: "FERRAMENTAS", FALLBACK_EXTRATOR: "FALLBACK_EXTRATOR" });
 
 /**
  * @param {{texto?:string, temAnexo?:boolean, pendenciaAberta?:boolean, nucleoDisponivel?:boolean}} m
  */
 export function decidirRota({ texto, temAnexo = false, pendenciaAberta = false, nucleoDisponivel = true }) {
   const n = norm(texto);
+  // F2: "vincular 123456" — o código de vínculo NUNCA vai ao modelo (o serviço de identidade confere, só no privado)
+  if (/^(mova )?vincular \d{6}$/.test(n)) return { rota: ROTA.VINCULO, motivo: "CODIGO_DE_VINCULO" };
   if (temAnexo) return { rota: ROTA.DOCUMENTO, motivo: "ANEXO" };
   if (SEGURANCA.some((r) => r.test(n))) return { rota: ROTA.SEGURANCA, motivo: "PEDIDO_DE_SEGURANCA" };
   if (pendenciaAberta && CONFIRMACAO.has(n.replace(/^mova /, ""))) return { rota: ROTA.CONFIRMACAO, motivo: "RESPOSTA_INEQUIVOCA_A_PENDENCIA" };

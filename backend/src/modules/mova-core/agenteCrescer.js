@@ -4,6 +4,34 @@
 // ferramentas é oferecida (o participante do WhatsApp não herda acesso de ninguém). Cada chamada repete as checagens do próprio
 // `executar()` do agente (garantirAcessoModulo/garantirPermissao) — além das do executor do MOVA CORE.
 const SO_LEITURA = new Set(["read"]);
+
+/**
+ * F2 — MAPA DE PERMISSÕES das 13 ferramentas do Agente Crescer (agente.tools.js), na ordem de prioridade para o MOVA.
+ * A permissão É a da plataforma (módulo contratado pela empresa/unidade + permissão do papel do perfil vinculado).
+ * `sugerir_navegacao` não é oferecida no WhatsApp (aponta telas do navegador, não é dado).
+ */
+export const PERMISSOES_DO_AGENTE_CRESCER = Object.freeze([
+  { nome: "consultar_dashboard_executivo", modulo: "ifood_dashboard", permissao: "dashboard_executivo.ver", tema: "Dashboard executivo", whatsapp: true },
+  { nome: "consultar_dashboard_dia", modulo: "ifood_dashboard", permissao: "dashboard_executivo.ver", tema: "Indicadores do dia", whatsapp: true },
+  { nome: "consultar_evolucao_diaria_financeiro", modulo: "ifood_dashboard", permissao: "dashboard_executivo.ver", tema: "Evolução diária (vendas/financeiro)", whatsapp: true },
+  { nome: "consultar_diagnostico", modulo: "ifood_dashboard", permissao: "dashboard_executivo.ver", tema: "Análise gerencial (diagnóstico)", whatsapp: true },
+  { nome: "listar_produtos_cmv", modulo: "products_cmv", permissao: "cmv.ver", tema: "Produtos e CMV (ranking)", whatsapp: true },
+  { nome: "consultar_produto_cmv", modulo: "products_cmv", permissao: "cmv.ver", tema: "CMV de um produto", whatsapp: true },
+  { nome: "listar_insumos", modulo: "ingredients", permissao: "insumos.ver", tema: "Insumos (ranking)", whatsapp: true },
+  { nome: "consultar_insumo", modulo: "ingredients", permissao: "insumos.ver", tema: "Um insumo", whatsapp: true },
+  { nome: "listar_cancelamentos", modulo: "parser_food_delivery", permissao: "parser_food_delivery.ver", tema: "Cancelamentos", whatsapp: true },
+  { nome: "consultar_cancelamento", modulo: "parser_food_delivery", permissao: "parser_food_delivery.ver", tema: "Um cancelamento", whatsapp: true },
+  { nome: "consultar_parser_resumo", modulo: "parser_food_delivery", permissao: "parser_food_delivery.ver", tema: "Resumo de vendas por plataforma", whatsapp: true },
+  { nome: "consultar_checklist_operacional", modulo: "checklist_operacional", permissao: "checklist.visualizar", tema: "Checklists", whatsapp: true },
+  { nome: "sugerir_navegacao", modulo: "agente_ia", permissao: null, tema: "Navegação de telas", whatsapp: false },
+]);
+const MAPA = new Map(PERMISSOES_DO_AGENTE_CRESCER.map((x) => [x.nome, x]));
+/** O acesso (formato agenteAcesso) alcança esta ferramenta? — mesma regra de ferramentasDisponiveis, sem bypass de impersonação. */
+export function acessoAlcanca(acesso, nome) {
+  const m = MAPA.get(nome);
+  if (!acesso || acesso.impersonando || !m || !m.whatsapp) return false;
+  return (acesso.modulos ?? []).includes(m.modulo) && (m.permissao === null || (acesso.permissoes ?? []).includes(m.permissao));
+}
 const MONETARIO = /(valor|total|custo|preco|faturamento|receita|ticket|cmv)/i;
 
 /** Fatos genéricos: campos monetários (centavos ou reais) com o rótulo do objeto que os contém. */
@@ -23,10 +51,12 @@ function fatosGenericos(o, nome, prof = 0, entidade = null, acc = []) {
  * @param {{resolverAcesso:(escopo)=>Promise<object|null>, permitidas?:string[]}} opcoes
  * @returns {Array} ferramentas no formato do catálogo
  */
-export function ferramentasDoAgenteCrescer(registro, { resolverAcesso, permitidas } = {}) {
+export function ferramentasDoAgenteCrescer(registro, { resolverAcesso, permitidas, acessoInicial } = {}) {
   if (typeof resolverAcesso !== "function") return [];
   return (registro ?? [])
     .filter((e) => SO_LEITURA.has(e.mode) && e.definicao?.name && (!permitidas || permitidas.includes(e.definicao.name)))
+    // F2: com o acesso da pessoa vinculada, só oferece o que o módulo E a permissão dela alcançam (o executar() repete a checagem)
+    .filter((e) => acessoInicial === undefined || acessoAlcanca(acessoInicial, e.definicao.name))
     .map((e) => ({
       nome: `crescer_${e.definicao.name}`.slice(0, 64),
       descricao: `[Agente Crescer] ${e.definicao.description}`.slice(0, 1000),
@@ -34,8 +64,8 @@ export function ferramentasDoAgenteCrescer(registro, { resolverAcesso, permitida
       valores: true, local: true, // permissão é a da plataforma (acesso), conferida pelo próprio executar() do agente
       origem: "AGENTE_CRESCER",
       async executar({ escopo, args }) {
-        const acesso = await resolverAcesso(escopo);
-        if (!acesso) return { erro: "SEM_ACESSO_NA_PLATAFORMA", dados: { mensagem: "Esta pessoa não tem acesso a esse módulo." }, fatos: [] };
+        const acesso = await resolverAcesso(escopo); // RE-resolvido a cada chamada: revogação vale no meio da conversa
+        if (!acesso || (acessoInicial !== undefined && !acessoAlcanca(acesso, e.definicao.name))) return { erro: "SEM_ACESSO_NA_PLATAFORMA", dados: { mensagem: "Esta pessoa não tem acesso a esse módulo." }, fatos: [] };
         const r = await e.executar(args, { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, acesso });
         return { dados: r, fatos: fatosGenericos(r, e.definicao.name) };
       },
