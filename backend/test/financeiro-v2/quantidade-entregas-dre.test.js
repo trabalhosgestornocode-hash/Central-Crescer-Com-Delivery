@@ -90,3 +90,15 @@ test("DRE: Entrega Sob Demanda fica junto das outras linhas de entrega (irmã de
   assert.equal(Math.abs(comissoes.no.valorCentavos), 50000, "Comissões sem a sob demanda");
   assert.equal(Math.abs(linha.valorCentavos), 50000 + 30000 + 1199, "total da linha inalterado");
 });
+
+test("entregadores próprios: quantidade das semanas fechadas que formam a linha (sem provisório); conta sem fechamento = parcial", async () => {
+  const { contarEntregasDasSemanasFechadas } = await import("../../src/modules/financeiro-v2/aplicacao/quantidadesDeEntregas.js");
+  const l = (id, valorCentavos = 1000, situacao = "ATIVO") => ({ id, valorCentavos, situacao });
+  const o = (id, lancamentoId) => ({ id, lancamentoId });
+  const f = (obrigacaoId, entregas) => ({ obrigacaoId, entregas });
+  assert.equal(contarEntregasDasSemanasFechadas([], [], []), null);
+  const r = contarEntregasDasSemanasFechadas([l("l1"), l("l2"), l("l3", 1000, "CANCELADO")], [o("o1", "l1"), o("o2", "l2"), o("o3", "l3")], [f("o1", 120), f("o2", 80), f("o3", 999)]);
+  assert.deepEqual([r.situacao, r.quantidade, r.provisorio, r.parcial, r.fonte], [S.COM_DADOS, 200, false, false, "SEMANAS_FECHADAS"]);
+  const p = contarEntregasDasSemanasFechadas([l("l1"), l("l4")], [o("o1", "l1"), o("o4", "l4")], [f("o1", 120)]);
+  assert.deepEqual([p.quantidade, p.parcial, p.semQuantidade], [120, true, 1]);
+});
