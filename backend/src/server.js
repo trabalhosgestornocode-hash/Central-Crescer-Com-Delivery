@@ -94,7 +94,7 @@ iniciarServidorHttp({
     // MOVA (só no backend de HOMOLOGAÇÃO): worker + respostas; desligado sem MOVA_HABILITADO/MOVA_PROCESSAMENTO_HABILITADO.
     import("./modules/fv2-integracao/index.js")
       .then((m) => m.iniciarMovaEmbutido({ env: process.env, log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }))
-      .then((r) => console.log(r.habilitado ? "   MOVA: worker ATIVO" : `   MOVA: DESABILITADO (${r.motivo})`))
+      .then((r) => console.log(r.habilitado ? "   MOVA: worker ATIVO" : r.retentando ? `   MOVA: montagem falhou (${r.codigo}); nova tentativa automática em ${Math.round(r.emMs / 1000)} s` : `   MOVA: DESABILITADO (${r.motivo})`))
       .catch(() => console.log("   MOVA: NÃO INICIADO"));
   },
   antesDeFechar: [

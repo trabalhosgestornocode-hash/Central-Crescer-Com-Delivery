@@ -185,9 +185,12 @@ t("07 unidade ambígua: pergunta, a resposta relacionada resolve; nunca presume 
   await s.enviar(gw({ doc: antes, texto: "alfa" }));
   await s.enviar(gw({ id: "AMBIGUA001", doc: amb, texto: "isso é da alfa ou da gama?" }));
   assert.equal((await s.ultima()).motivo, "UNIDADE_CONFLITANTE");
+  // 24/11: OUTRA pessoa não responde a pergunta do documento de P1 (a pendência continua aberta para P1)
   await s.enviar(gw({ participante: P2, texto: "é da gama", respostaA: "AMBIGUA001" }));
+  assert.deepEqual([(await s.ultima()).motivo, (await s.propostas(GAMA)).length], ["CONFIRMACAO_DE_OUTRO_PARTICIPANTE", 0]);
+  await s.enviar(gw({ texto: "é da gama", respostaA: "AMBIGUA001" }));
   const g = await s.propostas(GAMA);
-  assert.deepEqual([g.length, g[0].valorCentavos, g[0].esclarecidoPor], [1, 777, P2]);
+  assert.deepEqual([g.length, g[0].valorCentavos], [1, 777]);
   await s.enviar(gw({ doc: sem, texto: "mais um" }));           // P1 só mandou Alfa antes: mesmo assim pergunta
   assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
 });

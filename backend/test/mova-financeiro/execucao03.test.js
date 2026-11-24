@@ -232,6 +232,8 @@ t("12 unidade identificada depois: a resposta à pergunta retoma o MESMO documen
   const s = await cenario({ responder: () => comprovante({}) });
   await s.enviar(gw({ id: "E3UNID002", doc: bytes("depois"), mime: "image/jpeg", texto: "segue" }));
   await s.enviar(gw({ participante: P2, texto: "esse comprovante é da gama", respostaA: "E3UNID002" }));
+  assert.equal((await s.propostas(GAMA)).length, 0, "24/11: outra pessoa não retoma o documento de quem enviou");
+  await s.enviar(gw({ texto: "esse comprovante é da gama", respostaA: "E3UNID002" }));
   assert.equal((await s.propostas(GAMA)).length, 1);
   assert.equal(s.cliente.pedidos.length, 1, "o esclarecimento não relê o documento");
 });
