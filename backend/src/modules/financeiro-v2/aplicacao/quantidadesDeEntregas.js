@@ -6,8 +6,8 @@
 //     contam uma vez.
 //   * ENTREGA_SOB_DEMANDA — fonte oficial: Conciliação Financeira do iFood. Conta PEDIDOS distintos cuja cobrança líquida
 //     de entrega sob demanda ficou maior que zero na competência (cobrança estornada por inteiro não conta).
-//   * ENTREGAS_TERCEIRIZADAS — não há fonte oficial integrada com a quantidade (a nota da empresa de entregas não é lida):
-//     a resposta diz SEM_FONTE, nunca zero.
+//   * ENTREGAS_TERCEIRIZADAS — quantidade informada na descrição de cada lançamento da categoria (ex.: "(159 ENTREGAS)"),
+//     somada; lançamento sem quantidade deixa o total parcial (decisão do usuário em 24/11/2026).
 //
 // Situações: COM_DADOS (quantidade pode ser 0), SEM_DADOS (fonte integrada, mas nada importado na competência),
 // SEM_FONTE (não existe fonte oficial integrada) e INDISPONIVEL (a fonte não respondeu).
@@ -46,6 +46,27 @@ export function contarEntregasSobDemanda(movimentos) {
   return { situacao: S.COM_DADOS, quantidade: cobrados.length, fonte: "IFOOD_CONCILIACAO", valorCentavos: -cobrados.reduce((s, v) => s + v, 0) };
 }
 
+// "HASTAG ENTREGAS DE 02/11 A 08/11 (159 ENTREGAS)" → 159. Só número seguido de "entrega(s)"; datas e valores não casam.
+const QUANTIDADE_NA_DESCRICAO = /(?:^|[^\d.,/])(\d{1,6})\s*entregas?\b/i;
+export const quantidadeNaDescricao = (texto) => { const m = QUANTIDADE_NA_DESCRICAO.exec(String(texto ?? "")); return m ? Number(m[1]) : null; };
+
+/**
+ * Entregas terceirizadas: a quantidade vem da DESCRIÇÃO de cada lançamento da categoria (ex.: "(159 ENTREGAS)"), como a
+ * empresa de entregas cobra. Lançamento de valor positivo sem quantidade na descrição deixa o total PARCIAL (nunca é
+ * presumido); ajustes negativos (correções de valor) não mudam a quantidade. Pura.
+ */
+export function contarEntregasTerceirizadas(lancamentos) {
+  const ativos = lancamentos.filter((l) => l.situacao === "ATIVO");
+  if (!ativos.length) return { situacao: S.SEM_DADOS, quantidade: null, fonte: "DESCRICAO_DOS_LANCAMENTOS" };
+  let quantidade = 0; let comQuantidade = 0; let semQuantidade = 0;
+  for (const l of ativos) {
+    const q = quantidadeNaDescricao(l.descricao);
+    if (q !== null) { quantidade += q; comQuantidade += 1; } else if (l.valorCentavos > 0) semQuantidade += 1;
+  }
+  if (!comQuantidade) return { situacao: S.SEM_DADOS, quantidade: null, fonte: "DESCRICAO_DOS_LANCAMENTOS", semQuantidade };
+  return { situacao: S.COM_DADOS, quantidade, fonte: "DESCRICAO_DOS_LANCAMENTOS", parcial: semQuantidade > 0, lancamentos: comQuantidade, semQuantidade };
+}
+
 export function operacoesDeQuantidadesDeEntregas(b, { fonte = null } = {}) {
   return {
     /** Quantidade de entregas por linha de entrega da DRE, na competência e unidade do contexto. Nunca falha por fonte externa. */
@@ -65,14 +86,15 @@ export function operacoesDeQuantidadesDeEntregas(b, { fonte = null } = {}) {
         try { apuracao = await fonte.apurar({ organizacaoId: cx0.organizacaoId, unidadeId: cx0.unidadeId, inicio, fim }); } catch { apuracao = { disponivel: false, motivo: "FALHA_NA_LEITURA" }; }
         proprios = apuracao?.motivo === "PARSER_FOODY_DESLIGADO_NA_UNIDADE" ? { situacao: S.SEM_FONTE, quantidade: null, fonte: "FOODY", motivo: apuracao.motivo } : contarEntregasProprias(apuracao, { inicio, fim });
       }
-      const sobDemanda = await b.consultar(ctx, async (cx, tx) => contarEntregasSobDemanda(
-        (await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: "IFOOD", tipoRelatorio: RELATORIO_CONCILIACAO_IFOOD, competencia: comp, situacao: SITUACAO_REGISTRO_FONTE.ATIVO } })),
-      ));
+      const { sobDemanda, terceirizadas } = await b.consultar(ctx, async (cx, tx) => ({
+        sobDemanda: contarEntregasSobDemanda(await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: "IFOOD", tipoRelatorio: RELATORIO_CONCILIACAO_IFOOD, competencia: comp, situacao: SITUACAO_REGISTRO_FONTE.ATIVO } })),
+        terceirizadas: contarEntregasTerceirizadas(await tx.listar(cx, TIPO.LANCAMENTO, { onde: { competencia: comp, categoria: "ENTREGAS_TERCEIRIZADAS" } })),
+      }));
       return {
         competencia: comp,
         linhas: {
           ENTREGADORES_PROPRIOS: proprios,
-          ENTREGAS_TERCEIRIZADAS: { situacao: S.SEM_FONTE, quantidade: null, fonte: null, motivo: "SEM_FONTE_OFICIAL_INTEGRADA" },
+          ENTREGAS_TERCEIRIZADAS: terceirizadas,
           ENTREGA_SOB_DEMANDA: sobDemanda,
         },
       };
