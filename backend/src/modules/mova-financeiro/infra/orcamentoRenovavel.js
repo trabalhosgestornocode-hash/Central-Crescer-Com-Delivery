@@ -10,6 +10,30 @@ import { PRECOS_IA } from "./operacao.js";
 export const TETOS_RENOVAVEIS_MICROUSD = Object.freeze({ mensal: 10_000_000, diario: 1_000_000, requisicao: 100_000 });
 /** Multiplicadores oficiais sobre o preço de ENTRADA: leitura de cache 0,1×; escrita de cache (5 min) 1,25×. */
 export const MULTIPLICADOR_CACHE = Object.freeze({ leitura: 0.1, escrita: 1.25 });
+/**
+ * 24/11 — preços OFICIAIS revalidados (platform.claude.com/docs/en/about-claude/pricing, lidos em 24/11/2026), US$/MTok:
+ *   claude-haiku-5-5 ≤100K tokens de prompt: entrada 0,10 · escrita 5 min 0,125 · escrita 1 h 0,20 · leitura 0,01 · saída 0,50
+ *   claude-haiku-5-5 >100K: 0,50 · 0,625 · 1 · 0,05 · 2,50  (o tamanho do prompt inclui leitura e escrita de cache)
+ *   claude-sonnet-5-5 (qualquer tamanho): 2 · 2,50 · 4 · 0,10 (0,05×) · 10
+ * Sobrecarga de ferramentas no prompt: 286 tokens (tool_choice auto) / 406 (any/tool) no Haiku 5.5; 286 no Sonnet 5.5.
+ */
+export const PRECO_PIOR_CASO = Object.freeze({
+  "claude-haiku-5-5": Object.freeze({ entrada: 0.5, escrita1h: 1, saida: 2.5 }), // pior faixa (>100K)
+  "claude-sonnet-5-5": Object.freeze({ entrada: 2, escrita1h: 4, saida: 10 }),
+});
+export const SOBRECARGA_FERRAMENTAS_TOKENS = 406;
+
+/**
+ * RESERVA CONSERVADORA de UMA chamada (µUS$), sem depender do cache: TODO o prompt cobrado como escrita de cache de 1 h (a
+ * tarifa de entrada mais cara) na faixa de preço mais alta, mais a sobrecarga de ferramentas, mais o teto de saída inteiro
+ * (max_tokens, que inclui o raciocínio). Modelo desconhecido ⇒ o maior preço tabelado.
+ */
+export function reservaPiorCaso({ modelo, tokensDePrompt, maxTokens }) {
+  if (!Number.isInteger(tokensDePrompt) || tokensDePrompt < 0 || !Number.isInteger(maxTokens) || maxTokens <= 0) throw new TypeError("reserva exige tokens de prompt e max_tokens");
+  const p = PRECO_PIOR_CASO[String(modelo ?? "").replace(/-\d{8}$/, "")]
+    ?? Object.values(PRECO_PIOR_CASO).reduce((a, b) => ({ entrada: Math.max(a.entrada, b.entrada), escrita1h: Math.max(a.escrita1h, b.escrita1h), saida: Math.max(a.saida, b.saida) }));
+  return Math.ceil((tokensDePrompt + SOBRECARGA_FERRAMENTAS_TOKENS) * p.escrita1h + maxTokens * p.saida);
+}
 
 /** Custo em µUS$ (tokens × US$/MTok). Modelo desconhecido: maior preço tabelado (conservador). */
 export function custoMicrousd({ modelo, entrada = 0, saida = 0, cacheLeitura = 0, cacheEscrita = 0 }) {
@@ -63,7 +87,7 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
   return Object.freeze({
     regime: "RENOVAVEL",
     /** Reserva ANTES da chamada. Recusa: ORCAMENTO_MENSAL_ESGOTADO, ORCAMENTO_DIARIO_ESGOTADO, ORCAMENTO_REQUISICAO_ESGOTADO, PASSOS_ESGOTADOS. */
-    async reservar({ modelo = null, organizacaoId = null, unidadeId = null, requisicaoId = null } = {}) {
+    async reservar({ modelo = null, organizacaoId = null, unidadeId = null, requisicaoId = null, piorCasoMicrousd = 0 } = {}) {
       let cli;
       try { cli = await pool.connect(); } catch { throw new ErroDeIa("ORCAMENTO_INDISPONIVEL"); }
       try {
@@ -71,7 +95,8 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
         await cli.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", ["mova|orcamento_ia"]); // o MESMO bloqueio do acumulado
         const lim = await politica(cli);
         const c = await consumos(cli, lim, requisicaoId);
-        const r = lim.reserva;
+        // 24/11 — a reserva é o MAIOR entre a reserva fixa da política e o pior caso estimado DESTA chamada (reservaPiorCaso).
+        const r = Math.max(lim.reserva, Number.isInteger(piorCasoMicrousd) && piorCasoMicrousd > 0 ? piorCasoMicrousd : 0);
         if (c.mes + r > lim.mensal) throw new ErroDeIa("ORCAMENTO_MENSAL_ESGOTADO");
         if (c.dia + r > lim.diario) throw new ErroDeIa("ORCAMENTO_DIARIO_ESGOTADO");
         if (requisicaoId && c.req + r > lim.requisicao) throw new ErroDeIa("ORCAMENTO_REQUISICAO_ESGOTADO");
