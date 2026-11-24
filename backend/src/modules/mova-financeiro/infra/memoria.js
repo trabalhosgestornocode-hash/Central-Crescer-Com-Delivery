@@ -110,10 +110,11 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     }),
     mensagens: Object.freeze({
       async lembrar(mensagemId, { grupoId, pendente }) { if (pendente) pendentes.set(mensagemId, { grupoId, pendente, criadaEm: relogio() }); else pendentes.delete(mensagemId); },
-      async tomarPendente(mensagemId, { podeConfirmar = () => true } = {}) {
+      async tomarPendente(mensagemId, { podeConfirmar = () => true, validadeMs = null } = {}) {
         const p = pendentes.get(mensagemId) ?? null;
         if (!p) return null;
-        if (!podeConfirmar(p.pendente?.evento)) return { outroParticipante: true };
+        if (!podeConfirmar(p.pendente?.evento, p.pendente)) return { outroParticipante: true };
+        if (validadeMs !== null && p.criadaEm < new Date(relogio().getTime() - validadeMs)) return { expirada: true };
         pendentes.delete(mensagemId); return p;
       },
       /** 24/11 — citação exata (mesma regra do Postgres): pendência aberta do evento nesta conversa, dentro da validade. */
@@ -121,7 +122,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         const candidatas = [...pendentes.entries()].filter(([, x]) => x.grupoId === grupoId && x.pendente?.evento?.eventoId === eventoId).sort((a, b) => b[1].criadaEm - a[1].criadaEm);
         if (!candidatas.length) return null;
         const [chave, x] = candidatas[0];
-        if (!podeConfirmar(x.pendente?.evento)) return { outroParticipante: true };
+        if (!podeConfirmar(x.pendente?.evento, x.pendente)) return { outroParticipante: true };
         if (x.criadaEm < new Date(relogio().getTime() - validadeMs)) return { expirada: true };
         pendentes.delete(chave);
         return { grupoId: x.grupoId, pendente: x.pendente };
