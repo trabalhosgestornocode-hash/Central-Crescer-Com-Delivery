@@ -104,6 +104,124 @@ t("AUT-C2 valor maior e a resposta é 'outra compra': NÃO presume juros; cria a
   assert.deepEqual([(await s.liquidacoes()).length, (await s.saidas()).length], [1, 0]);
 });
 
+/** Simula o Gateway/relé confirmando a ÚLTIMA resposta do MOVA para `destino` com o id do provedor (o que a pessoa cita no WhatsApp). */
+async function entregar(s, providerMessageId, destino = FIN) {
+  await s.banco.pool.query("update mova.resposta set estado = 'ENVIADA', provider_message_id = $1 where seq = (select max(seq) from mova.resposta where grupo_jid = $2)", [providerMessageId, destino]);
+}
+const envelhecerPendencias = (s, intervalo) => s.banco.pool.query("update mova.mensagem_pendente set criada_em = now() - $1::interval where resolvida_em is null", [intervalo]);
+const relacoes = async (s) => (await s.mova.armazenamento.historico.todos()).filter((x) => x.decisao === "RELACIONADA");
+const abertas = async (s) => Number((await s.banco.pool.query("select count(*)::int n from mova.mensagem_pendente where resolvida_em is null")).rows[0].n);
+
+t("AUT-C3 (produção 23/11) 'Outra compra' CITANDO a pergunta do MOVA (não o comprovante): resolução EXATA pela resposta citada → continua a operação", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  const o = await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C3") }));
+  assert.equal((await s.ultima()).motivo, "VALOR_MAIOR_QUE_SALDO");
+  await entregar(s, "3EB0PERGUNTADOMOVA0001");
+  await s.enviar(gw({ texto: "Outra compra", grupo: FIN, respostaA: "3EB0PERGUNTADOMOVA0001" }));
+  const h = await s.ultima();
+  assert.notEqual(h.motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO");
+  assert.equal(h.decisao, "EXECUTADO");
+  assert.equal((await s.contas()).length, 2, "a conta nova entrou ao lado da existente");
+  assert.equal(await s.saldo(o.obrigacoes[0].id), 5000, "a conta existente ficou intacta");
+  assert.deepEqual((await relacoes(s)).map((x) => x.motivo), ["RESPOSTA_CITANDO_PERGUNTA"]);
+});
+
+t("AUT-C4 citação sem pendência e texto que não é resposta curta: segue o fluxo normal (não retoma pergunta alheia)", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C4") }));
+  await s.enviar(gw({ texto: "vou ver com a gerência amanhã e te falo", grupo: FIN, respostaA: "3EB0OUTRAMENSAGEM0001" }));
+  assert.equal((await relacoes(s)).length, 0);
+  assert.equal((await s.contas()).length, 1, "nada criado");
+});
+
+t("AUT-C5 'outra compra' citando uma mensagem QUALQUER (não é pergunta do MOVA) não confirma por aproximação a pendência recente", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C5") }));
+  await entregar(s, "3EB0PERGUNTA00C5");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0MENSAGEMHUMANA00C5" }));
+  assert.equal((await relacoes(s)).length, 0, "citação que não resolve nunca usa a memória curta");
+  assert.equal((await s.contas()).length, 1, "nada criado");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA00C5" }));
+  assert.equal((await s.contas()).length, 2, "a pendência continuava aberta e a citação certa a retoma");
+});
+
+t("AUT-C6 'sim' citando uma RESPOSTA do MOVA sem pendência (pergunta já resolvida) não confirma outra operação", async () => {
+  // IA simulada lê comprovante SÓ quando há documento; texto solto ("sim") vira conversa (como o Haiku real).
+  const temDocumento = (req) => (req.messages?.[0]?.content ?? []).some((b) => b.type === "document");
+  const s = await autonomo({ responder: (req) => (temDocumento(req) ? PIX({ valorCentavos: 25000 }) : base({})) });
+  const o = await s.conta("2026-10-20", 23000);
+  await s.enviar(gw({ texto: "MOVA descartáveis para a alfa", doc: pdf("C6a") }));
+  await entregar(s, "3EB0PERGUNTA00C6");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA00C6" })); // resolve a 1ª (despesa nova)
+  await entregar(s, "3EB0CONFIRMACAO00C6");
+  await s.enviar(gw({ texto: "MOVA descartáveis para a alfa (segundo)", doc: pdf("C6b") })); // nova pergunta (mesma conta, valor maior)
+  assert.equal((await s.ultima()).motivo, "VALOR_MAIOR_QUE_SALDO");
+  const antes = (await s.propostas()).length;
+  await s.enviar(gw({ texto: "sim", grupo: FIN, respostaA: "3EB0CONFIRMACAO00C6" })); // cita a confirmação da 1ª, que não tem pendência
+  assert.equal((await s.propostas()).length, antes, "nenhuma proposta nova (não virou juros da 2ª)");
+  assert.equal(await s.saldo(o.obrigacoes[0].id), 23000);
+  assert.equal((await relacoes(s)).length, 1, "só a 1ª citação foi relacionada");
+  assert.equal(await abertas(s), 1, "a 2ª pergunta continua aberta");
+});
+
+t("AUT-C7 DUAS pendências na mesma conversa: a citação escolhe a certa (não a mais recente) e a outra continua aberta", async () => {
+  let n = 0;
+  const s = await autonomo({ responder: () => (++n === 1 ? PIX({ valorCentavos: 25000 }) : PIX({ valorCentavos: 10800, favorecido: "Doceria Sintética" })) });
+  const doceria = await s.m.nucleo.registrarContraparte(s.c(ORG, ALFA), { tipo: "FORNECEDOR", nome: "Doceria Sintética" });
+  const c1 = await s.conta("2026-10-20", 23000);
+  const c2 = await s.conta("2026-10-21", 5000, ALFA, doceria);
+  await s.enviar(gw({ texto: "MOVA descartáveis para a alfa", doc: pdf("C7a") }));
+  await entregar(s, "3EB0PERGUNTA00C7A");
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C7b") }));
+  await entregar(s, "3EB0PERGUNTA00C7B");
+  assert.equal(await abertas(s), 2);
+  await s.enviar(gw({ texto: "sim", grupo: FIN, respostaA: "3EB0PERGUNTA00C7A" })); // juros da 1ª (a mais ANTIGA)
+  const [p] = await s.propostas();
+  assert.deepEqual([p.comando.entrada.obrigacaoId, p.comando.juros.valorCentavos], [c1.obrigacoes[0].id, 2000]);
+  assert.equal(await abertas(s), 1, "a pergunta dos brownies continua aberta");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA00C7B" }));
+  assert.equal(await s.saldo(c2.obrigacoes[0].id), 5000, "a conta da doceria ficou intacta");
+  assert.equal((await s.contas()).length, 3, "só a compra nova dos brownies entrou");
+  assert.equal(await abertas(s), 0);
+});
+
+t("AUT-C8 mensagem ATRASADA: citação 30 min depois ainda retoma (pendência financeira não some em 10 min); sem citação, não", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C8") }));
+  await entregar(s, "3EB0PERGUNTA00C8");
+  await envelhecerPendencias(s, "30 minutes");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN }));
+  assert.equal((await relacoes(s)).length, 0, "sem citação, a memória curta (10 min) não alcança");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA00C8" }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.contas()).length], ["EXECUTADO", 2]);
+});
+
+t("AUT-C9 pendência citada FORA da validade (73 h): nada é executado, pede reenvio e a pendência fica para a revisão", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C9") }));
+  await entregar(s, "3EB0PERGUNTA00C9");
+  await envelhecerPendencias(s, "73 hours");
+  await s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA00C9" }));
+  assert.deepEqual([(await s.ultima()).motivo, (await s.contas()).length, s.escritas().length], ["PENDENCIA_EXPIRADA", 1, 0]);
+  assert.match(await s.resposta(), /não continuo operações antigas/);
+  assert.equal(await abertas(s), 1);
+});
+
+t("AUT-C10 a MESMA resposta citada chega duas vezes (reenvio simultâneo): só UMA operação", async () => {
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800 }) });
+  await s.conta("2026-10-20", 5000);
+  await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("C10") }));
+  await entregar(s, "3EB0PERGUNTA0C10");
+  await Promise.all([s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA0C10" })), s.enviar(gw({ texto: "outra compra", grupo: FIN, respostaA: "3EB0PERGUNTA0C10" }))]);
+  assert.equal((await s.contas()).length, 2, "uma conta nova, não duas");
+  assert.equal((await relacoes(s)).length, 1);
+});
+
 t("AUT-D valor MENOR sem evidência de parcial: pergunta; 'sim' → baixa parcial preservando o saldo restante e o valor original", async () => {
   const s = await autonomo({ responder: () => PIX({ valorCentavos: 15000 }), politica: null });
   const o = await s.conta("2026-10-20", 25000);

@@ -13,6 +13,7 @@
 //   → unidade → revisão | transferência | receita | pagamento | conta → competência → obrigações → PROPOSTA.
 // Nunca: grava no Financeiro, paga, exclui, classifica em definitivo, age em competência que não esteja ABERTA, presume a
 // unidade pelo histórico do participante. Comprovante de obrigação existente = proposta de BAIXA (nunca despesa nova).
+import { camposAlterados, podeConfirmarPendencia, versaoDaConta } from "../dominio/confirmacao.js";
 import { chaveDoDocumento } from "../dominio/documentos.js";
 import { SITUACAO_COMPROVANTE, avaliarComprovante } from "../dominio/comprovante.js";
 import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
@@ -47,6 +48,8 @@ const PEDIDO_DE_APROVACAO = /^\s*(aprov[ao]r?|aprovad[oa]|aplic[ao]r?|pode\s+apr
 // é barrado pelo backend antes da IA. "paguei" (relato) não casa: só imperativo/pedido.
 /** 15A: validade da memória curta (esclarecimento sem citação). */
 export const MEMORIA_CURTA_MS = 10 * 60 * 1000;
+/** 24/11: validade de uma pendência retomada por CITAÇÃO da pergunta do MOVA (a conta é relida de qualquer forma). */
+export const PENDENCIA_CITADA_VALIDADE_MS = 72 * 60 * 60 * 1000;
 const PALAVRAS_DE_LIGACAO = new Set(["e", "eh", "a", "o", "da", "do", "de", "na", "no", "em", "foi", "unidade", "loja", "mova", "pra", "para", "sim", "ok", "hml"]);
 const PEDIDO_DE_EXECUCAO = [
   /\b(fa[çc]a|faz|efetue|realize|execute|agende|programe|mande)\s+(o|a|os|as|um|uma)?\s*(pagamento|pix|transfer[eê]ncia|ted|doc)s?\b/i,
@@ -233,9 +236,28 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 
       // 5. Mensagem relacionada: texto respondendo a um documento que aguarda esclarecimento (atômico; sobrevive a reinício).
       if (evento.respostaA && evento.tipo === "TEXTO") {
-        const pend = await a.mensagens.tomarPendente(evento.respostaA);
+        // 24/11 — só a MESMA pessoa autorizada que enviou o documento responde a pergunta dele (dominio/confirmacao.js).
+        // Recusada, a pendência NÃO é consumida: continua aberta para quem perguntou; nada é registrado.
+        const podeConfirmar = (origem, leitura) => podeConfirmarPendencia(cfg, origem, evento, { unidadeId: leitura?.divergencia?.unidadeId ?? null }).pode;
+        const recusarOutro = () => concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_DE_OUTRO_PARTICIPANTE", resposta: RESPOSTA.confirmacaoDeOutroParticipante(), extra: { retomou: null } });
+        let pend = await a.mensagens.tomarPendente(evento.respostaA, { podeConfirmar, validadeMs: PENDENCIA_CITADA_VALIDADE_MS });
+        if (pend?.expirada) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PENDENCIA_EXPIRADA", resposta: RESPOSTA.pendenciaExpirada(), extra: { retomou: null, citou: "DOCUMENTO" } });
+        if (pend?.outroParticipante) return recusarOutro();
+        let motivoRelacao = "ESCLARECIMENTO_RECEBIDO";
+        // 24/11 — CITAÇÃO EXATA: a pessoa citou a PERGUNTA do MOVA (outro id que o do documento). A resposta do MOVA guarda o id
+        // confirmado pelo provedor e o EVENTO que a gerou: a pendência é a desse evento, nesta conversa. Nada de aproximação: citação
+        // de uma resposta sem pendência não retoma outra operação; pendência fora da validade não continua sem nova conferência.
+        if (!pend?.pendente && typeof a.saida.origemDaResposta === "function" && typeof a.mensagens.tomarPendenteDoEvento === "function") {
+          const origem = await a.saida.origemDaResposta({ providerMessageId: evento.respostaA, grupoId: evento.grupoId });
+          if (origem?.eventoId) {
+            pend = await a.mensagens.tomarPendenteDoEvento({ eventoId: origem.eventoId, grupoId: evento.grupoId, validadeMs: PENDENCIA_CITADA_VALIDADE_MS, podeConfirmar });
+            motivoRelacao = "RESPOSTA_CITANDO_PERGUNTA";
+            if (pend?.outroParticipante) return recusarOutro();
+            if (pend?.expirada) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PENDENCIA_EXPIRADA", resposta: RESPOSTA.pendenciaExpirada(), extra: { retomou: null, citou: "PERGUNTA_DO_MOVA" } });
+          }
+        }
         if (pend?.pendente) {
-          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "ESCLARECIMENTO_RECEBIDO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null });
+          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
           return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
         }
       }
@@ -243,6 +265,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
       // texto curto, sem números, que identifica exatamente UMA unidade da conversa. Retomada atômica (nunca duas vezes).
       // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
+      // 24/11: SÓ sem citação. Uma mensagem que CITA algo e não achou pendência exata (passo 5) nunca é ligada por aproximação
+      // à pendência mais recente — citar uma consulta antiga com "sim" não pode confirmar outra operação.
       const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
       const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
       if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
@@ -519,7 +543,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
     // A resposta vem na MESMA conversa em que a pergunta saiu (grupo ou privado): é por ela que a memória curta reencontra a pendência.
-    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia } });
+    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia: { ...divergencia, unidadeId: unidade.unidadeId } } });
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
   }
 
@@ -559,6 +583,19 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       } else {
         contaEscolhida = porId(desf.desfecho === DESFECHO.ESCOLHER ? pend.candidatas[desf.indice]?.id : pend.candidatas[0]?.id);
         if (!contaEscolhida) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONTA_NAO_ESTA_MAIS_ABERTA", escopo, resposta: RESPOSTA.faltaInformacao(["qual conta este comprovante paga (ela mudou desde a pergunta; reenvie o comprovante)"]), injecao });
+        // 24/11 — VERSÃO: a resposta vale para a conta COMO ELA ESTAVA na pergunta. Se o saldo mudou desde então (outra baixa,
+        // correção), a pergunta ficou desatualizada: nada é executado e a conferência é refeita com o documento.
+        const naPergunta = (pend.candidatas ?? []).find((c) => c.id === contaEscolhida.id);
+        // revisão 24/11: a VERSÃO é a conta inteira (valor, saldo, pago, fornecedor, categoria, competência, vencimento, situação,
+        // unidade) — e a unidade da pendência tem de ser a desta retomada.
+        const versaoAgora = versaoDaConta(contaEscolhida, escopo.unidadeId);
+        const unidadeMudou = Boolean(pend.unidadeId) && pend.unidadeId !== escopo.unidadeId;
+        const saldoMudou = Number.isInteger(naPergunta?.saldoCentavos) && naPergunta.saldoCentavos !== contaEscolhida.saldoCentavos;
+        const versaoMudou = saldoMudou || (Boolean(naPergunta?.versao) && naPergunta.versao !== versaoAgora);
+        if (unidadeMudou || versaoMudou) {
+          const mudou = unidadeMudou ? ["unidade"] : [...new Set([...(saldoMudou ? ["saldo"] : []), ...(naPergunta?.versao ? camposAlterados(naPergunta.versao, versaoAgora) : [])])];
+          return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PERGUNTA_DESATUALIZADA", escopo, resposta: RESPOSTA.perguntaDesatualizada(naPergunta?.saldoCentavos ?? null, contaEscolhida.saldoCentavos, mudou), injecao, extra: { mudou } });
+        }
         if (desf.desfecho === DESFECHO.PARCIAL) parcialConfirmado = true;
         if (desf.desfecho === DESFECHO.JUROS) {
           if (valor <= contaEscolhida.saldoCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "JUROS_SEM_DIFERENCA", escopo, resposta: RESPOSTA.faltaInformacao(["a diferença não existe mais (o saldo mudou); reenvie o comprovante"]), injecao });
@@ -596,12 +633,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (casamento.caso === "EXATA") return baixa(casamento.conta);
       if (casamento.caso === "MENOR") {
         if (parcialConfirmado || legendaIndicaParcial(legenda)) return baixa(casamento.conta);
-        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MENOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMenor(casamento.conta, valor), "VALOR_MENOR_QUE_SALDO", [casamento.conta]);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MENOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id, saldoCentavos: casamento.conta.saldoCentavos, versao: versaoDaConta(casamento.conta, escopo.unidadeId) }] }, RESPOSTA.perguntaValorMenor(casamento.conta, valor), "VALOR_MENOR_QUE_SALDO", [casamento.conta]);
       }
-      if (casamento.caso === "MAIOR") return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MAIOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id }] }, RESPOSTA.perguntaValorMaior(casamento.conta, valor), "VALOR_MAIOR_QUE_SALDO", [casamento.conta]);
+      if (casamento.caso === "MAIOR") return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MAIOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id, saldoCentavos: casamento.conta.saldoCentavos, versao: versaoDaConta(casamento.conta, escopo.unidadeId) }] }, RESPOSTA.perguntaValorMaior(casamento.conta, valor), "VALOR_MAIOR_QUE_SALDO", [casamento.conta]);
       if (casamento.caso === "VARIAS") {
         const proximas = [...casamento.candidatas].sort((x, y) => Math.abs(x.saldoCentavos - valor) - Math.abs(y.saldoCentavos - valor)).slice(0, MAX_CANDIDATAS_NA_PERGUNTA);
-        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id, saldoCentavos: t.saldoCentavos, versao: versaoDaConta(t, escopo.unidadeId) })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
       }
     }
     // Nenhuma conta do favorecido (ou a pessoa disse "outra compra"): compra NOVA — mas a AUSÊNCIA de conta do mesmo favorecido não é,
