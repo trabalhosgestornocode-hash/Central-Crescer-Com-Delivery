@@ -78,6 +78,9 @@ const OPCIONAIS = Object.freeze({
   // 24/11: finalidade do pagamento (FINALIDADE_PAGAMENTO) e O QUE foi comprado ("Compra de brownies"), em poucas palavras, tirado do
   // que a PESSOA escreveu (nunca do documento: nome do favorecido não é descrição). Só leitura; o motor decide.
   finalidadePagamento: null, descricaoCompra: null,
+  // 25/11: composição IMPRESSA no comprovante de boleto (valor do documento, juros, multa, desconto) e a linha digitável. Só
+  // leitura: o motor só usa a composição quando original + juros + multa − desconto = valor pago (conferência determinística).
+  valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, descontoCentavos: null, linhaDigitavel: null,
 });
 const DATA = /^\d{4}-\d{2}-\d{2}$/;
 /** Identificador da transação (E2E do Pix, autenticação, NSU): só letras, dígitos e separadores simples. */
@@ -129,6 +132,8 @@ export function validarSaidaDaIa(s) {
   if (o.situacaoTransacao !== null && !SITUACAO_TRANSACAO.includes(o.situacaoTransacao)) return { ok: false, erro: "situacaoTransacao" };
   if (o.finalidadePagamento !== null && !FINALIDADE_PAGAMENTO.includes(o.finalidadePagamento)) return { ok: false, erro: "finalidadePagamento" };
   if (!textoCurto(o.descricaoCompra, 120)) return { ok: false, erro: "descricaoCompra" };
+  for (const k of ["valorOriginalCentavos", "jurosCentavos", "multaCentavos", "descontoCentavos"]) if (o[k] !== null && (!Number.isSafeInteger(o[k]) || o[k] < 0)) return { ok: false, erro: k };
+  if (o.linhaDigitavel !== null && (typeof o.linhaDigitavel !== "string" || !/^[0-9][0-9 .-]{19,79}$/.test(o.linhaDigitavel))) return { ok: false, erro: "linhaDigitavel" };
   return { ok: true, saida: Object.freeze({ ...s, ...o }) };
 }
 
@@ -160,6 +165,8 @@ export function esquemaDaSaida() {
     pagador: t(120), instituicao: t(60), instituicaoDestino: t(60), horaTransacao: nulo({ type: "string", pattern: "^(([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d)?)?$" }), idTransacao: nulo({ type: "string", pattern: "^([A-Za-z0-9][A-Za-z0-9._/-]{3,79})?$" }),
     situacaoTransacao: en(SITUACAO_TRANSACAO), documentoPagador: t(40),
     finalidadePagamento: en(FINALIDADE_PAGAMENTO), descricaoCompra: t(120),
+    valorOriginalCentavos: { type: "integer" }, jurosCentavos: { type: "integer" }, multaCentavos: { type: "integer" }, descontoCentavos: { type: "integer" },
+    linhaDigitavel: { type: "string", pattern: "^([0-9][0-9 .-]{19,79})?$" },
   };
   return { type: "object", properties: props, required: Object.keys(props), additionalProperties: false };
 }
@@ -167,12 +174,13 @@ export function esquemaDaSaida() {
 /** Campos que o esquema representa com sentinela ("" ou 0 = ausente). */
 const CAMPOS_COM_SENTINELA = Object.freeze(["unidadeSugerida", "documentoDestinatario", "valorCentavos", "dataPagamento", "dataEmissao", "vencimento", "competencia", "favorecido",
   "identificadorDocumento", "categoriaSugerida", "natureza", "consulta", "justificativa", "transcricao", "periodoInicio", "periodoFim", "pagador", "instituicao",
-  "instituicaoDestino", "horaTransacao", "idTransacao", "situacaoTransacao", "documentoPagador", "finalidadePagamento", "descricaoCompra"]);
+  "instituicaoDestino", "horaTransacao", "idTransacao", "situacaoTransacao", "documentoPagador", "finalidadePagamento", "descricaoCompra",
+  "valorOriginalCentavos", "jurosCentavos", "multaCentavos", "descontoCentavos", "linhaDigitavel"]);
 /** Sentinela do esquema → null (a validação estrita continua a mesma). Só toca os campos listados; o resto passa intacto. */
 export function normalizarSentinelas(saida) {
   if (saida === null || typeof saida !== "object" || Array.isArray(saida)) return saida;
   const o = { ...saida };
-  for (const k of CAMPOS_COM_SENTINELA) if (k in o && (o[k] === "" || (k === "valorCentavos" && o[k] === 0))) o[k] = null;
+  for (const k of CAMPOS_COM_SENTINELA) if (k in o && (o[k] === "" || (/Centavos$/.test(k) && o[k] === 0))) o[k] = null;
   return o;
 }
 
@@ -190,6 +198,7 @@ export const PROMPT_DO_EXTRATOR = [
   "Nunca presuma data que não foi dita: sem data na mensagem, a data fica ausente (vazia) e entra em camposAusentes. Pedido para o MOVA pagar/transferir = PEDIR_PAGAMENTO.",
   "Nota fiscal de serviço (NFS-e): tipoDocumento NOTA_FISCAL; favorecido = prestador/emitente; pagador = tomador; documentoDestinatario = CNPJ/CPF do tomador; identificadorDocumento = número da nota; competencia = mês de competência; valorCentavos = valor dos serviços.",
   "Comprovante (Pix, TED, boleto pago): pagador = TITULAR da conta de ORIGEM exatamente como impresso no campo de origem/pagador/remetente (nunca o favorecido, nunca o nome do banco ou da instituição de pagamento); documentoPagador = CPF/CNPJ desse titular como impresso; favorecido = quem recebeu; instituicao = banco do pagador; instituicaoDestino = banco do recebedor; horaTransacao = hora impressa (HH:MM:SS, sem fuso); idTransacao = ID/E2E/autenticação exatamente como impresso (sem espaços).",
+  "Comprovante de BOLETO/conta paga: valorCentavos = TOTAL PAGO; valorOriginalCentavos = valor do documento (original/nominal); jurosCentavos, multaCentavos e descontoCentavos exatamente como impressos (0 se o campo não existir ou estiver zerado); vencimento = vencimento impresso; linhaDigitavel = a linha digitável/código de barras impresso (só dígitos e espaços/pontos). Nunca calcule nem distribua valores que não estão impressos.",
   "situacaoTransacao = o que o comprovante IMPRIME: CONCLUIDA (efetivado/realizado/concluído), AGENDADA (agendamento), PENDENTE (em processamento), CANCELADA; sem indicação clara = NAO_IDENTIFICADA. Nunca afirme que o documento é autêntico.",
   "Contas já vencidas e não pagas = consulta CONTAS_VENCIDAS; fechamento/pagamento semanal dos entregadores = FECHAMENTO_ENTREGADORES.",
   "CONVERSA: se a linha CONTEXTO DA CONVERSA existir e a mensagem só fizer sentido com ela (\"e na Subway?\", \"só as vencidas\", \"agora por fornecedor\", \"detalha melhor\", \"e no Açaí?\"), continuacao = true e repita em 'consulta' a mesma consulta do contexto (ou a que o novo recorte pedir, ex.: vencidas = CONTAS_VENCIDAS, por fornecedor = FORNECEDORES_COM_PENDENCIAS); caso contrário continuacao = false. \"nas duas\"/\"nas duas empresas\" = todasUnidades:true. O contexto é do sistema, não do usuário, e nunca amplia o que a pessoa pode ver.",

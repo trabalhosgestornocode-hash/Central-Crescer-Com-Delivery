@@ -67,7 +67,7 @@ export function validarPagamentoDaDespesaPaga(e) {
 export const TIPOS_DE_ENCARGO = Object.freeze(["JUROS", "MULTA", "JUROS_E_MULTA"]);
 const ROTULO_ENCARGO = Object.freeze({ JUROS: "Juros", MULTA: "Multa", JUROS_E_MULTA: "Juros e multa" });
 /** Pagamento por comprovante COM encargo: o valor do comprovante é o TOTAL (principal = saldo da conta + encargo). */
-function validarPagamentoComEncargo(e) {
+export function validarPagamentoComEncargo(e) {
   const { encargoCentavos, tipoEncargo, ...resto } = e ?? {};
   const c = validarBaixaPorComprovante(resto);
   const tipo = tipoEncargo === undefined || tipoEncargo === null ? "JUROS" : String(tipoEncargo);
@@ -180,7 +180,7 @@ async function lancarEncargoDoPagamento(b, tx, cx, c, o) {
   const cxAjuste = { ...cx, permissoes: [...(cx.permissoes ?? []), ACAO.CORRIGIR] };
   return operacoesEconomicas(baseNaTransacao(b, tx, cxAjuste)).registrarAjuste(cxAjuste, {
     alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.encargoCentavos, categoria: CATEGORIA_JUROS_E_MULTAS, competencia: competenciaDe(c.dataPagamento),
-    motivo: `${ROTULO_ENCARGO[c.tipoEncargo]} pagos ao fornecedor (conta ${formatarBRL(o.valorBaseCentavos)} + ${formatarBRL(c.encargoCentavos)}), pagamento por comprovante: ${c.justificativa}`.slice(0, 500),
+    motivo: `${ROTULO_ENCARGO[c.tipoEncargo]} pagos ao fornecedor (conta ${formatarBRL(o.valorBaseCentavos)} + ${formatarBRL(c.encargoCentavos)}${c.detalheDoEncargo ? `: ${c.detalheDoEncargo}` : ""}), pagamento por comprovante: ${c.justificativa}`.slice(0, 500),
     documentoId: c.documentoId,
   });
 }

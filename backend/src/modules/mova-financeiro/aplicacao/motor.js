@@ -28,7 +28,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaU
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
@@ -613,8 +613,25 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const abertas = await porta.contasAPagarAbertas(escopo);
     const valor = saida.valorCentavos;
     const legenda = evento.midia ? legendaDoDocumento(evento.texto) : null; // legenda da mensagem original: descrição e evidência (entrada não confiável)
-    let candidatas = saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor);
-    let forcarNova = false; let contaEscolhida = null; let parcialConfirmado = false;
+    // 25/11: juros/multa DISCRIMINADOS no comprovante e soma conferida (original + juros + multa − desconto = pago) ⇒ comprovado:
+    // não pergunta se a diferença é juros. Genérico (qualquer boleto); a IA só lê os campos impressos, a conta é determinística.
+    const composicao = evento.midia ? composicaoComprovada(saida) : null;
+    let candidatas = saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor || (composicao && t.saldoCentavos === composicao.principalCentavos));
+    let forcarNova = false; let contaEscolhida = null; let parcialConfirmado = false; let competenciaInformada = null;
+    // Pagamento COM encargo de uma conta existente: um só caminho (resposta "são juros" ou composição comprovada no comprovante).
+    const propostaComEncargo = (conta, encargo, confirmadoPor, comp = null) => criarProposta(ctx, {
+      tipo: TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, valorCentavos: valor, parcial: false,
+      datas: { competencia: conta.competencia, caixa: saida.dataPagamento, vencimento: conta.vencimento },
+      comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: conta.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
+        juros: { valorCentavos: encargo, principalCentavos: conta.saldoCentavos, confirmadoPor,
+          ...(comp ? { jurosCentavos: comp.jurosCentavos, multaCentavos: comp.multaCentavos, tipoEncargo: comp.jurosCentavos && comp.multaCentavos ? "JUROS_E_MULTA" : comp.jurosCentavos ? "JUROS" : "MULTA" } : {}) } },
+    }, (p) => RESPOSTA.jurosAguardandoFinanceiro(p, conta, encargo), {
+      // Com as chaves, a política JUROS_DOCUMENTAL (limite = encargo máximo) e a ação `registrar_juros`: registra encargo + pagamento por comprovante.
+      posCriacao: execucao?.registrarJuros ? async (p) => {
+        const r = await execucao.aposJuros(p, escopo);
+        return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.pagoComJuros(p, r.resultado) } : r;
+      } : null,
+    });
     // 24/11 — o que a PESSOA disse sobre a finalidade e o que comprou (lido semanticamente; a resposta a uma pergunta prevalece
     // sobre a legenda do documento). "Compra nova" declarada não é presumida pela ausência de conta nem negada por valor igual.
     const finalidadeDaLegenda = evento.midia && !esclarecimento?.divergencia ? saida.finalidadePagamento ?? null : null;
@@ -623,8 +640,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (novaDeclarada) forcarNova = true;
     if (finalidadeDaLegenda === "PARCIAL") parcialConfirmado = true;
 
+    // 25/11 — resposta a "Qual é o mês de referência dessa conta?": a competência é a INFORMADA pela pessoa (nunca presumida).
+    if (esclarecimento?.divergencia?.tipo === TIPO_DIVERGENCIA.COMPETENCIA) {
+      const pend = esclarecimento.divergencia;
+      competenciaInformada = competenciaDaResposta(esclarecimento.texto, saida.dataPagamento);
+      if (!competenciaInformada) return perguntar(ctx, pend, RESPOSTA.naoEntendiCompetencia(), "COMPETENCIA_NAO_ENTENDIDA");
+      forcarNova = pend.forcarNova === true;
+      if (pend.descricao) descricaoInformada = pend.descricao;
     // 23/11 — RESPOSTA a uma pergunta de divergência: a operação CONTINUA (sem segunda confirmação) conforme o que a pessoa disse.
-    if (esclarecimento?.divergencia) {
+    } else if (esclarecimento?.divergencia) {
       const pend = esclarecimento.divergencia;
       // 24/11: pergunta "o que foi comprado?" — a resposta é a DESCRIÇÃO (curta e direta, ou lida pela IA); a compra é nova.
       if (pend.tipo === TIPO_DIVERGENCIA.DESCRICAO) {
@@ -662,21 +686,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         if (desf.desfecho === DESFECHO.PARCIAL) parcialConfirmado = true;
         if (desf.desfecho === DESFECHO.JUROS) {
           if (valor <= contaEscolhida.saldoCentavos) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "JUROS_SEM_DIFERENCA", escopo, resposta: RESPOSTA.faltaInformacao(["a diferença não existe mais (o saldo mudou); reenvie o comprovante"]), injecao });
-          const juros = valor - contaEscolhida.saldoCentavos;
-          // Juros CONFIRMADOS: nenhuma segunda conta. O pagamento com juros (saída + juros classificados) é aplicado pelo Financeiro na
-          // Central pelo mesmo serviço oficial de "Paguei pelo banco" (a diferença vira juros e multas); o MOVA não tem ação para isso.
-          return criarProposta(ctx, {
-            tipo: TIPO_PROPOSTA.BAIXA_DE_OBRIGACAO, valorCentavos: valor, parcial: false,
-            datas: { competencia: contaEscolhida.competencia, caixa: saida.dataPagamento, vencimento: contaEscolhida.vencimento },
-            comando: { operacao: "pagarContaAPagar", entrada: { obrigacaoId: contaEscolhida.id, contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
-              juros: { valorCentavos: juros, principalCentavos: contaEscolhida.saldoCentavos, confirmadoPor: esclarecimento.participanteId } },
-          }, (p) => RESPOSTA.jurosAguardandoFinanceiro(p, contaEscolhida, juros), {
-            // Com as chaves, a política JUROS_DOCUMENTAL (limite = encargo máximo) e a ação `registrar_juros`: registra encargo + pagamento por comprovante.
-            posCriacao: execucao?.registrarJuros ? async (p) => {
-              const r = await execucao.aposJuros(p, escopo);
-              return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.pagoComJuros(p, r.resultado) } : r;
-            } : null,
-          });
+          // Juros CONFIRMADOS pela pessoa: nenhuma segunda conta; encargo + pagamento pelo caminho único.
+          return propostaComEncargo(contaEscolhida, valor - contaEscolhida.saldoCentavos, esclarecimento.participanteId);
         }
       }
     }
@@ -697,6 +708,13 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (casamento.caso === "MENOR") {
         if (parcialConfirmado || legendaIndicaParcial(legenda)) return baixa(casamento.conta);
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MENOR, valorCentavos: valor, candidatas: [{ id: casamento.conta.id, saldoCentavos: casamento.conta.saldoCentavos, versao: versaoDaConta(casamento.conta, escopo.unidadeId) }] }, RESPOSTA.perguntaValorMenor(casamento.conta, valor), "VALOR_MENOR_QUE_SALDO", [casamento.conta]);
+      }
+      // 25/11: o comprovante DISCRIMINA os encargos e o principal é o saldo de UMA conta do favorecido ⇒ pagamento dessa conta com
+      // juros/multa comprovados, sem pergunta. Mais de uma conta com esse saldo continua perguntando qual.
+      if (composicao && (casamento.caso === "MAIOR" || casamento.caso === "VARIAS")) {
+        const lista = casamento.caso === "MAIOR" ? [casamento.conta] : casamento.candidatas;
+        const exatas = lista.filter((t) => t.saldoCentavos === composicao.principalCentavos);
+        if (exatas.length === 1) return propostaComEncargo(exatas[0], composicao.encargoCentavos, "COMPROVANTE", composicao);
       }
       if (casamento.caso === "MAIOR") {
         // 24/11 (caso real dos brownies: comprovante R$ 259 × conta de R$ 81): diferença grande demais para ser juros não vira a
@@ -726,7 +744,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
     // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
     // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
-    const competencia = saida.competencia ?? mes(saida.dataEmissao) ?? null;
+    const competencia = competenciaInformada ?? saida.competencia ?? mes(saida.dataEmissao) ?? null;
     const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
     // 24/11: a descrição é o que a PESSOA disse que comprou (legenda, mensagem posterior ou resposta à pergunta), lido pela IA; sem
@@ -738,19 +756,28 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     if (evento.midia && !descricao && !categoria && esclarecimento?.divergencia?.tipo !== TIPO_DIVERGENCIA.DESCRICAO) {
       return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.DESCRICAO, valorCentavos: valor, candidatas: [] }, RESPOSTA.perguntaDescricao(valor), "DESCRICAO_DA_COMPRA_AUSENTE");
     }
-    const comando = comandoDeObrigacao(saida, { competencia, vencimento: saida.dataPagamento, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria });
+    // 25/11: comprovante sem mês de referência ⇒ pergunta SÓ isso (o Financeiro não registra conta sem competência e o MOVA não a
+    // inventa: nem o mês do pagamento, nem o do vencimento). A resposta continua a operação sem nova confirmação.
+    // Sem a execução automática ligada, vale o fluxo 15A (proposta com competência a confirmar na revisão humana, reaproveitado).
+    if (evento.midia && !competencia && execucao?.criarDespesas) {
+      return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.COMPETENCIA, valorCentavos: valor, candidatas: [], forcarNova, descricao: descricaoInformada ?? null }, RESPOSTA.perguntaCompetencia(valor, saida.favorecido), "COMPETENCIA_AUSENTE");
+    }
+    // 25/11: com encargos comprovados, a conta nasce pelo valor ORIGINAL (o encargo é lançado à parte) e vence no vencimento impresso.
+    const vencimentoDaConta = composicao && saida.vencimento ? saida.vencimento : saida.dataPagamento;
+    const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     // Resumo consolidado: unidade, categoria e as contas em aberto do MESMO favorecido que este comprovante NÃO baixou.
     // A resposta NUNCA repete o texto recebido: só a descrição CURTA lida pela IA, mascarada e sem sinal de instrução, aparece.
     const descricaoExibivel = descricaoInformada && !sinaisDeInjecao(descricaoInformada) ? mascararDadosSensiveis(descricaoInformada).slice(0, 60) : null;
-    const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [] };
+    const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [], contaNova: true };
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
-      datas: { competencia, caixa: saida.dataPagamento, vencimento: saida.dataPagamento }, competenciaPendente: !competencia,
+      datas: { competencia, caixa: saida.dataPagamento, vencimento: vencimentoDaConta }, competenciaPendente: !competencia,
       // Execução 17: com comprovante, a aplicação registra a conta e o pagamento POR COMPROVANTE (nenhuma saída bancária
       // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
       // 24/11: com comprovante, a conta e o pagamento entram numa ÚNICA operação atômica (registrarDespesaPagaPorComprovante).
-      comando: { operacao: evento.midia ? "registrarDespesaPagaPorComprovante" : "registrarObrigacao+pagarContaAPagar", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor } },
+      comando: { operacao: !evento.midia ? "registrarObrigacao+pagarContaAPagar" : composicao ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
+        ...(composicao ? { encargos: { principalCentavos: composicao.principalCentavos, jurosCentavos: composicao.jurosCentavos, multaCentavos: composicao.multaCentavos, encargoCentavos: composicao.encargoCentavos } } : {}) },
       ...(novaDeclarada || esclarecimento?.divergencia ? { compraNovaDeclarada: true } : {}),
     }, comAvisoDeCompetencia((p) => RESPOSTA.propostaDespesaPaga(p, resumo), competencia), {
       // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.

@@ -10,7 +10,7 @@
 
 // 24/11: NOVA_OU_CONTA — o comprovante supera MUITO o saldo da única conta do favorecido (diferença grande demais para ser juros):
 // a pergunta é "é uma compra nova?" ("sim" = compra nova). DESCRICAO — compra nova sem descrição nem categoria: "o que foi comprado?".
-export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE", NOVA_OU_CONTA: "NOVA_OU_CONTA", DESCRICAO: "DESCRICAO" });
+export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE", NOVA_OU_CONTA: "NOVA_OU_CONTA", DESCRICAO: "DESCRICAO", COMPETENCIA: "COMPETENCIA" });
 export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA: "NOVA", ESCOLHER: "ESCOLHER", MESMA: "MESMA", NAO_ENTENDI: "NAO_ENTENDI" });
 export const MAX_CANDIDATAS_NA_PERGUNTA = 5;
 
@@ -27,11 +27,57 @@ export const legendaIndicaParcial = (legenda) => PALAVRA_PARCIAL.test(normalizar
 /** A legenda cita juros/multa? (mesmo assim o MOVA confirma a composição da diferença; nunca presume) */
 export const legendaCitaJuros = (legenda) => PALAVRA_JUROS.test(normalizar(legenda));
 
+/**
+ * 25/11 — COMPOSIÇÃO do pagamento impressa no comprovante (boleto com juros/multa): só vale quando é COMPROVADA, isto é,
+ * original + juros + multa − desconto = valor pago, centavo a centavo. Sem encargo, com desconto (sem serviço para abater na mesma
+ * operação) ou soma que não fecha ⇒ null (o MOVA segue o fluxo normal, com pergunta). Genérico: nenhum fornecedor é especial.
+ * @returns {{principalCentavos:number, jurosCentavos:number, multaCentavos:number, encargoCentavos:number}|null}
+ */
+export function composicaoComprovada(saida) {
+  const n = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : 0);
+  const original = saida?.valorOriginalCentavos; const pago = saida?.valorCentavos;
+  if (!Number.isSafeInteger(original) || original <= 0 || !Number.isSafeInteger(pago) || pago <= 0) return null;
+  const juros = n(saida.jurosCentavos); const multa = n(saida.multaCentavos); const desconto = n(saida.descontoCentavos);
+  if (juros + multa === 0 || desconto > 0 || original + juros + multa - desconto !== pago) return null;
+  return { principalCentavos: original, jurosCentavos: juros, multaCentavos: multa, encargoCentavos: juros + multa };
+}
+
+const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const RE_MES_NOME = new RegExp(`\\b(${MESES.join("|")}|${MESES.map((m) => m.slice(0, 3)).join("|")})\\b`);
+/** Texto curto que parece um mês ("novembro", "11/2026", "mês 10") — para a memória curta reconhecer a resposta. */
+export const pareceMes = (t) => /^(mes\s+)?(0?[1-9]|1[0-2])(\s+(de\s+)?(20)?\d{2})?$/.test(t) || (t.split(" ").length <= 4 && RE_MES_NOME.test(t));
+/**
+ * 25/11 — resposta a "Qual é o mês de referência dessa conta?" → competência AAAA-MM (determinística). Aceita "novembro",
+ * "nov/2026", "11/2026", "11/26", "2026-11", "mês 11", "11". Sem ano: o do pagamento (mês posterior ao do pagamento em mais
+ * de um ⇒ ano anterior). Não entendeu ⇒ null.
+ */
+export function competenciaDaResposta(texto, dataPagamento) {
+  const t = normalizar(texto).replace(/^(mova\s+)?((e|foi|eh|referente a|referente ao|referencia|de|do|mes de|mes)\s+)*/, "").trim();
+  if (!t || t.length > 40) return null;
+  let mesN = null; let ano = null;
+  const iso = /^(20\d{2})\s+(0?[1-9]|1[0-2])$/.exec(t);
+  const num = /^(0?[1-9]|1[0-2])(?:\s+(?:de\s+)?(20\d{2}|\d{2}))?$/.exec(t);
+  const nome = RE_MES_NOME.exec(t);
+  if (iso) { ano = Number(iso[1]); mesN = Number(iso[2]); }
+  else if (num) { mesN = Number(num[1]); if (num[2]) ano = num[2].length === 2 ? 2000 + Number(num[2]) : Number(num[2]); }
+  else if (nome && t.split(" ").length <= 4) {
+    mesN = MESES.findIndex((m) => m === nome[1] || m.slice(0, 3) === nome[1]) + 1;
+    const a = /\b(20\d{2}|\d{2})\b/.exec(t.replace(nome[1], ""));
+    if (a) ano = a[1].length === 2 ? 2000 + Number(a[1]) : Number(a[1]);
+  } else return null;
+  if (!ano) {
+    const [ap, mp] = String(dataPagamento ?? "").split("-").map(Number);
+    if (!ap || !mp) return null;
+    ano = mesN > mp + 1 ? ap - 1 : ap;
+  }
+  return `${ano}-${String(mesN).padStart(2, "0")}`;
+}
+
 /** Texto curto que parece resposta a uma pergunta de divergência (para a memória curta, sem citação). */
 export function parecerRespostaDeDivergencia(texto) {
   const t = normalizar(texto);
   if (!t || t.length > 60) return false;
-  return SIM.test(t) || NAO.test(t) || /^[1-9]$/.test(t) || PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t);
+  return SIM.test(t) || NAO.test(t) || /^[1-9]$/.test(t) || PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t);
 }
 
 /**
@@ -117,6 +163,7 @@ export function descreverPendencia(pendencia) {
     case TIPO_DIVERGENCIA.MENOR: return `o MOVA perguntou se o comprovante de ${v} é pagamento PARCIAL de uma conta já cadastrada ou uma compra nova.`;
     case TIPO_DIVERGENCIA.VARIAS: return `o MOVA listou ${pendencia.candidatas?.length ?? "várias"} contas cadastradas e perguntou qual o comprovante de ${v} paga (pelo número) ou se é compra nova.`;
     case TIPO_DIVERGENCIA.SEMELHANTE: return `o MOVA perguntou se o comprovante de ${v} é o MESMO pagamento/conta já registrado ou uma compra nova.`;
+    case TIPO_DIVERGENCIA.COMPETENCIA: return `o MOVA perguntou o MÊS DE REFERÊNCIA (competência) da conta paga com o comprovante de ${v}.`;
     case TIPO_DIVERGENCIA.DESCRICAO: return `o MOVA perguntou o que foi comprado com o comprovante de ${v} (a resposta é a descrição da compra nova).`;
     default: return null;
   }

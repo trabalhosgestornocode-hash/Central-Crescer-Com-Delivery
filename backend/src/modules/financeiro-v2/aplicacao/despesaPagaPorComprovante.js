@@ -23,16 +23,32 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
+import { exigirCentavos, formatarBRL } from "../dominio/dinheiro.js";
+
+/**
+ * 25/11 — encargos DISCRIMINADOS no comprovante (juros e/ou multa impressos). A conta nasce pelo valor ORIGINAL; o encargo entra
+ * pelo mecanismo oficial (ajuste na categoria de juros e multas, ação estreita `registrar_juros`) e o pagamento é o TOTAL.
+ */
+export function validarEncargosDoComprovante(e) {
+  semCamposDesconhecidos(e ?? {}, ["jurosCentavos", "multaCentavos"], "encargos");
+  const v = (x, campo) => (x === undefined || x === null ? 0 : exigirCentavos(x, campo));
+  const juros = v(e.jurosCentavos, "jurosCentavos"); const multa = v(e.multaCentavos, "multaCentavos");
+  if (!(juros + multa > 0)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe juros ou multa do comprovante.", { campo: "encargos" });
+  return { jurosCentavos: juros, multaCentavos: multa, encargoCentavos: juros + multa, tipoEncargo: juros && multa ? "JUROS_E_MULTA" : juros ? "JUROS" : "MULTA",
+    detalhe: [juros ? `juros ${formatarBRL(juros)}` : null, multa ? `multa ${formatarBRL(multa)}` : null].filter(Boolean).join(", ") };
+}
 
 export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
-  return {
+  const ops = {
     /**
      * @param {object} ctx
      * @param {{obrigacao:object, comprovante:{arquivo:{conteudo:Buffer,nome:string,tipoMime:string}, descricao:string, competencia?:string|null},
      *          pagamento:{dataPagamento:string, idTransacao?:string|null, justificativa:string, confirmar:boolean}}} entrada
      */
     async registrarDespesaPagaPorComprovante(ctx, entrada) {
-      semCamposDesconhecidos(entrada ?? {}, ["obrigacao", "comprovante", "pagamento"], "despesaPagaPorComprovante");
+      semCamposDesconhecidos(entrada ?? {}, ["obrigacao", "comprovante", "pagamento", "encargos"], "despesaPagaPorComprovante");
+      const encargos = entrada?.encargos === undefined || entrada?.encargos === null ? null : validarEncargosDoComprovante(entrada.encargos);
+      if (encargos) b.autorizarContexto(ctx, ACAO.REGISTRAR_JUROS);
       if (!entrada?.obrigacao || typeof entrada.obrigacao !== "object") falhar(CODIGO.ENTRADA_INVALIDA, "Informe a conta a pagar.", { campo: "obrigacao" });
       semCamposDesconhecidos(entrada.comprovante ?? {}, ["arquivo", "descricao", "competencia"], "comprovante");
       const arquivo = validarArquivoDeEvidencia({ ...(entrada.comprovante ?? {}), tipo: "COMPROVANTE" });
@@ -50,6 +66,7 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, async (cx, tx) => {
         await b.exigirConcessaoVigente(tx, cx, acaoDaConta);
         await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
+        if (encargos) await b.exigirConcessaoVigente(tx, cx, ACAO.REGISTRAR_JUROS);
         const economico = operacoesEconomicas(baseNaTransacao(b, tx, cx));
         const ob = acaoDaConta === ACAO.REGISTRAR_OBRIGACAO
           ? await economico.registrarObrigacaoDocumental(ctx, entrada.obrigacao)
@@ -58,16 +75,19 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
         const [conta] = ob.obrigacoes;
         const documento = await gravarFichaEVinculo(b, tx, cx, { cofre, guardado, envio: { ...arquivo, vinculo: { registroTipo: TIPO.OBRIGACAO, registroId: conta.id } } });
         // Liquidação INTEGRAL: o valor pago é o valor da despesa (nunca uma segunda despesa, nunca saída bancária inventada).
+        // Com encargos: o pagamento é o TOTAL (original + juros + multa); o encargo é lançado à parte (nunca tudo como a despesa).
+        const pagoCentavos = conta.valorBaseCentavos + (encargos?.encargoCentavos ?? 0);
         const pago = await pagarPorComprovante(b, tx, cx, {
-          obrigacaoId: conta.id, valorCentavos: conta.valorBaseCentavos, dataPagamento: pagamento.dataPagamento, documentoId: documento.documento.id,
+          obrigacaoId: conta.id, valorCentavos: pagoCentavos, dataPagamento: pagamento.dataPagamento, documentoId: documento.documento.id,
           idTransacao: pagamento.idTransacao, justificativa: pagamento.justificativa, confirmar: true,
+          ...(encargos ? { encargoCentavos: encargos.encargoCentavos, tipoEncargo: encargos.tipoEncargo, detalheDoEncargo: encargos.detalhe } : {}),
         });
         // F4 §13 — COMPROVANTE FOTOGRAFADO DE NOVO (depois das conferências exatas: mesmo arquivo/mesma transação já recusados acima): outro arquivo (outro hash) não basta para ser outro pagamento. Mesmo valor, mesma
         // data e mesmo beneficiário de um pagamento por comprovante já registrado, sem identificadores de transação DIFERENTES dos
         // dois lados ⇒ recusa (nada fica gravado) até a pessoa confirmar que é outra compra (`naoEDuplicado` + justificativa).
         if (!ob.repetido && !pago.repetido && !pagamento.naoEDuplicado) {
           const iguais = (await tx.listar(cx, TIPO.LIQUIDACAO)).filter((l) => l.origemDoVinculo === "COMPROVANTE" && l.situacao !== "ESTORNADA" && l.alvoId !== conta.id && l.id !== pago.liquidacao?.id
-            && l.valorCentavos === conta.valorBaseCentavos && l.dataEfetiva === pagamento.dataPagamento
+            && l.valorCentavos === pagoCentavos && l.dataEfetiva === pagamento.dataPagamento
             && !(l.idTransacao && pagamento.idTransacao && String(l.idTransacao).toUpperCase() !== pagamento.idTransacao.toUpperCase()));
           for (const l of iguais) {
             const outra = await tx.obter(cx, TIPO.OBRIGACAO, l.alvoId);
@@ -80,9 +100,16 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
           repetido: Boolean(ob.repetido && pago.repetido),
           lancamento: ob.lancamento, obrigacao: pago.titulo, documento: documento.documento, liquidacao: pago.liquidacao,
           conciliacao: pago.conciliacao,
-          efeito: { novasDespesas: ob.repetido ? 0 : 1, novasSaidas: 0, pagoCentavos: conta.valorBaseCentavos },
+          efeito: { novasDespesas: ob.repetido ? 0 : 1, novasSaidas: 0, pagoCentavos, ...(encargos ? { principalCentavos: conta.valorBaseCentavos, jurosCentavos: encargos.jurosCentavos, multaCentavos: encargos.multaCentavos, encargoCentavos: encargos.encargoCentavos } : {}) },
+          ...(pago.encargo ? { encargo: pago.encargo } : {}),
         };
       });
     },
   };
+  /** 25/11 — operação ESTREITA da compra nova paga COM juros/multa discriminados (exige também `registrar_juros`). */
+  ops.registrarDespesaPagaComEncargo = (ctx, entrada) => {
+    if (!entrada?.encargos) falhar(CODIGO.ENTRADA_INVALIDA, "Informe juros ou multa do comprovante.", { campo: "encargos" });
+    return ops.registrarDespesaPagaPorComprovante(ctx, entrada);
+  };
+  return ops;
 }
