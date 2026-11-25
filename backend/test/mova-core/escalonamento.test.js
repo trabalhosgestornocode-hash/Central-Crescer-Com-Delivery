@@ -85,3 +85,14 @@ test("ES-04 o Sonnet também reprovado: fica a melhor resposta CONFERIDA (nunca 
   assert.equal(msgs.length, 1);
   assert.match(JSON.stringify(msgs[0].content), /servidor/);
 });
+
+test("UN-01 troca de unidade no meio da conversa: o servidor avisa o modelo que a resposta anterior era da OUTRA unidade", async () => {
+  const k = await montar({ haiku: [CONSULTA, [falar("As contas de brownies de outubro somam R$ 230,00.")]] }, null);
+  await k.perguntar("quanto deu brownie em outubro?");
+  const outra = UNIDADES.find((u) => u.id !== UNI_A);
+  const antes = k.cliente.pedidos.length;
+  await k.perguntarEm("e aqui?", outra.id);
+  const sistema = JSON.stringify(k.cliente.pedidos[antes].system);
+  assert.match(sistema, /MUDOU de/);
+  assert.ok(sistema.includes(outra.nome));
+});

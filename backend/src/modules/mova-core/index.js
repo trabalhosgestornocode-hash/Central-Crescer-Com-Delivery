@@ -109,7 +109,14 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
         notaDoServidor = r.ok ? `[servidor] O documento desta mensagem foi anexado à proposta aberta (${r.proposta.id}, estado ${r.proposta.estado}). Consulte propostas_do_mova ou siga com preparar_operacao; nada entrou no Financeiro ainda.` : null;
       }
     }
-    const contexto = [orientacao, recuperado, notaDoServidor].filter(Boolean).join("\n") || null;
+    // troca de unidade no meio da conversa: as respostas anteriores eram da OUTRA unidade e continuam certas para ela
+    // (avaliação real: sem este aviso, o modelo dizia que a resposta anterior "estava errada")
+    const unidadeAnterior = conversa.unidadeDaUltimaResposta ?? null;
+    conversa.unidadeDaUltimaResposta = e.unidadeId;
+    const nomeDe = (id) => e.unidadesPermitidas.find((u) => u.id === id)?.nome ?? null;
+    const avisoDeUnidade = unidadeAnterior && unidadeAnterior !== e.unidadeId && nomeDe(unidadeAnterior)
+      ? `[servidor] A unidade desta conversa MUDOU de ${nomeDe(unidadeAnterior)} para ${nomeDe(e.unidadeId) ?? "outra unidade"}. As respostas anteriores se referiam a ${nomeDe(unidadeAnterior)} e continuam corretas para ela: não as chame de erradas; responda agora sobre ${nomeDe(e.unidadeId) ?? "a unidade atual"}.` : null;
+    const contexto = [orientacao, recuperado, notaDoServidor, avisoDeUnidade].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const argsDoLaco = {
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),
