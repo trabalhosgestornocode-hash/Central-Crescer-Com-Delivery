@@ -27,7 +27,7 @@ pessoas autorizadas. A diferença é quem escreve a resposta das mensagens de te
 ## Passos
 
 1. **Merge do PR e deploy**, com tudo desligado. O comportamento é idêntico ao atual, porque `MOVA_CORE_CONVERSA` fica ausente.
-2. **Sombra (1 dia):** `MOVA_CORE_CONVERSA=SOMBRA` e `MOVA_CORE_CONVERSA_UNIDADES=<unidadeId do Açaí Saci>`.
+2. **Sombra (1 dia):** `MOVA_CORE_CONVERSA=SOMBRA` e `MOVA_CORE_CONVERSA_UNIDADES=4d3b75bd-79b5-4335-ae5b-a183580c3555`.
    - O núcleo roda e registra `MOVA_CORE_SOMBRA` nos logs, só com motivo, ferramentas, custo e latência, sem texto.
    - Quem responde continua sendo o motor atual.
    - Usar dados reais na sombra exige a sua autorização.
