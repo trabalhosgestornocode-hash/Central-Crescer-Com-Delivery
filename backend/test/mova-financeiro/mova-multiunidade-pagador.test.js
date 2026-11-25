@@ -35,7 +35,7 @@ const pdf = (marca) => `%PDF-1.4\n% documento sintetico ${marca}\n%%EOF\n`;
 let seq = 0;
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 10800, dataPagamento: "2026-10-10", competencia: "2026-10",
   favorecido: "Fornecedor Sintético", pagador: "ALFA PRODUTOS LTDA", instituicao: "Banco Sintético", instituicaoDestino: "Banco Destino Sintético",
-  idTransacao: `E0000000020261010MULTI${String(++seq).padStart(5, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
+  idTransacao: `E0000000020261010MULTI${String(++seq).padStart(10, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
 const BOLETO = (x = {}) => base({ tipoDocumento: "BOLETO", intencao: "REGISTRAR_CONTA", valorCentavos: 45000, vencimento: "2026-10-28", dataEmissao: "2026-10-05",
   competencia: "2026-10", favorecido: "Distribuidora Sintética", pagador: "MP", categoriaSugerida: "INSUMOS", identificadorDocumento: `BOL-${++seq}`, ...x });
 const NOTA = (x = {}) => base({ tipoDocumento: "NOTA_FISCAL", intencao: "OUTRA", valorCentavos: 12345, dataEmissao: "2026-10-02", competencia: "2026-10",

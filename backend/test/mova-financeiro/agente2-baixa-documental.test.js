@@ -11,7 +11,7 @@ import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 
 const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c3"; // identidade OPERACIONAL (≠ identidade de leitura do MOVA)
 const HUMANO = "eeeeeeee-0000-4000-8000-000000000001";
-const ID_TX = "E00000000202610101200SINTMAN400";
+const ID_TX = "E00000000202610101200SINTMAN4000";
 const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 /** Pix CONCLUÍDO de R$ 400,00 — MANUTENÇÃO (sintético). */
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 40000, dataPagamento: "2026-10-10",
@@ -280,7 +280,7 @@ t("A2-D15 política aprovada (R$ 1.000,00 por pagamento): R$ 1.000,00 exato é a
 t("A2-D16 FRACIONAMENTO: dividir um pagamento em comprovantes menores não contorna o limite (mesma conta e mesmo favorecido em poucos dias)", async () => {
   // Mesma conta de R$ 1.500,00 paga em R$ 800,00 + R$ 700,00: o 1º é automático; o 2º somaria R$ 1.500,00 ⇒ confirmação humana.
   let i = 0;
-  const partes = [PIX({ valorCentavos: 80000, idTransacao: "E0000000020261010SINTFRAC0001" }), PIX({ valorCentavos: 70000, idTransacao: "E0000000020261010SINTFRAC0002" })];
+  const partes = [PIX({ valorCentavos: 80000, idTransacao: "E0000000020261010SINTFRAC0000001" }), PIX({ valorCentavos: 70000, idTransacao: "E0000000020261010SINTFRAC0000002" })];
   const s = await documental({ politica: LIMITE_APROVADO, valorConta: 150000, responder: () => partes[Math.min(i++, 1)] });
   await s.enviar(gw({ texto: "MOVA pagamento parcial da alfa (1)", doc: pdf("D16a") }));
   assert.equal((await s.ultima()).conciliacao, "PAGO_POR_COMPROVANTE");

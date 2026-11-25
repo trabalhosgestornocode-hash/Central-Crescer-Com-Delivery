@@ -15,7 +15,7 @@ let seq = 0;
 /** Pix concluído sintético; favorecido padrão = o fornecedor das contas do cenário. */
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 10800, dataPagamento: "2026-10-10", competencia: "2026-10",
   favorecido: "Fornecedor Sintético", pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", instituicaoDestino: "Banco Destino Sintético",
-  idTransacao: `E0000000020261010AUTON${String(++seq).padStart(5, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
+  idTransacao: `E0000000020261010AUTON${String(++seq).padStart(10, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
 const POLITICA = (x = {}) => ({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante Pix concluído até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01", ...x });
 const CONCESSAO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento"];
@@ -262,7 +262,7 @@ t("AUT-E2 a legenda indica parcial ('entrada'): sem pergunta, baixa parcial dire
 });
 
 t("AUT-F duplicidade: o MESMO comprovante (outro arquivo, mesma transação) não cria segunda despesa, pagamento ou saída", async () => {
-  const s = await autonomo({ responder: () => PIX({ favorecido: "Andressa Sintética", idTransacao: "E0000000020261010AUTONDUP0001" }) });
+  const s = await autonomo({ responder: () => PIX({ favorecido: "Andressa Sintética", idTransacao: "E0000000020261010AUTONDUP0000001" }) });
   await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("F1") }));
   assert.equal((await s.ultima()).decisao, "EXECUTADO");
   await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("F2-outro-arquivo") }));

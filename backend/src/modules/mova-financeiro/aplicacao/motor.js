@@ -28,6 +28,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaU
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
+import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
@@ -447,7 +448,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const escopo = escopoDe(unidade);
     // Agente 2 — Frente B: a MESMA transação (ID/E2E) já recebida nesta empresa, em outro arquivo (foto × PDF, print × encaminhado):
     // não cria segunda proposta. O sha256 só pega o mesmo arquivo; o identificador da transação pega o mesmo pagamento.
-    if (evento.midia && saida.idTransacao && typeof a.documentos.porTransacao === "function") {
+    if (evento.midia && idTransacaoConfiavel(saida.idTransacao) && typeof a.documentos.porTransacao === "function") {
       const mesma = await a.documentos.porTransacao({ organizacaoId: escopo.organizacaoId, idTransacao: saida.idTransacao });
       if (mesma && mesma.eventoId !== evento.eventoId) {
         await marcarDocumento(evento, escopo, null, saida);
@@ -524,7 +525,10 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: `COMPETENCIA_${estado}`, escopo, resposta: RESPOSTA.competenciaFechada(competencia), injecao });
   }
 
-  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento, grupo = null, participante = null, evidenciaUnidade = null }, dados, textoResposta, { posCriacao = null } = {}) {
+  async function criarProposta({ evento, escopo, unidade, saida, injecao, esclarecimento, grupo = null, participante = null, evidenciaUnidade = null, idRecortado = false }, dados, textoResposta, { posCriacao = null } = {}) {
+    // 25/11: identificador da transação cortado na imagem ⇒ sem baixa automática (regra SEM_IDENTIFICADOR); pede a evidência completa.
+    if (idRecortado) { const base = textoResposta; textoResposta = (p) => `${base(p)}
+O identificador da transação está cortado na imagem: envie o comprovante completo (ou outra evidência oficial) para a baixa automática.`; }
     // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
     // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
     if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
@@ -596,7 +600,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
   }
 
-  async function tratarPagamento(ctx) {
+  async function tratarPagamento(ctx0) {
+    // 25/11: identificador de transação RECORTADO na imagem (E2E incompleto) não serve de chave de duplicidade: é descartado e a
+    // conferência segue pelas demais evidências (arquivo, conta, pergunta objetiva) — nunca afirma "mesma transação" por ele.
+    const recortado = Boolean(ctx0.saida?.idTransacao) && !idTransacaoConfiavel(ctx0.saida.idTransacao);
+    const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } } : ctx0;
     const { evento, escopo, saida, injecao, esclarecimento } = ctx;
     // Execução 17: comprovante AGENDADO, PENDENTE ou CANCELADO não é pagamento — nada é proposto como pago.
     if (evento.midia && saida.tipoDocumento === "COMPROVANTE_PAGAMENTO") {
@@ -616,7 +624,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 25/11: juros/multa DISCRIMINADOS no comprovante e soma conferida (original + juros + multa − desconto = pago) ⇒ comprovado:
     // não pergunta se a diferença é juros. Genérico (qualquer boleto); a IA só lê os campos impressos, a conta é determinística.
     const composicao = evento.midia ? composicaoComprovada(saida) : null;
-    let candidatas = saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor || (composicao && t.saldoCentavos === composicao.principalCentavos));
+    // 25/11: PERÍODO/competência informados na legenda ("vale-refeição de 24/11 a 30/11", "aluguel referente a novembro"). Conta de
+    // OUTRO período (outra semana do mesmo benefício, outra competência) não é candidata, mesmo com a mesma pessoa e o mesmo valor.
+    const periodo = evento.midia ? periodoDaLegenda(legenda, saida.dataPagamento) : null;
+    const noPeriodo = (t) => contaCompativelComPeriodo(t, periodo);
+    let candidatas = (saida.favorecido ? abertas.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertas.filter((t) => t.saldoCentavos === valor || (composicao && t.saldoCentavos === composicao.principalCentavos))).filter(noPeriodo);
     let forcarNova = false; let contaEscolhida = null; let parcialConfirmado = false; let competenciaInformada = null;
     // Pagamento COM encargo de uma conta existente: um só caminho (resposta "são juros" ou composição comprovada no comprovante).
     const propostaComEncargo = (conta, encargo, confirmadoPor, comp = null) => criarProposta(ctx, {
@@ -734,17 +746,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 24/11: com "compra nova" DECLARADA, ainda se confere o pagamento IGUAL já registrado (mesmo favorecido, mesmo valor, data
     // próxima — possível reenvio do mesmo comprovante); conta aberta de outro fornecedor com o mesmo valor não é perguntada.
     if (!esclarecimento?.divergencia && (!forcarNova || novaDeclarada)) {
-      const achados = buscarSemelhantes({ todas: await porta.contasAPagarTodas(escopo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
+      const achados = buscarSemelhantes({ todas: (await porta.contasAPagarTodas(escopo)).filter(noPeriodo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
       const semelhantes = novaDeclarada ? achados.filter((x) => x.situacao === "PAGA") : achados;
       if (semelhantes.length) {
         const [primeiro] = semelhantes;
+        // Valor, data e favorecido iguais NÃO provam a mesma transação: pergunta; com o identificador recortado, pede o comprovante completo.
+        const texto = primeiro.situacao === "PAGA" ? RESPOSTA.perguntaSemelhantePaga(primeiro.conta) : RESPOSTA.perguntaSemelhanteAberta(primeiro.conta);
         return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.SEMELHANTE, valorCentavos: valor, candidatas: [{ id: primeiro.conta.id, situacao: primeiro.situacao }] },
-          primeiro.situacao === "PAGA" ? RESPOSTA.perguntaSemelhantePaga(primeiro.conta) : RESPOSTA.perguntaSemelhanteAberta(primeiro.conta), "POSSIVEL_COMPRA_JA_REGISTRADA");
+          recortado ? `${texto} O identificador da transação está cortado na imagem: se puder, envie o comprovante completo.` : texto, "POSSIVEL_COMPRA_JA_REGISTRADA");
       }
     }
     // 15A: competência = a INFORMADA (ou o mês da emissão do documento, que é fato do documento). Nunca o mês do vencimento,
     // do pagamento ou do recebimento: sem ela, a proposta nasce com competência PENDENTE, a confirmar na revisão humana.
-    const competencia = competenciaInformada ?? saida.competencia ?? mes(saida.dataEmissao) ?? null;
+    // 25/11: a competência INEQUÍVOCA da legenda vale (período num mês só ou um único mês citado). Período que atravessa dois meses,
+    // dois meses citados ou legenda que contradiz a leitura ⇒ sem competência: o MOVA pergunta só o mês (nunca escolhe).
+    const daLegenda = periodo?.competencia ?? null;
+    const duvida = Boolean(periodo?.ambigua) || Boolean(daLegenda && saida.competencia && daLegenda !== saida.competencia);
+    const competencia = competenciaInformada ?? (duvida ? null : daLegenda ?? saida.competencia ?? mes(saida.dataEmissao) ?? null);
     const bloqueioEconomico = competencia ? await competenciaAberta(ctx, competencia) : null;
     if (bloqueioEconomico) return bloqueioEconomico;
     // 24/11: a descrição é o que a PESSOA disse que comprou (legenda, mensagem posterior ou resposta à pergunta), lido pela IA; sem

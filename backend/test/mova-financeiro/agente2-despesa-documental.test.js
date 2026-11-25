@@ -13,7 +13,7 @@ const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 let seq = 0;
 /** Pix CONCLUÍDO de gás (sintético), competência informada, sem conta a pagar prévia. */
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 35000, dataPagamento: "2026-10-10", competencia: "2026-10",
-  favorecido: "Distribuidora de Gás Sintética", pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", idTransacao: `E0000000020261010SINTGAS${String(++seq).padStart(4, "0")}`,
+  favorecido: "Distribuidora de Gás Sintética", pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", idTransacao: `E0000000020261010SINTGAS${String(++seq).padStart(8, "0")}`,
   situacaoTransacao: "CONCLUIDA", categoriaSugerida: "GAS", ...x });
 const POLITICA = (x = {}) => ({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante Pix concluído até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01", ...x });
@@ -132,7 +132,7 @@ t("A2-H7 Pix AGENDADO, documento INCONSISTENTE e identificador REPETIDO nunca vi
   await inc.enviar(gw({ texto: "MOVA gás da alfa", doc: pdf("H7b") }));
   assert.notEqual((await inc.ultima()).decisao, "EXECUTADO");
   assert.equal(inc.escritas().length, 0);
-  const id = "E0000000020261010SINTREPETIDO01";
+  const id = "E0000000020261010SINTREPETIDO001";
   const rep = await despesa({ responder: () => PIX({ idTransacao: id }) });
   await rep.enviar(gw({ texto: "MOVA gás da alfa", doc: pdf("H7c") }));
   assert.equal((await rep.ultima()).decisao, "EXECUTADO");
