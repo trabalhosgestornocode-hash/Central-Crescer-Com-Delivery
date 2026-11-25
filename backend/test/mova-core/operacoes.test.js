@@ -244,7 +244,8 @@ test("SG-3 várias despesas numa retirada e prestação PARCIAL (o resto continu
   const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
   const { movId } = await t.abrirSangria(5000, "Compras do dia");
   const p = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "PRESTACAO_DE_SANGRIA", args: { sangria: movId, despesas: [{ valorCentavos: 1800, descricao: "Pão", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }, { valorCentavos: 2000, descricao: "Queijo", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }] } });
-  assert.deepEqual([p.proposta.estado, p.proposta.avisos, p.proposta.dados.restaCentavos], ["AGUARDANDO_CONFIRMACAO", ["PRESTACAO_PARCIAL"], 1200]);
+  // 25/11: "Fornecedor Sintético" não tem conta no Financeiro ⇒ cadastro novo ⇒ aviso (impede a execução automática; o "sim" segue valendo)
+  assert.deepEqual([p.proposta.estado, p.proposta.avisos, p.proposta.dados.restaCentavos], ["AGUARDANDO_CONFIRMACAO", ["FORNECEDOR_NOVO", "PRESTACAO_PARCIAL"], 1200]);
   const r = await t.operacoes.confirmar({ conversaChave: "k", autor: "pessoa-1", autorizacaoDeEscrita: { pode: true } });
   assert.deepEqual([r.executada, r.feitos.length, r.feitos.at(-1).pendenteDepoisCentavos], [true, 2, 1200]);
 

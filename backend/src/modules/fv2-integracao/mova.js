@@ -48,6 +48,15 @@ import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGa
 import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
 import { configuracaoDaConversa } from "../mova-core/conversaWhatsapp.js";
 import { montarConversaCore } from "./movaCoreConversa.js";
+import { criarRepositorioDePropostasPostgres } from "../mova-core/persistenciaPropostas.js";
+
+/** Repositório das propostas do MOVA CORE só se a migração 0020 estiver registrada no banco do MOVA (senão null: só consulta). */
+export async function repositorioDePropostasSeInstalado(pool) {
+  try {
+    const r = await pool.query("select 1 from mova.mova_migracao where left(nome, 5) = '0020_' limit 1");
+    return r.rowCount ? criarRepositorioDePropostasPostgres(pool) : null;
+  } catch { return null; }
+}
 
 export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -274,7 +283,12 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   }
   mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
-    try { conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null }); }
+    try {
+      // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta
+      const repositorioDePropostas = conversaCore.operacoes && conversaCore.operacoes !== "DESLIGADO" ? await repositorioDePropostasSeInstalado(pool) : null;
+      conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null,
+        operacional, armazenamento: mova.armazenamento, repositorioDePropostas });
+    }
     catch (e) { registrar({ tipo: "MOVA_CORE_CONVERSA_NAO_MONTADA", erro: String(e?.message ?? e).slice(0, 200) }); } // falha segura: o motor atual segue sozinho
   }
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
@@ -341,6 +355,12 @@ export function criarRotinaPeriodica(passo, { intervaloMs = 5 * 60 * 1000, regis
 const GERACAO_DA_INSTANCIA = Date.now();
 /** Conexões do papel de leitura por instância: o papel tem limite 2 no banco e o deploy mantém duas instâncias vivas. */
 export const LEITOR_CONEXOES_POR_INSTANCIA = 1;
+/**
+ * Quanto a conexão de leitura fica aberta sem uso. 25/11: era 5 s — cada mensagem abria conexão nova (TLS + autenticação pelo
+ * Supavisor), o maior custo fixo das consultas simples. Com UMA conexão por instância, duas instâncias vivas no deploy somam 2
+ * (o limite do papel), então manter a conexão aberta não tira a vaga da instância nova.
+ */
+export const LEITOR_OCIOSO_MS = 120_000;
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;
@@ -369,9 +389,9 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
       // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).
       // 25/11: o papel de leitura aceita 2 conexões NO TOTAL, somando as instâncias. UMA por instância garante que, na troca
-      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ocioso fecha em 5 s; esperar vaga tem limite (5 s) —
+      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ociosa fica aberta (LEITOR_OCIOSO_MS); esperar vaga tem limite (5 s) —
       // nunca uma espera sem fim que trave o pool.
-      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: 5000, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
+      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: LEITOR_OCIOSO_MS, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
       poolLeitor.on("error", () => {});
       abertos.push(poolLeitor);
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });

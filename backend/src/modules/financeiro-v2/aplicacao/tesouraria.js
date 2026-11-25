@@ -15,6 +15,7 @@ import {
   validarFiltroCalendario, validarFiltroFluxo, validarPosicaoAReceber, validarFiltroResumo, validarOperacaoDeCaixa, validarSaldoDeConta,
 } from "../contratos/tesouraria.js";
 import { SITUACAO_DOCUMENTAL } from "../dominio/entregadoresProprios.js";
+import { LIMITE_DA_LISTA } from "../contratos/repositorio.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { exigirEquivalencia } from "./cargaDaCompetencia.js";
@@ -73,8 +74,8 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
   async function ligados(cx, tx, tipo, campo, ids) {
     if (!ids.length) return [];
     const saida = [];
-    for (let i = 0; i < ids.length; i += 200) { // o contrato da porta aceita até 200 valores em `em`
-      const lote = ids.slice(i, i + 200);
+    for (let i = 0; i < ids.length; i += LIMITE_DA_LISTA) { // o contrato da porta aceita até LIMITE_DA_LISTA valores em `em`
+      const lote = ids.slice(i, i + LIMITE_DA_LISTA);
       for (let deslocamento = 0; ; deslocamento += 500) {
         const pg = await tx.paginar(cx, tipo, { em: { [campo]: lote }, limite: 500, deslocamento, contar: false }); // 08D: sem contagem
         saida.push(...pg.itens);

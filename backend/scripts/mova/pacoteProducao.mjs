@@ -173,6 +173,65 @@ insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}'
 `).join("")}`;
 }
 
+/** Estado do banco do MOVA em PRODUÇÃO depois do orçamento renovável (25/11): 0001–0018 + 0022. */
+export const ESTADO_PRODUCAO_APOS_ORCAMENTO = Object.freeze([...CONFERIDAS_EM_PRODUCAO_25_11, "0018", "0022"]);
+/**
+ * aplicar-propostas-core.sql (25/11, PR #223): SÓ a 0020 (tabela de propostas do MOVA CORE). Aditiva e independente de
+ * 0019/0021 (nenhuma delas é referenciada). UMA transação; exige 0001–0018 + 0022 com o mesmo sha256, a 0020 não registrada e
+ * a tabela inexistente; confere no fim as permissões do papel da aplicação. Sem linhas, nada muda no comportamento.
+ */
+export function gerarAplicarPropostas(migracoes = listarMigracoes()) {
+  const m = migracoes.find((x) => x.nome.startsWith("0020_"));
+  if (!m) throw new Error("migração 0020 inexistente");
+  const ja = migracoes.filter((x) => ESTADO_PRODUCAO_APOS_ORCAMENTO.includes(x.nome.slice(0, 4)));
+  const conferir = ja.map((x) => `  if not exists (select 1 from mova.mova_migracao where nome = '${x.nome}' and sha256 = '${x.sha256}') then raise exception 'MOVA 0020: ${x.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  return `-- MOVA — PROPOSTAS DO MOVA CORE em PRODUÇÃO: aplica SÓ ${m.nome} (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo. Não aplica 0019 nem 0021.
+-- Exige as já instaladas (nome + sha256): ${ja.map((x) => x.nome.slice(0, 4)).join(", ")}. Reversão: producao/reverter-propostas-core.sql.
+-- Compatibilidade: o código anterior não lê a tabela; o código novo só a usa com MOVA_CORE_OPERACOES ligado.
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA 0020: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA 0020: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${conferir.join("\n")}
+  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA 0020: já aplicada — nada foi feito'; end if;
+  if to_regclass('mova.core_proposta') is not null then raise exception 'MOVA 0020: mova.core_proposta já existe — nada foi feito'; end if;
+end $$;
+
+-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})
+${m.sql.trimEnd()}
+insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');
+
+do $$ begin
+  if not (has_table_privilege('mova_app', 'mova.core_proposta', 'select') and has_table_privilege('mova_app', 'mova.core_proposta', 'insert') and has_table_privilege('mova_app', 'mova.core_proposta', 'update')) then
+    raise exception 'MOVA 0020: mova_app sem permissão em mova.core_proposta — tudo desfeito'; end if;
+  if has_table_privilege('mova_app', 'mova.core_proposta', 'delete') then raise exception 'MOVA 0020: mova_app não pode apagar propostas — tudo desfeito'; end if;
+end $$;
+`;
+}
+
+/**
+ * reverter-propostas-core.sql: desfaz a aplicação acima no estado de PRODUÇÃO (0022 já aplicada, independente da 0020 — a
+ * recuperacao/reverter-0020.sql genérica aborta por haver migração posterior). Aborta se houver qualquer migração fora de
+ * 0001–0018, 0020 e 0022 (algo novo poderia depender da tabela) ou proposta EXECUTANDO.
+ */
+export function gerarReverterPropostas(migracoes = listarMigracoes()) {
+  const m = migracoes.find((x) => x.nome.startsWith("0020_"));
+  const permitidas = [...ESTADO_PRODUCAO_APOS_ORCAMENTO, "0020"].map((p) => `'${p}'`).join(", ");
+  return `-- MOVA — REVERSÃO das propostas do MOVA CORE em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão). Uma transação.
+-- Antes: MOVA_CORE_OPERACOES=DESLIGADO. As propostas não são dado financeiro (o Financeiro guarda o executado, com chave idempotente).
+do $$ begin
+  if not exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA reversão 0020: não está aplicada — nada a desfazer'; end if;
+  if exists (select 1 from mova.mova_migracao where left(nome, 4) not in (${permitidas})) then raise exception 'MOVA reversão 0020: há migração fora do estado conhecido — nada foi feito'; end if;
+  if exists (select 1 from mova.core_proposta where estado = 'EXECUTANDO') then raise exception 'MOVA reversão 0020: há proposta EXECUTANDO — aguarde o desfecho'; end if;
+end $$;
+drop table mova.core_proposta;
+delete from mova.mova_migracao where nome = '${m.nome}';
+`;
+}
+
 export function gerarInventario() {
   return `-- MOVA — INVENTÁRIO SOMENTE LEITURA (gerado por backend/scripts/mova/pacoteProducao.mjs). Rodar ANTES e DEPOIS da instalação.
 -- Não altera nada. Não lê conteúdo de mensagens: só existência, contagens, permissões e marcadores.
@@ -191,7 +250,7 @@ union all select 'migracao_em_curso', coalesce((select string_agg(left(query, 60
 }
 
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento() };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento(), "aplicar-propostas-core.sql": gerarAplicarPropostas(), "reverter-propostas-core.sql": gerarReverterPropostas() };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }

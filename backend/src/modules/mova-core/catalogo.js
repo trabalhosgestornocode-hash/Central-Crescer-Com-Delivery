@@ -228,6 +228,7 @@ export const FERRAMENTAS = [
   {
     nome: "resumo_financeiro",
     descricao: "Visão geral financeira de uma competência (a mesma da tela Resumo): a pagar, a receber, caixa e alertas do mês.",
+    alternativa: { ferramentas: ["contas_a_pagar", "contas_a_receber", "caixa_e_bancos"], cobre: "a pagar, a receber e saldos de banco e caixa", naoCobre: "os alertas consolidados do mês" },
     esquema: { type: "object", properties: { competencia: COMPETENCIA, unidade: UNIDADE }, required: ["competencia"] },
     valores: true, ops: ["consultarResumoFinanceiro"],
     async executar({ porta, escopo, args }) {
@@ -339,7 +340,11 @@ export const FERRAMENTAS = [
   },
   {
     nome: "pendencias_de_conferencia",
-    descricao: "Pendências da Central de Conferências de uma competência (o que falta conferir, classificar ou conciliar), por grupo.",
+    descricao: "Pendências da Central de Conferências de uma competência (o que falta conferir, classificar ou conciliar), por grupo. NÃO é a fonte de nota fiscal de entregador (use entregadores_da_semana). Consulta pesada: uma vez por competência.",
+    // 25/11: a Central calcula o mês inteiro (a mesma conta da tela). Medido em produção: ~9–10 s antes da correção das idas
+    // ao banco; o limite comum (8 s) só abandonava a resposta — a consulta seguia no banco segurando a conexão.
+    tempoMs: 12000,
+    alternativa: { ferramentas: ["resumo_financeiro"], cobre: "contas vencidas, movimentações sem vínculo, saldos de banco e caixa e recebíveis atrasados da competência", naoCobre: "a lista de pendências da Central (conferência, classificação, documentos)" },
     esquema: { type: "object", properties: { competencia: COMPETENCIA, grupo: { type: "string", enum: ["VENDAS_E_AJUSTES", "RECEBIMENTOS_E_REPASSES", "CONTAS_E_PAGAMENTOS", "CUSTOS_E_RATEIOS", "CAIXA_E_CONCILIACAO", "CLASSIFICACOES", "DOCUMENTAIS"] }, unidade: UNIDADE }, required: ["competencia"] },
     valores: false, ops: ["consultarPendencias"],
     async executar({ porta, escopo, args }) {
@@ -352,7 +357,7 @@ export const FERRAMENTAS = [
   },
   {
     nome: "documentos",
-    descricao: "Documentos guardados no cofre documental (notas, comprovantes, extratos) por competência e tipo — contagens e lista.",
+    descricao: "Documentos guardados no cofre documental (notas, comprovantes, extratos) por competência e tipo — contagens e lista. Não diz quem DEVE nota: para nota fiscal pendente de entregador use entregadores_da_semana.",
     esquema: { type: "object", properties: { competencia: COMPETENCIA, tipo: { ...TEXTO_CURTO, maxLength: 40 }, unidade: UNIDADE } },
     valores: false, ops: ["consultarDocumentos"],
     async executar({ porta, escopo, args }) {
@@ -374,7 +379,8 @@ export const FERRAMENTAS = [
   },
   {
     nome: "entregadores_da_semana",
-    descricao: "Fechamento SEMANAL dos entregadores próprios: entregas, valor a pagar, pago, situação, por entregador. Sem semana = semana atual; 'semana' é a segunda-feira de início (AAAA-MM-DD). Use 'entregador' com o nome para um só.",
+    descricao: "Fechamento SEMANAL dos entregadores próprios: entregas, valor a pagar, pago, situação e NOTA FISCAL pendente (aguardandoNota) por entregador. É A fonte para 'quem não mandou a nota', 'nota pendente dos entregadores'. Sem semana = semana atual (em andamento: a nota é da semana FECHADA, então para nota pendente use a semana anterior ou a pedida); 'semana' é a segunda-feira de início (AAAA-MM-DD). Use 'entregador' com o nome para um só.",
+    alternativa: { ferramentas: ["devido_aos_entregadores"], cobre: "quanto se deve a cada entregador (contas geradas e semanas não fechadas)", naoCobre: "entregas da semana e situação da nota fiscal" },
     esquema: { type: "object", properties: { semana: DATA, mes: COMPETENCIA, entregador: TEXTO_CURTO, unidade: UNIDADE } },
     valores: true, ops: ["consultarEntregadoresProprios"],
     async executar({ porta, escopo, args }) {
@@ -397,6 +403,7 @@ export const FERRAMENTAS = [
   },
   {
     nome: "devido_aos_entregadores",
+    alternativa: { ferramentas: ["entregadores_da_semana"], cobre: "valor da semana e em aberto de semanas fechadas, por entregador", naoCobre: "detalhe de vencimento e pagamentos parciais de cada conta" },
     descricao: "TOTAL devido aos entregadores próprios (todos ou um): contas JÁ GERADAS em aberto de semanas fechadas (com semana, vencimento, situação e pagamentos parciais) + o valor PROVISÓRIO das semanas ainda não fechadas (semana atual e semanas encerradas sem fechamento). Sem duplicar: semana fechada só conta pela conta gerada. Use para 'quanto devemos aos entregadores', 'quem tem mais a receber', 'quanto falta pagar ao X'.",
     esquema: { type: "object", properties: { entregador: { ...TEXTO_CURTO, description: "Nome (ou parte/apelido) de um entregador; omita para todos." }, unidade: UNIDADE } },
     valores: true, ops: ["consultarEntregadoresProprios", "consultarContasAPagar"],
