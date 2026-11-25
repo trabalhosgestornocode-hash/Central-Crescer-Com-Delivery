@@ -189,7 +189,7 @@ const E2E = (n) => `E00000000202611251451${String(n).padStart(11, "0")}`; // for
 /** Pix de benefício a uma funcionária SINTÉTICA (espelha o caso real sem dado real): R$ 90, sem competência impressa. */
 const PIX_BENEFICIO = (x = {}) => BOLETO_PAGO({ valorCentavos: 9000, valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, linhaDigitavel: null,
   vencimento: null, dataPagamento: "2026-10-14", favorecido: "Fulana Sintética de Sousa", categoriaSugerida: "VALE_REFEICAO", idTransacao: E2E(++seq), ...x });
-const LEG = "MOVA Vale refeição entre os dias 08/10 a 14/10 Fulana loja xis";
+const LEG = "Vale refeição entre os dias 08/10 a 14/10 Fulana loja xis";
 
 test("PE-0 período pela legenda: inequívoco vira competência; dois meses ⇒ ambíguo; data do pagamento nunca vira competência; E2E recortado descartado", () => {
   const p = (t) => periodoDaLegenda(t, "2026-11-25");
@@ -246,7 +246,7 @@ t("PE-3 conta em aberto da MESMA semana: baixa a existente, sem criar outra", as
 
 t("PE-4 período que atravessa dois meses: pergunta só o mês; nada gravado", async () => {
   const s = await grupo({ responder: () => PIX_BENEFICIO() });
-  await s.enviar(gw({ texto: "MOVA Vale transporte de 28/10 a 03/11 Fulana loja xis", doc: pdf("PE4") }));
+  await s.enviar(gw({ texto: "Vale transporte de 28/10 a 03/11 Fulana loja xis", doc: pdf("PE4") }));
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_AUSENTE"]);
   assert.equal(s.escritas().length, 0);
@@ -262,4 +262,17 @@ t("PE-5 E2E recortado: não serve de chave nem permite baixa automática; pede o
   await s.enviar(gw({ texto: LEG, doc: pdf("PE5b") }));
   assert.notEqual((await s.ultima()).motivo, "TRANSACAO_JA_RECEBIDA", "id recortado não decide duplicidade");
   assert.deepEqual([s.escritas().length, (await s.liquidacoes(ORG_X, XIS)).length], [0, 0]);
+});
+
+// ------------------------------------------------------------------ 25/11: comprovante no grupo SEM o nome "MOVA" (caso real do Açaí)
+t("DOC-1 comprovante com legenda simples, sem 'MOVA', de participante da lista: processado e respondido; sem legenda, texto comum e pessoa fora da lista: ignorados", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO({ favorecido: "Prestador Sintético de Ar", pagador: "ALFA PRODUTOS", documentoPagador: null, valorCentavos: 26000, categoriaSugerida: null }) });
+  const r = await s.enviar(gw({ texto: "Serviço de manutenção e limpeza ar condicionado loja alfa", doc: pdf("DOC1") }));
+  assert.notEqual(r.status, "IGNORADO", JSON.stringify(r));
+  const h = await s.ultima();
+  assert.equal(h.unidadeId, ALFA, "unidade pelo titular");
+  assert.ok((await s.respostas()).length >= 1, "o participante recebe resposta");
+  assert.equal((await s.enviar(gw({ doc: pdf("DOC1-sem-legenda") }))).motivo, "NAO_ACIONADO", "arquivo sem legenda");
+  assert.equal((await s.enviar(gw({ texto: "bom dia, pessoal" }))).motivo, "NAO_ACIONADO", "conversa comum continua exigindo o nome");
+  assert.equal((await s.enviar(gw({ texto: "Serviço de manutenção", doc: pdf("DOC1-x"), de: "5500000009999@s.whatsapp.net" }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
 });

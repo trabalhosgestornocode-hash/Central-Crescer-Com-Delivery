@@ -161,10 +161,18 @@ export function conversasPrivadasDerivadas(grupos, semGrupo = []) {
 /**
  * O MOVA foi CHAMADO por esta mensagem? Grupo com LISTA: nome "MOVA", citação de uma resposta do MOVA ou continuidade da
  * conversa do MESMO participante. Conversa privada (derivada/homologação/piloto): sempre. Grupo ABERTO (legado): sempre.
+ * 25/11: DOCUMENTO FINANCEIRO — imagem ou PDF com legenda, de participante da lista (conferida antes desta chamada) — também
+ * aciona, sem o nome: a regra do nome vale para a conversa comum do grupo, não para comprovantes.
  */
+export function ehDocumentoFinanceiro(bruto) {
+  const mime = String(bruto?.midia?.mime ?? "").toLowerCase();
+  return (mime.startsWith("image/") || mime === "application/pdf") && String(bruto?.texto ?? "").trim().length >= 3;
+}
+
 export async function foiAcionado({ grupo, bruto, armazenamento }) {
   if (!grupo.grupoId.endsWith("@g.us") || (grupo.acesso ?? ACESSO.ABERTO) !== ACESSO.LISTA) return { acionado: true, por: "CONVERSA" };
   if (chamaPeloNome(bruto.texto)) return { acionado: true, por: "NOME" };
+  if (ehDocumentoFinanceiro(bruto)) return { acionado: true, por: "DOCUMENTO" };
   if (bruto.respostaA && await armazenamento.saida.ehRespostaPropria(bruto.respostaA)) return { acionado: true, por: "CITACAO" };
   if (typeof armazenamento.conversas?.obter === "function" && await armazenamento.conversas.obter({ grupoId: grupo.grupoId, participanteId: bruto.participanteId })) return { acionado: true, por: "CONTINUIDADE" };
   return { acionado: false, por: null };

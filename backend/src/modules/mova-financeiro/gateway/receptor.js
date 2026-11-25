@@ -93,7 +93,11 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
       if ((grupo.acesso ?? ACESSO.ABERTO) === ACESSO.LISTA) {
         if (!participanteAutorizado(grupo, bruto)) { registrar({ tipo: "MOVA_PARTICIPANTE_NAO_AUTORIZADO", grupo: mascarar(bruto.grupoId) }); return { status: "IGNORADO", motivo: "PARTICIPANTE_NAO_AUTORIZADO" }; }
         const a = await foiAcionado({ grupo, bruto, armazenamento });
-        if (!a.acionado) return { status: "IGNORADO", motivo: "NAO_ACIONADO" };
+        if (!a.acionado) {
+          // 25/11: arquivo de participante autorizado descartado (sem legenda ou formato fora de imagem/PDF) deixa rastro no log (sem conteúdo).
+          if (bruto.midia) registrar({ tipo: "MOVA_DOCUMENTO_NAO_ACIONADO", grupo: mascarar(bruto.grupoId) });
+          return { status: "IGNORADO", motivo: "NAO_ACIONADO" };
+        }
         bruto.acionadoPor = a.por;
       }
       if (bruto.midia) {
