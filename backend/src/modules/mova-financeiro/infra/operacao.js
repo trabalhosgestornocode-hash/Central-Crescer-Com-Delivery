@@ -124,11 +124,16 @@ export async function aplicarTeto(cliente, req, teto) {
 }
 
 /** `contexto()` (opcional): {organizacaoId, unidadeId, requisicaoId} da mensagem em curso — o orçamento renovável usa; o acumulado ignora. */
+/** 25/11: tipo de uso para o orçamento renovável — requisição com imagem ou PDF é leitura de DOCUMENTO; o resto é CONVERSA. */
+export function usoDaRequisicao(req) {
+  const blocos = (req?.messages ?? []).flatMap((m) => (Array.isArray(m?.content) ? m.content : []));
+  return blocos.some((b) => b?.type === "image" || b?.type === "document") ? "DOCUMENTO" : "CONVERSA";
+}
 export function clienteComOrcamento(cliente, { orcamento, controle = null, teto = null, contexto = null }) {
   return { beta: { messages: { async create(reqOriginal) {
     if (controle && !(await controle.ligado("ia"))) throw new ErroDeIa("IA_DESLIGADA_NO_CONTROLE");
     const req = await aplicarTeto(cliente, reqOriginal, teto);
-    const id = await orcamento.reservar({ modelo: req.model ?? null, ...(contexto?.() ?? {}) });
+    const id = await orcamento.reservar({ modelo: req.model ?? null, uso: usoDaRequisicao(req), ...(contexto?.() ?? {}) });
     let r;
     try { r = await cliente.beta.messages.create(req); } catch (e) {
       try { await orcamento.falhar(id, { possivelmenteFaturada: !falhaComRespostaDaApi(e) }); } catch { /* a reserva fica contando: conservador */ }

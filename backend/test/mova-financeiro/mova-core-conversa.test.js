@@ -104,3 +104,18 @@ t("MC-07 configuração: desligado por padrão; sem unidades do piloto ou sem IA
   const semIa = lerConfiguracaoMova({ MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "postgres://x", MOVA_SERVICO_USUARIO_ID: CONFIG.identidadeServico.usuarioId, MOVA_CORE_CONVERSA: "RESPOSTA", MOVA_CORE_CONVERSA_UNIDADES: ALFA });
   assert.equal(semIa.conversaCore?.modo ?? "DESLIGADO", "DESLIGADO");
 });
+
+t("MC-08 (25/11) 'todas as contas': a introdução do modelo e a lista COMPLETA do servidor saem em mensagens separadas, em ordem, só na conversa privada", async () => {
+  const s = await montar({ roteiro: [[usar("lista_completa_de_contas", {})], [falar("Seguem todas as contas em aberto.")]] });
+  for (let i = 0; i < 29; i++) await s.conta(`2026-10-${String(1 + (i % 28)).padStart(2, "0")}`, 1000 + i, ALFA);
+  await s.enviar(gw({ texto: "me manda todas as contas a pagar", grupo: FIN, de: FIN }));
+  const saida = await s.saida();
+  assert.equal(saida.length, 3, "introdução + 2 partes (30 contas)");
+  assert.ok(saida.every((m) => m.destino === FIN));
+  assert.equal(saida[0].texto, "Seguem todas as contas em aberto.");
+  assert.match(saida[1].texto, /\(parte 1 de 2\)/);
+  assert.match(saida[2].texto, /Total: 30 contas, R\$ [\d.]+,\d{2} em aberto.*Lista completa \(30 contas\)/s);
+  assert.equal(saida.slice(1).map((m) => m.texto).join("\n").split("\n").filter((l) => l.startsWith("• ")).length, 30);
+  const h = await s.ultima();
+  assert.equal(h.mensagensExtras, 2);
+});

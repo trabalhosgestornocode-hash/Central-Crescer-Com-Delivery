@@ -50,7 +50,8 @@ test("EX-02 CADA ferramenta do catálogo roda contra o Financeiro v2 REAL com ar
   assert.match(ref, /^ref_/);
   assert.equal((await a.rodar(s, "detalhe_conta_a_pagar", { conta: ref })).ok, true);
   const h = await a.rodar(s, "historico_do_entregador", { entregador: "ninguem" });
-  assert.equal(h.ok, false); assert.equal(h.codigo, "NAO_ENCONTRADO_OU_INVALIDO");
+  // 25/11: o nome é resolvido no servidor; nome que não existe na unidade = SEM_REGISTROS explícito (nunca um valor inventado)
+  assert.equal(h.ok, true); assert.equal(h.json.situacao ?? h.situacao, "SEM_REGISTROS"); assert.match(h.conteudo, /Nenhum entregador/);
   // o núcleo SEMPRE recebeu só financeiro_v2.ver e a unidade da conversa
   assert.ok(a.chamadas.every((c) => c.organizacaoId === ORG_A && c.unidadeId === UNI_A && c.permissoes.length === 1 && c.permissoes[0] === "financeiro_v2.ver"));
 });

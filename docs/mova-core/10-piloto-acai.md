@@ -54,3 +54,34 @@ dado. Mais rápido ainda: desligar a IA no controle do MOVA. As duas IAs param e
 | `MOVA_CORE_CONVERSA` | `DESLIGADO` \| `SOMBRA` \| `RESPOSTA` | ausente = DESLIGADO |
 | `MOVA_CORE_CONVERSA_UNIDADES` | ids das unidades do piloto, separados por vírgula (obrigatório fora de DESLIGADO) | — |
 | `MOVA_CORE_MODELO` | só `claude-haiku-*` | o padrão do núcleo |
+
+## Correções da 1ª homologação em produção (24–25/11)
+
+| Problema real | Correção |
+|---|---|
+| "Todas as 69 contas" saíam parciais; a mesma consulta era repetida 3–4 vezes (resultado cortado em 12 mil caracteres) | `contas_a_pagar` devolve totais, totais por vencimento e **todos** os fornecedores, sempre completos. Os itens só vão quando são poucos. A nova `lista_completa_de_contas` monta a lista **no servidor**: vencimento, fornecedor, descrição, valor, pago/saldo e situação. Vai em mensagens de até 25 contas (no máximo 6 por pergunta) e cada página tem 120 contas. "continuar" traz a página seguinte. A última parte traz o total conferido e diz "Lista completa (N contas)" ou quais contas faltam. |
+| `FINANCEIRO_INDISPONIVEL` e tempo esgotado em perguntas com várias consultas | O papel de leitura tem **2 conexões no total**, e no deploy duas instâncias disputavam essas conexões. Agora: no máximo 2 leituras ao mesmo tempo por mensagem, a mesma leitura é feita uma vez por mensagem, e o tempo-limite conta a partir da vaga. Há uma nova tentativa curta em falha transitória. A causa técnica (SQLSTATE) vai para a auditoria. A conexão ociosa do leitor fecha em 5 s. Pool e tempos **não** foram aumentados. |
+| Total devido aos entregadores mostrava só a semana atual | `devido_aos_entregadores` soma as contas já geradas e ainda não pagas (pagamento parcial descontado, com vencimento) e o valor **provisório** das semanas ainda não fechadas, sem duplicar. Aceita todos os entregadores ou um só. Um nome ambíguo leva a uma pergunta. |
+| Histórico do entregador sem datas ("outra semana") e exigindo a chave | `historico_do_entregador` resolve nome e apelido. Mostra cada semana com início e fim, entregas, valor, pago, saldo, situação da nota e do pagamento, data do pagamento e origem do dado, e separa a semana em apuração. |
+| Situação de vencimento decidida pelo modelo | O servidor calcula com a data de hoje em Fortaleza: VENCIDA (dias de atraso), VENCE_HOJE, A_VENCER, LIQUIDADA e CANCELADA. Conta paga em parte continua vencida pelo saldo. |
+| Troca de instância no deploy | Cada instância marca as suas conexões com a hora em que subiu. A mais nova assume a fila e a antiga termina o que já pegou e para de pegar. Cada mensagem continua sendo processada uma única vez (lease). Não há infraestrutura nova nem migração. |
+| `AGRUPAMENTO_NAO_SUPORTADO` | O esquema da análise lista as combinações válidas de cada métrica. |
+
+## Orçamento renovável — o que depende da sua autorização
+
+Tudo já está no código, **desligado**. Os limites financeiros não mudaram: US$ 10/mês, US$ 1/dia e US$ 0,10/solicitação, também presos no código.
+
+1. **Migração** `database/mova-financeiro/producao/aplicar-orcamento-renovavel.sql`. Aplica **só** a 0018 (política, alertas e colunas de controle) e a 0022 (tipo de uso, parte guardada para documentos e chamadas de conversa por dia), numa transação, como `postgres`.
+   - Exige 0001–0017 com o mesmo sha256 (conferido em produção em 25/11).
+   - Não liga nada. A política nasce com `ativo = false`.
+   - Reversão: `recuperacao/reverter-0022.sql` e depois `reverter-0018.sql`.
+2. **Ligar a política** (SQL de uma linha): `update mova.orcamento_ia_politica set ativo = true, atualizado_por = '<você>', atualizado_em = now();`
+3. **Variável** `MOVA_ORCAMENTO_RENOVAVEL=1` no backend, seguida de reinício. Sem a variável, continua o acumulado de 500 chamadas.
+
+Padrões da 0022:
+
+- US$ 2 do mês e US$ 0,20 do dia ficam **guardados para leitura de documentos**: a conversa nunca usa essa parte.
+- 300 chamadas de conversa por dia, renovadas à meia-noite de Fortaleza.
+- Alertas em 50/80/100%, uma vez por período.
+
+Rollback: remover a variável e reiniciar. O acumulado volta na hora.

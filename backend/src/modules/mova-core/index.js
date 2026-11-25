@@ -119,7 +119,10 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
     // Piloto só leitura (sem o serviço de operações): o modelo não pode oferecer proposta/confirmação que não existe nesta montagem,
     // mesmo que a documentação do sistema descreva o recurso.
     const notaSemEscrita = operacoes ? null : "[servidor] Nesta versão o MOVA só consulta e explica: não prepara proposta nem confirma lançamento pela conversa (não ofereça isso, mesmo que a documentação descreva). Comprovante enviado aqui segue o fluxo de documentos que já existe (fica guardado para conferência na Central); o lançamento é feito na tela do Financeiro.";
-    const contexto = [orientacao, recuperado, notaDoServidor, avisoDeUnidade, notaSemEscrita].filter(Boolean).join("\n") || null;
+    // 25/11: continuidade de LISTA paginada ("continuar", "o resto"): o servidor lembra a página e os filtros da última lista
+    const ul = conversa.ultimaLista ?? null;
+    const notaDaLista = ul && ul.pagina < ul.paginas ? `[servidor] A última lista enviada nesta conversa foi a página ${ul.pagina} de ${ul.paginas} (filtros ${JSON.stringify(ul.filtro)}). Se a pessoa pedir para continuar ou o restante, chame lista_completa_de_contas com os MESMOS filtros e pagina ${ul.pagina + 1}.` : null;
+    const contexto = [orientacao, recuperado, notaDoServidor, avisoDeUnidade, notaSemEscrita, notaDaLista].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const argsDoLaco = {
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),
@@ -143,7 +146,16 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
         uso: { entrada: somar("entrada"), saida: somar("saida"), cacheLeitura: somar("cacheLeitura"), cacheEscrita: somar("cacheEscrita"), custoMicrousd: somar("custoMicrousd"), chamadas: somar("chamadas") } };
     }
     const { mensagens: _m, ...semMensagens } = r; void _m; r = { ...semMensagens, ...(infoEscalonamento ? { escalonamento: infoEscalonamento } : {}) };
-    await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: r.texto, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos, esclarecimentoPedido: r.motivo === "RESPONDIDO" && /\?\s*$/.test(String(r.texto ?? "")) && !(r.ferramentas ?? []).some((x) => x.ok) });
+    // 25/11: lista montada e conferida pelo SERVIDOR (lista_completa_de_contas) segue em mensagens próprias. Se o modelo não
+    // conseguiu escrever a introdução (limite, conferência), a lista — que não depende dele — vai com uma introdução fixa.
+    const lista = (sessao.entregas ?? [])[0] ?? null;
+    if (lista) {
+      conversa.ultimaLista = { tipo: lista.tipo, filtro: lista.filtro, pagina: lista.pagina, paginas: lista.paginas };
+      if (r.motivo !== "RESPONDIDO" && r.motivo !== "RESPOSTA_PARCIAL_CONFERIDA") r = { ...r, texto: "Segue a lista, montada e conferida pelo sistema:", motivo: "LISTA_DO_SERVIDOR" };
+      r = { ...r, blocos: lista.blocos };
+    }
+    const notaDaEntrega = lista ? `\n[o servidor enviou em seguida a lista em ${lista.blocos.length} mensagem(ns), página ${lista.pagina} de ${lista.paginas}]` : "";
+    await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: `${r.texto ?? ""}${notaDaEntrega}`, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos, esclarecimentoPedido: r.motivo === "RESPONDIDO" && /\?\s*$/.test(String(r.texto ?? "")) && !(r.ferramentas ?? []).some((x) => x.ok) });
     auditoria.registrar({ tipo: "MOVA_CORE_RESPOSTA", requisicaoId, rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas.map((x) => x.nome), custoMicrousd: r.uso.custoMicrousd, latenciaMs: r.latenciaMs, verificador: r.verificacao?.ok ?? null });
     metricas.registrar({ rota: rota.rota, motivo: r.motivo, ferramentas: r.ferramentas, uso: r.uso, latenciaMs: r.latenciaMs, verificacao: r.verificacao });
     return { requisicaoId, rota: rota.rota, ...r, fatos: sessao.fatos };

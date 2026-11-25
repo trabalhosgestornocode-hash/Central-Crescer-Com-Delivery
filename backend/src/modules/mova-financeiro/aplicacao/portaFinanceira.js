@@ -56,7 +56,9 @@ export function criarPortaFinanceira({ nucleo, concessoes, financeiro }) {
   /** Erro do Financeiro que NÃO é de regra (rede, banco, indisponibilidade) vira transitório: a fila tenta de novo. */
   const traduzir = (e) => {
     if (e instanceof ErroFinanceiro) throw e;
-    throw new ErroTransitorio("FINANCEIRO_INDISPONIVEL");
+    // 25/11: a CAUSA técnica (só o código: SQLSTATE do PostgreSQL ou o nome do erro, nunca mensagem ou dado) segue junto para o
+    // diagnóstico — na homologação real, "Financeiro indisponível" escondia a recusa de conexão do papel de leitura (53300).
+    throw Object.assign(new ErroTransitorio("FINANCEIRO_INDISPONIVEL"), { causa: String(e?.code ?? e?.codigo ?? e?.name ?? "ERRO").slice(0, 40) });
   };
   const chamar = async (op, escopo, entrada) => {
     if (!OPERACOES_PERMITIDAS.includes(op) || typeof nucleo[op] !== "function") throw new Error(`Operação não permitida ao MOVA: ${op}`);

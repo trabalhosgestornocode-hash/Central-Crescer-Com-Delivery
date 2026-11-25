@@ -12,7 +12,7 @@ import { RESULTADO_UNIDADE, resolverUnidade } from "../mova-financeiro/dominio/u
 
 export const MODO_CONVERSA = Object.freeze({ DESLIGADO: "DESLIGADO", SOMBRA: "SOMBRA", RESPOSTA: "RESPOSTA" });
 /** Desfechos do núcleo que NÃO viram resposta: o motor atual trata (ele responde 'IA pausada' etc. pelo próprio caminho). */
-const SEM_RESPOSTA = new Set(["IA_INDISPONIVEL", "ORCAMENTO_INDISPONIVEL", "ORCAMENTO_MENSAL_ESGOTADO", "ORCAMENTO_DIARIO_ESGOTADO", "ORCAMENTO_REQUISICAO_ESGOTADO", "IA_RECUSOU"]);
+const SEM_RESPOSTA = new Set(["IA_INDISPONIVEL", "ORCAMENTO_INDISPONIVEL", "ORCAMENTO_MENSAL_ESGOTADO", "ORCAMENTO_DIARIO_ESGOTADO", "ORCAMENTO_REQUISICAO_ESGOTADO", "ORCAMENTO_CHAMADAS_ESGOTADAS", "IA_RECUSOU"]);
 const ehPrivada = (grupo, grupoId) => Boolean(grupo?.privada || grupo?.derivada) || /@s\.whatsapp\.net$/.test(String(grupoId ?? ""));
 const hojeEm = (agora, fuso) => new Intl.DateTimeFormat("en-CA", { timeZone: fuso, year: "numeric", month: "2-digit", day: "2-digit" }).format(agora);
 
@@ -85,10 +85,11 @@ export function criarConversaWhatsapp({ core, cfg, modo, unidadesDoPiloto, ident
     try { r = await core.responder(entrada); }
     catch (e) { registrar({ tipo: "MOVA_CORE_CONVERSA_FALHOU", erro: String(e?.message ?? e).slice(0, 200) }); return null; }
     const resumo = { requisicaoId: r.requisicaoId, motivo: r.motivo, rota: r.rota, ferramentas: (r.ferramentas ?? []).map((f) => f.nome), custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0 };
-    if (modo === MODO_CONVERSA.SOMBRA) { registrar({ tipo: "MOVA_CORE_SOMBRA", ...resumo, respondeu: Boolean(r.texto) }); return null; }
+    if (modo === MODO_CONVERSA.SOMBRA) { registrar({ tipo: "MOVA_CORE_SOMBRA", ...resumo, respondeu: Boolean(r.texto), mensagensExtras: (r.blocos ?? []).length }); return null; }
     if (!r.texto || SEM_RESPOSTA.has(r.motivo)) { registrar({ tipo: "MOVA_CORE_CONVERSA_DEVOLVIDA", ...resumo }); return null; }
     ultimaUnidade.set(chave, unidadeId);
-    return { texto: r.texto, unidadeId, organizacaoId: daUnidade.organizacaoId, ...resumo };
+    // 25/11: lista montada pelo SERVIDOR (ex.: todas as contas) segue em mensagens próprias, depois da resposta do modelo
+    return { texto: r.texto, blocos: (r.blocos ?? []).slice(0, MAX_MENSAGENS_EXTRAS), unidadeId, organizacaoId: daUnidade.organizacaoId, ...resumo };
   }
   return Object.freeze({ modo, atender });
 }
@@ -98,6 +99,9 @@ export function criarConversaWhatsapp({ core, cfg, modo, unidadesDoPiloto, ident
  * `clienteComOrcamento` (reserva/conclusão persistentes, controle 'ia' e teto total). Aqui fica só o limite POR MENSAGEM
  * (passos e custo de uma requisição), em memória — nunca substitui o persistente.
  */
+/** No máximo 6 mensagens extras por pergunta (lista longa): o resto vem por "continuar" — nada de enxurrada no WhatsApp. */
+export const MAX_MENSAGENS_EXTRAS = 6;
+
 export function orcamentoPorMensagem({ maxPassos = 6, requisicaoMicrousd = 60_000, custo }) {
   const req = new Map(); let n = 0;
   return Object.freeze({

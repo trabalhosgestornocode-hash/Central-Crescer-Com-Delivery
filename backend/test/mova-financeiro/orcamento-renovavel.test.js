@@ -13,7 +13,7 @@ const BETA = "dddddddd-0000-4000-8000-0000000000b1";
 
 async function cenario(politica = {}) {
   const { pool } = await criarBancoMova();
-  const campos = { ativo: true, ...politica };
+  const campos = { ativo: true, reserva_documentos_mensal_microusd: 0, reserva_documentos_diario_microusd: 0, ...politica };
   const sets = Object.keys(campos).map((k, i) => `${k} = $${i + 1}`).join(", ");
   await pool.query(`update mova.orcamento_ia_politica set ${sets} where id`, Object.values(campos));
   const eventos = [];
@@ -33,9 +33,9 @@ test("OR-01 custo com cache: leitura 0,1× e escrita 1,25× do preço de entrada
   assert.equal(custoMicrousd({ modelo: "modelo-desconhecido", entrada: 1000 }), 4000, "desconhecido = maior preço (conservador)");
 });
 
-test("OR-02 regime: renovável SÓ com a chave E em homologação; produção (OPERACAO/PILOTO) e sem chave seguem no acumulado", () => {
-  assert.equal(regimeDeOrcamento({ ligado: true, modo: "HOMOLOGACAO" }), "RENOVAVEL");
-  for (const [ligado, modo] of [[false, "HOMOLOGACAO"], [true, "OPERACAO"], [true, "PILOTO"], [true, "SIMULACAO"], [undefined, "HOMOLOGACAO"]]) assert.equal(regimeDeOrcamento({ ligado, modo }), "ACUMULADO");
+test("OR-02 regime: renovável SÓ com a chave (homologação, piloto ou operação — 25/11); sem chave ou em simulação segue no acumulado", () => {
+  for (const modo of ["HOMOLOGACAO", "PILOTO", "OPERACAO"]) assert.equal(regimeDeOrcamento({ ligado: true, modo }), "RENOVAVEL");
+  for (const [ligado, modo] of [[false, "HOMOLOGACAO"], [false, "PILOTO"], ["1", "OPERACAO"], [true, "SIMULACAO"], [undefined, "HOMOLOGACAO"]]) assert.equal(regimeDeOrcamento({ ligado, modo }), "ACUMULADO");
   assert.deepEqual(TETOS_RENOVAVEIS_MICROUSD, { mensal: 10_000_000, diario: 1_000_000, requisicao: 100_000 });
 });
 
@@ -159,4 +159,38 @@ t("OR-13 rollback: a reversão oficial da 0018 recusa com a política ATIVA e, d
   const r = await s.pool.query("select to_regclass('mova.orcamento_ia_politica') p, to_regclass('mova.orcamento_ia_alerta') a, (select count(*)::int from mova.consumo_ia) n");
   assert.deepEqual(r.rows[0], { p: null, a: null, n: 1 });
   assert.equal((await criarOrcamentoIa({ pool: s.pool }).resumo()).chamadas, 1, "o acumulado continua funcionando depois da reversão");
+});
+
+// ------------------------------------------------------------ 25/11: controle por tipo de uso (0022) e chamadas renováveis
+t("OR-20 a CONVERSA não alcança a parte guardada para DOCUMENTOS: conversa esgota o dia e o documento ainda é lido", async () => {
+  const s = await cenario({ reserva_microusd: 20_000, reserva_documentos_mensal_microusd: 2_000_000, reserva_documentos_diario_microusd: 200_000 }); // padrão da 0022: US$ 0,20 do dia guardados para documentos
+  for (let i = 0; i < 7; i++) await s.gastar(99_000); // US$ 0,693 de conversa
+  await s.gastar(90_000); // 0,783
+  await assert.rejects(s.o.reservar({ uso: "CONVERSA" }), recusa("ORCAMENTO_DIARIO_ESGOTADO"), "0,783 + 0,02 > 1 − 0,20");
+  const id = await s.o.reservar({ uso: "DOCUMENTO" });
+  await s.o.concluir(id, { modelo: "claude-haiku-5-5", saida: 100_000 });
+  const usos = (await s.pool.query("select uso, count(*)::int n from mova.consumo_ia group by 1 order by 1")).rows;
+  assert.deepEqual(usos, [{ uso: "CONVERSA", n: 8 }, { uso: "DOCUMENTO", n: 1 }]);
+  await assert.rejects(s.o.reservar({ uso: "CONVERSA" }), recusa("ORCAMENTO_DIARIO_ESGOTADO"));
+  const r = await s.o.resumo();
+  assert.deepEqual(r.guardadoParaDocumentos, { mensalUsd: 2, diarioUsd: 0.2 });
+});
+
+t("OR-21 limite RENOVÁVEL de chamadas de conversa por dia (substitui o acumulado de 500): esgota no dia, renova no seguinte; documento não conta", async () => {
+  const s = await cenario({ reserva_microusd: 1_000, limite_chamadas_conversa_diario: 3 });
+  for (let i = 0; i < 3; i++) await s.gastar(100, { uso: "CONVERSA" });
+  await assert.rejects(s.o.reservar({ uso: "CONVERSA" }), recusa("ORCAMENTO_CHAMADAS_ESGOTADAS"));
+  await s.gastar(100, { uso: "DOCUMENTO" });
+  assert.deepEqual((await s.o.resumo()).chamadasDeConversaHoje, { usadas: 3, limite: 3 });
+  await s.envelhecer("1 day 1 hour");
+  await s.gastar(100, { uso: "CONVERSA" });
+  assert.equal((await s.pool.query("select count(*)::int n from mova.consumo_ia")).rows[0].n, 5, "histórico preservado");
+});
+
+test("OR-22 tipo de uso pela requisição: imagem ou PDF = DOCUMENTO; texto = CONVERSA", async () => {
+  const { usoDaRequisicao } = await import("../../src/modules/mova-financeiro/infra/operacao.js");
+  assert.equal(usoDaRequisicao({ messages: [{ role: "user", content: "oi" }] }), "CONVERSA");
+  assert.equal(usoDaRequisicao({ messages: [{ role: "user", content: [{ type: "text", text: "x" }] }] }), "CONVERSA");
+  assert.equal(usoDaRequisicao({ messages: [{ role: "user", content: [{ type: "document", source: {} }, { type: "text", text: "x" }] }] }), "DOCUMENTO");
+  assert.equal(usoDaRequisicao({ messages: [{ role: "user", content: [{ type: "image", source: {} }] }] }), "DOCUMENTO");
 });

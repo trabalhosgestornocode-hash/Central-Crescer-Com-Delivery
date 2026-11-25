@@ -52,6 +52,10 @@ function limitesDe(p) {
     diario: Math.min(Number(p.limite_diario_microusd), TETOS_RENOVAVEIS_MICROUSD.diario),
     requisicao: Math.min(Number(p.limite_requisicao_microusd), TETOS_RENOVAVEIS_MICROUSD.requisicao),
     reserva: Number(p.reserva_microusd), maxPassos: Number(p.max_passos_requisicao),
+    // 0022 (25/11): parte do limite guardada para DOCUMENTOS e chamadas de conversa por dia (ausentes antes da 0022 = sem reserva/limite)
+    reservaDocumentosMensal: Math.min(Number(p.reserva_documentos_mensal_microusd ?? 0), TETOS_RENOVAVEIS_MICROUSD.mensal),
+    reservaDocumentosDiario: Math.min(Number(p.reserva_documentos_diario_microusd ?? 0), TETOS_RENOVAVEIS_MICROUSD.diario),
+    chamadasConversaDia: p.limite_chamadas_conversa_diario == null ? null : Number(p.limite_chamadas_conversa_diario),
     alertas: [...(p.alertas_percentuais ?? [])].map(Number).filter((n) => n > 0 && n <= 100).sort((a, b) => a - b), fuso: p.fuso,
   };
 }
@@ -67,9 +71,10 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
     const u = (await q.query(`select coalesce(sum(custo_microusd) filter (where em >= $1), 0)::bigint as mes,
                                      coalesce(sum(custo_microusd) filter (where em >= $2), 0)::bigint as dia,
                                      coalesce(sum(custo_microusd) filter (where requisicao_id = $3), 0)::bigint as req,
-                                     count(*) filter (where requisicao_id = $3)::int as passos
+                                     count(*) filter (where requisicao_id = $3)::int as passos,
+                                     count(*) filter (where em >= $2 and coalesce(uso, 'CONVERSA') = 'CONVERSA' and not (estado = 'FALHOU' and custo_microusd = 0))::int as chamadas_conversa_dia
                                 from mova.consumo_ia where em >= least($1, $2) or requisicao_id = $3`, [a.mes, a.dia, requisicaoId ?? null])).rows[0];
-    return { ancoras: a, mes: Number(u.mes), dia: Number(u.dia), req: Number(u.req), passos: u.passos };
+    return { ancoras: a, mes: Number(u.mes), dia: Number(u.dia), req: Number(u.req), passos: u.passos, chamadasConversaDia: u.chamadas_conversa_dia };
   }
   async function alertar(lim) {
     const c = await consumos(pool, lim, null);
@@ -87,7 +92,8 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
   return Object.freeze({
     regime: "RENOVAVEL",
     /** Reserva ANTES da chamada. Recusa: ORCAMENTO_MENSAL_ESGOTADO, ORCAMENTO_DIARIO_ESGOTADO, ORCAMENTO_REQUISICAO_ESGOTADO, PASSOS_ESGOTADOS. */
-    async reservar({ modelo = null, organizacaoId = null, unidadeId = null, requisicaoId = null, piorCasoMicrousd = 0 } = {}) {
+    async reservar({ modelo = null, organizacaoId = null, unidadeId = null, requisicaoId = null, piorCasoMicrousd = 0, uso = null } = {}) {
+      const tipo = uso === "DOCUMENTO" ? "DOCUMENTO" : "CONVERSA";
       let cli;
       try { cli = await pool.connect(); } catch { throw new ErroDeIa("ORCAMENTO_INDISPONIVEL"); }
       try {
@@ -97,12 +103,16 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
         const c = await consumos(cli, lim, requisicaoId);
         // 24/11 — a reserva é o MAIOR entre a reserva fixa da política e o pior caso estimado DESTA chamada (reservaPiorCaso).
         const r = Math.max(lim.reserva, Number.isInteger(piorCasoMicrousd) && piorCasoMicrousd > 0 ? piorCasoMicrousd : 0);
-        if (c.mes + r > lim.mensal) throw new ErroDeIa("ORCAMENTO_MENSAL_ESGOTADO");
-        if (c.dia + r > lim.diario) throw new ErroDeIa("ORCAMENTO_DIARIO_ESGOTADO");
+        // 25/11: a CONVERSA não alcança a parte guardada para documentos; DOCUMENTO pode usar o limite inteiro.
+        const guardaMes = tipo === "CONVERSA" ? lim.reservaDocumentosMensal : 0; const guardaDia = tipo === "CONVERSA" ? lim.reservaDocumentosDiario : 0;
+        if (c.mes + r > lim.mensal - guardaMes) throw new ErroDeIa("ORCAMENTO_MENSAL_ESGOTADO");
+        if (c.dia + r > lim.diario - guardaDia) throw new ErroDeIa("ORCAMENTO_DIARIO_ESGOTADO");
+        if (tipo === "CONVERSA" && lim.chamadasConversaDia != null && c.chamadasConversaDia >= lim.chamadasConversaDia) throw new ErroDeIa("ORCAMENTO_CHAMADAS_ESGOTADAS");
         if (requisicaoId && c.req + r > lim.requisicao) throw new ErroDeIa("ORCAMENTO_REQUISICAO_ESGOTADO");
         if (requisicaoId && c.passos >= lim.maxPassos) throw new ErroDeIa("PASSOS_ESGOTADOS");
         const id = (await cli.query(`insert into mova.consumo_ia (estado, custo_microusd, modelo, organizacao_id, unidade_id, requisicao_id, regime)
                                      values ('RESERVADA', $1, $2, $3, $4, $5, 'RENOVAVEL') returning id`, [r, modelo, organizacaoId, unidadeId, requisicaoId])).rows[0].id;
+        if (lim.chamadasConversaDia != null) await cli.query("update mova.consumo_ia set uso = $2 where id = $1", [id, tipo]); // coluna da 0022
         await cli.query("commit");
         return id;
       } catch (e) {
@@ -133,6 +143,8 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
         porRequisicaoUsd: lim.requisicao / 1e6, maxPassos: lim.maxPassos,
         porModelo: porModelo.map((x) => ({ modelo: x.modelo, chamadas: x.chamadas, custoUsd: Number(x.c) / 1e6 })),
         porUnidade: porUnidade.map((x) => ({ unidadeId: x.unidadeId, chamadas: x.chamadas, custoUsd: Number(x.c) / 1e6 })),
+        guardadoParaDocumentos: { mensalUsd: lim.reservaDocumentosMensal / 1e6, diarioUsd: lim.reservaDocumentosDiario / 1e6 },
+        chamadasDeConversaHoje: { usadas: c.chamadasConversaDia, limite: lim.chamadasConversaDia },
         alertas,
       };
     },
@@ -141,5 +153,6 @@ export function criarOrcamentoRenovavel({ pool, registrar = () => {} }) {
 
 /** Escolha do regime (fail-closed): renovável SÓ com a chave E em homologação; em qualquer outro caso, o acumulado de sempre. */
 export function regimeDeOrcamento({ ligado = false, modo }) {
-  return ligado === true && modo === "HOMOLOGACAO" ? "RENOVAVEL" : "ACUMULADO";
+  // 25/11: liberado também em PILOTO/OPERAÇÃO (produção) — só com MOVA_ORCAMENTO_RENOVAVEL=1 E a política `ativo` no banco.
+  return ligado === true && ["HOMOLOGACAO", "PILOTO", "OPERACAO"].includes(modo) ? "RENOVAVEL" : "ACUMULADO";
 }

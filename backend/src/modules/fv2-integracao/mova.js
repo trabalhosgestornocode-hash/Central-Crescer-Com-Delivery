@@ -41,7 +41,7 @@ import pg from "pg";
 import { ACAO, ErroFinanceiro, comandos, criarNucleoFinanceiro, planoDeContas } from "../financeiro-v2/index.js";
 import { criarPortaOperacional } from "../mova-financeiro/index.js";
 import {
-  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarOrcamentoRenovavel, regimeDeOrcamento, criarWorker, validarConfiguracao, configuracaoViva,
+  MODELOS_PERMITIDOS, carregarConfiguracao, criarRedator, criarSaidaPeloRele, ehConversaPrivada, clienteComOrcamento, criarConsumidorRele, criarControle, criarEnviadorDeRespostas, criarExtratorAnthropic, criarMova, criarOrcamentoIa, criarOrcamentoRenovavel, regimeDeOrcamento, criarTitularPorGeracao, NOME_DA_CONEXAO_DO_WORKER, criarWorker, validarConfiguracao, configuracaoViva,
 } from "../mova-financeiro/index.js";
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
@@ -225,7 +225,7 @@ export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } 
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null }) {
+export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null }) {
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
     // HOMOLOGACAO/PILOTO: estado no banco de homologação marcado. OPERACAO: schema próprio de produção marcado (nunca o de teste).
     if (cfg.modo === "OPERACAO") await exigirBancoDaOperacao(pool, cfg.marcador);
@@ -272,7 +272,7 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
     try { conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null }); }
     catch (e) { registrar({ tipo: "MOVA_CORE_CONVERSA_NAO_MONTADA", erro: String(e?.message ?? e).slice(0, 200) }); } // falha segura: o motor atual segue sozinho
@@ -337,6 +337,10 @@ export function criarRotinaPeriodica(passo, { intervaloMs = 5 * 60 * 1000, regis
   timer.unref?.();
   return Object.freeze({ tick, parar: () => clearInterval(timer) });
 }
+/** Instante da subida DESTE processo (13 dígitos): identifica a instância mais nova numa troca de deploy. */
+const GERACAO_DA_INSTANCIA = Date.now();
+/** Conexões do papel de leitura por instância: o papel tem limite 2 no banco e o deploy mantém duas instâncias vivas. */
+export const LEITOR_CONEXOES_POR_INSTANCIA = 1;
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;
@@ -346,7 +350,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     // TLS SEMPRE verificado; a CA do provedor (ex.: raiz do Supabase) vem de MOVA_PG_CA ou, na falta, de FV2_PG_CA.
     const ca = env.MOVA_PG_CA ?? env.FV2_PG_CA ?? null;
     const ssl = ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
-    const pool = new pg.Pool({ connectionString: cfg.databaseUrl, max: 4, idleTimeoutMillis: 30000, ssl });
+    // 25/11: as conexões levam a GERAÇÃO desta instância (instante da subida): numa troca de instância, a mais nova assume a fila.
+    const pool = new pg.Pool({ connectionString: cfg.databaseUrl, max: 4, idleTimeoutMillis: 30000, ssl, application_name: `${NOME_DA_CONEXAO_DO_WORKER}:${GERACAO_DA_INSTANCIA}` });
+    // Pelo Supavisor o banco vê application_name = 'Supavisor': a geração vai também por SET na própria conexão (modo sessão).
+    pool.on("connect", (c) => { c.query(`set application_name = '${NOME_DA_CONEXAO_DO_WORKER}:${GERACAO_DA_INSTANCIA}'`).catch(() => {}); });
     pool.on("error", () => {});
     abertos.push(pool);
     const verificarBancoFinanceiro = async () => {
@@ -361,13 +368,16 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
       // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).
-      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: 2, idleTimeoutMillis: 30000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
+      // 25/11: o papel de leitura aceita 2 conexões NO TOTAL, somando as instâncias. UMA por instância garante que, na troca
+      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ocioso fecha em 5 s; esperar vaga tem limite (5 s) —
+      // nunca uma espera sem fim que trave o pool.
+      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: 5000, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
       poolLeitor.on("error", () => {});
       abertos.push(poolLeitor);
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });
       // Escrita (Frente C/D): só se a plataforma registrar o provedor da identidade operacional (implantação do Agente 1).
       const operacionalDaPlataforma = cfg.escrita ? (obterDependenciasFv2?.()?.operacionalMova ?? null) : null;
-      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma });
+      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma, titularDaFila: criarTitularPorGeracao({ pool, geracao: GERACAO_DA_INSTANCIA, registrar }) });
     }
     const dep = obterDependenciasFv2();
     return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });
