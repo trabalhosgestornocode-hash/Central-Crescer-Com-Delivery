@@ -227,6 +227,11 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
     async preparar({ conversaChave, sessao, autor, tipo, args, anexo = null }) {
       const escopo = Object.freeze({ organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, usuarioId: sessao.usuarioId });
       const anterior = await abertaDaConversa(conversaChave);
+      // §9 (S03): correção parcial = só o campo corrigido muda; o resto vem da versão anterior guardada pelo SERVIDOR
+      if (anterior?.tipo === tipo && anterior.args && anterior.autor === autor) {
+        const novos = Object.fromEntries(Object.entries(args ?? {}).filter(([, v]) => v !== undefined && v !== null && v !== "" && !(Array.isArray(v) && !v.length)));
+        args = { ...anterior.args, ...novos };
+      }
       // o comprovante enviado num turno anterior continua valendo para a correção da MESMA operação (o servidor guarda, nunca o modelo)
       const anexoEfetivo = anexo?.arquivo ? anexo : (anterior?.tipo === tipo ? anterior.anexo ?? null : null);
       // §9: troco só com menção EXPLÍCITA da pessoa (nesta mensagem ou já aceito na versão anterior): "o resto ainda está comigo" é PENDENTE, não troco

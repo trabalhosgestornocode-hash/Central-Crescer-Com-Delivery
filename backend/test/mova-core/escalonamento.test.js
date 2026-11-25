@@ -27,7 +27,8 @@ async function montar(roteiros, escalonamento = LIGADO) {
   const auditoria = [];
   const c = criarMovaCore({ porta: f.porta, cliente, orcamento: criarOrcamentoMemoria(), auditoria: { registrar: (x) => auditoria.push(x) }, escalonamento });
   const perguntar = (texto) => c.responder({ organizacaoId: ORG_A, conversaId: "g1", participanteId: "p1", usuarioId: USUARIO, unidadeId: UNI_A, unidadesPermitidas: UNIDADES, perfil: PERFIL_FIN, podeValores: true, texto, hoje: HOJE });
-  return { cliente, auditoria, perguntar };
+  const perguntarEm = (texto, unidadeId) => c.responder({ organizacaoId: ORG_A, conversaId: "g1", participanteId: "p1", usuarioId: USUARIO, unidadeId, unidadesPermitidas: UNIDADES, perfil: PERFIL_FIN, podeValores: true, texto, hoje: HOJE });
+  return { cliente, auditoria, perguntar, perguntarEm };
 }
 const CONSULTA = [usar("contas_a_pagar", { termo: "brownie", competencia: "2026-10" }, "a")];
 

@@ -101,7 +101,15 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
     const orientacao = conceitos.orientacao(String(e.texto ?? ""));
-    const contexto = [orientacao, recuperado].filter(Boolean).join("\n") || null;
+    let notaDoServidor = null;
+    if (documentoNoCore) {
+      const aberta = await operacoes.abertaDaConversa(conversaChave);
+      if (aberta && aberta.autor === autor && (aberta.requisitos ?? []).includes("COMPROVANTE")) {
+        const r = await operacoes.preparar({ conversaChave, sessao, autor, tipo: aberta.tipo, args: aberta.args ?? {}, anexo: e.anexo });
+        notaDoServidor = r.ok ? `[servidor] O documento desta mensagem foi anexado à proposta aberta (${r.proposta.id}, estado ${r.proposta.estado}). Consulte propostas_do_mova ou siga com preparar_operacao; nada entrou no Financeiro ainda.` : null;
+      }
+    }
+    const contexto = [orientacao, recuperado, notaDoServidor].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const argsDoLaco = {
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),

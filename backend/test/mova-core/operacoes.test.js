@@ -104,7 +104,8 @@ test("OP-02 pede SÓ o que falta: sem comprovante a proposta aguarda dados e 'si
   assert.deepEqual(await t.retrato(), antes);
   await t.turno("segue o comprovante", { anexo: ANEXO(), temAnexo: true });
   const lista = await t.operacoes.daConversa(`${ORG_A}|conv-1|5585999990001@s.whatsapp.net`);
-  assert.deepEqual(lista.map((x) => [x.versao, x.estado]), [[2, "AGUARDANDO_CONFIRMACAO"], [1, "SUBSTITUIDA"]]);
+  // o SERVIDOR anexa o comprovante à proposta aberta (v2) e o modelo ainda prepara de novo (v3): só a mais nova vale
+  assert.deepEqual(lista.map((x) => [x.versao, x.estado]), [[3, "AGUARDANDO_CONFIRMACAO"], [2, "SUBSTITUIDA"], [1, "SUBSTITUIDA"]]);
   assert.equal((await t.turno("pode lançar")).motivo, "OPERACAO_EXECUTADA");
   assert.equal((await t.retrato()).contas - antes.contas, 1);
 });
@@ -401,4 +402,24 @@ test("OP-14 TROCO só com menção da pessoa: 'o resto ainda tá comigo' NÃO vi
   assert.deepEqual([r1.proposta.dados.trocoCentavos, r1.proposta.avisos.includes("TROCO_NAO_INFORMADO_PELA_PESSOA")], [0, true]);
   const r2 = await t.operacoes.preparar({ conversaChave: "k2", sessao: { ...base, textoDaPessoa: "gastei 32 e voltaram 18 de troco" }, autor: "pessoa-1", tipo: args.tipo, args });
   assert.equal(r2.proposta.dados.trocoCentavos, 1800);
+});
+
+test("OP-15 correção parcial: nova versão sem o valor HERDA o valor da anterior (só a categoria muda)", async () => {
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: COMPRA, anexo: ANEXO() });
+  const { valorCentavos: _v, ...semValor } = COMPRA; void _v;
+  const v2 = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...semValor, categoria: "Embalagens", fornecedor: undefined } });
+  assert.deepEqual([v2.proposta.versao, v2.proposta.dados.valorCentavos, v2.proposta.dados.categoria, v2.proposta.requisitos], [2, 25900, "EMBALAGENS", []]);
+});
+
+test("OP-16 comprovante chega num turno em que o modelo NÃO chama a ferramenta: o SERVIDOR anexa à proposta aberta e o 'sim' executa", async () => {
+  const semAnexo = { ...COMPRA };
+  const t = await montar({ roteiro: [...preparo(semAnexo, "Preparei; falta o comprovante."), [[falar("Recebi o comprovante. Confirma com 'sim'?")]]] });
+  await t.turno("comprei 259 de brownies da Doce Brownie ontem no Inter, insumos");
+  assert.ok((await t.operacoes.abertaDaConversa(`${ORG_A}|conv-1|5585999990001@s.whatsapp.net`)).requisitos.includes("COMPROVANTE"));
+  await t.turno("segue o comprovante", { anexo: ANEXO(), temAnexo: true });
+  const r = await t.turno("sim");
+  assert.equal(r.operacao?.executada, true, r.texto);
+  assert.equal((await t.retrato()).contas, 2);
 });
