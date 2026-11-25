@@ -144,8 +144,7 @@ ${c.voce.podeConfigurar ? `<section class="card" aria-labelledby="t-canal-novo">
     campos: `<label>Papel <select name="papel"><option value="CANAL">Canal de venda</option><option value="PROCESSADOR">Processador de pagamento</option></select></label>
 <label>Código (maiúsculas, números e _) <input name="codigo" required pattern="[A-Z][A-Z0-9_]{1,39}" maxlength="40"></label>
 <label>Equivale a (código base) <select name="codigoBase">${Object.entries(NOMES_BASE).map(([k, v]) => `<option value="${esc(k)}">${esc(v)}</option>`).join("")}</select></label>
-<label>Nome <input name="nome" required maxlength="80"></label><label>Fundo fixo da frente de caixa (R$, fica no caixa para o próximo expediente; vazio mantém) <input name="fundoFixoCaixa" inputmode="decimal" maxlength="12" placeholder="106,00" value="${Number.isInteger(u?.fundoFixoCaixaCentavos) ? (u.fundoFixoCaixaCentavos / 100).toFixed(2).replace(".", ",") : ""}"></label>
-<label>Situação <select name="situacao"><option value="ATIVO">Ativo</option><option value="INATIVO">Inativo</option></select></label>${justificativa()}` })}
+<label>Nome <input name="nome" required maxlength="80"></label><label>Situação <select name="situacao"><option value="ATIVO">Ativo</option><option value="INATIVO">Inativo</option></select></label>${justificativa()}` })}
 <p class="nota">Não há campo de taxa contratual: taxas desconhecidas não são presumidas.</p></section>` : exige("Cadastrar exige a permissão \"configurar\".")}`;
 }
 
@@ -193,8 +192,7 @@ export function documentos(r, f = {}) {
   return `<header class="cabecalho"><div><h1>Documentos</h1><p class="subtitulo">Cofre documental da unidade · ${r.paginacao.total} documento(s)</p></div></header>
 <p class="aviso">Abrir ou baixar um arquivo exige a permissão "abrir documentos do cofre", conferida a cada pedido. ${r.podeAbrir ? "Você tem esta permissão." : "Você vê só as fichas (metadados)."}</p>
 <form class="filtros-locais" data-filtro-local="documentos" aria-label="Filtros de documentos">
-  <label>Fundo fixo da frente de caixa (R$, fica no caixa para o próximo expediente; vazio mantém) <input name="fundoFixoCaixa" inputmode="decimal" maxlength="12" placeholder="106,00" value="${Number.isInteger(u?.fundoFixoCaixaCentavos) ? (u.fundoFixoCaixaCentavos / 100).toFixed(2).replace(".", ",") : ""}"></label>
-<label>Situação <select name="situacao"><option value="">Todos</option><option value="VIGENTE"${f.situacao === "VIGENTE" ? " selected" : ""}>Versão vigente</option><option value="SUBSTITUIDO"${f.situacao === "SUBSTITUIDO" ? " selected" : ""}>Substituídos</option></select></label>
+  <label>Situação <select name="situacao"><option value="">Todos</option><option value="VIGENTE"${f.situacao === "VIGENTE" ? " selected" : ""}>Versão vigente</option><option value="SUBSTITUIDO"${f.situacao === "SUBSTITUIDO" ? " selected" : ""}>Substituídos</option></select></label>
   <label class="caixa-marcar"><input type="checkbox" name="soCompetencia"${f.soCompetencia ? " checked" : ""}> Só a competência selecionada</label>
 </form>
 <section class="card" aria-labelledby="t-docs"><h2 id="t-docs" class="sr">Lista de documentos</h2>
