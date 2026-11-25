@@ -24,7 +24,7 @@ import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjeca
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
-import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
@@ -249,8 +249,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (evento.respostaA && evento.tipo === "TEXTO") {
         // 24/11 — só a MESMA pessoa autorizada que enviou o documento responde a pergunta dele (dominio/confirmacao.js).
         // Recusada, a pendência NÃO é consumida: continua aberta para quem perguntou; nada é registrado.
-        const podeConfirmar = (origem, leitura) => podeConfirmarPendencia(cfg, origem, evento, { unidadeId: leitura?.divergencia?.unidadeId ?? null }).pode;
-        const recusarOutro = () => concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_DE_OUTRO_PARTICIPANTE", resposta: RESPOSTA.confirmacaoDeOutroParticipante(), extra: { retomou: null } });
+        // 25/11: o tipo da pergunta decide se é COMPLEMENTO (competência, descrição, unidade: outro FINANCEIRO da unidade pode
+        // completar) ou CONFIRMAÇÃO de efeito (só quem enviou). O motivo real da recusa fica na decisão e na resposta.
+        let motivoRecusa = null;
+        const podeConfirmar = (origem, leitura) => {
+          const r = podeConfirmarPendencia(cfg, origem, evento, { unidadeId: leitura?.divergencia?.unidadeId ?? leitura?.saida?.unidadeId ?? null, tipo: leitura?.divergencia?.tipo ?? null });
+          if (!r.pode) motivoRecusa = r.motivo;
+          return r.pode;
+        };
+        const recusarOutro = () => concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: motivoRecusa === "OUTRO_PARTICIPANTE" || !motivoRecusa ? "CONFIRMACAO_DE_OUTRO_PARTICIPANTE" : `RESPOSTA_RECUSADA:${motivoRecusa}`,
+          resposta: motivoRecusa === "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE" || motivoRecusa === "UNIDADE_FORA_DA_CONVERSA" ? RESPOSTA.complementoSemPermissao() : RESPOSTA.confirmacaoDeOutroParticipante(), extra: { retomou: null } });
         let pend = await a.mensagens.tomarPendente(evento.respostaA, { podeConfirmar, validadeMs: PENDENCIA_CITADA_VALIDADE_MS });
         if (pend?.expirada) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PENDENCIA_EXPIRADA", resposta: RESPOSTA.pendenciaExpirada(), extra: { retomou: null, citou: "DOCUMENTO" } });
         if (pend?.outroParticipante) return recusarOutro();
@@ -413,6 +421,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // lançamento — antes caía na pergunta "Esse lançamento pertence à…?". Sem documento, sem valor e sem esclarecimento pendente.
     // 15H (H-1): CONSULTAR sem assunto definido (ex.: "você está funcionando?") também é conversa — nunca pergunta de unidade.
     if (!evento.midia && !esclarecimento && !saida.valorCentavos && (["OUTRA", "DESCONHECIDA"].includes(saida.intencao) || (saida.intencao === "CONSULTAR" && !saida.consulta && !saida.todasUnidades))) {
+      // 25/11: no grupo por LISTA, conversa sem pedido financeiro só tem resposta quando o MOVA foi chamado PELO NOME. Mensagem que
+      // entrou pela continuidade ou citação ("ok", "kkk", "valeu") não recebe apresentação no meio de uma operação.
+      if (String(evento.grupoId).endsWith("@g.us") && (grupo.acesso ?? "ABERTO") === "LISTA" && !chamaPeloNome(evento.texto)) {
+        return concluir(evento, { decisao: DECISAO.IGNORADO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO_SILENCIOSA", injecao });
+      }
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONVERSA_SEM_PEDIDO_FINANCEIRO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });
     }
     // 16A (piloto): qualquer coisa que não seja consulta (pagamento, conta, correção, transferência) NÃO vira proposta.

@@ -7,14 +7,22 @@
 // Quem responde também precisa estar AUTORIZADO na conversa em que responde e essa conversa precisa alcançar a UNIDADE da pendência.
 // Delegação formal de aprovação: o sistema ainda NÃO tem cadastro de delegação; quando existir, entra aqui (e só por ela).
 import { conversaAutorizada, mesmoCelularBr } from "./configuracao.js";
-import { participanteAutorizado } from "./participantes.js";
+import { PERFIL, participanteAutorizado, perfilNa } from "./participantes.js";
+
+// 25/11 — COMPLEMENTO de informação (não é confirmação de efeito financeiro): competência, descrição, unidade. Outro participante
+// FINANCEIRO autorizado NA UNIDADE da pendência, no MESMO grupo e citando a pergunta, pode completar. As perguntas que decidem o
+// EFEITO (é o mesmo pagamento? é juros? é parcial? qual conta?) continuam só com quem enviou o documento.
+export const TIPOS_COMPLEMENTO = Object.freeze(["COMPETENCIA", "DESCRICAO", "UNIDADE"]);
 
 const idsDa = (entrada) => [...(entrada?.ids ?? []), ...(entrada?.privado ? [entrada.privado] : [])];
 // reconhecimento por IDENTIFICADOR: o JID listado na entrada, ou o mesmo celular brasileiro com/sem o nono dígito DE UM JID LISTADO
 // (o WhatsApp entrega as duas formas). Nunca pelo telefoneE164 informado no evento, nem por nome.
-const porIdentificador = (conversa, participanteId) => {
+// 25/11: o telefone entregue pelo GATEWAY (canal HMAC, `participantPn` do próprio WhatsApp para o LID do grupo) é a MESMA regra
+// que autorizou a mensagem na recepção — sem ele, quem aparece no grupo pelo LID (…@lid) não era reconhecido ao responder e
+// recebia "documento enviado por outra pessoa" mesmo sendo quem enviou. Nunca por nome.
+const porIdentificador = (conversa, participanteId, telefoneE164 = null) => {
   if (!conversa) return null;
-  const direto = participanteAutorizado(conversa, { participanteId, telefoneE164: null });
+  const direto = participanteAutorizado(conversa, { participanteId, telefoneE164 });
   if (direto && !direto.aberto) return direto;
   const pelaLista = (conversa.participantes ?? []).find((p) => idsDa(p).some((j) => mesmoCelularBr(j, participanteId))) ?? null;
   return pelaLista ?? direto;
@@ -24,26 +32,32 @@ const porIdentificador = (conversa, participanteId) => {
  * @param {object} cfg configuração validada
  * @param {{participanteId:string, grupoId:string}} origem quem enviou o documento que gerou a pergunta
  * @param {{participanteId:string, grupoId:string}} quem quem está respondendo agora
- * @param {{unidadeId?:string|null}} [pendencia] unidade da operação pendente
+ * @param {{unidadeId?:string|null, tipo?:string|null}} [pendencia] unidade e tipo da pergunta pendente (null = pergunta de unidade)
  * @returns {{pode:boolean, motivo:string}}
  */
-export function podeConfirmarPendencia(cfg, origem, quem, { unidadeId = null } = {}) {
+export function podeConfirmarPendencia(cfg, origem, quem, { unidadeId = null, tipo = null } = {}) {
   if (!origem?.participanteId || !quem?.participanteId) return { pode: false, motivo: "SEM_PARTICIPANTE" };
-  // quem responde precisa ser reconhecido (por identificador) na conversa em que responde, e ela alcançar a unidade
+  // quem responde precisa ser reconhecido na conversa em que responde, e ela alcançar a unidade
   const conversaDeQuem = conversaAutorizada(cfg, quem.grupoId);
-  const entradaDeQuem = porIdentificador(conversaDeQuem, quem.participanteId);
+  const entradaDeQuem = porIdentificador(conversaDeQuem, quem.participanteId, quem.telefoneE164 ?? null);
   if (!entradaDeQuem) return { pode: false, motivo: "NAO_AUTORIZADO_NESTA_CONVERSA" };
   if (unidadeId && !(entradaDeQuem.unidades ?? conversaDeQuem.unidades ?? []).includes(unidadeId)) return { pode: false, motivo: "UNIDADE_FORA_DA_CONVERSA" };
   if (origem.participanteId === quem.participanteId) return { pode: true, motivo: "MESMO_IDENTIFICADOR" };
   if (mesmoCelularBr(origem.participanteId, quem.participanteId)) return { pode: true, motivo: "MESMO_CELULAR" }; // mesmo JID de celular com/sem 9 (quem responde já foi reconhecido pela lista)
   // a ENTRADA da lista que autorizou o envio original (grupo de lista; grupo aberto não tem identidade além do JID)
   const conversaDeOrigem = conversaAutorizada(cfg, origem.grupoId);
-  const entrada = conversaDeOrigem && (conversaDeOrigem.acesso ?? "ABERTO") === "LISTA" ? porIdentificador(conversaDeOrigem, origem.participanteId) : null;
+  const entrada = conversaDeOrigem && (conversaDeOrigem.acesso ?? "ABERTO") === "LISTA" ? porIdentificador(conversaDeOrigem, origem.participanteId, origem.telefoneE164 ?? null) : null;
   if (entrada) {
+    if (entrada === entradaDeQuem) return { pode: true, motivo: "MESMA_PESSOA_AUTORIZADA" };
     const conhecidos = idsDa(entrada);
     if (conhecidos.includes(quem.participanteId) || conhecidos.some((j) => mesmoCelularBr(j, quem.participanteId))) return { pode: true, motivo: "MESMA_PESSOA_AUTORIZADA" };
   }
-  return { pode: false, motivo: "OUTRO_PARTICIPANTE" };
+  // 25/11 — complemento por OUTRO integrante: mesmo grupo de LISTA (nunca a conversa privada de outra pessoa), FINANCEIRO na unidade.
+  const complemento = TIPOS_COMPLEMENTO.includes(tipo ?? "UNIDADE");
+  const mesmoGrupo = quem.grupoId === origem.grupoId && String(quem.grupoId).endsWith("@g.us") && (conversaDeQuem?.acesso ?? "ABERTO") === "LISTA" && !entradaDeQuem.aberto;
+  if (complemento && mesmoGrupo && unidadeId && perfilNa(entradaDeQuem, unidadeId) === PERFIL.FINANCEIRO) return { pode: true, motivo: "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO" };
+  // Sem unidade definida (pergunta de unidade ambígua) não há como conferir a permissão de outra pessoa: só quem enviou responde.
+  return { pode: false, motivo: complemento && mesmoGrupo && unidadeId ? "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE" : "OUTRO_PARTICIPANTE" };
 }
 
 /**

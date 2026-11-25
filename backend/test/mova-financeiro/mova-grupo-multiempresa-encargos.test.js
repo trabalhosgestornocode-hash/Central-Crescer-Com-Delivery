@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { AGORA } from "../financeiro-v2/helpers/cenario.js";
-import { ALFA, FIN, FINANCEIRO, GRUPO, ORG, ORG_X, SO_ALFA, XIS, base, cenario, gw, t } from "./helpers/operacao.js";
+import { ALFA, CONS, ESTRANHO, FIN, FINANCEIRO, GRUPO, ORG, ORG_X, SO_ALFA, XIS, base, cenario, gw, t } from "./helpers/operacao.js";
+import { podeConfirmarPendencia } from "../../src/modules/mova-financeiro/dominio/confirmacao.js";
 import { criarPortaOperacional, validarConfiguracao } from "../../src/modules/mova-financeiro/index.js";
 import { competenciaDaResposta, composicaoComprovada } from "../../src/modules/mova-financeiro/dominio/divergencia.js";
 import { validarSaidaDaIa, normalizarSentinelas } from "../../src/modules/mova-financeiro/ia/contratos.js";
@@ -26,9 +27,15 @@ const CONFIG = ({ multiempresa = true } = {}) => ({
   ],
   gruposAutorizados: [{ grupoId: GRUPO, unidades: [ALFA, XIS], acesso: "LISTA", politicaResposta: "GRUPO_FINANCEIRO", ...(multiempresa === null ? {} : { multiempresa }), participantes: [
     { ids: [FIN], perfil: "FINANCEIRO", nome: "Financeiro" }, { ids: [SO_ALFA], perfil: "FINANCEIRO", unidades: [ALFA] },
+    // 25/11: como em produção — cadastrado pelo NÚMERO; no grupo o WhatsApp entrega o LID e o telefone (participantPn) junto.
+    { ids: [GERENTE_TEL], telefones: [GERENTE_E164], perfil: "FINANCEIRO", nome: "Gerente Sintético" },
+    { ids: [CONS], perfil: "CONSULTA", nome: "Só consulta" },
   ] }],
 });
 
+const GERENTE_TEL = "5500000000301@s.whatsapp.net";
+const GERENTE_E164 = "+5500000000301";
+const GERENTE_LID = "88000000000301@lid";
 const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 let seq = 0;
 /** Boleto de energia pago com atraso: original 8.671,81 + juros 5,77 + multa 173,44 = 8.851,02 (sem competência impressa). */
@@ -79,7 +86,7 @@ test("GM-0 composição comprovada: soma exata centavo a centavo; sem encargo, c
   assert.equal(composicaoComprovada({ valorCentavos: 867181, valorOriginalCentavos: 867181 }), null, "sem encargo");
   assert.equal(composicaoComprovada({ valorCentavos: 10500, valorOriginalCentavos: 10000, jurosCentavos: 1000, descontoCentavos: 500 }), null, "desconto: fluxo normal");
   assert.equal(composicaoComprovada({ valorCentavos: 10200, valorOriginalCentavos: null, jurosCentavos: 200 }), null, "sem valor original impresso");
-  for (const [txt, comp] of [["outubro", "2026-10"], ["11/2026", "2026-11"], ["nov/26", "2026-11"], ["mês 9", "2026-09"], ["dezembro", "2025-12"], ["é de setembro", "2026-09"], ["sim", null], ["paguei ontem", null]]) {
+  for (const [txt, comp] of [["outubro", "2026-10"], ["11/2026", "2026-11"], ["nov/26", "2026-11"], ["mês 9", "2026-09"], ["dezembro", "2025-12"], ["é de setembro", "2026-09"], ["sim", null], ["paguei ontem", null], ["Mês de novembro, dia 25", "2026-11"], ["outubro dia 14", "2026-10"], ["novembro de 26", "2026-11"]]) {
     assert.equal(competenciaDaResposta(txt, "2026-10-14"), comp, txt);
   }
   // Leitura: os campos novos usam sentinela 0/"" e são validados (nunca negativos).
@@ -277,4 +284,111 @@ t("DOC-1 comprovante com legenda simples, sem 'MOVA', de participante da lista: 
   assert.equal((await n.enviar(gw({ doc: pdf("DOC1-sem-legenda") }))).motivo, "NAO_ACIONADO", "arquivo sem legenda");
   assert.equal((await n.enviar(gw({ texto: "bom dia, pessoal" }))).motivo, "NAO_ACIONADO", "conversa comum continua exigindo o nome");
   assert.equal((await n.enviar(gw({ texto: "Serviço de manutenção", doc: pdf("DOC1-x"), de: "5500000009999@s.whatsapp.net" }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
+});
+
+// ------------------------------------------------------------------ 25/11: continuidade e colaboração no grupo (homologação real do R$ 260)
+const entregar = (s, providerMessageId) => s.banco.pool.query("update mova.resposta set estado = 'ENVIADA', provider_message_id = $1 where seq = (select max(seq) from mova.resposta where grupo_jid = $2)", [providerMessageId, GRUPO]);
+const doGerente = (x) => gw({ de: GERENTE_LID, telefone: GERENTE_E164, ...x });
+const relacoes = async (s) => (await s.mova.armazenamento.historico.todos()).filter((x) => x.decisao === "RELACIONADA");
+const abertas = async (s) => Number((await s.banco.pool.query("select count(*)::int n from mova.mensagem_pendente where resolvida_em is null")).rows[0].n);
+async function perguntaDoMes(s, marca, x = {}) {
+  await s.enviar(doGerente({ texto: "Energia da loja xis", doc: pdf(marca), ...x }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_AUSENTE"], JSON.stringify(h));
+  await entregar(s, `3EB0PERGUNTA${marca}`);
+  return `3EB0PERGUNTA${marca}`;
+}
+
+test("CO-0 regra pura: complemento (competência/descrição/unidade) por outro FINANCEIRO da unidade no MESMO grupo; confirmação de efeito só por quem enviou; LID reconhecido pelo telefone", () => {
+  const cfg = validarConfiguracao(CONFIG());
+  const origem = { participanteId: GERENTE_LID, telefoneE164: GERENTE_E164, grupoId: GRUPO };
+  const p = (quem, pend) => podeConfirmarPendencia(cfg, origem, { grupoId: GRUPO, telefoneE164: null, ...quem }, { unidadeId: XIS, ...pend }).motivo;
+  assert.equal(p({ participanteId: GERENTE_LID, telefoneE164: GERENTE_E164 }, { tipo: "MAIOR" }), "MESMO_IDENTIFICADOR");
+  assert.equal(p({ participanteId: GERENTE_TEL }, { tipo: "MAIOR" }), "MESMA_PESSOA_AUTORIZADA", "a mesma pessoa pelo número (privado × LID)");
+  assert.equal(p({ participanteId: FIN }, { tipo: "COMPETENCIA" }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO");
+  assert.equal(p({ participanteId: FIN }, { tipo: "DESCRICAO" }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO");
+  assert.equal(p({ participanteId: FIN }, { tipo: null }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO", "pergunta de unidade");
+  for (const tipo of ["MAIOR", "MENOR", "VARIAS", "SEMELHANTE", "NOVA_OU_CONTA"]) assert.equal(p({ participanteId: FIN }, { tipo }), "OUTRO_PARTICIPANTE", `confirmação de efeito ${tipo}`);
+  assert.equal(p({ participanteId: CONS }, { tipo: "COMPETENCIA" }), "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", "perfil só de consulta");
+  assert.equal(p({ participanteId: SO_ALFA }, { tipo: "COMPETENCIA" }), "UNIDADE_FORA_DA_CONVERSA", "financeiro só de outra empresa");
+  assert.equal(p({ participanteId: ESTRANHO }, { tipo: "COMPETENCIA" }), "NAO_AUTORIZADO_NESTA_CONVERSA");
+  assert.equal(podeConfirmarPendencia(cfg, origem, { participanteId: FIN, grupoId: FIN }, { unidadeId: XIS, tipo: "COMPETENCIA" }).pode, false, "na conversa privada de outra pessoa: nunca");
+});
+
+t("CO-1 caso real: quem enviou aparece no grupo pelo LID e responde CITANDO a pergunta com mês e dia ('Mês de outubro, dia 14') → continua e paga; reenvio não duplica", async () => {
+  const s = await grupo({ responder: () => BOLETO_PAGO() });
+  const q = await perguntaDoMes(s, "CO1");
+  await s.enviar(doGerente({ texto: "Mês de outubro, dia 14", respostaA: q }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.conciliacao], ["EXECUTADO", "PAGO_POR_COMPROVANTE"], JSON.stringify(h));
+  assert.doesNotMatch((await s.respostas()).join("\n"), /outra pessoa/);
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.equal(conta.competencia, "2026-10");
+  assert.deepEqual((await relacoes(s)).map((x) => x.motivo), ["RESPOSTA_CITANDO_PERGUNTA"]);
+  await s.enviar(doGerente({ texto: "Energia da loja xis", doc: pdf("CO1") }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1], "sem duplicidade");
+});
+
+t("CO-2 OUTRO integrante FINANCEIRO da empresa completa a competência citando a pergunta → continua; a auditoria guarda quem enviou e quem completou", async () => {
+  const s = await grupo({ responder: () => BOLETO_PAGO() });
+  const q = await perguntaDoMes(s, "CO2");
+  await s.enviar(gw({ de: FIN, texto: "outubro", respostaA: q }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, "EXECUTADO", JSON.stringify(h));
+  const [rel] = await relacoes(s);
+  assert.equal(rel.participanteId, FIN, "quem completou");
+  const ev = (await s.banco.pool.query("select participante_jid from mova.evento where evento_id = $1", [rel.retomou])).rows[0];
+  assert.equal(ev.participante_jid, GERENTE_LID, "quem enviou o documento");
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+});
+
+t("CO-3 fora da lista é descartado; perfil só de consulta e financeiro só da OUTRA empresa são recusados SEM consumir a pendência; depois o autorizado completa", async () => {
+  const s = await grupo({ responder: () => BOLETO_PAGO() });
+  const q = await perguntaDoMes(s, "CO3");
+  assert.equal((await s.enviar(gw({ de: ESTRANHO, texto: "outubro", respostaA: q }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
+  await s.enviar(gw({ de: CONS, texto: "outubro", respostaA: q }));
+  let h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["BLOQUEADO", "RESPOSTA_RECUSADA:SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE"]);
+  await s.enviar(gw({ de: SO_ALFA, texto: "outubro", respostaA: q }));
+  h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["BLOQUEADO", "RESPOSTA_RECUSADA:UNIDADE_FORA_DA_CONVERSA"]);
+  assert.equal(s.escritas().length, 0, "nada gravado pelas recusas");
+  assert.equal(await abertas(s), 1, "a pendência continua aberta");
+  await s.enviar(doGerente({ texto: "outubro", respostaA: q }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+});
+
+t("CO-4 duas pendências ao mesmo tempo: a resposta citando a SEGUNDA pergunta só continua a segunda; a primeira segue aberta", async () => {
+  let n = 0;
+  const s = await grupo({ responder: () => (++n === 1 ? BOLETO_PAGO() : BOLETO_PAGO({ valorCentavos: 50000, valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, favorecido: "Outro Fornecedor Sintético", linhaDigitavel: null })) });
+  await perguntaDoMes(s, "CO4A");
+  const q2 = await perguntaDoMes(s, "CO4B");
+  await s.enviar(gw({ de: FIN, texto: "outubro", respostaA: q2 }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO", JSON.stringify(await s.ultima()));
+  assert.deepEqual((await s.contas(ORG_X, XIS)).map((x) => x.valorBaseCentavos), [50000], "só a segunda");
+  assert.equal(await abertas(s), 1);
+});
+
+t("CO-5 figurinha, só emoji e conversa ('kkkk valeu') durante uma pendência: nenhuma resposta, nenhuma apresentação; depois continua", async () => {
+  let n = 0; // a leitura real de "kkkk valeu" é conversa (OUTRA), não um boleto
+  const s = await grupo({ responder: () => (++n === 1 ? BOLETO_PAGO() : base({})) });
+  const q = await perguntaDoMes(s, "CO5");
+  const antes = (await s.respostas()).length;
+  assert.equal((await s.enviar({ ...doGerente({}), tipo: "OUTRO", texto: null })).motivo, "NAO_ACIONADO", "figurinha");
+  assert.equal((await s.enviar(doGerente({ texto: "👍😂" }))).motivo, "NAO_ACIONADO", "só emoji");
+  await s.enviar(doGerente({ texto: "kkkk valeu" }));
+  assert.equal((await s.respostas()).length, antes, "nada respondido: " + (await s.respostas()).at(-1) + " | " + JSON.stringify(await s.ultima()));
+  assert.doesNotMatch((await s.respostas()).join("\n"), /Sou o MOVA/);
+  await s.enviar(doGerente({ texto: "outubro", respostaA: q }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+});
+
+t("CO-6 REINÍCIO entre a pergunta e a resposta: a pendência está no banco e a resposta citando a pergunta continua uma única vez", async () => {
+  const s = await grupo({ responder: () => BOLETO_PAGO() });
+  const q = await perguntaDoMes(s, "CO6");
+  s.reiniciar();
+  await s.enviar(gw({ de: FIN, texto: "outubro", respostaA: q }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  await s.enviar(gw({ de: FIN, texto: "outubro", respostaA: q }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1], "a segunda resposta não paga de novo");
 });

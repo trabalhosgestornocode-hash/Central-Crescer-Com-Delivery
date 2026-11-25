@@ -85,12 +85,17 @@ export async function cenario({ responder = () => base({}), comandosDeterministi
   const nucleo = Object.fromEntries(Object.entries(m.nucleo).map(([nome, op]) => [nome, async (cx, ...a) => { chamadas.push({ nome, organizacaoId: cx?.organizacaoId, unidadeId: cx?.unidadeId, permissoes: cx?.permissoes }); return op(cx, ...a); }]));
   const ref = {};
   const extrator = criarExtratorAnthropic({ cliente, obterEvidencia: (r) => ref.mova.evidencias.obter(r), relogio: () => AGORA });
-  ref.mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos, ...(typeof extras === "function" ? extras({ nucleo, m, c }) : extras) });
-  const mova = ref.mova;
+  const montarMova = () => criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, comandosDeterministicos, ...(typeof extras === "function" ? extras({ nucleo, m, c }) : extras) });
+  ref.mova = montarMova();
+  let mova = ref.mova;
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
+  // 25/11: REINÍCIO do processo — um MOVA novo sobre o MESMO banco (nada em memória sobrevive; só o que está no PostgreSQL).
+  const reiniciar = () => { ref.mova = montarMova(); mova = ref.mova; resultado.mova = mova; return mova; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
   const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
   const contar = async (tabela) => Number((await banco.pool.query(`select count(*)::int n from mova.${tabela}`)).rows[0].n);
-  return { m, c, forn, conta, banco, cliente, chamadas, mova, enviar, saida, ultima, contar, cfg };
+  const ultimaDoMova = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const resultado = { m, c, forn, conta, banco, cliente, chamadas, mova, enviar, saida, ultima: ultimaDoMova, contar, cfg, reiniciar };
+  return resultado;
 }
 
