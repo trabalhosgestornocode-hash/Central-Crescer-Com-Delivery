@@ -249,8 +249,38 @@ union all select 'migracao_em_curso', coalesce((select string_agg(left(query, 60
 `;
 }
 
+/** Estado do banco do MOVA em PRODUÇÃO depois das propostas do MOVA CORE (25/11): 0001–0018, 0020 e 0022. */
+export const ESTADO_PRODUCAO_APOS_PROPOSTAS = Object.freeze([...ESTADO_PRODUCAO_APOS_ORCAMENTO, "0020"]);
+/**
+ * aplicar-politica-sangria.sql (25/11): SÓ a 0023 (PRESTACAO_DE_SANGRIA nas listas fechadas de políticas e execuções). UMA
+ * transação; exige 0001–0018, 0020 e 0022 com o mesmo sha256 e a 0023 não registrada. Não semeia política nenhuma.
+ */
+export function gerarAplicarPoliticaSangria(migracoes = listarMigracoes()) {
+  const m = migracoes.find((x) => x.nome.startsWith("0023_"));
+  if (!m) throw new Error("migração 0023 inexistente");
+  const ja = migracoes.filter((x) => ESTADO_PRODUCAO_APOS_PROPOSTAS.includes(x.nome.slice(0, 4)));
+  const conferir = ja.map((x) => `  if not exists (select 1 from mova.mova_migracao where nome = '${x.nome}' and sha256 = '${x.sha256}') then raise exception 'MOVA 0023: ${x.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  return `-- MOVA — POLÍTICA DE SANGRIA em PRODUÇÃO: aplica SÓ ${m.nome} (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
+-- Exige as já instaladas (nome + sha256): ${ja.map((x) => x.nome.slice(0, 4)).join(", ")}. Reversão: recuperacao/reverter-0023.sql.
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA 0023: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA 0023: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${conferir.join("\n")}
+  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA 0023: já aplicada — nada foi feito'; end if;
+end $$;
+
+-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})
+${m.sql.trimEnd()}
+insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');
+`;
+}
+
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento(), "aplicar-propostas-core.sql": gerarAplicarPropostas(), "reverter-propostas-core.sql": gerarReverterPropostas() };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento(), "aplicar-propostas-core.sql": gerarAplicarPropostas(), "reverter-propostas-core.sql": gerarReverterPropostas(), "aplicar-politica-sangria.sql": gerarAplicarPoliticaSangria() };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }

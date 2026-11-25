@@ -368,23 +368,26 @@ test("POL-0 kit de políticas: limite explícito obrigatório (sem padrão nem i
   assert.match(sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "CONTA_A_PAGAR", nivel: "APLICAR_AUTOMATICO", limiteCentavos: 2_000_000 }] }), /0015_mova_pagadores_multiunidade\.sql/);
 });
 
-t("POL-1 kit aplicado no banco do MOVA: cinco políticas por operação; reaplicar troca (revoga a anterior, uma vigente por operação); revogar todas", async () => {
+t("POL-1 kit aplicado no banco do MOVA: seis políticas (com a sangria, 0023) por operação; reaplicar troca (revoga a anterior, uma vigente por operação); revogar todas", async () => {
   const banco = await criarBancoMova();
   try {
     // como em produção: o instalador registra as migrações aplicadas (o helper de teste só executa os arquivos)
     await banco.pool.query("create table if not exists mova.mova_migracao (nome text primary key, sha256 text not null, aplicada_em timestamptz not null default now())");
     for (const m of MIGRACOES) await banco.pool.query("insert into mova.mova_migracao (nome, sha256) values ($1, 'teste') on conflict do nothing", [m]);
     await banco.pool.query(`insert into mova.unidade_sem_grupo (unidade_id, organizacao_id, nome, motivo, ativo) values ($1, $2, 'Loja Xis', 'Cadastro sintético para o teste de políticas', true)`, [XIS, ORG_X]);
-    const politicas = [["CONTA_A_PAGAR", 2_000_000], ["DESPESA_DOCUMENTAL", 300_000], ["BAIXA_DOCUMENTAL", 2_000_000], ["ANEXAR_DOCUMENTO", 2_000_000], ["JUROS_DOCUMENTAL", 5_000]]
+    const politicas = [["CONTA_A_PAGAR", 2_000_000], ["DESPESA_DOCUMENTAL", 300_000], ["BAIXA_DOCUMENTAL", 2_000_000], ["ANEXAR_DOCUMENTO", 2_000_000], ["JUROS_DOCUMENTAL", 5_000], ["PRESTACAO_DE_SANGRIA", 100_000]] // sangria: 0023
       .map(([operacao, limiteCentavos]) => ({ operacao, nivel: "APLICAR_AUTOMATICO", limiteCentavos }));
     const base = { organizacaoId: ORG_X, unidadeId: XIS, criadaPor: HUMANO, responsavel: "Proprietário Sintético", motivo: "Política sintética aprovada para o teste", vigenteDe: "2026-11-24" };
     await banco.pool.query(sqlPoliticasDaUnidade({ ...base, politicas }));
     await banco.pool.query(sqlPoliticasDaUnidade({ ...base, politicas: [{ operacao: "DESPESA_DOCUMENTAL", nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 500_000 }] }));
     const { rows } = await banco.pool.query("select operacao, nivel, limite_centavos::int l, revogada_em is null vigente from mova.politica_autonomia order by operacao, criada_em");
     const vigentes = rows.filter((r) => r.vigente);
-    assert.equal(vigentes.length, 5, "uma vigente por operação");
+    assert.equal(vigentes.length, 6, "uma vigente por operação");
     assert.deepEqual(vigentes.find((r) => r.operacao === "DESPESA_DOCUMENTAL"), { operacao: "DESPESA_DOCUMENTAL", nivel: "APLICAR_COM_CONFIRMACAO", l: 500_000, vigente: true });
-    assert.equal(rows.length, 6, "a anterior ficou no histórico (revogada)");
+    assert.equal(rows.length, 7, "a anterior ficou no histórico (revogada)");
+    // a reversão da 0023 recusa sem mudar nada enquanto existir política de sangria
+    const { readFileSync } = await import("node:fs");
+    await assert.rejects(banco.pool.query(readFileSync(new URL("../../../database/mova-financeiro/recuperacao/reverter-0023.sql", import.meta.url), "utf8")), /PRESTACAO_DE_SANGRIA/);
     // o armazenamento do MOVA lê e o domínio aceita cada política
     const { criarArmazenamentoPostgres } = await import("../../src/modules/mova-financeiro/index.js");
     for (const p of await criarArmazenamentoPostgres({ pool: banco.pool }).politicas.listar(ORG_X)) validarPolitica(p);
