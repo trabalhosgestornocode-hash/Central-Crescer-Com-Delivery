@@ -111,6 +111,13 @@ tenant.use("/gestao-financeira", requireFinanceiro(), gestaoFinanceiraRouter);
 // Financeiro v2 (Execução 10): DESLIGADO por padrão (FV2_HABILITADO). Gate PRÓPRIO a cada requisição — adaptador do v2
 // (sem bypass de impersonação, sem perfil de exibição, concessão própria, unidade liberada); somente leitura nesta fase.
 tenant.use("/financeiro-v2", criarFinanceiroV2DaPlataforma({ supabase }));
+// MOVA CORE F2 (§5): vínculo WhatsApp ↔ conta (o usuário gera o código; o administrador gerencia). DESLIGADO por padrão;
+// exige a migração 0019. Os módulos só carregam com a chave ligada; a sessão vem de requireContexto (nunca do corpo).
+if (process.env.MOVA_CORE_VINCULO_HABILITADO === "1") {
+  const preguicoso = import("./modules/fv2-integracao/movaVinculo.js").then((m) => m.routerDoVinculoDaPlataforma(process.env));
+  preguicoso.catch(() => {});
+  tenant.use("/mova/vinculo", (req, res, next) => preguicoso.then((r) => r(req, res, next), () => res.status(503).json({ erro: "VINCULO_INDISPONIVEL", error: "O vínculo do WhatsApp está indisponível no momento." })));
+}
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de

@@ -123,17 +123,18 @@ export async function aplicarTeto(cliente, req, teto) {
   return ajustado;
 }
 
-export function clienteComOrcamento(cliente, { orcamento, controle = null, teto = null }) {
+/** `contexto()` (opcional): {organizacaoId, unidadeId, requisicaoId} da mensagem em curso — o orçamento renovável usa; o acumulado ignora. */
+export function clienteComOrcamento(cliente, { orcamento, controle = null, teto = null, contexto = null }) {
   return { beta: { messages: { async create(reqOriginal) {
     if (controle && !(await controle.ligado("ia"))) throw new ErroDeIa("IA_DESLIGADA_NO_CONTROLE");
     const req = await aplicarTeto(cliente, reqOriginal, teto);
-    const id = await orcamento.reservar();
+    const id = await orcamento.reservar({ modelo: req.model ?? null, ...(contexto?.() ?? {}) });
     let r;
     try { r = await cliente.beta.messages.create(req); } catch (e) {
       try { await orcamento.falhar(id, { possivelmenteFaturada: !falhaComRespostaDaApi(e) }); } catch { /* a reserva fica contando: conservador */ }
       throw e;
     }
-    try { await orcamento.concluir(id, { modelo: r?.model, entrada: r?.usage?.input_tokens ?? 0, saida: r?.usage?.output_tokens ?? 0 }); } catch { /* reserva fica (conservador) */ }
+    try { await orcamento.concluir(id, { modelo: r?.model, entrada: r?.usage?.input_tokens ?? 0, saida: r?.usage?.output_tokens ?? 0, cacheLeitura: r?.usage?.cache_read_input_tokens ?? 0, cacheEscrita: r?.usage?.cache_creation_input_tokens ?? 0 }); } catch { /* reserva fica (conservador) */ }
     return r;
   } } } };
 }

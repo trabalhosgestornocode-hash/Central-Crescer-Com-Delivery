@@ -38,6 +38,7 @@ export { criarReceptor } from "./gateway/receptor.js";
 export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorRele.js";
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
 export { CHAVES_DE_CONTROLE, PRECOS_IA, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
+export { TETOS_RENOVAVEIS_MICROUSD, criarOrcamentoRenovavel, custoMicrousd, regimeDeOrcamento } from "./infra/orcamentoRenovavel.js";
 export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
 
 /**
@@ -49,7 +50,7 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {} }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, conversaNova = null }) {
   // 23/11: configuração VIVA (lista de entregadores recarregável) já vem validada: é usada como está, senão a recarga não chegaria aqui.
   const cfg = typeof configuracao?.recarregarEntregadores === "function" ? configuracao : validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
@@ -61,7 +62,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
   const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, extrator, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar, avisosNoGrupo }) : null;
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,
-    recebimentoDocumental, obterEvidencia: (r) => evidencias.obter(r) });
+    recebimentoDocumental, obterEvidencia: (r) => evidencias.obter(r), conversaNova });
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle, recebimentoDocumental });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada, execucao });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;

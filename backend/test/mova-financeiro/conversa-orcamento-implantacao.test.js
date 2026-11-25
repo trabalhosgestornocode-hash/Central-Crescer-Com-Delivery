@@ -118,6 +118,11 @@ async function bancoDeProducaoAntes() {
   await pool.query(`begin;
 ${readFileSync(join(RAIZ, "producao", "instalar.sql"), "utf8")}
 commit;`);
+  // 24/11: migrações posteriores (0018+, ainda não aplicadas em produção) saem antes, pela reversão oficial de cada uma.
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0021.sql"), "utf8"));
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0020.sql"), "utf8"));
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0019.sql"), "utf8"));
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0018.sql"), "utf8"));
   await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0017.sql"), "utf8"));
   await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0016.sql"), "utf8"));
   return pool;

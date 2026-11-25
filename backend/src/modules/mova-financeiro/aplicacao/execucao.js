@@ -185,6 +185,27 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       parcial: proposta.parcial === true, dataPagamento, saldoDepoisCentavos: r.titulo?.saldoCentavos ?? null, situacaoPagamento: "PAGO_POR_COMPROVANTE", conciliacao: "CONCILIACAO_PENDENTE" };
   }
 
+  /**
+   * 24/11 — compra NOVA já paga: a conta (despesa na competência), o comprovante e o pagamento por comprovante (data do pagamento,
+   * sem saída bancária) numa ÚNICA operação atômica do Financeiro. Se qualquer parte falhar, nada fica gravado (antes, uma falha no
+   * pagamento deixava a conta em aberto). Idempotente: mesma fonte (MOVA:<proposta>) e mesmo arquivo devolvem o que já existe.
+   */
+  async function registrarDespesaPaga({ proposta, escopo, entrada = proposta.comando.entrada, dataPagamento = proposta.comando.pagamento.dataEfetiva, nivel, executor }) {
+    const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
+    if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_COMPROVANTE");
+    const mime = proposta.evidencia.mime;
+    const r = await executor.chamar("registrarDespesaPagaPorComprovante", escopo, {
+      obrigacao: { ...entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } },
+      comprovante: { arquivo: { conteudo: bytes, nome: `comprovante-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime },
+        descricao: `Comprovante recebido pelo MOVA (proposta ${curto(proposta.id)})`, competencia: proposta.datas?.competencia ?? null },
+      pagamento: { dataPagamento, idTransacao: proposta.leitura?.idTransacao ?? null, confirmar: true,
+        justificativa: `Compra paga registrada pelo MOVA (${nivel === NIVEL.APLICAR_AUTOMATICO ? "política de despesa documental" : "confirmada por responsável"}); conciliação com o extrato pendente.` },
+    });
+    return { obrigacaoId: r.obrigacao.id, movimentacaoId: null, documentoId: r.documento.id, liquidacaoIds: [r.liquidacao.id], repetidoNoFinanceiro: Boolean(r.repetido),
+      favorecido: proposta.leitura?.favorecido ?? null, parcial: false, dataPagamento, saldoDepoisCentavos: r.obrigacao.saldoCentavos ?? 0, situacaoPagamento: "PAGO_POR_COMPROVANTE",
+      conciliacao: "CONCILIACAO_PENDENTE", despesaCriada: r.efeito?.novasDespesas === 1, lancamentoId: r.lancamento?.id ?? null, categoria: entrada.categoria ?? null };
+  }
+
   /** Avaliação do comprovante guardada na proposta (ou refeita pela leitura, se a proposta é anterior à Execução 17). */
   const comprovanteDa = (proposta) => proposta.leitura?.comprovante ?? (proposta.evidencia ? avaliarComprovante(proposta.leitura, { hoje: hoje() }) : null);
 
@@ -270,18 +291,14 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: decisao.motivos, motivosDocumentais: decisao.motivos, comprovante: comprovante?.situacao ?? null };
     if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
     if (!operacional) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
-    for (const op of ["registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "enviarEvidencia"]) {
-      if (!(await operacional.pode(op, escopo))) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
-    }
+    if (!(await operacional.pode("registrarDespesaPagaPorComprovante", escopo))) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     const { reserva, repetida } = await reservar(OPERACAO.DESPESA_DOCUMENTAL, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, decisao.politicaId, operacional);
     if (repetida) return { ...r0, ...(repetida.ok ? { situacao: "PAGO_POR_COMPROVANTE", resultado: repetida.operacao?.resultado } : { motivo: repetida.motivo }) };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ...r0, motivo: "PROPOSTA_JA_DECIDIDA" }; }
     try {
-      const ob = await operacional.chamar("registrarObrigacaoDocumental", escopo, { ...proposta.comando.entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
-      const obrigacaoId = ob.obrigacoes[0].id;
-      const pago = await anexarEPagar({ proposta, escopo, obrigacaoId, dataPagamento: proposta.comando.pagamento.dataEfetiva, nivel: NIVEL.APLICAR_AUTOMATICO, executor: operacional });
-      const resultado = { ...pago, despesaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: proposta.comando.entrada.categoria ?? null };
+      const resultado = await registrarDespesaPaga({ proposta, escopo, nivel: NIVEL.APLICAR_AUTOMATICO, executor: operacional });
+      const { obrigacaoId } = resultado;
       await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
       const operacao = await a.operacoes.concluir(reserva.id, resultado);
       await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
@@ -486,5 +503,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

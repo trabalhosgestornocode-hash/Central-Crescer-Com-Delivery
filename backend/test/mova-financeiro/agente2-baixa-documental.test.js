@@ -212,7 +212,7 @@ t("A2-D12 despesa NOVA (sem conta) com comprovante: proposta; a aprovação huma
   const s = await documental({ valorConta: 0, politica: {}, responder: () => PIX({ competencia: "2026-10" }) });
   await s.enviar(gw({ texto: "MOVA comprovante manutenção freezer alfa", doc: pdf("D12") }));
   const [p] = await s.propostas();
-  assert.deepEqual([p.tipo, p.comando.operacao], ["DESPESA_PAGA", "registrarObrigacao+registrarPagamentoPorComprovante"]);
+  assert.deepEqual([p.tipo, p.comando.operacao], ["DESPESA_PAGA", "registrarDespesaPagaPorComprovante"]);
   assert.equal(s.escritas().length, 0, "obrigação nova nunca é automática");
   const aplicada = await s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id });
   assert.equal(aplicada.resultado.situacaoPagamento, "PAGO_POR_COMPROVANTE");

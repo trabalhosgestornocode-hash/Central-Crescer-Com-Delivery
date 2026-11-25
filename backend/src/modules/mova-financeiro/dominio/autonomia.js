@@ -34,6 +34,9 @@ export const OPERACAO = Object.freeze({
   DESPESA_DOCUMENTAL: "DESPESA_DOCUMENTAL",
   // 23/11: pagamento por comprovante COM juros/multa confirmados pela pessoa. O limite da política é o ENCARGO máximo por pagamento.
   JUROS_DOCUMENTAL: "JUROS_DOCUMENTAL",
+  // MOVA CORE F4: prestação de contas da SANGRIA (despesa paga com a própria retirada + troco). Não liquida contra o extrato
+  // (o dinheiro já saiu do caixa na sangria) e não exige comprovante; o limite da política vale igual.
+  PRESTACAO_DE_SANGRIA: "PRESTACAO_DE_SANGRIA",
 });
 /** Operações decididas pelo COMPROVANTE (sem saída do extrato): mesmas exigências e anti-fracionamento. */
 const DOCUMENTAIS = new Set(["BAIXA_DOCUMENTAL", "DESPESA_DOCUMENTAL", "JUROS_DOCUMENTAL"]);
