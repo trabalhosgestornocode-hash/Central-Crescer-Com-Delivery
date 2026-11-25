@@ -114,6 +114,10 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const r = await q("select * from mova.proposta where id = $1 and organizacao_id = $2 and unidade_id = $3", [id, escopo.organizacaoId, escopo.unidadeId]);
         return linhaProposta(r.rows[0]) ?? null;
       },
+      /** 25/11: propostas geradas por um evento (retomada pela citação da resposta do MOVA). */
+      async porEvento(eventoId) {
+        return (await q("select * from mova.proposta where evento_id = $1 order by seq", [eventoId])).rows.map(linhaProposta);
+      },
       /** Transição CONDICIONAL (só se o estado atual for `de`): é o que impede duas aplicações da mesma proposta. */
       async transicionar(escopo, id, de, para, resultado = null) {
         const r = await q(`update mova.proposta set estado = $4, resultado = coalesce($5::jsonb, resultado)

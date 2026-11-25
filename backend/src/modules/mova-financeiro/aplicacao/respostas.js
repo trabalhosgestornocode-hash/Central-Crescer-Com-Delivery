@@ -58,6 +58,15 @@ export const RESPOSTA = Object.freeze({
   transferenciaInterna: () => "Isso parece uma transferência entre contas da própria empresa: não é despesa. Ela será reconhecida pelo extrato bancário, na conciliação. Nada foi registrado.",
   solicitacaoRevisao: (p) => `Pedido ${curto(p.id)} registrado para o administrador financeiro revisar. Nada foi alterado.`,
   dadosInsuficientes: (o) => `Ainda não há dados suficientes registrados no Financeiro para responder sobre ${o}. Não vou estimar.`,
+  // 25/11 — a política autorizou o registro automático, mas a execução não pôde acontecer: diz o motivo e como continuar pelo WhatsApp.
+  semExecucaoAutomatica: (motivos = []) => {
+    const m = motivos.includes("SEM_IDENTIDADE_OPERACIONAL") ? "o registro automático ainda não está ativado neste ambiente"
+      : motivos.includes("SEM_CONCESSAO_OPERACIONAL") ? "a permissão operacional do MOVA nesta unidade não cobre essa operação"
+      : "o registro automático não pôde ser concluído agora";
+    return `Não registrei automaticamente: ${m}. A proposta ficou guardada e nada foi lançado. Quando isso for resolvido, responda citando esta mensagem com "registrar" que eu continuo, sem novo comprovante.`;
+  },
+  propostaJaRegistrada: () => "Essa proposta já foi registrada. Não criei outro lançamento.",
+  propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
   documentoDeOutraUnidade: () => "O documento parece ser de outra unidade (ou de uma unidade que este grupo não atende). Confira e reenvie no lugar certo. Nada foi registrado.",

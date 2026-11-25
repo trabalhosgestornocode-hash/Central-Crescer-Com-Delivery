@@ -51,9 +51,24 @@ export const pareceMes = (t) => /^(mes\s+)?(0?[1-9]|1[0-2])(\s+(de\s+)?(20)?\d{2
  * "nov/2026", "11/2026", "11/26", "2026-11", "mês 11", "11". Sem ano: o do pagamento (mês posterior ao do pagamento em mais
  * de um ⇒ ano anterior). Não entendeu ⇒ null.
  */
-export function competenciaDaResposta(texto, dataPagamento) {
-  const t = normalizar(texto).replace(/^(mova\s+)?((e|foi|eh|referente a|referente ao|referencia|de|do|mes de|mes)\s+)*/, "").trim();
+/**
+ * Ano de um mês SEM ano escrito, a partir da data do pagamento (AAAA-MM-DD). Mês mais de um à frente do pagamento ⇒ ano anterior
+ * ("outubro" dito em janeiro é do ano passado); mês de janeiro/fevereiro com pagamento em novembro/dezembro ⇒ próximo ano
+ * (virada: conta de janeiro paga em dezembro). Nunca usa o "dia" como ano.
+ */
+export function anoPadraoDoMes(mesN, ap, mp) {
+  if (mp >= 11 && mesN + 12 - mp <= 2) return ap + 1;
+  return mesN > mp + 1 ? ap - 1 : ap;
+}
+const mesAnterior = (hoje) => { const [a, m] = String(hoje ?? "").split("-").map(Number); if (!a || !m) return null; return m === 1 ? `${a - 1}-12` : `${a}-${String(m - 1).padStart(2, "0")}`; };
+const mesDe = (hoje) => { const [a, m] = String(hoje ?? "").split("-").map(Number); return a && m ? `${a}-${String(m).padStart(2, "0")}` : null; };
+export function competenciaDaResposta(texto, dataPagamento, hoje = null) {
+  // 25/11: "no dia 25"/"dia 25" é o DIA do pagamento, nunca mês nem ano — sai antes de qualquer leitura ("Novembro de 2026. dia 25").
+  const t = normalizar(texto).replace(/\b(no\s+)?dia\s+\d{1,2}\b/g, " ").replace(/\s+/g, " ").trim().replace(/^(mova\s+)?((e|foi|eh|referente a|referente ao|referencia|de|do|mes de|mes)\s+)*/, "").trim();
   if (!t || t.length > 40) return null;
+  // 25/11: "deste mês"/"mês passado" são RELATIVOS a HOJE (o dia em que a pessoa responde), não ao pagamento.
+  if (/^(atual|corrente)$|^(deste|desse|este|esse|neste|nesse) mes$/.test(t)) return mesDe(hoje);
+  if (/^(passado|anterior)$|^ultimo mes$/.test(t)) return mesAnterior(hoje);
   let mesN = null; let ano = null;
   const iso = /^(20\d{2})\s+(0?[1-9]|1[0-2])$/.exec(t);
   const num = /^(0?[1-9]|1[0-2])(?:\s+(?:de\s+)?(20\d{2}|\d{2}))?$/.exec(t);
@@ -72,9 +87,52 @@ export function competenciaDaResposta(texto, dataPagamento) {
   if (!ano) {
     const [ap, mp] = String(dataPagamento ?? "").split("-").map(Number);
     if (!ap || !mp) return null;
-    ano = mesN > mp + 1 ? ap - 1 : ap;
+    ano = anoPadraoDoMes(mesN, ap, mp);
   }
   return `${ano}-${String(mesN).padStart(2, "0")}`;
+}
+
+/**
+ * 25/11 — RESPOSTA NATURAL lida pela IA (só quando as regras determinísticas não entenderam): a IA devolve campos estruturados e
+ * ESTA função os valida antes de qualquer uso. Nada vindo do modelo é executado: competência com formato, janela e ano conferidos;
+ * finalidade só do conjunto fechado; valores inteiros não negativos; textos curtos (o chamador ainda mascara/descarta injeção).
+ * Ano da competência: só o escrito pela pessoa com 4 dígitos vale; sem ano escrito, o do pagamento (mesma regra determinística) —
+ * o "dia 25" nunca vira ano e o modelo nunca escolhe o ano por conta própria.
+ * @returns {{competencia:string|null, descricao:string|null, finalidade:string|null, categoria:string|null, favorecido:string|null, jurosCentavos:number|null, multaCentavos:number|null}}
+ */
+export function extracaoDaRespostaIA(saidaIa, { texto = "", dataPagamento = null } = {}) {
+  const s = saidaIa ?? {};
+  const limpo = (v, max) => (typeof v === "string" && v.trim() && v.length <= max && !v.includes("\u0000") ? v.trim() : null);
+  const inteiro = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+  let competencia = null;
+  const m = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(String(s.competencia ?? ""));
+  const [ap, mp] = String(dataPagamento ?? "").split("-").map(Number);
+  if (m && ap && mp) {
+    const mesN = Number(m[2]);
+    const a4 = /\b(20\d{2})\b/.exec(normalizar(texto).replace(/\bdia\s+\d{1,2}\b/g, " "));
+    const ano = a4 ? Number(a4[1]) : anoPadraoDoMes(mesN, ap, mp);
+    // janela de sanidade: de 24 meses antes até 2 meses depois do mês do pagamento
+    if (ano * 12 + mesN >= ap * 12 + mp - 24 && ano * 12 + mesN <= ap * 12 + mp + 2) competencia = `${ano}-${String(mesN).padStart(2, "0")}`;
+  }
+  return {
+    competencia,
+    descricao: limpo(s.descricaoCompra, 120),
+    finalidade: ["COMPRA_NOVA", "CONTA_EXISTENTE", "JUROS", "PARCIAL"].includes(s.finalidadePagamento) ? s.finalidadePagamento : null,
+    categoria: typeof s.categoriaSugerida === "string" && /^[A-Z][A-Z0-9_]{1,79}$/.test(s.categoriaSugerida) ? s.categoriaSugerida : null,
+    favorecido: limpo(s.favorecido, 120),
+    jurosCentavos: inteiro(s.jurosCentavos), multaCentavos: inteiro(s.multaCentavos),
+  };
+}
+
+/**
+ * 25/11 — resposta CURTA e afirmativa citando a mensagem da proposta do MOVA ("pode registrar", "tenta de novo", "sim", "ok"): pede para
+ * retomar a execução automática da MESMA proposta. Só decide se há intenção de retomar; quem pode, a política, as chaves e a
+ * duplicidade são conferidos de novo na execução. Frase longa ou com pergunta não é pedido de retomada.
+ */
+export function pedidoDeRetomar(texto) {
+  const t = normalizar(texto);
+  if (!t || t.length > 60 || t.split(" ").length > 8 || /[?]/.test(String(texto))) return false;
+  return SIM.test(t) || /\b(registr|lanc|tent|continu|conclu|finaliz|execut|process|pode|ok|isso|manda|faz|faca)/.test(t);
 }
 
 /** Texto curto que parece resposta a uma pergunta de divergência (para a memória curta, sem citação). */
@@ -167,7 +225,7 @@ export function descreverPendencia(pendencia) {
     case TIPO_DIVERGENCIA.MENOR: return `o MOVA perguntou se o comprovante de ${v} é pagamento PARCIAL de uma conta já cadastrada ou uma compra nova.`;
     case TIPO_DIVERGENCIA.VARIAS: return `o MOVA listou ${pendencia.candidatas?.length ?? "várias"} contas cadastradas e perguntou qual o comprovante de ${v} paga (pelo número) ou se é compra nova.`;
     case TIPO_DIVERGENCIA.SEMELHANTE: return `o MOVA perguntou se o comprovante de ${v} é o MESMO pagamento/conta já registrado ou uma compra nova.`;
-    case TIPO_DIVERGENCIA.COMPETENCIA: return `o MOVA perguntou o MÊS DE REFERÊNCIA (competência) da conta paga com o comprovante de ${v}.`;
+    case TIPO_DIVERGENCIA.COMPETENCIA: return `o MOVA perguntou o MÊS DE REFERÊNCIA (competência) da conta paga com o comprovante de ${v}. Preencha competencia (AAAA-MM) com o mês que a pessoa disse, em qualquer formato ("novembro de 2026", "mês 11", "referente a novembro", "11/2026", "deste mês" = mês da data de referência). "dia 25" é o dia do mês: nunca é ano nem mês. Sem mês dito, competencia vazia.`;
     case TIPO_DIVERGENCIA.DESCRICAO: return `o MOVA perguntou o que foi comprado com o comprovante de ${v} (a resposta é a descrição da compra nova).`;
     default: return null;
   }

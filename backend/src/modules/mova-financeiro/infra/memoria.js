@@ -55,6 +55,8 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       },
       async listar(escopo) { return [...propostas.values()].filter((p) => chave(p) === chave(escopo)); },
       async obter(escopo, id) { const p = propostas.get(id); return p && chave(p) === chave(escopo) ? p : null; },
+      /** 25/11: propostas geradas por um evento (retomada pela citação da resposta do MOVA). */
+      async porEvento(eventoId) { return [...propostas.values()].filter((p) => p.eventoId === eventoId); },
       async anotar(escopo, id, alteracoes) {
         const p = propostas.get(id);
         if (!p || chave(p) !== chave(escopo) || p.estado !== "AGUARDANDO_REVISAO") return null;

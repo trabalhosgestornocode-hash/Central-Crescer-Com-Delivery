@@ -8,7 +8,7 @@ import { AGORA } from "../financeiro-v2/helpers/cenario.js";
 import { ALFA, CONS, ESTRANHO, FIN, FINANCEIRO, GRUPO, ORG, ORG_X, SO_ALFA, XIS, base, cenario, gw, t } from "./helpers/operacao.js";
 import { podeConfirmarPendencia } from "../../src/modules/mova-financeiro/dominio/confirmacao.js";
 import { criarPortaOperacional, validarConfiguracao } from "../../src/modules/mova-financeiro/index.js";
-import { competenciaDaResposta, composicaoComprovada } from "../../src/modules/mova-financeiro/dominio/divergencia.js";
+import { competenciaDaResposta, composicaoComprovada, extracaoDaRespostaIA } from "../../src/modules/mova-financeiro/dominio/divergencia.js";
 import { validarSaidaDaIa, normalizarSentinelas } from "../../src/modules/mova-financeiro/ia/contratos.js";
 
 const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c5";
@@ -50,13 +50,13 @@ const POL = (operacao, org, u, x = {}) => ({ operacao, organizacaoId: org, unida
 const ACOES = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_juros"];
 const ESCRITAS = ["enviarEvidencia", "registrarDespesaPagaComEncargo", "registrarDespesaPagaPorComprovante", "registrarPagamentoComEncargo", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 
-async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN] } = {}) {
+async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN], controle = null } = {}) {
   const s = await cenario({
     responder, config,
     extras: ({ nucleo }) => ({
       autonomia: true, pagamentoPorComprovante: true, criarDespesas: true, criarContas: true, registrarJuros: true,
-      operacional: criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: SERVICO,
-        concessoes: criarConcessoesMemoria(concessoes.map(([organizacaoId, unidadeId]) => ({ organizacaoId, usuarioId: OPERADOR, unidadeId, acoes: ACOES }))) }),
+      operacional: ((real) => (controle ? { identidade: real.identidade, pode: async (...x) => (controle.ligada ? real.pode(...x) : false), chamar: (...x) => real.chamar(...x) } : real))(criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: SERVICO,
+        concessoes: criarConcessoesMemoria(concessoes.map(([organizacaoId, unidadeId]) => ({ organizacaoId, usuarioId: OPERADOR, unidadeId, acoes: ACOES }))) })),
     }),
   });
   if (process.env.FV2_REPOSITORIO === "postgres") for (const [o, u] of concessoes) await s.m.nucleo.concederAcesso(s.c(o, u), { usuarioId: OPERADOR, acoes: ACOES, justificativa: "Identidade operacional do MOVA (sintético)." });
@@ -391,4 +391,122 @@ t("CO-6 REINÍCIO entre a pergunta e a resposta: a pendência está no banco e a
   assert.equal((await s.ultima()).decisao, "EXECUTADO");
   await s.enviar(gw({ de: FIN, texto: "outubro", respostaA: q }));
   assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1], "a segunda resposta não paga de novo");
+});
+
+// ------------------------------------------------------------------ 25/11: resposta NATURAL (IA só quando as regras curtas não entendem; o backend valida)
+const LEITURA = (x) => base({ tipoDocumento: "OUTRO", intencao: "INFORMAR_PAGAMENTO", ...x });
+const comIa = (leituras) => { let n = 0; const chamadas = []; const responder = () => { n += 1; if (n === 1) return BOLETO_PAGO(); chamadas.push(n); const l = leituras.shift(); if (l instanceof Error) throw l; return l; }; return { responder, chamadas }; };
+
+test("RN-0 extração da IA é VALIDADA: ano só se escrito com 4 dígitos; o dia nunca vira ano; mês fora da janela ou formato inválido ⇒ null", () => {
+  const ex = (competencia, texto, pag = "2026-11-25") => extracaoDaRespostaIA({ competencia }, { texto, dataPagamento: pag }).competencia;
+  assert.equal(ex("2025-11", "Novembro de 2026. dia 25"), "2026-11", "o ano escrito prevalece sobre o do modelo");
+  assert.equal(ex("2025-11", "referente a novembro, dia 25"), "2026-11", "sem ano escrito: o do pagamento (o modelo não escolhe ano)");
+  assert.equal(ex("2026-11", "mês de novembro"), "2026-11");
+  assert.equal(ex("2026-13", "mês 13"), null, "formato inválido");
+  assert.equal(ex("2019-11", "novembro de 2019"), null, "fora da janela de sanidade");
+  assert.equal(ex("2026-11", "novembro", null), null, "sem data de pagamento não há como validar");
+  const t2 = extracaoDaRespostaIA({ finalidadePagamento: "QUALQUER", categoriaSugerida: "manutencao; drop", jurosCentavos: -5, multaCentavos: 1.5, descricaoCompra: "" }, { dataPagamento: "2026-11-25" });
+  assert.deepEqual([t2.finalidade, t2.categoria, t2.jurosCentavos, t2.multaCentavos, t2.descricao], [null, null, null, null, null], "nada fora do contrato passa");
+});
+
+t("RN-1 caso real: resposta natural que as regras curtas não entendem ('foi o serviço de outubro lá da loja xis') citando a pergunta → a IA lê, o backend valida, a operação ORIGINAL continua uma única vez", async () => {
+  const { responder, chamadas } = comIa([LEITURA({ competencia: "2026-10" })]);
+  const s = await grupo({ responder });
+  const q = await perguntaDoMes(s, "RN1");
+  await s.enviar(doGerente({ texto: "foi o serviço de outubro lá da loja xis", respostaA: q }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.conciliacao], ["EXECUTADO", "PAGO_POR_COMPROVANTE"], JSON.stringify(h));
+  assert.equal(chamadas.length, 1, "uma leitura por IA");
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.competencia, conta.valorBaseCentavos], ["2026-10", 867181], "competência validada; valor/fornecedor do comprovante original");
+  await s.enviar(doGerente({ texto: "foi o serviço de outubro lá da loja xis", respostaA: q }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1], "sem duplicidade");
+});
+
+t("RN-2 respostas simples NÃO chamam a IA (custo zero): 'outubro', 'Mês de outubro, dia 14', '10/2026', 'mês 10'", async () => {
+  for (const [i, txt] of ["outubro", "Mês de outubro, dia 14", "10/2026", "mês 10", "Referente a outubro"].entries()) {
+    const { responder, chamadas } = comIa([]);
+    const s = await grupo({ responder });
+    const q = await perguntaDoMes(s, `RN2${i}`);
+    await s.enviar(doGerente({ texto: txt, respostaA: q }));
+    assert.equal((await s.ultima()).decisao, "EXECUTADO", txt);
+    assert.equal(chamadas.length, 0, `sem IA: ${txt}`);
+    assert.equal((await s.contas(ORG_X, XIS))[0].competencia, "2026-10", txt);
+  }
+});
+
+t("RN-3 o modelo erra o ano ('dia 25' virando 2025): o backend mantém o ano do pagamento; formato inválido ⇒ pergunta de novo e nada é gravado", async () => {
+  const { responder } = comIa([LEITURA({ competencia: "2025-10" }), LEITURA({ competencia: "2026-13" })]);
+  const s = await grupo({ responder });
+  const q = await perguntaDoMes(s, "RN3");
+  await s.enviar(doGerente({ texto: "foi lá pra outubro mesmo, dia 25 eu paguei, né", respostaA: q }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  assert.equal((await s.contas(ORG_X, XIS))[0].competencia, "2026-10", "ano do pagamento, não 2025");
+  const r = comIa([LEITURA({ competencia: "2026-13" })]);
+  const s2 = await grupo({ responder: r.responder });
+  const q2 = await perguntaDoMes(s2, "RN3B");
+  await s2.enviar(doGerente({ texto: "sei lá, a conta do ar", respostaA: q2 }));
+  const h = await s2.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_NAO_ENTENDIDA"]);
+  assert.equal(s2.escritas().length, 0, "nada gravado");
+});
+
+t("RN-4 IA indisponível não derruba nem registra: pergunta de novo, e a NOVA pergunta também pode ser citada para continuar a mesma operação", async () => {
+  const { responder } = comIa([new Error("fora do ar")]);
+  const s = await grupo({ responder });
+  const q = await perguntaDoMes(s, "RN4");
+  await s.enviar(doGerente({ texto: "foi o serviço de outubro lá da loja xis", respostaA: q }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_NAO_ENTENDIDA"], JSON.stringify(h));
+  assert.equal(s.escritas().length, 0);
+  await entregar(s, "3EB0PERGUNTARN4-2");
+  await s.enviar(doGerente({ texto: "Novembro de 2026. dia 25", respostaA: "3EB0PERGUNTARN4-2" }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO", JSON.stringify(await s.ultima()));
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+});
+
+// ------------------------------------------------------------------ 25/11: retomar a proposta pelo WhatsApp (execução automática antes indisponível)
+t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o motivo e a proposta fica guardada; depois de resolvido, citar a resposta com 'registrar' conclui UMA vez, sem novo comprovante", async () => {
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => BOLETO_PAGO({ competencia: "2026-10" }), controle });
+  await s.enviar(doGerente({ texto: "Energia da loja xis", doc: pdf("RT1") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PROPOSTA", "DESPESA_PAGA"], JSON.stringify(h));
+  const msg = (await s.respostas()).at(-1);
+  assert.match(msg, /Não registrei automaticamente/);
+  assert.match(msg, /citando esta mensagem/);
+  assert.deepEqual((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS }))[0].semExecucao?.motivos, ["SEM_CONCESSAO_OPERACIONAL"], "o motivo fica registrado na proposta");
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
+  await entregar(s, "3EB0PROPOSTART1");
+  // sem permissão (perfil só de consulta): recusado; nada executado; segue possível depois
+  await s.enviar(gw({ de: CONS, texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
+  assert.equal((await s.ultima()).decisao, "BLOQUEADO");
+  // retomada com a execução AINDA indisponível: explica de novo, não grava
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
+  assert.equal((await s.ultima()).motivo, "RETOMADA_NAO_EXECUTADA");
+  assert.equal((await s.contas(ORG_X, XIS)).length, 0);
+  // resolvido: a mesma frase conclui
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "tenta de novo", respostaA: "3EB0PROPOSTART1" }));
+  const r = await s.ultima();
+  assert.deepEqual([r.decisao, r.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(r));
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao], [867181, 0, "QUITADA"]);
+  assert.equal((await s.documentos(ORG_X, XIS)).length, 1, "o comprovante original, sem novo envio");
+  // repetir não duplica
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
+  assert.notEqual((await s.ultima()).decisao, "EXECUTADO", "repetir não executa de novo");
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1]);
+});
+
+test("RN-5 virada do ano e relativos: 'deste mês' e 'mês passado' contam a partir de HOJE; dezembro/janeiro escolhem o ano certo; o dia nunca é ano", () => {
+  const c = (txt, pag, hoje = pag) => competenciaDaResposta(txt, pag, hoje);
+  assert.equal(c("dezembro", "2027-01-05"), "2026-12", "dezembro respondido em janeiro é do ano anterior");
+  assert.equal(c("janeiro", "2026-12-28"), "2027-01", "janeiro respondido em dezembro é do ano seguinte");
+  assert.equal(c("é deste mês", "2026-12-31", "2027-01-02"), "2027-01", "deste mês = mês de hoje, não o do pagamento");
+  assert.equal(c("mês passado", "2026-12-31", "2027-01-02"), "2026-12", "mês passado em janeiro = dezembro do ano anterior");
+  assert.equal(c("do mês passado", "2026-11-25"), "2026-10");
+  for (const txt of ["Novembro de 2026. dia 25.", "Mês de novembro, dia 25.", "Referente a novembro.", "Mês 11", "11/2026", "Novembro"]) assert.equal(c(txt, "2026-11-25"), "2026-11", txt);
+  assert.equal(extracaoDaRespostaIA({ competencia: "2027-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01");
+  assert.equal(extracaoDaRespostaIA({ competencia: "2026-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01", "o modelo não escolhe o ano");
 });
