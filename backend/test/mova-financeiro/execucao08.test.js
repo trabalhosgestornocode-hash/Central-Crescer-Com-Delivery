@@ -210,6 +210,24 @@ t("AUTO — leituras do worker passam pelo contexto de automação (sessão da i
   assert.ok(dentro.every(Boolean), "toda leitura dentro do contexto de automação");
 });
 
+t("FS-1 (25/11) falha segura da escrita: sem o provedor da identidade operacional, ou com ele falhando, o MOVA MONTA com a escrita desligada e registra o motivo", async () => {
+  for (const operacionalDaPlataforma of [null, async () => { throw Object.assign(new Error("x"), { codigo: "SEM_CONCESSAO" }); }, async () => ({ nucleo: null })]) {
+    const { pool, banco } = await criarBancoMova();
+    await pool.query(`comment on database ${banco} is 'MOVA_HOMOLOGACAO:marcador-teste-01'`);
+    await instalarConfiguracao(pool, validarConfiguracao(CONFIG));
+    const m = montar({ escopos: [ALFA, GAMA].map((unidadeId) => ({ organizacaoId: ORG, unidadeId })) });
+    const base = lerConfiguracaoMova({ ...PROD_LIKE, MOVA_GATEWAY_SECRET: "s".repeat(40) });
+    const cfg = { ...base, autonomia: true, escrita: true, pagamentoPorComprovante: true, criarDespesas: true, identidadeOperacional: "eeeeeeee-0000-4000-8000-0000000000c2" };
+    const eventos = [];
+    const r = await montarMova({ cfg, pool, repositorio: m.repositorio, verificarBancoFinanceiro: async () => {}, registrar: (e) => eventos.push(e), operacionalDaPlataforma });
+    assert.ok(r?.mova?.porta, "o MOVA montou (consultas, documentos e entregadores seguem)");
+    const desligada = eventos.filter((e) => e.tipo === "MOVA_ESCRITA_DESLIGADA");
+    assert.equal(desligada.length, 1, JSON.stringify(eventos.map((e) => e.tipo)));
+    assert.ok(["IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA", "IDENTIDADE_OPERACIONAL_FALHOU"].includes(desligada[0].motivo));
+    await r.mova.porta.contasAPagarAbertas({ organizacaoId: ORG, unidadeId: ALFA, usuarioId: SERVICO }).catch(() => {});
+  }
+});
+
 t("H1-7 (12A) falhas gerais listam só FALHAS: pergunta pendente sem unidade (PEDIR_INFORMACAO) não aparece", async () => {
   const s = await cenario();
   await s.enviar(msg(CONVERSA_ALFA));

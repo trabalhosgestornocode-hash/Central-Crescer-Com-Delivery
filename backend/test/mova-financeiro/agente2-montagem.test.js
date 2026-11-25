@@ -56,13 +56,16 @@ test("A2-M4 autonomia e escrita: desligadas por padrão; escrita exige autonomia
   const c = lerConfiguracaoMova(BASE);
   assert.deepEqual([c.autonomia, c.escrita, c.identidadeOperacional], [false, false, null]);
   assert.equal(lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1" }).autonomia, true);
-  const motivo = (env) => lerConfiguracaoMova(env).contradicoes ?? [];
+  // 25/11 — falha segura: a configuração de escrita inválida desliga SÓ a escrita (o MOVA segue habilitado), com o motivo.
+  const motivo = (env) => { const r = lerConfiguracaoMova(env); assert.equal(r.habilitado, true, "o MOVA continua habilitado"); assert.deepEqual([r.autonomia ?? false, r.escrita ?? false, r.pagamentoPorComprovante ?? false, r.criarDespesas ?? false], [false, false, false, false]); return r.escritaRecusada ?? []; };
   assert.ok(motivo({ ...BASE, MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_AUTONOMIA"));
   assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1" }).includes("ESCRITA_SEM_IDENTIDADE_OPERACIONAL"));
   assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: IDENTIDADE_MOVA }).includes("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA"));
-  assert.ok(motivo({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_PILOTO_UNIDADE_ID: U1, MOVA_OPERACAO_UNIDADES: "", MOVA_OPERACAO_AUTONOMIA: "1" }).includes("AUTONOMIA_FORA_DA_OPERACAO"));
+  assert.ok(motivo({ ...BASE, MOVA_MODO: "PILOTO", MOVA_AMBIENTE: "piloto", MOVA_PILOTO_UNIDADE_ID: U1, MOVA_OPERACAO_UNIDADES: undefined, MOVA_OPERACAO_MARCADOR: undefined, MOVA_HOMOLOGACAO_MARCADOR: "marcador-sintetico-02", MOVA_OPERACAO_AUTONOMIA: "1" }).includes("AUTONOMIA_FORA_DA_OPERACAO"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE: "1", MOVA_OPERACAO_CRIAR_DESPESAS: "1", MOVA_IDENTIDADE_OPERACIONAL: "00000000-0000-4000-8000-00000000e7e9" }).includes("IDENTIDADE_OPERACIONAL_RESERVADA"));
+  assert.ok(motivo({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE: "1", MOVA_IDENTIDADE_OPERACIONAL: "nao-e-uuid" }).includes("ESCRITA_SEM_IDENTIDADE_OPERACIONAL"));
   const ok = lerConfiguracaoMova({ ...BASE, MOVA_OPERACAO_AUTONOMIA: "1", MOVA_OPERACAO_ESCRITA: "1", MOVA_IDENTIDADE_OPERACIONAL: "eeeeeeee-0000-4000-8000-0000000000c2" });
-  assert.deepEqual([ok.habilitado, ok.escrita, ok.identidadeOperacional], [true, true, "eeeeeeee-0000-4000-8000-0000000000c2"]);
+  assert.deepEqual([ok.habilitado, ok.escrita, ok.identidadeOperacional, ok.escritaRecusada], [true, true, "eeeeeeee-0000-4000-8000-0000000000c2", []]);
 });
 
 test("A2-M5 entregadores e rotina: desligados por padrão; só na OPERACAO; rotina exige os entregadores; passo sem sobreposição", async () => {

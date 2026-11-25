@@ -12,6 +12,9 @@
 //                                 só com política e chave próprias; NÃO concedida em produção sem política específica
 //   PAGAR_COM_ENCARGO             registrar_juros (+ baixar_por_comprovante + enviar_documento): pagamento por comprovante com juros/multa
 //                                 confirmados; teto de 10% da conta; só com política JUROS_DOCUMENTAL e chave própria (0031)
+//   PRESTAR_SANGRIA               prestar_sangria (estreita, 0032): despesa paga com o dinheiro de uma sangria EXISTENTE (liquidada
+//                                 contra a própria retirada), prestação parcial e troco ao mesmo caixa; só com política
+//                                 PRESTACAO_DE_SANGRIA. Sem saída nova, pagamento, transferência ou conta existente
 //   REVERTER_OPERACOES            NÃO concedido ao MOVA: estorno é do responsável (cancelar), pela Central
 // Ações amplas (registrar, corrigir, cancelar, configurar, conceder, revogar, aplicar, homologar, reabrir) são RECUSADAS aqui.
 export const PERFIS_OPERACIONAIS = Object.freeze({
@@ -21,6 +24,7 @@ export const PERFIS_OPERACIONAIS = Object.freeze({
   VINCULAR_EXTRATO: Object.freeze(["financeiro_v2.ver", "financeiro_v2.vincular_pagamento"]),
   CRIAR_OBRIGACOES: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_obrigacao"]),
   PAGAR_COM_ENCARGO: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_juros"]),
+  PRESTAR_SANGRIA: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.prestar_sangria"]),
 });
 export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(PERFIS_OPERACIONAIS).flat())]);
 

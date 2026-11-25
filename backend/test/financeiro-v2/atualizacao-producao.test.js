@@ -14,10 +14,10 @@ import { abrirPool, ambiente, motivoParaPular } from "./helpers/postgres.js";
 
 const PULAR = motivoParaPular();
 const raiz = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
-const BASE = "0029"; // última migração já aplicada em produção (conferida por nome e hash contra o Git em 23/11: 29 migrações)
+const BASE = "0031"; // última migração já aplicada em produção (conferida por nome e hash contra o Git em 25/11: 31 migrações)
 const N_BASE = Number(BASE);
 
-test("atualizar.sql: da base de produção (0029) para 0030 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
+test("atualizar.sql: da base de produção (0031) para 0032 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
   const a = ambiente();
   const controle = await abrirPool(a.urlAdmin, { max: 1 });
   const banco = `fv2_teste_ensaio_${randomBytes(4).toString("hex")}`;
@@ -107,14 +107,16 @@ test("atualizar.sql: da base de produção (0029) para 0030 sem mexer em dado, s
             or has_table_privilege('fv2_leitor_mova', c.oid, 'delete') or has_table_privilege('fv2_leitor_mova', c.oid, 'truncate')))::int escrita`)).rows[0];
     assert.deepEqual(leitor, { papel: 1, sessao_mova: true, app_abre: false, leitor_abre_alheia: false, escrita: 0 });
 
-    // 0030 (conta a pagar por documento): nova ação estreita e os dois gatilhos de forma do que se grava.
+    // 0032 (prestação de contas da sangria): nova ação estreita e os cinco gatilhos de forma do que se grava; as anteriores ficam.
     const pc = (await pool.query(`select
-        (select count(*) from pg_trigger where tgname in ('fv2_lancamento_documental', 'fv2_obrigacao_documental') and not tgisinternal)::int gatilhos,
+        (select count(*) from pg_trigger where tgname like 'fv2\_%\_sangria' and not tgisinternal)::int gatilhos,
+        (select count(*) from pg_trigger where tgname in ('fv2_lancamento_documental', 'fv2_obrigacao_documental') and not tgisinternal)::int documentais,
         (select pg_get_constraintdef(oid) from pg_constraint where conname = 'fv2_concessao_acoes_lista') acoes,
-        (select count(*) from financeiro_v2.fv2_concessao where acoes ? 'financeiro_v2.registrar_obrigacao')::int concedidas`)).rows[0];
-    assert.equal(pc.gatilhos, 2);
-    assert.match(pc.acoes, /registrar_obrigacao/);
-    assert.match(pc.acoes, /baixar_por_comprovante/, "a ação da 0029 continua no catálogo");
+        (select count(*) from financeiro_v2.fv2_concessao where acoes ? 'financeiro_v2.prestar_sangria')::int concedidas`)).rows[0];
+    assert.equal(pc.gatilhos, 5);
+    assert.equal(pc.documentais, 2, "os gatilhos da 0030 continuam");
+    assert.match(pc.acoes, /prestar_sangria/);
+    for (const a of ["baixar_por_comprovante", "registrar_obrigacao", "registrar_juros"]) assert.match(pc.acoes, new RegExp(a), `a ação ${a} continua no catálogo`);
     assert.equal(pc.concedidas, 0, "migração restritiva: nenhuma concessão recebe a ação nova");
 
     // 6) Repetir o pacote é recusado antes de mudar qualquer coisa.
