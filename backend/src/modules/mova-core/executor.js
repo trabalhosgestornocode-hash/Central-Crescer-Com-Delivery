@@ -11,6 +11,7 @@
 // Nenhuma ferramenta do catálogo escreve: `preparar_registro` só devolve o pedido entendido (executado:false).
 import { validarEsquema, ErroDeArgumento } from "./esquema.js";
 import { ErroDeReferencia } from "./referencias.js";
+import { comMemoDeLeituras } from "./leituras.js";
 
 const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 /** "R$ 1.234,56" a partir de centavos (o mesmo formato que o verificador lê). */
@@ -31,7 +32,15 @@ export function comReais(o, prof = 0) {
   return r;
 }
 
-export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12 });
+export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12, leiturasSimultaneas: 2, esperaNovaTentativaMs: 400 });
+const esperar = (ms) => new Promise((ok) => { setTimeout(ok, ms); });
+/** Fila curta por mensagem: no máximo `vagas` leituras ao mesmo tempo (null = sem fila, para ferramentas locais). */
+async function comVaga(sessao, vagas, fn) {
+  if (!vagas) return fn();
+  const s = (sessao.semaforo ??= { livres: vagas, espera: [] });
+  if (s.livres > 0) s.livres--; else await new Promise((ok) => { s.espera.push(ok); });
+  try { return await fn(); } finally { const proxima = s.espera.shift(); if (proxima) proxima(); else s.livres++; }
+}
 const ACAO_VER = "financeiro_v2.ver";
 
 export class ErroDeFerramenta extends Error {
@@ -107,13 +116,27 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     const semCache = Boolean(f.local || f.escrita || f.semCache);
     if (emCache && relogio() - emCache.em < limites.cacheMs && !semCache) { r = emCache.r; registro.cache = true; consultadoEm = emCache.em; } // do cache: vale a data da consulta ORIGINAL
     else {
+      // 25/11 (homologação real): leituras da MESMA mensagem compartilham a carga (memória por mensagem) e no máximo
+      // `leiturasSimultaneas` vão ao Financeiro ao mesmo tempo (o papel de leitura do MOVA tem 2 conexões); o tempo-limite
+      // conta a partir da VAGA (esperar a vez não é lentidão da consulta). Falha transitória (conexão recusada, banco
+      // momentaneamente indisponível) tem UMA nova tentativa curta — é leitura, repetir não tem efeito.
+      sessao.portaDaMensagem ??= comMemoDeLeituras(porta);
+      const rodar = () => comTempo(Promise.resolve(f.executar({ porta: sessao.portaDaMensagem, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), f.tempoMs ?? limites.tempoMs);
+      const transitorio = (e) => e?.name === "ErroTransitorio" || e?.constructor?.name === "ErroTransitorio";
       try {
-        r = await comTempo(Promise.resolve(f.executar({ porta, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), limites.tempoMs);
+        r = await comVaga(sessao, f.local ? null : (limites.leiturasSimultaneas ?? 2), async () => {
+          try { return await rodar(); } catch (e) {
+            if (!transitorio(e) || f.local || f.escrita) throw e;
+            registro.novaTentativa = { causa: e?.causa ?? null };
+            await esperar(limites.esperaNovaTentativaMs ?? 400);
+            return rodar();
+          }
+        });
       } catch (e) {
         if (e instanceof ErroDeFerramenta) return falhar(e.codigo, e.message);
         if (porta.ehErroDeRegra?.(e)) return falhar("NAO_ENCONTRADO_OU_INVALIDO", "O Financeiro não encontrou isso nesta unidade.");
         // indisponibilidade real (rede/banco) chega como ErroTransitorio da porta; qualquer outra coisa é DEFEITO da ferramenta
-        if (e?.name === "ErroTransitorio" || e?.constructor?.name === "ErroTransitorio") return falhar("FINANCEIRO_INDISPONIVEL", "O Financeiro não respondeu agora.");
+        if (transitorio(e)) { registro.causa = e?.causa ?? null; return falhar("FINANCEIRO_INDISPONIVEL", "O Financeiro não respondeu agora."); }
         registro.defeito = String(e?.message ?? e).slice(0, 200);
         return falhar("FALHA_INTERNA_DA_FERRAMENTA", "Não consegui ler esse dado agora.");
       }

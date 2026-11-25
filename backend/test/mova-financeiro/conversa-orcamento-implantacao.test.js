@@ -119,6 +119,7 @@ async function bancoDeProducaoAntes() {
 ${readFileSync(join(RAIZ, "producao", "instalar.sql"), "utf8")}
 commit;`);
   // 24/11: migrações posteriores (0018+, ainda não aplicadas em produção) saem antes, pela reversão oficial de cada uma.
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0022.sql"), "utf8"));
   await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0021.sql"), "utf8"));
   await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0020.sql"), "utf8"));
   await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0019.sql"), "utf8"));
@@ -182,4 +183,30 @@ t("IM-03 o código NOVO convive com o banco SEM a 0017: continuidade funciona (s
   const b = criarArmazenamentoPostgres({ pool });
   await b.conversas.registrar({ ...chave, unidadeId: null, consulta: "CONTAS_VENCIDAS", contexto: { competencia: "2026-10" }, validadeMs: 600_000 });
   assert.deepEqual((await b.conversas.obter(chave)).contexto, { competencia: "2026-10" });
+});
+
+// ------------------------------------------------------------------ 3. (25/11) orçamento renovável: só 0018 + 0022 sobre a produção real
+t("IM-04 aplicar-orcamento-renovavel: sobre 0001–0017 aplica SÓ 0018 + 0022, não liga nada, o acumulado segue; reaplicar aborta; reversão oficial volta ao estado anterior", async () => {
+  const { gerarAplicarOrcamento } = await import("../../scripts/mova/pacoteProducao.mjs");
+  const { criarOrcamentoRenovavel } = await import("../../src/modules/mova-financeiro/infra/orcamentoRenovavel.js");
+  const pool = await bancoDeProducaoAntes();
+  // estado de produção conferido em 25/11: 0001–0017 (a função acima tira 0016/0017; recoloca pelas migrações oficiais)
+  for (const p of ["0016", "0017"]) { const m = listarMigracoes().find((x) => x.nome.startsWith(p)); await pool.query(`begin;\n${m.sql}\ninsert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');\ncommit;`); }
+  const sql = readFileSync(join(RAIZ, "producao", "aplicar-orcamento-renovavel.sql"), "utf8");
+  assert.equal(sql, gerarAplicarOrcamento(), "arquivo versionado = gerado");
+  await criarOrcamentoIa({ pool }).reservar(); // consumo antigo, regime acumulado
+  await pool.query(`begin;\n${sql}\ncommit;`);
+  const nomes = (await pool.query("select nome from mova.mova_migracao where nome >= '0018' order by nome")).rows.map((x) => x.nome);
+  assert.deepEqual(nomes, ["0018_mova_orcamento_renovavel.sql", "0022_mova_orcamento_uso.sql"], "não arrasta 0019/0020/0021");
+  const pol = (await pool.query("select * from mova.orcamento_ia_politica")).rows[0];
+  assert.equal(pol.ativo, false, "nada é ligado pela migração");
+  assert.deepEqual([Number(pol.limite_mensal_microusd), Number(pol.limite_diario_microusd), Number(pol.limite_requisicao_microusd)], [10_000_000, 1_000_000, 100_000], "limites financeiros iguais aos aprovados");
+  assert.deepEqual([Number(pol.reserva_documentos_mensal_microusd), Number(pol.reserva_documentos_diario_microusd), pol.limite_chamadas_conversa_diario], [2_000_000, 200_000, 300]);
+  assert.equal((await criarOrcamentoIa({ pool }).resumo()).chamadas, 1, "o acumulado continua igual (o código atual não muda)");
+  await assert.rejects(criarOrcamentoRenovavel({ pool }).reservar(), { codigo: "ORCAMENTO_INDISPONIVEL" }, "renovável desligado até a autorização");
+  await assert.rejects(pool.query(`begin;\n${sql}\ncommit;`).catch(async (e) => { await pool.query("rollback"); throw e; }), /já aplicada/);
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0022.sql"), "utf8"));
+  await pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0018.sql"), "utf8"));
+  assert.deepEqual((await pool.query("select nome from mova.mova_migracao where nome >= '0018'")).rows, []);
+  assert.equal((await criarOrcamentoIa({ pool }).resumo()).chamadas, 1);
 });

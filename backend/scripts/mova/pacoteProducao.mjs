@@ -140,6 +140,39 @@ insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}'
 `;
 }
 
+/** Migrações conferidas no banco do MOVA em PRODUÇÃO em 25/11/2026 (nome + sha256, leitura): 0001 a 0017. */
+export const CONFERIDAS_EM_PRODUCAO_25_11 = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017"]);
+/**
+ * aplicar-orcamento-renovavel.sql (25/11): SÓ o indispensável para o orçamento renovável — 0018 (política, colunas de
+ * controle, alertas) e 0022 (parte guardada para documentos, chamadas de conversa por dia, tipo de uso). Não aplica 0019,
+ * 0020 nem 0021. UMA transação; exige 0001–0017 com o mesmo sha256 e nenhuma das duas registrada. Não liga nada: a política
+ * fica ativo = false; ligar é um passo separado (ver docs/mova-core/10-piloto-acai.md).
+ */
+export function gerarAplicarOrcamento(migracoes = listarMigracoes()) {
+  const alvo = ["0018", "0022"].map((p) => { const m = migracoes.find((x) => x.nome.startsWith(`${p}_`)); if (!m) throw new Error(`migração ${p} inexistente`); return m; });
+  const ja = migracoes.filter((x) => CONFERIDAS_EM_PRODUCAO_25_11.includes(x.nome.slice(0, 4)));
+  const conferir = ja.map((x) => `  if not exists (select 1 from mova.mova_migracao where nome = '${x.nome}' and sha256 = '${x.sha256}') then raise exception 'MOVA orçamento: ${x.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  const naoAplicadas = alvo.map((m) => `  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA orçamento: ${m.nome} já aplicada — nada foi feito'; end if;`);
+  return `-- MOVA — ORÇAMENTO RENOVÁVEL em PRODUÇÃO: aplica SÓ ${alvo.map((m) => m.nome).join(" + ")} (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
+-- Exige as já instaladas (nome + sha256): ${ja.map((x) => x.nome.slice(0, 4)).join(", ")}. Não liga o orçamento (política ativo = false).
+-- Compatibilidade: o código anterior não lê nenhuma coluna ou tabela nova; o orçamento acumulado continua valendo até a chave.
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA orçamento: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA orçamento: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${conferir.join("\n")}
+${naoAplicadas.join("\n")}
+end $$;
+${alvo.map((m) => `
+-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})
+${m.sql.trimEnd()}
+insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');
+`).join("")}`;
+}
+
 export function gerarInventario() {
   return `-- MOVA — INVENTÁRIO SOMENTE LEITURA (gerado por backend/scripts/mova/pacoteProducao.mjs). Rodar ANTES e DEPOIS da instalação.
 -- Não altera nada. Não lê conteúdo de mensagens: só existência, contagens, permissões e marcadores.
@@ -158,7 +191,7 @@ union all select 'migracao_em_curso', coalesce((select string_agg(left(query, 60
 }
 
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }) };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento() };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }

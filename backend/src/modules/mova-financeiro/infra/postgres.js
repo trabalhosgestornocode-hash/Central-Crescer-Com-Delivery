@@ -611,7 +611,7 @@ export function criarEvidenciasPostgres({ pool }) {
  * Fila persistente com lease (`for update skip locked`): dois processos nunca pegam o mesmo item; item cujo lease venceu
  * (processo caiu no meio) volta a ser elegível. Mesmo contrato de criarFilaMemoria.
  */
-export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000, leaseMs = 120_000, relogio = () => Date.now(), lote = 10 }) {
+export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000, leaseMs = 120_000, relogio = () => Date.now(), lote = 10, titular = null }) {
   const q = consultar(pool);
   const agora = () => new Date(relogio()).toISOString();
   return Object.freeze({
@@ -622,6 +622,9 @@ export function criarFilaPostgres({ pool, maxTentativas = 5, esperaBaseMs = 1000
     async processarPendentes(tratar, { aoDesistir } = {}) {
       let processados = 0;
       for (;;) {
+        // 25/11: numa troca de instância (deploy), só a instância TITULAR (a mais nova) pega mensagens novas — a antiga termina
+        // o que já pegou e para, para que todas as mensagens sigam a configuração nova (modo do MOVA CORE, chaves).
+        if (titular && !(await titular())) return processados;
         const t = relogio();
         const pegos = await emTransacao(pool, async (tx) => (await tx(`
           update mova.fila set estado = 'PROCESSANDO', tentativas = tentativas + 1, lease_ate = $2, atualizado_em = $1
@@ -878,4 +881,30 @@ export function criarConsultasPostgres({ pool }) {
       return (await q("select evento_id as \"eventoId\", decisao, motivo, proposta_id as \"propostaId\", sinais_injecao as \"sinaisDeInjecao\", em from mova.decisao where organizacao_id = $1 and unidade_id = $2 order by seq desc limit $3", [organizacaoId, unidadeId, limite])).rows;
     },
   });
+}
+
+/**
+ * 25/11 — TITULAR DA FILA numa troca de instância (deploy sem interrupção do Render: a instância antiga segue viva ~2 min
+ * depois da nova). Cada processo marca as próprias conexões com `application_name = mova-worker:<instante da subida>`; antes de
+ * pegar mensagens, o worker confere em pg_stat_activity se existe uma instância MAIS NOVA conectada ao banco do MOVA. Se existe,
+ * ele para de pegar (o que já pegou termina normalmente: cada mensagem continua sendo processada uma única vez, pelo lease).
+ * Sem infraestrutura nova e sem migração. Falha na conferência = comportamento anterior (continua pegando).
+ */
+export const NOME_DA_CONEXAO_DO_WORKER = "mova-worker";
+export function criarTitularPorGeracao({ pool, geracao, intervaloMs = 5000, relogio = () => Date.now(), registrar = () => {} }) {
+  if (!Number.isInteger(geracao) || geracao <= 0) throw new TypeError("titular exige a geração (instante da subida) da instância");
+  let conferidoEm = -Infinity; let titular = true; let avisado = false;
+  return async function ehTitular() {
+    if (relogio() - conferidoEm < intervaloMs) return titular;
+    conferidoEm = relogio();
+    try {
+      const r = await pool.query(`select coalesce(max(substring(application_name from '^${NOME_DA_CONEXAO_DO_WORKER}:([0-9]{13})$')::bigint), 0) as g
+                                    from pg_stat_activity where datname = current_database() and application_name like '${NOME_DA_CONEXAO_DO_WORKER}:%'`);
+      const maisNova = Number(r.rows[0]?.g ?? 0);
+      titular = !(maisNova > geracao);
+      if (!titular && !avisado) { avisado = true; registrar({ tipo: "MOVA_WORKER_SUBSTITUIDO", geracao, geracaoNova: maisNova }); }
+      if (titular && avisado) { avisado = false; registrar({ tipo: "MOVA_WORKER_RETOMOU", geracao }); } // a nova caiu: esta volta a atender
+    } catch { titular = true; }
+    return titular;
+  };
 }

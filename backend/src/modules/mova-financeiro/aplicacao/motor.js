@@ -89,7 +89,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
 
-  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
+  async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, respostasExtras = [], propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
     if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
     await a.historico.registrar({
       organizacaoId: escopo?.organizacaoId ?? null, unidadeId: escopo?.unidadeId ?? null, eventoId: evento.eventoId, mensagemId: evento.mensagemId,
@@ -102,7 +102,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (privado.destino) await a.saida.enfileirar({ grupoId: privado.destino, respostaA: null, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
       const aviso = privado.destino ? (privado.aviso ?? RESPOSTA.respondidoNoPrivado()) : (privado.avisoSemPrivado ?? RESPOSTA.semConversaPrivada());
       await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: aviso, simulada: true });
-    } else if (resposta) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
+    } else if (resposta) {
+      await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: evento.mensagemId, eventoId: evento.eventoId, texto: mascararDadosSensiveis(resposta), simulada: true });
+      // 25/11: partes de uma lista montada pelo servidor (MOVA CORE), na ordem, no MESMO destino (só conversa privada chega aqui)
+      for (const parte of respostasExtras ?? []) if (parte) await a.saida.enfileirar({ grupoId: evento.grupoId, respostaA: null, eventoId: evento.eventoId, texto: mascararDadosSensiveis(parte), simulada: true });
+    }
     // Continuidade: depois de responder, escuta a próxima mensagem DESTE participante nesta conversa (e lembra unidade/consulta).
     if (resposta && evento.participanteId && typeof a.conversas?.registrar === "function") {
       await a.conversas.registrar({ grupoId: evento.grupoId, participanteId: evento.participanteId, unidadeId: escopo?.unidadeId ?? null, consulta, contexto: contextoConversa, validadeMs: JANELA_CONTINUIDADE_MS });
@@ -325,8 +329,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // motor atual, que é também o rollback imediato (MOVA_CORE_CONVERSA=DESLIGADO).
     if (conversaNova && evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && !pendenteSemantico) {
       const nova = await conversaNova.atender({ evento, grupo, participante });
-      if (nova?.texto) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `MOVA_CORE:${nova.motivo}`, escopo: { organizacaoId: nova.organizacaoId, unidadeId: nova.unidadeId }, resposta: nova.texto, injecao,
-        extra: { nucleo: "MOVA_CORE", requisicaoCore: nova.requisicaoId, ferramentas: nova.ferramentas, custoMicrousd: nova.custoMicrousd, latenciaMs: nova.latenciaMs } });
+      if (nova?.texto) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `MOVA_CORE:${nova.motivo}`, escopo: { organizacaoId: nova.organizacaoId, unidadeId: nova.unidadeId }, resposta: nova.texto, respostasExtras: nova.blocos ?? [], injecao,
+        extra: { nucleo: "MOVA_CORE", mensagensExtras: (nova.blocos ?? []).length, requisicaoCore: nova.requisicaoId, ferramentas: nova.ferramentas, custoMicrousd: nova.custoMicrousd, latenciaMs: nova.latenciaMs } });
     }
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
     // 15H (H-1): saudação/pergunta sobre o MOVA, sem número nem palavra financeira ⇒ orientação determinística, SEM IA.

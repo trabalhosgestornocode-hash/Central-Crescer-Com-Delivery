@@ -39,7 +39,7 @@ export { conferirEventoDoRele, criarConsumidorRele } from "./gateway/consumidorR
 export { criarArmazenamentoMemoria } from "./infra/memoria.js";
 export { CHAVES_DE_CONTROLE, PRECOS_IA, clienteComOrcamento, criarControle, criarOrcamentoIa } from "./infra/operacao.js";
 export { TETOS_RENOVAVEIS_MICROUSD, criarOrcamentoRenovavel, custoMicrousd, regimeDeOrcamento } from "./infra/orcamentoRenovavel.js";
-export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
+export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgres, criarEvidenciasPostgres, criarFilaPostgres, criarTitularPorGeracao, NOME_DA_CONEXAO_DO_WORKER, ehFalhaDeConexao, instalarConfiguracao } from "./infra/postgres.js";
 
 /**
  * Monta o MOVA. Sem `pool` = memória (simulação); com `pool` = PostgreSQL (schema `mova`).
@@ -50,12 +50,12 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, conversaNova = null }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, conversaNova = null, titularDaFila = null }) {
   // 23/11: configuração VIVA (lista de entregadores recarregável) já vem validada: é usada como está, senão a recarga não chegaria aqui.
   const cfg = typeof configuracao?.recarregarEntregadores === "function" ? configuracao : validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
   const evidencias = pool ? criarEvidenciasPostgres({ pool }) : criarEvidenciasMemoria();
-  const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime() }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
+  const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime(), titular: titularDaFila }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
   // Agente 2 — Frente C: conferência com o extrato + política de autonomia (só com `autonomia`); escrita só com a porta OPERACIONAL.
   const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, pagamentoPorComprovante, criarDespesas, registrarJuros, criarContas, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar }) : null;

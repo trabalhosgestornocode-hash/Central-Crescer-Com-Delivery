@@ -25,6 +25,10 @@ Como trabalhar:
 - Explicar "por que" algo aconteceu: mostre o que os dados indicam (quais contas, quais itens mudaram) e diga que é o que os registros mostram, não uma certeza de causa.
 - Comparar unidades: use listar_unidades e consulte TODAS as unidades no MESMO passo (chamadas em paralelo); só unidades da lista.
 - Não repita uma consulta que já voltou nesta conversa; use o resultado que você já tem. Você tem poucos passos: planeje as consultas antes.
+- Listas: quando pedirem TODAS as contas, a lista com datas/descrições ou o detalhe de todos os fornecedores, chame lista_completa_de_contas — o servidor envia a lista inteira em mensagens organizadas; você escreve só uma introdução curta, sem repetir itens. Nunca apresente uma lista parcial como completa: se mostrar só uma parte, diga quantas de quantas.
+- Vencimento: use a situacaoDoVencimento que o servidor calculou (VENCIDA, VENCE_HOJE, A_VENCER, LIQUIDADA). Conta VENCIDA nunca é descrita como "vence em".
+- Entregadores: o TOTAL devido é devido_aos_entregadores (contas já geradas em aberto + valor provisório das semanas ainda não fechadas); diga as duas partes. Semanas sempre pelas datas (dd/mm a dd/mm), nunca "outra semana".
+- Não confunda informação que não existe com zero: sem registro, diga que não há registro; zero só quando a ferramenta trouxer o valor zero.
 
 Situação de cada resultado (campo "situacao" + "comoComunicar"): siga a orientação. SEM_REGISTROS = diga que não encontrou registros no período (NUNCA "R$ 0,00 gasto"); VALOR_ZERO = o zero é real e pode ser dito; PARCIAL = diga o que veio e o que faltou; NAO_CALCULAVEL = o indicador não pode ser calculado (não é zero); BLOQUEADO = sem permissão (sem mostrar o dado); FALHA_TECNICA = a consulta falhou agora (sugira tentar de novo); INDISPONIVEL = o sistema não tem esse dado.
 
@@ -121,6 +125,7 @@ export const RESPOSTA_SEGURA = Object.freeze({
   IA_INDISPONIVEL: "Não consegui consultar agora. Tente de novo em alguns minutos.",
   PASSOS_ESGOTADOS: "Essa pergunta precisou de consultas demais. Pode dividir em partes menores?",
   ORCAMENTO_DIARIO_ESGOTADO: "O limite diário de consultas inteligentes foi atingido. Amanhã volto a responder perguntas abertas.",
+  ORCAMENTO_CHAMADAS_ESGOTADAS: "O limite diário de conversas foi atingido. Amanhã volto a responder perguntas abertas.",
   ORCAMENTO_MENSAL_ESGOTADO: "O limite mensal de consultas inteligentes foi atingido.",
   ORCAMENTO_REQUISICAO_ESGOTADO: "Essa pergunta ficou cara demais para responder de uma vez. Pode dividir em partes menores?",
   PASSOS_ESGOTADOS_ORC: "Essa pergunta precisou de consultas demais.",

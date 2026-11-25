@@ -30,6 +30,9 @@ export const METRICAS = Object.freeze({
   CUSTO_POR_ENTREGA: { fonte: "ENTREGADORES", razao: ["aPagarCentavos", "entregas"], significado: "CALCULO:MEDIA:POR_ENTREGA", agrupa: ["NENHUM", "ENTREGADOR", "UNIDADE"], rotulo: "custo médio por entrega (custo ÷ entregas)" },
 });
 const AGRUPAMENTOS = ["NENHUM", "FORNECEDOR", "CATEGORIA", "CANAL", "ENTREGADOR", "UNIDADE"];
+// 25/11 (homologação real): o modelo pedia combinações que a análise não tem (AGRUPAMENTO_NAO_SUPORTADO). O esquema agora diz,
+// a partir de METRICAS (a mesma fonte da validação), exatamente quais agrupamentos cada métrica aceita.
+const COMBINACOES_VALIDAS = `SÓ estas combinações existem — ${Object.entries(METRICAS).map(([k, m]) => `${k}: ${m.agrupa.join("/")}`).join("; ")}. Valor devido por entregador: use devido_aos_entregadores (não analisar).`;
 /** Matriz de compatibilidade métrica × dimensão (fonte única: METRICAS.agrupa). Fora dela, a análise é recusada com explicação. */
 export const MATRIZ_DE_COMPATIBILIDADE = Object.freeze(Object.fromEntries(Object.entries(METRICAS).map(([k, m]) => [k, Object.freeze(Object.fromEntries(AGRUPAMENTOS.map((a) => [a, m.agrupa.includes(a)])))])));
 export const PERIODOS_RELATIVOS = Object.freeze(["MES_ATUAL", "MES_ANTERIOR", "ULTIMOS_3_MESES", "ULTIMOS_6_MESES", "ANO_ATUAL"]);
@@ -101,7 +104,7 @@ export const FERRAMENTA_ANALISAR = Object.freeze({
   descricao: "Análise flexível (perguntas que nenhuma outra ferramenta responde direto): escolha a MÉTRICA, como AGRUPAR, o PERÍODO (relativo, como MES_ANTERIOR ou ULTIMOS_3_MESES, ou as COMPETÊNCIAS AAAA-MM, até 6), se compara TODAS as unidades da conversa, um filtro de texto e a ordem. O código busca, agrupa, ordena, soma, compara (diferença e variação % entre a 1ª e a última competência), calcula a PARTICIPAÇÃO de cada linha no total, médias (ticket médio, custo por entrega) e a TENDÊNCIA (3+ meses). O resultado traz a COBERTURA: se não estiver completo, não apresente como total. Ex.: 'qual fornecedor mais cresceu de outubro para novembro', 'top 5 categorias de despesa e quanto cada uma pesa', 'qual loja vendeu mais no iFood', 'custo por entrega de cada entregador no mês'.",
   esquema: { type: "object", properties: {
     metrica: { type: "string", enum: Object.keys(METRICAS), description: "DESPESAS = valor das contas da competência (não é pagamento). PAGAMENTOS = o que foi pago. EM_ABERTO = saldo a pagar. TICKET_MEDIO e CUSTO_POR_ENTREGA são médias calculadas pelo código." },
-    agruparPor: { type: "string", enum: AGRUPAMENTOS },
+    agruparPor: { type: "string", enum: AGRUPAMENTOS, description: COMBINACOES_VALIDAS },
     periodo: { type: "string", enum: PERIODOS_RELATIVOS, description: "Período relativo à data de hoje da conversa (use no lugar de competencias)." },
     competencias: { type: "array", maxItems: MAX_COMPETENCIAS, items: COMPETENCIA, description: "Meses AAAA-MM, do mais antigo ao mais recente (ou use 'periodo')." },
     todasAsUnidades: { type: "boolean", description: "true = cada unidade que esta pessoa pode consultar nesta conversa, lado a lado." },
@@ -114,7 +117,7 @@ export const FERRAMENTA_ANALISAR = Object.freeze({
     const m = METRICAS[args.metrica];
     if (!m) return { erro: "ARGUMENTO_INVALIDO", dados: { mensagem: `Métrica desconhecida. Existem: ${Object.keys(METRICAS).join(", ")}.` }, fatos: [] };
     const agruparPor = args.agruparPor ?? "NENHUM";
-    if (!m.agrupa.includes(agruparPor)) return { erro: "AGRUPAMENTO_NAO_SUPORTADO", dados: { mensagem: `${args.metrica} agrupa só por: ${m.agrupa.join(", ")} (${agruparPor} não tem significado para ${m.rotulo}).` }, fatos: [] };
+    if (!m.agrupa.includes(agruparPor)) return { erro: "AGRUPAMENTO_NAO_SUPORTADO", dados: { mensagem: `${args.metrica} agrupa só por: ${m.agrupa.join(", ")} (${agruparPor} não tem significado para ${m.rotulo}). Métricas que agrupam por ${agruparPor}: ${Object.entries(METRICAS).filter(([, x]) => x.agrupa.includes(agruparPor)).map(([k]) => k).join(", ") || "nenhuma"}.` }, fatos: [] };
     let competencias = args.competencias?.length ? [...new Set(args.competencias)].sort() : null;
     if (!competencias && args.periodo) {
       competencias = competenciasDoPeriodo(args.periodo, sessao.hoje);
