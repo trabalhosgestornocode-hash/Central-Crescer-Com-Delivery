@@ -391,3 +391,14 @@ test("SG-6 repositório: CAS de versão impede que duas gravações da mesma pro
   assert.equal((await r.salvar({ ...proposta, estado: "EXECUTANDO" }, { versaoEsperada: proposta.revisao })).ok, true);
   assert.equal((await r.salvar({ ...proposta, estado: "EXECUTANDO" }, { versaoEsperada: proposta.revisao })).ok, false);
 });
+
+test("OP-14 TROCO só com menção da pessoa: 'o resto ainda tá comigo' NÃO vira troco (fica pendente); 'voltaram 3 de troco' vira", async () => {
+  const t = await montar();
+  const { movId } = await t.abrirSangria(5000, "Compra de material de limpeza");
+  const base = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  const args = { tipo: "PRESTACAO_DE_SANGRIA", sangria: movId, despesas: [{ valorCentavos: 3200, descricao: "Detergente", fornecedor: "Fornecedor Sintético", categoria: "Insumos" }], trocoCentavos: 1800 };
+  const r1 = await t.operacoes.preparar({ conversaChave: "k1", sessao: { ...base, textoDaPessoa: "gastei 32 em detergente, o resto ainda tá comigo" }, autor: "pessoa-1", tipo: args.tipo, args });
+  assert.deepEqual([r1.proposta.dados.trocoCentavos, r1.proposta.avisos.includes("TROCO_NAO_INFORMADO_PELA_PESSOA")], [0, true]);
+  const r2 = await t.operacoes.preparar({ conversaChave: "k2", sessao: { ...base, textoDaPessoa: "gastei 32 e voltaram 18 de troco" }, autor: "pessoa-1", tipo: args.tipo, args });
+  assert.equal(r2.proposta.dados.trocoCentavos, 1800);
+});

@@ -229,7 +229,13 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
       const anterior = await abertaDaConversa(conversaChave);
       // o comprovante enviado num turno anterior continua valendo para a correção da MESMA operação (o servidor guarda, nunca o modelo)
       const anexoEfetivo = anexo?.arquivo ? anexo : (anterior?.tipo === tipo ? anterior.anexo ?? null : null);
+      // §9: troco só com menção EXPLÍCITA da pessoa (nesta mensagem ou já aceito na versão anterior): "o resto ainda está comigo" é PENDENTE, não troco
+      let trocoDescartado = false;
+      if (tipo === TIPO_OPERACAO.PRESTACAO_DE_SANGRIA && (args?.trocoCentavos ?? 0) > 0 && typeof sessao.textoDaPessoa === "string"
+        && !/(troco|devolv|volt|retorn|sobrou|de volta)/.test(sessao.textoDaPessoa.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase())
+        && !(anterior?.tipo === tipo && anterior?.dados?.trocoCentavos === args.trocoCentavos)) { args = { ...args, trocoCentavos: 0 }; trocoDescartado = true; }
       const n = await normalizar({ tipo, args: args ?? {}, escopo, anexo: anexoEfetivo, hoje: sessao.hoje });
+      if (trocoDescartado && Array.isArray(n.avisos)) n.avisos.push("TROCO_NAO_INFORMADO_PELA_PESSOA");
       if (n.recusa) return { ok: false, motivo: n.recusa, detalhes: n.detalhes ?? null };
       if (anterior) { await repositorio.salvar({ ...anterior, estado: ESTADO_PROPOSTA.SUBSTITUIDA }, { versaoEsperada: anterior.revisao }); auditar("SUBSTITUIDA", anterior); }
       const decisao = await decidir({ tipo, organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, valorCentavos: n.valorCentavos, hoje: sessao.hoje, comprovante: comprovanteDe(tipo, anexoEfetivo), favorecidoChave: n.favorecidoChave });
