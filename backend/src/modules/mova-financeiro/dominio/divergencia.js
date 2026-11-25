@@ -62,8 +62,12 @@ export function competenciaDaResposta(texto, dataPagamento) {
   else if (num) { mesN = Number(num[1]); if (num[2]) ano = num[2].length === 2 ? 2000 + Number(num[2]) : Number(num[2]); }
   else if (nome && t.split(" ").length <= 4) {
     mesN = MESES.findIndex((m) => m === nome[1] || m.slice(0, 3) === nome[1]) + 1;
-    const a = /\b(20\d{2}|\d{2})\b/.exec(t.replace(nome[1], ""));
-    if (a) ano = a[1].length === 2 ? 2000 + Number(a[1]) : Number(a[1]);
+    // 25/11 (homologação real): "Mês de novembro, dia 25" — o DIA nunca é ano (virava 2025-11). Ano de 2 dígitos só colado ao
+    // mês ("nov 26", "novembro de 26"); ano de 4 dígitos em qualquer posição.
+    const resto = t.replace(/\bdia\s+\d{1,2}\b/g, " ").replace(/\s+/g, " ").trim();
+    const a4 = /\b(20\d{2})\b/.exec(resto);
+    const a2 = /^[a-z]+\s+(?:de\s+)?(\d{2})$/.exec(resto);
+    if (a4) ano = Number(a4[1]); else if (a2) ano = 2000 + Number(a2[1]);
   } else return null;
   if (!ano) {
     const [ap, mp] = String(dataPagamento ?? "").split("-").map(Number);

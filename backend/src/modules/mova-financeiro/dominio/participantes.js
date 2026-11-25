@@ -169,7 +169,15 @@ export function ehDocumentoFinanceiro(bruto) {
   return (mime.startsWith("image/") || mime === "application/pdf") && String(bruto?.texto ?? "").trim().length >= 3;
 }
 
+/** 25/11: figurinha, reação, GIF/vídeo (o Gateway entrega como OUTRO, sem texto e sem mídia) e texto só de emoji/pontuação. */
+export function semConteudoUtil(bruto) {
+  if (bruto?.midia) return false;
+  return !/[\p{L}\p{N}]/u.test(String(bruto?.texto ?? ""));
+}
+
 export async function foiAcionado({ grupo, bruto, armazenamento }) {
+  // 25/11: sem conteúdo útil nunca aciona — nem por conversa aberta, nem por citação (a figurinha recebia a apresentação genérica).
+  if (semConteudoUtil(bruto)) return { acionado: false, por: null };
   if (!grupo.grupoId.endsWith("@g.us") || (grupo.acesso ?? ACESSO.ABERTO) !== ACESSO.LISTA) return { acionado: true, por: "CONVERSA" };
   if (chamaPeloNome(bruto.texto)) return { acionado: true, por: "NOME" };
   if (ehDocumentoFinanceiro(bruto)) return { acionado: true, por: "DOCUMENTO" };
