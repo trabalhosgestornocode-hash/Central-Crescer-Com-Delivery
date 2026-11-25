@@ -115,7 +115,7 @@ test("piloto IA — modelo exato: só Haiku 5.5 é montável; resposta de outro 
 test("criação de despesas — chave própria, desligada por padrão e só com o pagamento por comprovante", () => {
   const base = { MOVA_HABILITADO: "1", MOVA_DATABASE_URL: "x", MOVA_SERVICO_USUARIO_ID: "eeeeeeee-0000-4000-8000-0000000000aa" };
   assert.notEqual(lerConfiguracaoMova(base).criarDespesas, true, "desligada por padrão");
-  assert.ok(lerConfiguracaoMova({ ...base, MOVA_OPERACAO_CRIAR_DESPESAS: "1" }).contradicoes.includes("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE"));
+  assert.ok(lerConfiguracaoMova({ ...base, MOVA_OPERACAO_CRIAR_DESPESAS: "1" }).escritaRecusada.includes("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE"));
 });
 
 test("piloto IA — teto TOTAL de US$ 10,00 no código: configurar mais no banco não amplia; consumo anterior conta", { skip: pular }, async () => {

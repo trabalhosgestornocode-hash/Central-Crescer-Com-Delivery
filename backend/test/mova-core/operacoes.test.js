@@ -380,9 +380,10 @@ test("OP-13 cache: preparo nunca vem do cache; a leitura é isolada por identida
   assert.equal(leituras, 4, "mensagem nova ⇒ leitura nova (dado atual)");
 });
 
-test("SG-5 a escrita do MOVA só usa a LISTA FECHADA (prestação entra com REGISTRAR; nenhuma operação paga, estorna ou transfere)", () => {
-  assert.equal(OPERACOES_DE_ESCRITA.registrarDespesaDaSangria, "REGISTRAR");
-  assert.equal(OPERACOES_DE_ESCRITA.registrarTrocoDaSangria, "REGISTRAR");
+test("SG-5 a escrita do MOVA só usa a LISTA FECHADA (prestação entra com a estreita PRESTAR_SANGRIA, nunca REGISTRAR; nenhuma operação paga, estorna ou transfere)", () => {
+  assert.equal(OPERACOES_DE_ESCRITA.registrarDespesaDaSangria, "PRESTAR_SANGRIA");
+  assert.equal(OPERACOES_DE_ESCRITA.registrarTrocoDaSangria, "PRESTAR_SANGRIA");
+  assert.ok(!Object.values(OPERACOES_DE_ESCRITA).flat().includes("REGISTRAR"), "nenhuma operação do MOVA exige a ação ampla");
   for (const proibida of ["registrarTransferencia", "estornarLiquidacao", "estornarMovimentacao", "registrarLiquidacao", "excluirObrigacao"]) assert.equal(OPERACOES_DE_ESCRITA[proibida], undefined, proibida);
   assert.ok(OPERACOES_PERMITIDAS.includes("consultarPrestacaoDeSangrias"));
 });

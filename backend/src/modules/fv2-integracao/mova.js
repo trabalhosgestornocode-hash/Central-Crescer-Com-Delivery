@@ -60,6 +60,8 @@ export async function repositorioDePropostasSeInstalado(pool) {
 
 export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Identidades técnicas que NUNCA são a operacional (leitura do MOVA, executor do bootstrap, entregadores).
+const IDENTIDADES_TECNICAS_RESERVADAS = Object.freeze([IDENTIDADE_MOVA, "00000000-0000-4000-8000-0000000b0075", "00000000-0000-4000-8000-00000000e7e9"]);
 const sim = (v) => v === "1";
 
 /** Lê a configuração (nunca imprime valores). Ausente, inválida ou CONTRADITÓRIA ⇒ desligado com motivo. */
@@ -102,20 +104,27 @@ export function lerConfiguracaoMova(env) {
   }
   // Agente 2 — Frente C: AUTONOMIA (conferência com o extrato + políticas; só leitura) e ESCRITA (liquidação pelo serviço oficial).
   // Escrita exige a autonomia, a OPERACAO e uma identidade OPERACIONAL própria (nunca a de leitura do MOVA).
-  const autonomia = sim(env.MOVA_OPERACAO_AUTONOMIA);
-  const escrita = sim(env.MOVA_OPERACAO_ESCRITA);
-  if ((autonomia || escrita) && !operacao) contradicoes.push("AUTONOMIA_FORA_DA_OPERACAO");
-  if (escrita && !autonomia) contradicoes.push("ESCRITA_SEM_AUTONOMIA");
-  if (sim(env.MOVA_OPERACAO_CRIAR_DESPESAS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) contradicoes.push("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE");
-  if (sim(env.MOVA_OPERACAO_REGISTRAR_JUROS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) contradicoes.push("REGISTRAR_JUROS_SEM_PAGAMENTO_POR_COMPROVANTE");
-  if (sim(env.MOVA_OPERACAO_CRIAR_CONTAS) && !autonomia) contradicoes.push("CRIAR_CONTAS_SEM_AUTONOMIA");
-  if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) contradicoes.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
+  // 25/11 — FALHA SEGURA DAS ESCRITAS: uma configuração de escrita inválida NÃO derruba o MOVA (consultas, documentos e a rotina
+  // dos entregadores seguem); ela desliga SÓ a autonomia, a escrita e as chaves que dependem dela, e o motivo fica registrado.
+  let autonomia = sim(env.MOVA_OPERACAO_AUTONOMIA);
+  let escrita = sim(env.MOVA_OPERACAO_ESCRITA);
+  const escritaRecusada = [];
+  if ((autonomia || escrita) && !operacao) escritaRecusada.push("AUTONOMIA_FORA_DA_OPERACAO");
+  if (escrita && !autonomia) escritaRecusada.push("ESCRITA_SEM_AUTONOMIA");
+  if (sim(env.MOVA_OPERACAO_CRIAR_DESPESAS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) escritaRecusada.push("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE");
+  if (sim(env.MOVA_OPERACAO_REGISTRAR_JUROS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) escritaRecusada.push("REGISTRAR_JUROS_SEM_PAGAMENTO_POR_COMPROVANTE");
+  if (sim(env.MOVA_OPERACAO_CRIAR_CONTAS) && !autonomia) escritaRecusada.push("CRIAR_CONTAS_SEM_AUTONOMIA");
+  if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) escritaRecusada.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
+  if (escrita && String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase() === String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase()) escritaRecusada.push("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA");
+  if (escrita && IDENTIDADES_TECNICAS_RESERVADAS.includes(String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase())) escritaRecusada.push("IDENTIDADE_OPERACIONAL_RESERVADA");
+  const escritaDesligada = escritaRecusada.length > 0;
+  if (escritaDesligada) { autonomia = false; escrita = false; }
+  const chaveDeEscrita = (v) => !escritaDesligada && sim(v);
   // Agente 2 — Frente D: entregadores no privado (só OPERACAO) e a rotina semanal (exige os entregadores).
   const entregadores = sim(env.MOVA_ENTREGADORES);
   const rotinaEntregadores = sim(env.MOVA_ENTREGADORES_ROTINA);
   if (entregadores && !operacao) contradicoes.push("ENTREGADORES_FORA_DA_OPERACAO");
   if (rotinaEntregadores && !entregadores) contradicoes.push("ROTINA_SEM_ENTREGADORES");
-  if (escrita && String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase() === String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase()) contradicoes.push("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA");
   if (processamento && !recebimento) contradicoes.push("PROCESSAMENTO_SEM_RECEBIMENTO");
   if (ia && !processamento) contradicoes.push("IA_SEM_PROCESSAMENTO");
   if (envio && !processamento) contradicoes.push("ENVIO_SEM_PROCESSAMENTO");
@@ -145,19 +154,19 @@ export function lerConfiguracaoMova(env) {
     ...(piloto && !operacao ? { pilotoUnidadeId: env.MOVA_PILOTO_UNIDADE_ID.toLowerCase(), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL, somenteConsultas: true } : {}),
     ...(operacao ? { operacaoUnidades: String(env.MOVA_OPERACAO_UNIDADES).split(",").map((x) => x.trim().toLowerCase()).filter(Boolean), leituraUrl: env.MOVA_FINANCEIRO_LEITURA_URL,
       somenteConsultas: !sim(env.MOVA_OPERACAO_DOCUMENTOS), recebimentoDocumental: sim(env.MOVA_OPERACAO_DOCUMENTOS_SEM_IA), comandosDeterministicos: true, autonomia, escrita,
-      pagamentoPorComprovante: sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE),
+      pagamentoPorComprovante: chaveDeEscrita(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE),
       // 23/11: criar a conta a pagar de despesa sem conta prévia (exige o pagamento por comprovante; padrão DESLIGADA).
-      criarDespesas: sim(env.MOVA_OPERACAO_CRIAR_DESPESAS),
+      criarDespesas: chaveDeEscrita(env.MOVA_OPERACAO_CRIAR_DESPESAS),
       // 23/11: registrar juros/multa confirmados junto com o pagamento por comprovante (exige o pagamento por comprovante; padrão DESLIGADA).
-      registrarJuros: sim(env.MOVA_OPERACAO_REGISTRAR_JUROS),
+      registrarJuros: chaveDeEscrita(env.MOVA_OPERACAO_REGISTRAR_JUROS),
       // 24/11: conta a pagar NOVA a partir de boleto/nota e vínculo da nota com a conta existente (padrão DESLIGADA; exige a autonomia).
-      criarContas: sim(env.MOVA_OPERACAO_CRIAR_CONTAS),
+      criarContas: chaveDeEscrita(env.MOVA_OPERACAO_CRIAR_CONTAS),
       // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
       // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
       iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
       // 24/11: com a IA só de documentos, permite ler a RESPOSTA em texto a uma pergunta pendente do MOVA (padrão DESLIGADA).
       iaRespostasPendentes: sim(env.MOVA_IA_RESPOSTAS_PENDENTES),
-      identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
+      identidadeOperacional: escrita ? env.MOVA_IDENTIDADE_OPERACIONAL.toLowerCase() : null } : {}), escritaRecusada, teto, modeloIa, envioNaoAntesDe: envio ? envioNaoAntesDe : null, transporteEnvio: envio ? (env.MOVA_RELE_DATABASE_URL ? "RELE" : "DIRETO") : null,
     // 15I: teto de respostas por processo (teste controlado). Vazio = sem teto; inválido = 0 (nada sai).
     envioMaximo: env.MOVA_ENVIO_MAXIMO ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO) ? Number(env.MOVA_ENVIO_MAXIMO) : 0) : null,
     // 23/11: teto operacional DIÁRIO (persistente, 00h Fortaleza) e por conversa (anti-laço; padrão 10 quando há teto diário).
@@ -234,7 +243,8 @@ export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } 
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null }) {
+export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null }) {
+  let cfg = cfgRecebida;
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
     // HOMOLOGACAO/PILOTO: estado no banco de homologação marcado. OPERACAO: schema próprio de produção marcado (nunca o de teste).
     if (cfg.modo === "OPERACAO") await exigirBancoDaOperacao(pool, cfg.marcador);
@@ -274,12 +284,21 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   let conversaReal = null;
   const conversaNova = conversaCore ? Object.freeze({ atender: async (x) => (conversaReal ? conversaReal.atender(x) : null) }) : null;
   // Agente 2 — Frente C: a escrita só existe com a identidade OPERACIONAL implantada pela plataforma (núcleo de escrita + concessões
-  // dela). Sem isso a montagem RECUSA (nada sobe pela metade); sem `escrita`, o MOVA confere e propõe, nunca escreve.
+  // dela). 25/11 — FALHA SEGURA: sem isso (ou se o provedor falhar) só a ESCRITA fica desligada, com evento; o MOVA segue com
+  // consultas, documentos e entregadores. Sem `escrita`, o MOVA confere e propõe, nunca escreve.
+  if (cfg.escritaRecusada?.length) registrar({ tipo: "MOVA_ESCRITA_DESLIGADA", motivo: "CONFIGURACAO_DE_ESCRITA_INVALIDA", contradicoes: cfg.escritaRecusada });
   let operacional = null;
   if (cfg.escrita) {
-    const op = operacionalDaPlataforma ? await operacionalDaPlataforma({ identidade: cfg.identidadeOperacional, escopos }) : null;
-    if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
-    operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
+    let op = null;
+    let falhou = false;
+    try { op = operacionalDaPlataforma ? await operacionalDaPlataforma({ identidade: cfg.identidadeOperacional, escopos }) : null; }
+    catch (e) { registrar({ tipo: "MOVA_ESCRITA_DESLIGADA", motivo: "IDENTIDADE_OPERACIONAL_FALHOU", erro: String(e?.codigo ?? e?.code ?? "ERRO").slice(0, 80) }); falhou = true; }
+    if (op?.nucleo && op?.concessoes) {
+      operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
+    } else {
+      if (!falhou) registrar({ tipo: "MOVA_ESCRITA_DESLIGADA", motivo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
+      cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false };
+    }
   }
   mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {

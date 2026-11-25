@@ -31,8 +31,9 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   registrarDespesaPagaPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO"],
   // MOVA CORE F4 (24/11): prestação de contas da SANGRIA — despesa paga com a PRÓPRIA retirada (conta + liquidação contra a saída
   // da sangria, numa transação) e troco devolvido ao MESMO caixa. Nenhuma saída nova; o núcleo trava a retirada e recusa excedente.
-  registrarDespesaDaSangria: "REGISTRAR",
-  registrarTrocoDaSangria: "REGISTRAR",
+  // 25/11: ação ESTREITA `prestar_sangria` (0032) — nunca a ampla `registrar` (que o provedor operacional recusa).
+  registrarDespesaDaSangria: "PRESTAR_SANGRIA",
+  registrarTrocoDaSangria: "PRESTAR_SANGRIA",
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

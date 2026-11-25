@@ -38,7 +38,7 @@ test("OP-0 gerador: recusa identidade de leitura/técnica, ação ampla, lista s
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, acoes: [ACAO.VER] }), /LEITURA/);
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, concedidoPor: OPERADOR }), /própria identidade/);
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, justificativa: "curta" }), /Justificativa/);
-  assert.deepEqual([...ACOES_OPERACIONAIS_DO_MOVA].sort(), [ACAO.VER, ACAO.ENVIAR_DOCUMENTO, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.REGISTRAR_OBRIGACAO, ACAO.REGISTRAR_JUROS, ACAO.VINCULAR_PAGAMENTO].sort());
+  assert.deepEqual([...ACOES_OPERACIONAIS_DO_MOVA].sort(), [ACAO.VER, ACAO.ENVIAR_DOCUMENTO, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.REGISTRAR_OBRIGACAO, ACAO.REGISTRAR_JUROS, ACAO.VINCULAR_PAGAMENTO, ACAO.PRESTAR_SANGRIA].sort());
   const sql = sqlConcessaoOperacionalDoMova({ ...base, acoes: [...ESTREITAS] });
   assert.match(sql, /0030_registrar_obrigacao_documental\.sql/);
   assert.match(sql, /0031_registrar_juros_no_pagamento\.sql/);

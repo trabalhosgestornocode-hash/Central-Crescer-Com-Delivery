@@ -13,7 +13,9 @@
 // Correção/estorno: `estornarLiquidacao` (núcleo) devolve o valor à saída e a pendência volta sozinha; a conta pode ser cancelada pelo
 // caminho normal. Comprovante posterior: a despesa sem documento fica marcada `comprovantePendente` até um documento ser vinculado.
 // Idempotência: cada item tem uma `chave` (formulário/proposta); repetir devolve o que já existe; outra entrada com a mesma chave é
-// recusada. Permissão: `registrar` (a mesma de operar o caixa), conferida no contexto e na concessão (b.executar).
+// recusada. Permissão: `registrar` (a mesma de operar o caixa) OU a estreita `prestar_sangria` (0032), conferida no contexto e na
+// concessão (b.executar). Com a estreita, as operações internas (conta, liquidação, entrada do troco) valem SÓ dentro deste fluxo,
+// com a forma fixada aqui e conferida de novo pelo banco (fv2_prestacao_de_sangria).
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, OPERACAO_CAIXA, SENTIDO, SITUACAO_MOVIMENTACAO, SITUACAO_SESSAO_CAIXA, TIPO, TIPO_CONTA } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
@@ -28,6 +30,8 @@ export const ESTADO_PRESTACAO = Object.freeze({ AGUARDANDO_DESTINO: "AGUARDANDO_
 const CHAVE = /^[A-Za-z0-9:_.-]{8,120}$/;
 const exigirChave = (v) => { if (typeof v !== "string" || !CHAVE.test(v)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a chave do pedido (8 a 120 caracteres: letras, números, : _ . -).", { campo: "chave" }); return v; };
 const exigirValor = (v, campo) => { if (!Number.isInteger(v) || v <= 0) falhar(CODIGO.VALOR_INVALIDO, "Valor em centavos, inteiro e positivo.", { campo }); return v; };
+/** `registrar` (amplo) quando o contexto o tem; senão a estreita `prestar_sangria` (o executar recusa se não tiver nenhuma). */
+const acaoDoFluxo = (ctx) => ((ctx?.permissoes ?? []).includes(ACAO.REGISTRAR) || !(ctx?.permissoes ?? []).includes(ACAO.PRESTAR_SANGRIA) ? ACAO.REGISTRAR : ACAO.PRESTAR_SANGRIA);
 const vazia = () => ({ despesas: [], devolucoes: [], devolvidoCentavos: 0 });
 
 /** Prazo da unidade (horas). Configuração ausente ⇒ padrão; fora de 1..720 ⇒ padrão (nunca prazo absurdo). */
@@ -68,7 +72,13 @@ export function retratoDaPrestacao({ operacao, mov }, { agora, prazoHoras }) {
 }
 
 export function operacoesDePrestacaoDeSangria(b) {
-  const naTx = (tx, cx) => { const bt = baseNaTransacao(b, tx, cx); return { ...operacoesEconomicas(bt), ...operacoesDeCaixa(bt) }; };
+  // Com `registrar`: as internas são autorizadas como sempre. Com a estreita: autorizadas pela própria `prestar_sangria` (já conferida
+  // no contexto e na concessão vigente pela transação externa) — nunca fora deste fluxo.
+  const naTx = (tx, cx) => {
+    const bt = baseNaTransacao(b, tx, cx);
+    const base = acaoDoFluxo(cx) === ACAO.REGISTRAR ? bt : { ...bt, executar: (ctxBruto, _acao, fn) => bt.executar(ctxBruto, ACAO.PRESTAR_SANGRIA, fn) };
+    return { ...operacoesEconomicas(base), ...operacoesDeCaixa(base) };
+  };
   const repetida = (lista, chave, impressao) => {
     const ja = (lista ?? []).find((x) => x.chave === chave);
     if (ja && ja.impressao !== impressao) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Este pedido já foi registrado com outro conteúdo.", { campo: "chave" });
@@ -116,7 +126,7 @@ export function operacoesDePrestacaoDeSangria(b) {
       const valor = exigirValor(entrada.obrigacao.valorOriginalCentavos, "obrigacao.valorOriginalCentavos");
       if (entrada.confirmar !== true) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a despesa, o valor e a retirada e confirme.");
       const impressao = JSON.stringify([entrada.movimentacaoId, valor, entrada.obrigacao.descricao ?? null, entrada.obrigacao.categoria ?? null, entrada.obrigacao.competencia ?? null, entrada.documentoId ?? null]);
-      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+      return b.executar(ctx, acaoDoFluxo(ctx), async (cx, tx) => {
         await tx.travar(cx, `movimentacao:${entrada.movimentacaoId}`, "EXCLUSIVA"); // duas prestações nunca consomem o mesmo pendente
         const s = await sangriaDe(b, tx, cx, entrada.sessaoId, entrada.movimentacaoId);
         const p = s.mov.prestacaoSangria ?? vazia();
@@ -156,7 +166,7 @@ export function operacoesDePrestacaoDeSangria(b) {
       const data = exigirData(entrada.data, "data");
       if (entrada.confirmar !== true) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira o troco devolvido e confirme.");
       const impressao = JSON.stringify([entrada.movimentacaoId, valor, data, entrada.sessaoDaDevolucaoId ?? entrada.sessaoId]);
-      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+      return b.executar(ctx, acaoDoFluxo(ctx), async (cx, tx) => {
         await tx.travar(cx, `movimentacao:${entrada.movimentacaoId}`, "EXCLUSIVA");
         const s = await sangriaDe(b, tx, cx, entrada.sessaoId, entrada.movimentacaoId);
         await tx.travar(cx, `caixa:${s.conta.id}`, "EXCLUSIVA");

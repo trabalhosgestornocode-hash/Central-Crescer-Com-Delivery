@@ -45,6 +45,10 @@ export const ACAO = Object.freeze({
   // conjunto com `baixar_por_comprovante`, só quita a conta, com teto de 10% do valor da conta e a categoria oficial de juros e
   // multas. NÃO é `corrigir` (que altera qualquer título). Nenhuma concessão anterior a recebe (migração 0031).
   REGISTRAR_JUROS: "financeiro_v2.registrar_juros",
+  // 25/11 — PRESTAR CONTAS DE UMA SANGRIA EXISTENTE (MOVA CORE §12): despesa paga com o dinheiro da retirada (liquidada contra a
+  // PRÓPRIA saída da sangria), prestação parcial, troco devolvido ao mesmo caixa e o pendente. NÃO é `registrar` (sem saída nova,
+  // pagamento, transferência, receita ou conta existente). Nenhuma concessão anterior a recebe (migração 0032).
+  PRESTAR_SANGRIA: "financeiro_v2.prestar_sangria",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 
