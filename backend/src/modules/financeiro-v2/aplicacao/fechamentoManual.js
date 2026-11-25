@@ -8,7 +8,7 @@ import { exigirTexto, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { operadoraNaData } from "../dominio/operadoras.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { validarFaturamentoManual } from "../dominio/fechamentoManual.js";
-import { dinheiroDoDia, movimentosDoPeriodo, resumirMovimentosDoDia } from "./movimentosDeCaixa.js";
+import { dinheiroDoDia, fundoFixoDaUnidade, movimentosDoPeriodo, resumirMovimentosDoDia } from "./movimentosDeCaixa.js";
 
 /** Venda de faturamento manual provisório: origem MANUAL com este prefixo no identificador. */
 export const PREFIXO_PROVISORIO = "faturamento-manual:";
@@ -27,6 +27,7 @@ export async function diasDeFechamento(tx, cx, inicio, fim) {
   for (const p of pagamentos) { if (!porVenda.has(p.vendaId)) porVenda.set(p.vendaId, []); porVenda.get(p.vendaId).push(p); }
   // Sangrias/reforços/transferências importados da SAIPOS: só LEITURA para conferir o dinheiro do dia (nunca viram faturamento nem somam sozinhos ao fechamento).
   const movimentos = await movimentosDoPeriodo(tx, cx, inicio, fim);
+  const fundoFixoCentavos = await fundoFixoDaUnidade(tx, cx);
   const datas = [...new Set([...fechamentos.map((f) => f.data), ...vendas.map((v) => v.dataVenda), ...movimentos.map((r) => r.dataReferencia)])].sort();
   return datas.map((data) => {
     const doDia = fechamentos.filter((f) => f.data === data).sort((a, x) => a.caixa.localeCompare(x.caixa));
@@ -37,7 +38,7 @@ export async function diasDeFechamento(tx, cx, inicio, fim) {
     const movimentosDeCaixa = movDoDia.length ? resumirMovimentosDoDia({ data, movimentos: movDoDia, fechamentos: doDia, vendasEmDinheiroCentavos }) : null;
     return {
       data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }),
-      movimentosDeCaixa, dinheiroDoDia: movDoDia.length || doDia.length ? dinheiroDoDia({ resumo: movimentosDeCaixa, fechamentos: doDia, vendasEmDinheiroCentavos }) : null,
+      movimentosDeCaixa, dinheiroDoDia: movDoDia.length || doDia.length ? dinheiroDoDia({ resumo: movimentosDeCaixa, fechamentos: doDia, vendasEmDinheiroCentavos, fundoFixoCentavos }) : null,
     };
   });
 }

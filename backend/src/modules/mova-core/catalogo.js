@@ -8,6 +8,9 @@
 import { COMPETENCIA, DATA, REFERENCIA, TEXTO_CURTO } from "./esquema.js";
 import { resolverEntidade } from "./resolucao.js";
 import { bate, itemAPagar, todasAsPaginas, lerUmaVez, formatarListaDeContas, dataBr, SEM_FORNECEDOR } from "./leituras.js";
+/** Dinheiro da frente de caixa → significados que o verificador já conhece (vendas em dinheiro = faturamento; esperado/contado = saldo). */
+const SIGNIFICADO_DO_DINHEIRO = Object.freeze({ vendasEmDinheiroCentavos: "VENDAS:dinheiro", esperadoCentavos: "SALDO_ESPERADO_DO_CAIXA", contadoCentavos: "SALDO_CONTADO_DO_CAIXA",
+  diferencaCentavos: "DIFERENCA_DE_SALDO", fundoFixoCentavos: "SALDO_FUNDO_FIXO", aberturaCentavos: "SALDO_ABERTURA_DO_CAIXA" });
 export { bate, itemAPagar, todasAsPaginas };
 import { FERRAMENTA_ANALISAR } from "./analise.js"; // F2 (import circular seguro: analise só usa os auxiliares daqui em tempo de chamada)
 
@@ -273,6 +276,29 @@ export const FERRAMENTAS = [
     },
   },
   {
+    nome: "sangrias_registradas",
+    descricao: "Sangrias/RETIRADAS importadas do PDV (SAIPOS ou SWF) e a conta JÁ PAGA de cada uma no Contas a Pagar: data, valor, descrição, categoria (provisória quando a finalidade não foi identificada) e se está lançada. Use para localizar uma retirada ('a retirada de R$ 15 do dia 19'), 'quais sangrias de hoje', 'quais retiradas ainda estão com classificação provisória'. Classificação provisória NÃO é pagamento pendente.",
+    esquema: { type: "object", properties: { inicio: DATA, fim: DATA, unidade: UNIDADE }, required: ["inicio", "fim"] },
+    valores: true, ops: ["consultarSangriasComoDespesa", "consultarSangriasSwf"],
+    async executar({ porta, escopo, args }) {
+      const periodo = { periodoInicio: args.inicio, periodoFim: args.fim };
+      // A unidade usa UM PDV: a prévia do outro recusa (fonte não configurada) e é ignorada.
+      const [saipos, swf] = await Promise.all([porta.ler("consultarSangriasComoDespesa", escopo, periodo).catch(() => null), porta.ler("consultarSangriasSwf", escopo, periodo).catch(() => null)]);
+      const pdv = swf?.itens?.length ? "SWF" : saipos?.itens?.length ? "SAIPOS" : null;
+      const fonte = pdv === "SWF" ? swf : saipos;
+      const LANCADAS = ["JA_LANCADA_MANUALMENTE", "JA_LANCADA_EM_CONTA_UNICA", "JA_LANCADA_PELA_IMPORTACAO"];
+      const itens = (fonte?.itens ?? []).slice(0, 60).map((x) => ({ ref: x.obrigacaoId ?? x.registroId ?? x.chave ?? null, data: x.data, valorCentavos: x.valorCentavos, descricao: x.descricao ?? x.descricaoDaConta ?? null,
+        paga: LANCADAS.includes(x.situacao) && x.quitada !== false, lancada: LANCADAS.includes(x.situacao), situacao: x.situacao,
+        categoria: x.categoriaDaConta ?? x.categoria ?? x.categoriaSugerida ?? (x.situacao === "JA_LANCADA_PELA_IMPORTACAO" ? "OUTRAS_DESPESAS" : null), classificacaoProvisoria: x.classificacaoProvisoria === true || /^(OUTRAS_DESPESAS|outras despesas)$/i.test(String(x.categoriaDaConta ?? x.categoria ?? x.categoriaSugerida ?? (x.situacao === "JA_LANCADA_PELA_IMPORTACAO" ? "OUTRAS_DESPESAS" : ""))), pendencia: x.pendencia ?? null }));
+      const soma = (l) => l.reduce((s, x) => s + (Number.isInteger(x.valorCentavos) ? x.valorCentavos : 0), 0);
+      const pagas = itens.filter((x) => x.paga); const naoLancadas = itens.filter((x) => !x.lancada);
+      return { dados: { pdv, periodo: `${args.inicio}..${args.fim}`, itens, totais: { retiradasCentavos: soma(itens), pagasCentavos: soma(pagas), naoLancadasCentavos: soma(naoLancadas), quantidade: itens.length },
+          nota: "Toda retirada importada entra PAGA (vencimento e pagamento no dia da retirada). 'classificacaoProvisoria' = finalidade a revisar; o pagamento já está feito." },
+        fatos: fatos(fato(soma(itens), "RETIRADAS_DO_CAIXA", { entidade: "sangrias", periodo: `${args.inicio}..${args.fim}` }), fato(soma(pagas), "PAGO", { entidade: "sangrias", periodo: `${args.inicio}..${args.fim}` }),
+          itens.flatMap((x) => [fato(x.valorCentavos, x.paga ? "PAGO" : "RETIRADAS_DO_CAIXA", { entidade: x.descricao, periodo: x.data }), fato(x.valorCentavos, "RETIRADAS_DO_CAIXA", { entidade: x.descricao, periodo: x.data })])) };
+    },
+  },
+  {
     nome: "caixa_e_bancos",
     descricao: "Saldos e movimentos das contas de CAIXA FÍSICO e BANCOS (saldo informado, saldo calculado, diferença) num período. Use para 'saldo real do caixa', 'quanto tem no banco'.",
     esquema: { type: "object", properties: { inicio: DATA, fim: DATA, unidade: UNIDADE }, required: ["inicio", "fim"] },
@@ -299,7 +325,7 @@ export const FERRAMENTAS = [
   },
   {
     nome: "movimentos_do_caixa_fisico",
-    descricao: "Movimentos do CAIXA FÍSICO (sangrias, suprimentos, retiradas) já registrados num período.",
+    descricao: "FRENTE DE CAIXA num período: sangrias/retiradas, reforços e transferências importados do PDV e, por dia, o DINHEIRO do caixa (fundo fixo/abertura, vendas em dinheiro, saldo esperado, dinheiro contado, sobra/falta) e o valor para o COFRE (esperado, pela contagem; recebido só quando confirmado). Use para 'quanto faturamos em dinheiro', 'quanto foi retirado', 'quanto deveria ir para a gerência/cofre', 'houve diferença no fechamento'. Saldo físico desconhecido = não informado (nunca estime).",
     esquema: { type: "object", properties: { inicio: DATA, fim: DATA, unidade: UNIDADE }, required: ["inicio", "fim"] },
     valores: true, ops: ["consultarMovimentosDeCaixa"],
     async executar({ porta, escopo, args }) {
@@ -307,10 +333,17 @@ export const FERRAMENTAS = [
       const t = r?.totais ?? {};
       const periodo = `${args.inicio}..${args.fim}`;
       const dias = (r?.dias ?? []).slice(0, 31);
-      return { dados: { periodo, totais: t, dias, observacao: r?.observacao ?? null },
+      const dinheiro = (r?.dinheiroPorDia ?? []).slice(0, 31).map((d) => ({ data: d.data, fundoFixoCentavos: d.fundoFixoCentavos ?? null, aberturaCentavos: d.aberturaCentavos ?? null, origemDaAbertura: d.origemDaAbertura ?? null,
+        vendasEmDinheiroCentavos: d.vendasEmDinheiroCentavos ?? null, retiradasCentavos: d.retiradasCentavos ?? null, reforcosCentavos: d.reforcosCentavos ?? null, transferenciasCentavos: d.transferenciasCentavos ?? null,
+        esperadoCentavos: d.esperadoCentavos ?? null, contadoCentavos: d.informadoCentavos ?? null, diferencaCentavos: d.diferencaCentavos ?? null, situacao: d.situacao ?? null,
+        cofre: d.cofre ? { situacao: d.cofre.situacao, esperadoCentavos: d.cofre.esperadoCentavos, pelaContagemCentavos: d.cofre.pelaContagemCentavos, recomposicaoCentavos: d.cofre.recomposicaoCentavos, recebidoCentavos: d.cofre.confirmado ? d.cofre.recebidoCentavos : null, confirmado: d.cofre.confirmado === true } : null }));
+      return { dados: { periodo, totais: t, dias, dinheiroPorDia: dinheiro, observacao: r?.observacao ?? null,
+          nota: "Contado null = dinheiro físico NÃO informado. Valor para o cofre é PREVISÃO: só é entrega confirmada quando 'confirmado' for true. Abertura FUNDO_FIXO_CONFIGURADO é presumida." },
         fatos: fatos(fato(t.retiradas?.totalCentavos, "RETIRADAS_DO_CAIXA", { entidade: "sangrias", periodo }), fato(t.reforcos?.totalCentavos, "REFORCOS_DO_CAIXA", { entidade: "reforços", periodo }),
           fato(t.transferencias?.totalCentavos, "MOVIMENTO_DE_CAIXA", { entidade: "transferências", periodo }), fato(t.desconhecidas?.totalCentavos, "MOVIMENTO_DE_CAIXA", { entidade: "não identificados", periodo }),
-          dias.flatMap((d) => Object.entries(d ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:${kk}`, { periodo: d.data })))) };
+          dias.flatMap((d) => Object.entries(d ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:${kk}`, { periodo: d.data }))),
+          dinheiro.flatMap((d) => [...Object.entries(d).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, SIGNIFICADO_DO_DINHEIRO[kk] ?? `MOVIMENTO_DE_CAIXA:${kk}`, { entidade: "frente de caixa", periodo: d.data })),
+            ...Object.entries(d.cofre ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:cofre_${kk}`, { entidade: "para o cofre", periodo: d.data }))])) };
     },
   },
   {

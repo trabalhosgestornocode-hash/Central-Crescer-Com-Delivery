@@ -11,6 +11,7 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { CANAL, EVENTO_HISTORICO, NATUREZAS_DA_CLASSIFICACAO, PAPEL_COMERCIAL, PROCESSADOR, SITUACAO_CADASTRO, SITUACAO_SESSAO_CAIXA, TIPO } from "../dominio/catalogos.js";
 import { unidadeUsaSwf } from "./fontesDeFaturamento.js";
+import { fundoFixoDe } from "./movimentosDeCaixa.js";
 import { ACAO } from "../dominio/contexto.js";
 import { conciliacaoEfetiva } from "../dominio/tesouraria.js";
 import { METODOLOGIAS, identificadorDa, metodologiaVigente } from "../dominio/metodologias.js";
@@ -49,7 +50,7 @@ export function operacoesDeConfiguracao(b) {
         const extras = cadastros.filter((x) => x.codigo !== x.codigoBase).map((c) => ({ papel: c.papel, codigo: c.codigo, codigoBase: c.codigoBase, nome: c.nome, situacao: c.situacao, doSistema: false, cadastrado: true, observacao: c.observacao ?? null }));
         return {
           dataBase: hoje,
-          unidade: unidade ? { nomeExibicao: unidade.nomeExibicao, identificacaoEmpresa: unidade.identificacaoEmpresa ?? null, situacao: unidade.situacao, observacao: unidade.observacao ?? null, atualizadoEm: unidade.atualizadoEm } : null,
+          unidade: unidade ? { nomeExibicao: unidade.nomeExibicao, identificacaoEmpresa: unidade.identificacaoEmpresa ?? null, situacao: unidade.situacao, observacao: unidade.observacao ?? null, fundoFixoCaixaCentavos: fundoFixoDe(unidade), atualizadoEm: unidade.atualizadoEm } : null,
           contas: contas.map((c) => ({
             id: c.id, nome: c.nome, tipo: c.tipo, instituicao: c.instituicao ?? null, ativa: c.ativa,
             movimentacoes: movs.filter((m) => m.contaId === c.id).length, naoConciliadas: movs.filter((m) => m.contaId === c.id && conciliacaoEfetiva(m) === "NAO_CONCILIADA" && m.situacao !== "ESTORNADA").length,
@@ -68,7 +69,11 @@ export function operacoesDeConfiguracao(b) {
 
     /** Identificação de exibição e situação da unidade no Financeiro v2 (um registro por escopo). */
     configurarUnidade(ctx, e = {}) {
-      semCamposDesconhecidos(e, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], "unidade");
+      semCamposDesconhecidos(e, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa", "fundoFixoCaixaCentavos", "prazoPrestacaoSangriaHoras"], "unidade");
+      if (e.fundoFixoCaixaCentavos !== undefined && e.fundoFixoCaixaCentavos !== null && fundoFixoDe({ fundoFixoCaixaCentavos: e.fundoFixoCaixaCentavos }) === null)
+        falhar(CODIGO.VALOR_INVALIDO, "Fundo fixo do caixa em centavos, inteiro, de 0 a R$ 100.000.", { campo: "fundoFixoCaixaCentavos" });
+      if (e.prazoPrestacaoSangriaHoras !== undefined && e.prazoPrestacaoSangriaHoras !== null && !(Number.isInteger(e.prazoPrestacaoSangriaHoras) && e.prazoPrestacaoSangriaHoras >= 1 && e.prazoPrestacaoSangriaHoras <= 720))
+        falhar(CODIGO.VALOR_INVALIDO, "Prazo da prestação de contas da sangria em horas, inteiro, de 1 a 720.", { campo: "prazoPrestacaoSangriaHoras" });
       const c = {
         nomeExibicao: exigirTexto(e.nomeExibicao, "nomeExibicao", { max: 120 }), identificacaoEmpresa: exigirTexto(e.identificacaoEmpresa, "identificacaoEmpresa", { max: 120, opcional: true }),
         situacao: exigirUmDe(e.situacao ?? "ATIVA", SITUACAO_UNIDADE, "situacao"), observacao: exigirTexto(e.observacao, "observacao", { max: 300, opcional: true }),
@@ -76,6 +81,7 @@ export function operacoesDeConfiguracao(b) {
       const justificativa = exigirTexto(e.justificativa, "justificativa", { max: 500 });
       return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
         const atual = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+        for (const k of ["fundoFixoCaixaCentavos", "prazoPrestacaoSangriaHoras"]) c[k] = e[k] !== undefined ? e[k] : (atual?.[k] ?? null);
         if (!atual) return b.criar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, { ...c, chaveIdempotencia: "unidade", impressao: null }, justificativa);
         return b.alterar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, atual, c, EVENTO_HISTORICO.CONFIGURACAO, justificativa);
       });
