@@ -21,9 +21,24 @@ const CLASSES = [
   { nome: "MEDIA", termos: /\b(media|medio|em media|por entrega|por pedido|cada entrega|ticket)\b/, aceita: (s) => /^(CALCULO:(MEDIA|DIVISAO)|.*TICKET|.*MEDI[OA])/i.test(s) },
   // F2: sangria/retirada de caixa só com movimento de caixa (não com despesa nem pagamento a fornecedor)
   { nome: "MOVIMENTO_DE_CAIXA", termos: /\b(sangrias?|retiradas? de caixa|reforcos?( de caixa)?|suprimentos? de caixa)\b/, aceita: (s) => /^(SANGRIA|RETIRADA|REFORCO|MOVIMENTO|CAIXA|SALDO_|FLUXO:|INFORMADO_PELA_PESSOA)/i.test(s) },
-  { nome: "VALOR_DA_CONTA", termos: /\b(valor(?! (informado|calculado|contado))( original| total| da conta)?|total da conta|contas a pagar|somou|somaram)\b/, aceita: (s) => /^(VALOR_DAS_CONTAS|A_PAGAR|PAGO|ENTREGADOR_|A_RECEBER|RECEBIDO|VENDAS:|DRE:|RESUMO:|CALCULO:SOMA)/i.test(s) }, // "valor"/"somaram" são genéricos: só não aceitam saldo nem cálculo de outra natureza
+  { nome: "VALOR_DA_CONTA", termos: /\b(valor(?! (informado|calculado|contado))( original| total| da conta)?|total da conta|contas a pagar|somou|somaram)\b/, aceita: (s) => /^(VALOR_DAS_CONTAS|A_PAGAR|PAGO|ENTREGADOR_|A_RECEBER|RECEBIDO|VENDAS:|DRE:|RESUMO:|CALCULO:SOMA|PROPOSTA:)/i.test(s) }, // "valor"/"somaram" são genéricos: só não aceitam saldo nem cálculo de outra natureza
 ];
 const ESCRITA_AFIRMADA = /\b(registrei|lancei|anotei|baixei|dei baixa|(?<!\b(que|como|quanto) )foi registrad[oa]|ficou registrad[oa]|registrad[oa] com sucesso|ja (esta|foi) lancad[oa]|lancamento feito)\b/;
+
+/**
+ * Valores que a PESSOA escreveu na mensagem atual ("paguei 90", "R$ 259,00", "gastei 12 e voltaram 3"), como fatos de significado
+ * PERGUNTA:informado. Servem SÓ para repetir o número em frase neutra ("o valor de R$ 90,00 que você informou"): nenhuma classe
+ * de significado (em aberto, pago, saldo, vencido, valor da conta…) os aceita — afirmar estado financeiro continua exigindo consulta.
+ */
+export function fatosDaMensagem(texto) {
+  const t = String(texto ?? "").slice(0, 2000);
+  const vistos = new Set(); const fatos = [];
+  const add = (c) => { if (Number.isInteger(c) && c > 0 && c <= 10_000_000_00 && !vistos.has(c)) { vistos.add(c); fatos.push({ valorCentavos: c, significado: "PERGUNTA:informado", entidade: null, periodo: null }); } };
+  for (const v of valoresDoTexto(t)) add(v.valorCentavos);
+  const semDatas = t.replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b|\b(19|20)\d{2}\b|\b\d+\s?(ml|l|kg|g|un|unidades|h|horas|dias|%)(?![a-z])/gi, " ");
+  for (const m of semDatas.matchAll(/(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d{1,6})(?:,(\d{1,2}))?(?![\d]|[.,]\d)/g)) add(Number(m[1].replace(/\./g, "")) * 100 + (m[2] ? Number(m[2].padEnd(2, "0")) : 0));
+  return fatos;
+}
 
 export function valoresDoTexto(texto) {
   const r = [];
@@ -84,6 +99,8 @@ export function verificarFidelidade(resposta, { fatos = [], unidades = [] } = {}
     const fim = Math.min(i < valores.length - 1 ? valores[i + 1].inicio : texto.length, depois ? v.fim + depois.index : texto.length);
     const seg = norm(texto.slice(ini, fim));
     if (candidatos.some((f) => f.derivado || f.significado === "INFORMADO_PELA_PESSOA")) return; // cálculo do próprio código / valor que a pessoa disse
+    // número que a pessoa escreveu NESTA mensagem, atribuído a ela na frase ("o valor que você informou", "você disse R$ 90,00")
+    if (candidatos.some((f) => f.significado === "PERGUNTA:informado") && /\b(voce|vc) (me )?(informou|disse|falou|mencionou|passou|escreveu)\b|\binformad[oa]s? por (voce|vc)\b/.test(seg)) return;
 
     const unidadesCitadas = unidades.filter((u) => contem(seg, u));
     if (unidadesCitadas.length && !candidatos.some((f) => !f.unidade || unidadesCitadas.some((u) => norm(u) === norm(f.unidade)))) violacoes.push({ tipo: "UNIDADE_TROCADA", valor: v.texto, detalhe: unidadesCitadas.join(",") });

@@ -5,6 +5,7 @@ import { CATALOGO, FERRAMENTAS, OPERACOES_DO_CATALOGO, definicoesParaApi } from 
 import { intencaoDeterministica, ferramentasDeOperacao, textoDoDesfecho } from "./operacoes.js";
 import { ferramentasDeConhecimento } from "./conhecimento.js";
 import { decidirEscalonamento, mensagensParaEscalonar } from "./escalonamento.js";
+import { fatosDaMensagem } from "./verificador.js";
 import { criarExecutor, novaSessao } from "./executor.js";
 import { executarLaco, PADROES_DO_LACO } from "./laco.js";
 import { decidirRota, ROTA, RESPOSTAS_FIXAS } from "./roteador.js";
@@ -13,7 +14,7 @@ import { criarMetricas } from "./metricas.js";
 import { criarResolvedorDeConceitos } from "./resolucao.js";
 
 export { CATALOGO, FERRAMENTAS, ROTA, decidirRota, definicoesParaApi };
-export { verificarFidelidade } from "./verificador.js";
+export { verificarFidelidade, fatosDaMensagem } from "./verificador.js";
 export { criarOrcamentoMemoria, LIMITES_HOMOLOGACAO } from "./orcamentoMemoria.js";
 export { ferramentasDoAgenteCrescer, PERMISSOES_DO_AGENTE_CRESCER } from "./agenteCrescer.js";
 export { criarMemoriaEmCamadas, PADROES_DA_MEMORIA } from "./memoria.js";
@@ -95,6 +96,7 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       ? memoria.fatosValidos(conversa, { pergunta: String(e.texto ?? ""), unidadeId: e.unidadeId, ferramentasPermitidas: new Set(Object.keys(catalogoDaVez)) })
       : conversa.fatos;
     const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId, hoje: e.hoje ?? null });
+    sessao.fatos.push(...fatosDaMensagem(e.texto)); // números que a pessoa escreveu: só para repetir em frase neutra
     Object.assign(sessao, { operacoes, conhecimento, conversaChave, autor, textoDaPessoa: String(e.texto ?? "").slice(0, 2000), anexo: documentoNoCore ? e.anexo : null });
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
