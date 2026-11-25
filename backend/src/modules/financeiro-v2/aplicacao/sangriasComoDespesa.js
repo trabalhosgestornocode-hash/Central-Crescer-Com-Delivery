@@ -158,6 +158,8 @@ export function operacoesDeSangriasComoDespesa(b) {
 
   return {
     previaSangriasComoDespesa: previa,
+    /** Mesma leitura, com nome de CONSULTA (porta de leitura do MOVA). */
+    consultarSangriasComoDespesa: previa,
 
     /** Lança as retiradas NOVAS do período como despesas pagas em dinheiro. Cada uma é atômica; falhas são listadas, não escondidas. */
     async lancarSangriasComoDespesa(ctx, entrada = {}) {

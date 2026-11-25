@@ -19,6 +19,27 @@ const chave = (v) => String(v ?? "").slice(0, 400);
 export const centavos = (v) => { const t = String(v ?? "").trim().replace(/\./g, ""); const m = /^(\d{1,9})(?:,(\d{1,2}))?$/.exec(t); return m ? Number(m[1]) * 100 + Number((m[2] ?? "0").padEnd(2, "0")) : t; };
 const inteiro = (v) => (/^\d{1,9}$/.test(String(v ?? "")) ? Number(v) : v);
 const marcado = (v) => v === true || v === "on" || v === "true";
+/** Metodologia 25/11: retiradas importadas do PDV entram PAGAS no calendário, sem confirmação individual (só as NOVAS; nada duplica). */
+export const JUSTIFICATIVA_RETIRADAS_AUTOMATICAS = "Retiradas do relatório oficial do PDV lançadas como pagas em dinheiro (metodologia de 25/11/2026).";
+export async function lancarRetiradasImportadas(n, c, imp) {
+  const tipo = imp?.tipoRelatorio; const periodo = { periodoInicio: imp?.periodoInicio, periodoFim: imp?.periodoFim };
+  if (!periodo.periodoInicio || !periodo.periodoFim || !["SAIPOS_MOVIMENTOS_CAIXA", "SWF_SANGRIAS"].includes(tipo)) return null;
+  try {
+    if (tipo === "SAIPOS_MOVIMENTOS_CAIXA") {
+      const r = await n.lancarSangriasComoDespesa(c, { ...periodo, justificativa: JUSTIFICATIVA_RETIRADAS_AUTOMATICAS, confirmar: true });
+      return { situacao: "FEITO", lancadas: r.lancadas?.length ?? 0, falhas: r.falhas ?? [] };
+    }
+    const p = await n.previaSangriasSwf(c, periodo);
+    const registros = (p.itens ?? []).filter((i) => i.podeLancar && !i.competenciaAConfirmar).map((i) => i.registroId);
+    const pendentes = (p.itens ?? []).filter((i) => i.situacao === "NOVA" && !(i.podeLancar && !i.competenciaAConfirmar)).map((i) => ({ registroId: i.registroId, motivo: i.pendencia ?? (i.competenciaAConfirmar ? "Escolha a competência." : null) }));
+    if (!registros.length) return { situacao: "FEITO", lancadas: 0, falhas: [], pendentes };
+    const r = await n.lancarSangriasSwf(c, { ...periodo, registros, justificativa: JUSTIFICATIVA_RETIRADAS_AUTOMATICAS, confirmar: true });
+    return { situacao: "FEITO", lancadas: r.lancadas?.length ?? 0, falhas: [...(r.falhas ?? []), ...(r.recusadas ?? [])], pendentes };
+  } catch (e) {
+    return { situacao: "NAO_LANCADAS", motivo: e?.message ?? String(e), codigo: e?.codigo ?? null };
+  }
+}
+
 const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
@@ -226,7 +247,11 @@ export const ESCRITAS = Object.freeze({
   "/entregadores/divergencia": { campos: ["inicio", "divergencia", "decisao", "justificativa"], fazer: (n, c, b) => n.decidirDivergenciaDoEntregador(c, { inicio: b.inicio, divergencia: b.divergencia, decisao: b.decisao, justificativa: b.justificativa }) },
   "/documentos/enviar": { campos: [], fazer: indisponivel("Envio de arquivos indisponível: o cofre documental ainda não tem verificação antimalware.") },
   "/documentos/verificar": { campos: [], fazer: indisponivel("Verificação de arquivos indisponível enquanto o cofre estiver desligado.") },
-  "/importacao/confirmar": { campos: ["importacao", "impressaoPrevia", "aceitarPendencias", "justificativa"], fazer: (n, c, b) => n.confirmarImportacao(c, { importacaoId: id(b.importacao), impressaoPrevia: b.impressaoPrevia, ...(b.aceitarPendencias === true ? { aceitarPendencias: true } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+  "/importacao/confirmar": { campos: ["importacao", "impressaoPrevia", "aceitarPendencias", "justificativa"], fazer: async (n, c, b) => {
+    const r = await n.confirmarImportacao(c, { importacaoId: id(b.importacao), impressaoPrevia: b.impressaoPrevia, ...(b.aceitarPendencias === true ? { aceitarPendencias: true } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) });
+    const lancamento = await lancarRetiradasImportadas(n, c, r?.importacao ?? r);
+    return lancamento ? { ...r, retiradasLancadasComoPagas: lancamento } : r;
+  } },
   "/importacao/rejeitar": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.rejeitarImportacao(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
   // doc 38: a conta vem da unidade quando é INEQUÍVOCA (extrato Unicred → a única conta bancária "Unicred" ativa; dinheiro
   // de pedidos → o único caixa físico ativo). Ambígua ou ausente: recusa e pede o cadastro/escolha — nunca "chuta".

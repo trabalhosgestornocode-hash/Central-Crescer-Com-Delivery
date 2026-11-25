@@ -21,7 +21,7 @@ import { rotulo } from "../importacao/leitor.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeTesouraria } from "./tesouraria.js";
-import { FORNECEDOR_DAS_SANGRIAS, PREFIXO_DA_FONTE, SITUACAO_RETIRADA, situacaoDasRetiradas } from "./sangriasComoDespesa.js";
+import { CATEGORIA_DAS_SANGRIAS, FORNECEDOR_DAS_SANGRIAS, PREFIXO_DA_FONTE, SITUACAO_RETIRADA, situacaoDasRetiradas } from "./sangriasComoDespesa.js";
 import { fontesDaUnidade } from "./fontesDeFaturamento.js";
 
 const SITUACOES_JA_LANCADAS = [SITUACAO_RETIRADA.JA_LANCADA_MANUALMENTE, SITUACAO_RETIRADA.JA_LANCADA_EM_CONTA_UNICA, SITUACAO_RETIRADA.JA_LANCADA_PELA_IMPORTACAO];
@@ -101,7 +101,11 @@ export async function situacaoDasSangriasSwf(tx, cx, inicio, fim) {
   const itens = [];
   for (const i of s.itens) {
     const d = porId.get(i.registroId).dados;
-    const sug = sugerirSangriaSwf(d.motivoOriginal); // regra VIGENTE (pode ter mudado desde a importação)
+    const sugBruta = sugerirSangriaSwf(d.motivoOriginal); // regra VIGENTE (pode ter mudado desde a importação)
+    // Metodologia 25/11 (dono): toda retirada do PDV aparece PAGA no calendário. Sem finalidade reconhecida ⇒ categoria PROVISÓRIA
+    // das sangrias (classificação pendente NÃO é pagamento pendente); a revisão posterior troca a categoria, sem nova saída.
+    const provisoria = sugBruta.natureza === N.A_CLASSIFICAR;
+    const sug = provisoria ? { ...sugBruta, natureza: N.DESPESA, categoria: CATEGORIA_DAS_SANGRIAS, categoriaPai: null, motivo: `${sugBruta.motivo} Lançada na categoria provisória das sangrias; revise a finalidade depois.` } : sugBruta;
     const jaLancada = SITUACOES_JA_LANCADAS.includes(i.situacao);
     const orfa = !jaLancada ? diasTravados.get(i.data) : null;
     const comp = competenciaDaRetirada(d);
@@ -120,7 +124,7 @@ export async function situacaoDasSangriasSwf(tx, cx, inicio, fim) {
       : bloqueio ?? (!lancavel ? sug.motivo : comp.alerta);
     itens.push({
       ...i, descricao: d.motivoOriginal, dataOperacional: d.dataOperacional, dataReal: d.dataReal, dataHoraReal: d.dataHoraReal, hora: d.hora, madrugada: d.madrugada, doFechamentoAnterior: d.doFechamentoAnterior,
-      operador: d.operador, formaPagamento: "DINHEIRO", origem: "Caixa SWF", naturezaSugerida: sug.natureza, regra: sug.regra, categoriaSugerida: sug.categoria, categoriaPai: sug.categoriaPai ?? null,
+      operador: d.operador, formaPagamento: "DINHEIRO", origem: "Caixa SWF", classificacaoProvisoria: provisoria, naturezaSugerida: sug.natureza, regra: sug.regra, categoriaSugerida: sug.categoria, categoriaPai: sug.categoriaPai ?? null,
       motivoDaSugestao: sug.motivo, sugestaoNaImportacao: d.regra !== sug.regra ? { regra: d.regra, natureza: d.naturezaSugerida } : null,
       // Já lançada: vale a competência GRAVADA na conta (a escolhida na confirmação ou a da obrigação baixada).
       competencia: jaLancada ? obrigacoes.find((o) => o.id === i.obrigacaoId)?.competencia ?? comp.competencia : comp.competencia, competenciaOpcoes: comp.opcoes, competenciaAConfirmar: !jaLancada && !comp.competencia,
@@ -178,6 +182,8 @@ export function operacoesDeSangriasSwf(b) {
 
   return {
     previaSangriasSwf: previa,
+    /** Mesma leitura, com nome de CONSULTA (porta de leitura do MOVA). */
+    consultarSangriasSwf: previa,
 
     /** Lança as retiradas escolhidas que estão prontas. Cada uma é atômica; falhas e recusas são listadas, nunca escondidas. */
     async lancarSangriasSwf(ctx, entrada = {}) {
