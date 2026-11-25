@@ -122,7 +122,7 @@ for (const s of CENARIOS) {
     const gravou = w.escritas.length > escritasAntes;
     turnos.push({ texto, resposta: r.texto, rota: r.rota, motivo: r.motivo, ferramentas: (r.ferramentas ?? []).map((x) => `${x.nome}${x.ok ? "" : `!${x.codigo ?? ""}`}`), gravou,
       // sucesso dito SEM gravação nesta vez = sucesso falso (o texto de execução real vem do servidor)
-      sucessoFalso: !gravou && SUCESSO_FALSO.test(norm(r.texto)) && !/nada (entrou|foi)|nao (entrou|foi lancad|foi registrad|registrei|lancei)/.test(norm(r.texto)), custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0 });
+      sucessoFalso: !gravou && SUCESSO_FALSO.test(norm(r.texto)) && !/nada (entrou|foi|e (registrad|lancad)|sera (registrad|lancad)|entra)|nao (entrou|foi lancad|foi registrad|registrei|lancei)|ainda nao (lancei|registrei|entrou)/.test(norm(r.texto)), custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0 });
     if (String(r.motivo ?? "").startsWith("ORCAMENTO")) { interrompido = r.motivo; break; }
   }
   const depois = await w.retrato();
