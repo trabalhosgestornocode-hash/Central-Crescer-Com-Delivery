@@ -423,3 +423,11 @@ test("OP-16 comprovante chega num turno em que o modelo NÃO chama a ferramenta:
   assert.equal(r.operacao?.executada, true, r.texto);
   assert.equal((await t.retrato()).contas, 2);
 });
+
+test("OP-17 categoria no singular ('insumo') resolve para 'Insumos' mesmo com 'Outros insumos' e 'Açaí e insumos…' no plano", async () => {
+  const t = await montar();
+  const sessao = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: "pessoa-1", hoje: HOJE };
+  const r = await t.operacoes.preparar({ conversaChave: "k", sessao, autor: "pessoa-1", tipo: "COMPRA_JA_PAGA", args: { ...COMPRA, categoria: "insumo" }, anexo: ANEXO() });
+  assert.equal(r.proposta.dados.categoria, "INSUMOS");
+  assert.ok(!r.proposta.requisitos.includes("CATEGORIA_AMBIGUA"));
+});

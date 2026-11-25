@@ -143,6 +143,10 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
     if (texto) {
       const exato = lista.find((c) => c.codigo === codigoCategoria(texto));
       if (exato) return { categoria: exato.codigo, nome: exato.nome };
+      // §9 (S01): nome IGUAL, ignorando acento e plural ("insumo" = "Insumos"), vence a semelhança ("Outros insumos", "Açaí e insumos…")
+      const forma = (x) => semAcento(x).split(" ").map((w) => w.replace(/(oes|aes|ais|eis|es|s)$/, "")).join(" ");
+      const mesmos = lista.filter((c) => forma(c.nome) === forma(texto) || forma(c.codigo.replace(/_/g, " ")) === forma(texto));
+      if (mesmos.length === 1) return { categoria: mesmos[0].codigo, nome: mesmos[0].nome };
       const r = resolverEntidade(texto, lista);
       if (r.estado === "UNICO") return { categoria: r.escolhido.codigo, nome: r.escolhido.nome };
       return { requisito: r.estado === "AMBIGUO" ? "CATEGORIA_AMBIGUA" : "CATEGORIA", candidatos: (r.candidatos ?? []).map((c) => c.nome).slice(0, 5) };
