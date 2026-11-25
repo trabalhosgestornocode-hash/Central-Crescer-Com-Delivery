@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -1023,6 +1023,17 @@ alter table mova.orcamento_ia_politica
 alter table mova.consumo_ia
   add column uso text check (uso is null or uso in ('CONVERSA', 'DOCUMENTO'));
 
+-- ------------------------------------------------------------------------- 0023_mova_politica_sangria.sql (arquivo 7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631)
+-- MOVA (25/11/2026): operação PRESTACAO_DE_SANGRIA nas POLÍTICAS de autonomia e nas execuções (MOVA CORE F4; ação estreita
+-- `prestar_sangria` do Financeiro, migração 0032). O código já trata a operação (dominio/autonomia.js); faltava a lista fechada
+-- do banco aceitá-la. Só amplia as duas listas fechadas. Nenhuma política é semeada: sem política o MOVA só PROPÕE.
+alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
+alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA'));
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA'));
+
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
 insert into mova.mova_migracao (nome, sha256) values
@@ -1047,7 +1058,8 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0019_mova_core_identidade_memoria.sql', 'b0346dc3c70f5ab415c73c764ae7af5d667928159528c7e4eb9359d20372963b'),
   ('0020_mova_core_propostas.sql', '1b7bd5f36f302ec80af081f9f0a2c383ad4c4764d21315ec9967f6313f4a8bd8'),
   ('0021_mova_core_conhecimento.sql', '8374fcaa31978caf36f8e52faf9dc160f0c4f9f03305b33d93d3972de0fadd69'),
-  ('0022_mova_orcamento_uso.sql', '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9');
+  ('0022_mova_orcamento_uso.sql', '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9'),
+  ('0023_mova_politica_sangria.sql', '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
