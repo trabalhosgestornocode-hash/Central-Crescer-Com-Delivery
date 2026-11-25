@@ -210,3 +210,27 @@ t("IM-04 aplicar-orcamento-renovavel: sobre 0001–0017 aplica SÓ 0018 + 0022, 
   assert.deepEqual((await pool.query("select nome from mova.mova_migracao where nome >= '0018'")).rows, []);
   assert.equal((await criarOrcamentoIa({ pool }).resumo()).chamadas, 1);
 });
+
+t("IM-05 aplicar-propostas-core (PR #223): sobre o estado de PRODUÇÃO (0001–0018 + 0022) aplica SÓ a 0020; o MOVA passa a achar o repositório; mova_app grava e não apaga; reaplicar aborta; a reversão de produção volta ao estado anterior (a genérica aborta por causa da 0022)", async () => {
+  const { gerarAplicarOrcamento, gerarAplicarPropostas, gerarReverterPropostas } = await import("../../scripts/mova/pacoteProducao.mjs");
+  const { repositorioDePropostasSeInstalado } = await import("../../src/modules/fv2-integracao/mova.js");
+  const pool = await bancoDeProducaoAntes();
+  for (const p of ["0016", "0017"]) { const m = listarMigracoes().find((x) => x.nome.startsWith(p)); await pool.query(`begin;\n${m.sql}\ninsert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');\ncommit;`); }
+  await pool.query(`begin;\n${gerarAplicarOrcamento()}\ncommit;`); // estado de produção de 25/11
+  const sql = readFileSync(join(RAIZ, "producao", "aplicar-propostas-core.sql"), "utf8");
+  const reverter = readFileSync(join(RAIZ, "producao", "reverter-propostas-core.sql"), "utf8");
+  assert.equal(sql, gerarAplicarPropostas(), "arquivo versionado = gerado");
+  assert.equal(reverter, gerarReverterPropostas(), "arquivo versionado = gerado");
+  assert.equal(await repositorioDePropostasSeInstalado(pool), null, "antes: sem repositório (operações ficam desligadas)");
+  await pool.query(`begin;\n${sql}\ncommit;`);
+  const nomes = (await pool.query("select nome from mova.mova_migracao where nome >= '0018' order by nome")).rows.map((x) => x.nome);
+  assert.deepEqual(nomes, ["0018_mova_orcamento_renovavel.sql", "0020_mova_core_propostas.sql", "0022_mova_orcamento_uso.sql"], "não arrasta 0019/0021");
+  assert.ok(await repositorioDePropostasSeInstalado(pool), "depois: o MOVA acha o repositório");
+  const priv = (await pool.query("select has_table_privilege('mova_app','mova.core_proposta','insert') i, has_table_privilege('mova_app','mova.core_proposta','delete') d")).rows[0];
+  assert.deepEqual([priv.i, priv.d], [true, false]);
+  await assert.rejects(pool.query(`begin;\n${sql}\ncommit;`).catch(async (e) => { await pool.query("rollback"); throw e; }), /já aplicada/);
+  await assert.rejects(pool.query(readFileSync(join(RAIZ, "recuperacao", "reverter-0020.sql"), "utf8")), /migrações depois da 0020/, "a genérica não serve em produção");
+  await pool.query(`begin;\n${reverter}\ncommit;`);
+  assert.deepEqual((await pool.query("select nome from mova.mova_migracao where nome >= '0018' order by nome")).rows.map((x) => x.nome), ["0018_mova_orcamento_renovavel.sql", "0022_mova_orcamento_uso.sql"]);
+  assert.equal((await pool.query("select to_regclass('mova.core_proposta') r")).rows[0].r, null);
+});
