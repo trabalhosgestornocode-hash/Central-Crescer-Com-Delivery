@@ -35,7 +35,8 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
   const ferramentasExtras = [...extrasDadas, ...(operacoes ? ferramentasDeOperacao() : []), ...(conhecimento ? ferramentasDeConhecimento() : [])];
   const montar = (extras) => ({
     catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
-    definicoes: [...definicoesParaApi(), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
+    // F5: com a base de conhecimento ligada, como_funciona (temas fixos) SAI — buscar_conhecimento cobre e é versionada
+    definicoes: [...definicoesParaApi().filter((d) => !(conhecimento && d.name === "como_funciona")), ...extras.map((f) => ({ name: f.nome, description: f.descricao, input_schema: f.esquema }))],
   });
   const base = montar(ferramentasExtras);
   const catalogo = base.catalogo; const definicoes = base.definicoes;

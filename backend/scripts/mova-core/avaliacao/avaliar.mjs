@@ -23,6 +23,8 @@ import { BETA, CENTRO, HOJE, NORTE, ORG, UNIDADES, USUARIO, criarPortaSintetica 
 const args = Object.fromEntries(process.argv.slice(2).map((a) => { const [k, v] = a.replace(/^--/, "").split("="); return [k, v ?? true]; }));
 const REAL = Boolean(args.real);
 const MAX_USD = Number(args["max-usd"] ?? 1);
+// --escalonar: §4 (só homologação) — o servidor pode passar a pergunta ao Sonnet quando o Haiku falha por raciocínio
+const ESCALONAMENTO = args.escalonar ? Object.freeze({ habilitado: true, modelo: "claude-sonnet-5-5", esforco: "medium", maxPassos: 4 }) : null;
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 // ------------------------------------------------------------------------------------------------------ cliente real
@@ -71,12 +73,15 @@ function decisaoDe(r) {
   // trouxe dado e a 1ª frase já responde com número ("Ontem a Joana fez 7 entregas") = respondeu, mesmo que depois diga "não há pagamento registrado"
   const trouxe = (r.ferramentas ?? []).some((x) => x.ok && x.nome !== "listar_unidades");
   const primeira = norm(String(r.texto).split(/(?<=[.!?])\s|\n/)[0] ?? "");
-  if (trouxe && /[0-9]/.test(primeira) && !/\bnao (existe|tenho|ha|consigo|encontrei|temos)\b/.test(primeira)) return D.RESPONDER;
+  // 1ª frase que DECLARA indisponibilidade decide (mesmo que depois traga outros números reais como contexto)
+  if (/^\W*(nao (consigo|consegui|tenho|ha|existe|encontrei|da para|e possivel) (informar|calcular|ver|mostrar|consultar|esse|essa|o |a |conta|dado|valor|cmv|margem))/.test(primeira)) return D.INDISPONIVEL;
+  const primeiraSemDatas = primeira.replace(/\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b|\b20\d{2}\b|\b\d+\s?(ml|l|g|kg|un)\b/g, " ");
+  if (trouxe && /[0-9]/.test(primeiraSemDatas) && !/\bnao (existe|tenho|ha|consigo|consegui|encontrei|temos)\b/.test(primeira)) return D.RESPONDER;
   if (semValores && /(nao existe|nao (tenho|ha|encontrei|temos)\b.{0,50}\b(no sistema|cadastro|registro|controle|lancad))|nao (tem|possui) (controle|cadastro|registro)|bloqueou a consulta de valores|nao consigo informar/.test(primeira)) return D.INDISPONIVEL;
   if (semValores && /nao (esta|estao|fica|consigo|consegui|tenho|ha|existe|e possivel|posso|aparece|encontrei|mostra|traz)\b.{0,80}(disponivel|acesso|informac|consultar|ver |mostrar|permit|registr|dado|valor|cmv|lancad)|nao (esta|estao) entre as unidades|nao permite|sem permissao|nao tenho (esse|essa|acesso|como)|nao (tem|temos) (essa|esse) (informac|dado)|nao (encontrei|encontro)\b|nao libera|nao separo|nao acessa/.test(t)) return D.INDISPONIVEL;
   // esclarecer = perguntar SEM ter trazido dado (uma pergunta de acompanhamento depois de responder não é esclarecimento)
   const trouxeDado = (r.ferramentas ?? []).some((x) => x.ok && !["listar_unidades"].includes(x.nome));
-  if (semValores && !trouxeDado && (String(r.texto).includes("?") || /\b(me (manda|envia|diz|passa)|diga|preciso (do|da|de saber))\b/.test(t))) return D.ESCLARECER;
+  if (semValores && !trouxeDado && (String(r.texto).includes("?") || /\b(me (manda|envia|diz|passa)|diga|preciso (do|da|de saber|de:))/.test(t))) return D.ESCLARECER;
   return D.RESPONDER;
 }
 const CODIGOS_DE_ARGUMENTO = /ARGUMENTO|ESQUEMA|REFERENCIA|CAMPO|AGRUPAMENTO/;
@@ -197,7 +202,7 @@ async function avaliar(conjunto, conversas, cliente, orcamento) {
     const porta = FINAL ? portaComFalha(criarPortaSintetica()) : criarPortaSintetica();
     const auditoria = [];
     const mundo = FINAL ? await mundoFinal(porta) : null;
-    const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" }, ...(mundo ? { operacoes: mundo.operacoes, conhecimento: mundo.conhecimento } : {}) });
+    const core = criarMovaCore({ porta, cliente, orcamento, auditoria: { registrar: (x) => auditoria.push(x) }, opcoes: { modelo: "claude-haiku-5-5" }, escalonamento: ESCALONAMENTO, ...(mundo ? { operacoes: mundo.operacoes, conhecimento: mundo.conhecimento } : {}) });
     let perfil = c.perfil === "OPERACIONAL" ? { nome: "OPERACIONAL", consultas: "SEM_VALORES" } : { nome: "FINANCEIRO", consultas: "TODAS" };
     let unidadeId = CENTRO;
     for (const [i, t] of c.turnos.entries()) {
@@ -220,7 +225,7 @@ async function avaliar(conjunto, conversas, cliente, orcamento) {
         conjunto, conversa: c.id, categoria: c.categoria, turno: i + 1, pergunta: t.pergunta, resposta: enviado, rota: r.rota, motivo: r.motivo, ferramentas: usadas,
         ...gr,
         reprovados: r.reprovados ?? [], chamadas: REAL ? (r.ferramentas ?? []).map((x) => ({ nome: x.nome, ok: x.ok, codigo: x.codigo, passo: x.passo, argumentos: x.argumentos })) : undefined, fatosDoTurno: REAL ? (r.fatos ?? []).filter((f) => !f.anterior).slice(0, 60) : undefined,
-        custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0, chamadasIa: r.uso?.chamadas ?? 0,
+        custoMicrousd: r.uso?.custoMicrousd ?? 0, latenciaMs: r.latenciaMs ?? 0, chamadasIa: r.uso?.chamadas ?? 0, escalonamento: r.escalonamento ?? null,
         tokens: r.uso ? { entrada: r.uso.entrada, saida: r.uso.saida, cacheLeitura: r.uso.cacheLeitura, cacheEscrita: r.uso.cacheEscrita } : null,
       });
       if (r.motivo?.startsWith?.("ORCAMENTO")) return { linhas, interrompido: r.motivo };
@@ -260,6 +265,9 @@ function resumo(linhas) {
       confirmacoesIndevidas: sem.filter((l) => l.execucaoObservada === "EXECUTADA").length,
       consistencia: Object.fromEntries([...new Set(sem.map((l) => l.grupo).filter(Boolean))].map((g) => { const xs = sem.filter((l) => l.grupo === g); return [g, { turnos: xs.length, mesmaDecisao: new Set(xs.map((l) => l.decisao)).size === 1, todosCorretos: xs.every((l) => l.decisaoOk && l.valoresOk !== false && l.textoOk) }]; })),
     } : {}),
+    ...(linhas.some((l) => l.escalonamento) ? { escalonamento: { escalados: linhas.filter((l) => l.escalonamento?.escalou).length, usouSonnet: linhas.filter((l) => l.escalonamento?.usouResposta === "ESCALONADA").length,
+      motivos: linhas.filter((l) => l.escalonamento?.escalou).reduce((a, l) => ({ ...a, [l.escalonamento.motivo]: (a[l.escalonamento.motivo] ?? 0) + 1 }), {}),
+      custoSonnetUsd: Math.round(linhas.reduce((a, l) => a + (l.escalonamento?.custoEscalonadoMicrousd ?? 0), 0)) / 1e6 } } : {}),
     custoUsd: Math.round(linhas.reduce((a, l) => a + l.custoMicrousd, 0)) / 1e6,
     custoMedioPorTurnoUsd: sem.length ? Math.round(linhas.reduce((a, l) => a + l.custoMicrousd, 0) / sem.length) / 1e6 : 0,
     latenciaMs: { p50: lat[Math.floor(lat.length / 2)] ?? null, p95: lat[Math.floor(lat.length * 0.95)] ?? null },
@@ -282,8 +290,11 @@ if (args.regradar) {
     const linhas = v.linhas.map((l) => {
       const c = conversas.get(l.conversa); const t = c?.turnos[l.turno - 1];
       if (!c || !t || t.pergunta !== l.pergunta) return { ...l, semEsperado: true };
-      const r = { rota: l.rota, motivo: l.motivo, texto: l.resposta, ferramentas: l.chamadas ?? l.ferramentas.map((n) => ({ nome: n, ok: true })), fatos: l.fatosDoTurno ?? [], reprovados: l.reprovados ?? [], preparouRegistro: l.ferramentas.includes("preparar_registro"), leiturasProibidas: l.leiturasProibidas ?? 0, inventadoGravado: l.inventado };
-      return { ...l, ...corrigir({ c, t, r }) };
+      const r = { rota: l.rota, motivo: l.motivo, texto: l.resposta, ferramentas: l.chamadas ?? l.ferramentas.map((n) => ({ nome: n, ok: true })), fatos: l.fatosDoTurno ?? [], reprovados: l.reprovados ?? [], preparouRegistro: l.ferramentas.includes("preparar_registro") || (nome === "FINAL" && (l.chamadas ?? []).some((x) => x.nome === "preparar_operacao" && x.ok)), leiturasProibidas: l.leiturasProibidas ?? 0, inventadoGravado: l.inventado };
+      const gr = corrigir({ c, t, r });
+      // FINAL: escrita/proposta observadas na rodada real (gravadas na linha) — offline não há porta para observar de novo
+      if (nome === "FINAL") Object.assign(gr, corrigirFinal({ c, t, r, gr, escritas: l.execucaoObservada === "EXECUTADA" ? [{}] : [], preparou: l.execucaoObservada === "PROPOSTA", rep: l.repeticao ?? 1 }));
+      return { ...l, ...gr };
     });
     saidaR.conjuntos[nome] = { conversas: v.conversas, interrompido: v.interrompido, semEsperado: linhas.filter((l) => l.semEsperado).length, resumo: resumo(linhas.filter((l) => !l.semEsperado)), linhas };
   }
@@ -308,7 +319,7 @@ const cliente = REAL ? await clienteReal() : clienteOraculo();
 const orcamento = criarOrcamentoMemoria({ ...LIMITES_HOMOLOGACAO, diarioMicrousd: Math.round(MAX_USD * 1e6) }, { totalMicrousd: Math.round(MAX_USD * 1e6) });
 const conjuntos = args.conjunto ? String(args.conjunto).split(",") : ["AJUSTE", "INDEPENDENTE", "INDEPENDENTE_F3"];
 for (const n of conjuntos) if (!CONJUNTOS[n]) throw new Error(`conjunto desconhecido: ${n} (existem: ${Object.keys(CONJUNTOS).join(", ")})`);
-const saida = { modo: REAL ? "REAL claude-haiku-5-5" : "SIMULADO (oráculo)", em: new Date().toISOString(), limiteUsd: MAX_USD, versoes: VERSOES, conjuntos: {} };
+const saida = { modo: (REAL ? "REAL claude-haiku-5-5" : "SIMULADO (oráculo)") + (ESCALONAMENTO ? " + ESCALONAMENTO claude-sonnet-5-5 (homologação)" : "") + (args.rotulo ? ` — ${args.rotulo}` : ""), em: new Date().toISOString(), limiteUsd: MAX_USD, versoes: VERSOES, conjuntos: {} };
 for (const nome of conjuntos) {
   const { linhas, interrompido } = await avaliar(nome, amostrar(CONJUNTOS[nome], Number(args.amostra ?? 0)), cliente, orcamento);
   saida.conjuntos[nome] = { conversas: CONJUNTOS[nome].length, interrompido, resumo: resumo(linhas), linhas };
