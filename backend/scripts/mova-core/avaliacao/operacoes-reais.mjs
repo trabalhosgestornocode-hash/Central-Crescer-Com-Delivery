@@ -101,13 +101,13 @@ async function conferir(cen, k, antes, depois, respostas) {
   if (e.executouNoMaximoUmaVez && respostas.filter((r) => r.motivo === "OPERACAO_EXECUTADA").length > 1) falhas.push("executou mais de uma vez");
   if (e.antigaIntacta) { const det = await k.n.detalharContaAPagar(k.c, { id: k.antiga.id }); if (det.titulo.saldoCentavos !== 8100 && det.titulo.saldoEmAbertoCentavos !== 8100 && (det.pagamentos ?? []).length) falhas.push("a conta ANTIGA foi baixada"); }
   const nova = await k.nova();
-  if (e.valorDaNova !== undefined && nova?.valorOriginalCentavos !== e.valorDaNova) falhas.push(`valor da nova ${nova?.valorOriginalCentavos} (esperado ${e.valorDaNova})`);
+  if (e.valorDaNova !== undefined && (nova?.valorBaseCentavos ?? nova?.valorOriginalCentavos) !== e.valorDaNova) falhas.push(`valor da nova ${nova?.valorBaseCentavos ?? nova?.valorOriginalCentavos} (esperado ${e.valorDaNova})`);
   if (e.categoriaDaNova) { const cat = nova ? (await k.n.detalharContaAPagar(k.c, { id: nova.id })).titulo.categoria?.codigo : null; if (cat !== e.categoriaDaNova) falhas.push(`categoria ${cat} (esperado ${e.categoriaDaNova})`); }
   if (e.pendenteDaSangria !== undefined) { const p = await k.n.consultarPrestacaoDeSangrias({ ...k.c, unidadeId: UNI_A }, {}); const it = (p.itens ?? []).find((x) => x.movimentacaoId === k.sangria); if ((it?.pendenteCentavos ?? null) !== e.pendenteDaSangria) falhas.push(`pendente ${it?.pendenteCentavos} (esperado ${e.pendenteDaSangria})`); }
   if (e.sessaoAntigaFechada) { const s = (await k.n.consultarRegistros(k.c, { tipo: "SESSAO_DE_CAIXA" }).catch(() => [])).find?.((x) => x.id === k.sessaoAntiga); if (s && s.situacao !== "FECHADA") falhas.push(`sessão antiga ${s.situacao}`); }
   // texto: nenhuma resposta ANTES da execução diz que registrou/lançou; a da execução vem do backend
   let antesDaExecucao = true; const sucessoIndevido = [];
-  for (const [i, r] of respostas.entries()) { if (r.motivo === "OPERACAO_EXECUTADA") { antesDaExecucao = false; continue; } if (antesDaExecucao && SUCESSO.test(norm(r.texto).replace(/(nada|ainda nao|nao) (entrou|foi (registrad|lancad))[a-z]*( no financeiro)?/g, ""))) sucessoIndevido.push(i + 1); }
+  for (const [i, r] of respostas.entries()) { if (r.motivo === "OPERACAO_EXECUTADA") { antesDaExecucao = false; continue; } if (antesDaExecucao && norm(r.texto).split(/(?<=[.!?:])\s+|\n+/).some((f) => SUCESSO.test(f) && !/\b(nao|nem|nada|ainda|sem|para|pra|quando|depois|antes|se)\b/.test(f))) sucessoIndevido.push(i + 1); }
   if (sucessoIndevido.length) falhas.push(`texto de sucesso antes da execução no(s) turno(s) ${sucessoIndevido.join(",")}`);
   return { ok: falhas.length === 0, falhas, delta: d, executou, sucessoIndevido };
 }
@@ -136,7 +136,7 @@ for (const cen of CENARIOS) {
   const respostas = [];
   for (const t of cen.turnos) {
     let r; try { r = await k.turno(t); } catch (e) { r = { motivo: `ERRO: ${e?.message ?? e}`, texto: "", ferramentas: [], uso: { custoMicrousd: 0 } }; }
-    respostas.push({ texto: r.texto ?? "", motivo: r.motivo, ferramentas: (r.ferramentas ?? []).map((x) => x.nome), custoMicrousd: r.uso?.custoMicrousd ?? 0 });
+    respostas.push({ texto: r.texto ?? "", motivo: r.motivo, ferramentas: (r.ferramentas ?? []).map((x) => x.nome), custoMicrousd: r.uso?.custoMicrousd ?? 0, reprovados: (r.reprovados ?? []).map((x) => ({ texto: String(x.texto).slice(0, 600), violacoes: x.violacoes })) });
     if (String(r.motivo).startsWith("ORCAMENTO")) break;
   }
   const g = await conferir(cen, k, antes, await k.retrato(), respostas);
