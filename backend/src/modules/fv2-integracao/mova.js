@@ -341,6 +341,12 @@ export function criarRotinaPeriodica(passo, { intervaloMs = 5 * 60 * 1000, regis
 const GERACAO_DA_INSTANCIA = Date.now();
 /** Conexões do papel de leitura por instância: o papel tem limite 2 no banco e o deploy mantém duas instâncias vivas. */
 export const LEITOR_CONEXOES_POR_INSTANCIA = 1;
+/**
+ * Quanto a conexão de leitura fica aberta sem uso. 25/11: era 5 s — cada mensagem abria conexão nova (TLS + autenticação pelo
+ * Supavisor), o maior custo fixo das consultas simples. Com UMA conexão por instância, duas instâncias vivas no deploy somam 2
+ * (o limite do papel), então manter a conexão aberta não tira a vaga da instância nova.
+ */
+export const LEITOR_OCIOSO_MS = 120_000;
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;
@@ -369,9 +375,9 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
       // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).
       // 25/11: o papel de leitura aceita 2 conexões NO TOTAL, somando as instâncias. UMA por instância garante que, na troca
-      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ocioso fecha em 5 s; esperar vaga tem limite (5 s) —
+      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ociosa fica aberta (LEITOR_OCIOSO_MS); esperar vaga tem limite (5 s) —
       // nunca uma espera sem fim que trave o pool.
-      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: 5000, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
+      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: LEITOR_OCIOSO_MS, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
       poolLeitor.on("error", () => {});
       abertos.push(poolLeitor);
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });

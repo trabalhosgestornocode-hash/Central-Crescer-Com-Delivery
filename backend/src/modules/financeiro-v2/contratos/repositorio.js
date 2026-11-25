@@ -46,6 +46,12 @@ export const ORDEM_DE_GRAVACAO = Symbol.for("financeiro-v2.ordemDeGravacao");
 
 export const METODOS_DA_TRANSACAO = Object.freeze(["inserir", "atualizar", "obter", "listar", "buscarPorChave", "buscarPorChaves", "inserirVarios", "travar", "anexarHistorico", "anexarHistoricos", "listarHistorico", "paginar", "agregar"]);
 export const LIMITE_DA_PAGINA = 500;
+/**
+ * Valores aceitos numa lista `em`. No PostgreSQL a lista vai como UM parâmetro de array (`= any($1)`), então o tamanho não
+ * muda o texto da consulta. 25/11: era 200 — numa loja com ~1.000 vendas no mês a Central fazia ~90 idas sequenciais ao banco
+ * (cada ida ~60 ms em produção) e passava de 8 s; com 1.000 o mesmo resultado sai em menos da metade das idas.
+ */
+export const LIMITE_DA_LISTA = 1000;
 const PROIBIDOS = Object.freeze(["remover", "excluir", "apagar", "deletar", "delete", "remove"]);
 
 export function exigirRepositorio(repositorio) {
@@ -76,7 +82,7 @@ export function normalizarConsulta(consulta = {}, { paginada = true } = {}) {
     return v;
   };
   const em = objeto(consulta.em, "em");
-  for (const [campo, lista] of Object.entries(em)) if (!Array.isArray(lista) || !lista.length || lista.length > 200) falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta: `em` exige lista de 1 a 200 valores.", { campo });
+  for (const [campo, lista] of Object.entries(em)) if (!Array.isArray(lista) || !lista.length || lista.length > LIMITE_DA_LISTA) falhar(CODIGO.REPOSITORIO_INVALIDO, `Consulta: "em" exige lista de 1 a ${LIMITE_DA_LISTA} valores.`, { campo });
   const ordem = consulta.ordem ?? [];
   if (!Array.isArray(ordem) || ordem.some((o) => typeof o?.campo !== "string")) falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta: ordem inválida.");
   // 08D: `contar: false` dispensa a contagem total (quem percorre todas as páginas não precisa dela): total = null.

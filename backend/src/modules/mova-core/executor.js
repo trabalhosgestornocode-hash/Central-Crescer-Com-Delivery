@@ -34,12 +34,19 @@ export function comReais(o, prof = 0) {
 
 export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12, leiturasSimultaneas: 1, esperaNovaTentativaMs: 400 });
 const esperar = (ms) => new Promise((ok) => { setTimeout(ok, ms); });
-/** Fila curta por mensagem: no máximo `vagas` leituras ao mesmo tempo (null = sem fila, para ferramentas locais). */
+/**
+ * Fila curta por mensagem: no máximo `vagas` leituras ao mesmo tempo (null = sem fila, para ferramentas locais).
+ * 25/11: `segurar(p)` mantém a vaga até a leitura REAL terminar. O tempo-limite devolve a resposta à conversa, mas a
+ * consulta continua no banco segurando a conexão; liberar a vaga antes fazia a leitura seguinte esperar conexão e falhar
+ * como "Financeiro indisponível" (homologação de 25/11: Central de Conferências → documentos e relatório semanal).
+ */
 async function comVaga(sessao, vagas, fn) {
-  if (!vagas) return fn();
+  if (!vagas) return fn(() => {});
   const s = (sessao.semaforo ??= { livres: vagas, espera: [] });
   if (s.livres > 0) s.livres--; else await new Promise((ok) => { s.espera.push(ok); });
-  try { return await fn(); } finally { const proxima = s.espera.shift(); if (proxima) proxima(); else s.livres++; }
+  let ate = null;
+  const liberar = () => { const proxima = s.espera.shift(); if (proxima) proxima(); else s.livres++; };
+  try { return await fn((p) => { ate = p; }); } finally { if (ate) Promise.resolve(ate).then(liberar, liberar); else liberar(); }
 }
 const ACAO_VER = "financeiro_v2.ver";
 
@@ -76,7 +83,11 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
       const situacao = situacaoDoCodigo(codigo);
       auditoria.registrar({ ...registro, ok: false, codigo, situacao, ms: relogio() - inicio });
       if (situacao) (sessao.situacoes ??= []).push({ ferramenta: nome ?? null, situacao, codigo });
-      return { ok: false, codigo, situacao, conteudo: JSON.stringify({ erro: codigo, mensagem, ...(situacao ? { situacao, comoComunicar: COMO_COMUNICAR[situacao] } : {}) }) };
+      // 25/11: falha técnica de uma fonte que tem OUTRA fonte oficial para a mesma pergunta — diz qual, o que ela cobre e o
+      // que não cobre (mesma unidade e mesmo período). Sem alternativa, vale o comoComunicar: informar a limitação.
+      const alternativa = situacao === "FALHA_TECNICA" && nome && Object.hasOwn(catalogo, nome) ? catalogo[nome].alternativa ?? null : null;
+      return { ok: false, codigo, situacao, conteudo: JSON.stringify({ erro: codigo, mensagem, ...(situacao ? { situacao, comoComunicar: COMO_COMUNICAR[situacao] } : {}),
+        ...(alternativa ? { fonteAlternativa: { ...alternativa, regra: "Consulte a fonte alternativa com a MESMA unidade e o MESMO período; responda só o que ela cobre e diga o que ficou de fora." } } : {}) }) };
     };
     sessao.chamadas = (sessao.chamadas ?? 0) + 1;
     if (sessao.chamadas > limites.maxChamadasPorRequisicao) return falhar("LIMITE_DE_CHAMADAS", "Limite de consultas desta pergunta atingido.");
@@ -121,10 +132,12 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
       // conta a partir da VAGA (esperar a vez não é lentidão da consulta). Falha transitória (conexão recusada, banco
       // momentaneamente indisponível) tem UMA nova tentativa curta — é leitura, repetir não tem efeito.
       sessao.portaDaMensagem ??= comMemoDeLeituras(porta);
-      const rodar = () => comTempo(Promise.resolve(f.executar({ porta: sessao.portaDaMensagem, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })), f.tempoMs ?? limites.tempoMs);
+      let segurar = () => {};
+      const rodar = () => { const p = Promise.resolve(f.executar({ porta: sessao.portaDaMensagem, escopo, args, sessao, fatosDaConversa: () => sessao.fatos })); segurar(p); return comTempo(p, f.tempoMs ?? limites.tempoMs); };
       const transitorio = (e) => e?.name === "ErroTransitorio" || e?.constructor?.name === "ErroTransitorio";
       try {
-        r = await comVaga(sessao, f.local ? null : (limites.leiturasSimultaneas ?? 2), async () => {
+        r = await comVaga(sessao, f.local ? null : (limites.leiturasSimultaneas ?? 2), async (s) => {
+          segurar = s;
           try { return await rodar(); } catch (e) {
             if (!transitorio(e) || f.local || f.escrita) throw e;
             registro.novaTentativa = { causa: e?.causa ?? null };

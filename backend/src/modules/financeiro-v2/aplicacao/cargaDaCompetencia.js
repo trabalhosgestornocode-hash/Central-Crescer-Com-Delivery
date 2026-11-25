@@ -16,11 +16,11 @@
 import { TIPO } from "../dominio/catalogos.js";
 import { carregarFontesDaUnidade } from "./fontesDeFaturamento.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { ORDEM_DE_GRAVACAO } from "../contratos/repositorio.js";
+import { LIMITE_DA_LISTA, ORDEM_DE_GRAVACAO } from "../contratos/repositorio.js";
 import { competenciaDe, primeiroDiaDe, somarDias, somarMeses, ultimoDiaDe } from "../dominio/tempo.js";
 import { inicioEfetivoDe } from "../dominio/tesouraria.js";
 
-const LOTE = 200; // a porta aceita até 200 valores em `em`
+const LOTE = LIMITE_DA_LISTA; // a porta aceita até LIMITE_DA_LISTA valores em `em` (um só parâmetro de array no banco)
 const PAGINA = 500;
 const ordenar = (lista) => lista.sort((a, b) => (a[ORDEM_DE_GRAVACAO] ?? 0) - (b[ORDEM_DE_GRAVACAO] ?? 0));
 
@@ -34,7 +34,7 @@ async function todasAsPaginas(tx, cx, tipo, consulta) {
   }
 }
 
-/** Registros cujo `campo` está na lista (lotes de 200, cada lote paginado no banco). */
+/** Registros cujo `campo` está na lista (lotes de LIMITE_DA_LISTA, cada lote paginado no banco). */
 export async function porLista(tx, cx, tipo, campo, valores, extra = {}) {
   const lista = [...new Set(valores.filter((v) => v !== null && v !== undefined))];
   const saida = [];
