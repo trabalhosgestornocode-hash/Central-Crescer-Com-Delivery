@@ -7,9 +7,9 @@ Nenhum merge, deploy, migração em produção, mudança de orçamento, escrita 
 
 | Bloco | Estado | Prova |
 |---|---|---|
-| F1–F3: laço de ferramentas, verificador, memória, conceitos, Agente Crescer | pronto (isolado) | suíte mova-core 134/134 |
+| F1–F3: laço de ferramentas, verificador, memória, conceitos, Agente Crescer | pronto (isolado) | suíte mova-core 141/141 (PostgreSQL isolado) |
 | F2 vínculo WhatsApp ↔ plataforma + tela | pronto; **rotas já montáveis** por `MOVA_CORE_VINCULO_HABILITADO` | testes F2 + 0019 |
-| F4 compra já paga + prestação de sangria (proposta → "sim" → execução pelo servidor) | pronto (isolado) | operacoes 21/21; §9 real |
+| F4 compra já paga + prestação de sangria (proposta → "sim" → execução pelo servidor) | pronto (isolado) | testes OP/SG (inclui OP-14..17); §9 real: 15/15 cenários aprovados ao menos uma vez pós-ajuste, 0 sucesso falso |
 | Propostas persistentes (0020): reinício, várias instâncias, CAS, retomada | pronto | PP-1..5 em PostgreSQL |
 | F5 conhecimento corporativo (0021) + corpo de 35 itens (PENDENTES) | pronto | CN-01..05 + CN-PG-1..3 |
 | Escalonamento Sonnet (só homologação, desligado em produção) | pronto, **recomendado manter desligado** | ES-01..04 + avaliação |
