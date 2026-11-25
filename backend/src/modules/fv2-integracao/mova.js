@@ -48,6 +48,15 @@ import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGa
 import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
 import { configuracaoDaConversa } from "../mova-core/conversaWhatsapp.js";
 import { montarConversaCore } from "./movaCoreConversa.js";
+import { criarRepositorioDePropostasPostgres } from "../mova-core/persistenciaPropostas.js";
+
+/** Repositório das propostas do MOVA CORE só se a migração 0020 estiver registrada no banco do MOVA (senão null: só consulta). */
+export async function repositorioDePropostasSeInstalado(pool) {
+  try {
+    const r = await pool.query("select 1 from mova.mova_migracao where left(nome, 5) = '0020_' limit 1");
+    return r.rowCount ? criarRepositorioDePropostasPostgres(pool) : null;
+  } catch { return null; }
+}
 
 export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -274,7 +283,12 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   }
   mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
-    try { conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null }); }
+    try {
+      // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta
+      const repositorioDePropostas = conversaCore.operacoes && conversaCore.operacoes !== "DESLIGADO" ? await repositorioDePropostasSeInstalado(pool) : null;
+      conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null,
+        operacional, armazenamento: mova.armazenamento, repositorioDePropostas });
+    }
     catch (e) { registrar({ tipo: "MOVA_CORE_CONVERSA_NAO_MONTADA", erro: String(e?.message ?? e).slice(0, 200) }); } // falha segura: o motor atual segue sozinho
   }
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;

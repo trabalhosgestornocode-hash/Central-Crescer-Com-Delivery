@@ -87,13 +87,26 @@ const codigoCategoria = (s) => String(s ?? "").normalize("NFD").replace(/\p{M}/g
  * @param {object|null} deps.portaOperacional  { pode(op, escopo), chamar(op, escopo, entrada) } — null ⇒ só propõe
  * @param {() => Promise<object[]>} deps.politicas  políticas de autonomia vigentes (dominio/autonomia.js)
  */
-export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropostasMemoria(), porta, portaOperacional = null, politicas = async () => [], auditoria = { registrar() {} }, relogio = () => Date.now(), validadeMs = VALIDADE_PROPOSTA_MS, avaliarComprovante = null }) {
+/**
+ * 25/11 — EXECUÇÃO AUTOMÁTICA (política APLICAR_AUTOMATICO): proposta COMPLETA, pessoa com autorização de escrita, execução
+ * ligada, política vigente no nível automático dentro do limite (sem fracionamento) e nenhum aviso que peça um olhar humano.
+ * Qualquer um destes avisos mantém a confirmação ("sim"), mesmo com a política automática.
+ */
+const AVISOS_QUE_PEDEM_CONFIRMACAO = new Set(["FORNECEDOR_NOVO", "TROCO_NAO_INFORMADO_PELA_PESSOA", "TROCO_NO_CAIXA_ATUAL"]);
+
+/**
+ * @param {string[]} [deps.tipos]  tipos que ESTA montagem prepara (25/11: no WhatsApp só a prestação de sangria — compra já paga
+ *   entra pelo COMPROVANTE no fluxo de documentos que já executa, para não haver dois motores na mesma operação)
+ */
+export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropostasMemoria(), porta, portaOperacional = null, politicas = async () => [], auditoria = { registrar() {} }, relogio = () => Date.now(), validadeMs = VALIDADE_PROPOSTA_MS, avaliarComprovante = null, tipos = Object.values(TIPO_OPERACAO) }) {
+  const tiposPermitidos = new Set(tipos);
+  for (const t of tiposPermitidos) if (!Object.values(TIPO_OPERACAO).includes(t)) throw new TypeError(`tipo de operação desconhecido: ${t}`);
   const agoraIso = () => new Date(relogio()).toISOString();
   const auditar = (acao, p, extra = {}) => auditoria.registrar({ tipo: "MOVA_CORE_OPERACAO", acao, propostaId: p?.id ?? null, versao: p?.versao ?? null, tipoOperacao: p?.tipo ?? null, organizacaoId: p?.organizacaoId ?? null, unidadeId: p?.unidadeId ?? null, estado: p?.estado ?? null, em: agoraIso(), ...extra });
 
   /** Política vigente AGORA + §10: o limite vale por pagamento e não se contorna dividindo (mesmo favorecido, 7 dias), em QUALQUER nível. */
   async function decidir({ tipo, organizacaoId, unidadeId, valorCentavos, hoje, comprovante, favorecidoChave }) {
-    const lista = await politicas();
+    const lista = await politicas(organizacaoId); // políticas da EMPRESA da proposta (lidas a cada decisão: revogar vale na hora)
     const acumuladoCentavos = favorecidoChave ? await repositorio.acumuladoDoFavorecido({ organizacaoId, unidadeId, favorecido: favorecidoChave, desde: new Date(relogio() - 7 * 86_400_000).toISOString() }) : 0;
     const d = decidirAutonomia({ politicas: lista, operacao: POLITICA_DO_TIPO[tipo], organizacaoId, unidadeId, valorCentavos: valorCentavos ?? 0, hoje, comprovante, acumuladoCentavos });
     const pol = d.politicaId ? lista.find((x) => x.id === d.politicaId) : null;
@@ -104,6 +117,19 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
   }
   const comprovanteDe = (tipo, anexo) => (tipo !== TIPO_OPERACAO.COMPRA_JA_PAGA ? { apto: true, comIdentificador: true }
     : avaliarComprovante ? avaliarComprovante(anexo) : { apto: Boolean(anexo?.arquivo), situacao: anexo?.arquivo ? "APTO" : "AUSENTE", comIdentificador: Boolean(anexo?.idTransacao), motivos: [] });
+
+  /** null = pode executar sem confirmação; senão o motivo (auditado) para seguir pedindo o "sim". */
+  function motivoParaConfirmar(p, decisao, autorizacaoDeEscrita) {
+    if (p.estado !== ESTADO_PROPOSTA.AGUARDANDO_CONFIRMACAO) return "PROPOSTA_NAO_PRONTA";
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return "POLITICA_EXIGE_CONFIRMACAO";
+    if (!autorizacaoDeEscrita?.pode) return "SEM_AUTORIZACAO_DE_ESCRITA";
+    if (!portaOperacional) return "EXECUCAO_DESLIGADA";
+    const aviso = (p.avisos ?? []).find((a) => AVISOS_QUE_PEDEM_CONFIRMACAO.has(a));
+    if (aviso) return aviso;
+    // compra paga: o valor que a pessoa disse precisa ser o valor LIDO do comprovante (nunca só o que foi dito)
+    if (p.tipo === TIPO_OPERACAO.COMPRA_JA_PAGA && p.anexo?.valorCentavos !== p.dados.valorCentavos) return "VALOR_DO_COMPROVANTE_NAO_CONFERIDO";
+    return null;
+  }
 
   /** A proposta mais recente da conversa, se está em REVISÃO HUMANA e ainda válida (para responder 'sim' com a verdade). */
   async function emRevisaoDaConversa(conversaChave) {
@@ -203,6 +229,8 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
         if (forn.requisito) requisitos.push(forn.requisito);
         resolvidas.push({ ...d, fornecedor: forn.nome ?? null, contraparteId: forn.contraparteId ?? null, contraparteNova: forn.contraparteNova ?? null, categoria: cat.categoria ?? null, categoriaNome: cat.nome ?? null });
       }
+      // fornecedor que ainda não existe no cadastro: a despesa cria um cadastro novo — pede o olhar da pessoa (nunca automático)
+      if (resolvidas.some((d) => d.contraparteNova)) avisos.push("FORNECEDOR_NOVO");
       if (total < alvo.pendenteCentavos) avisos.push("PRESTACAO_PARCIAL");
       // troco: caixa da retirada FECHADO ⇒ volta no caixa aberto AGORA da mesma conta; nenhum aberto ⇒ requisito (nunca reabre, nunca retroage)
       let sessaoDaDevolucaoId = alvo.sessaoId;
@@ -225,10 +253,11 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
   }
 
   return Object.freeze({
-    abertaDaConversa, emRevisaoDaConversa,
+    abertaDaConversa, emRevisaoDaConversa, tipos: Object.freeze([...tiposPermitidos]),
 
     /** Ferramenta preparar_operacao: cria/substitui a proposta da conversa. NUNCA grava no Financeiro. */
-    async preparar({ conversaChave, sessao, autor, tipo, args, anexo = null }) {
+    async preparar({ conversaChave, sessao, autor, tipo, args, anexo = null, autorizacaoDeEscrita = null }) {
+      if (!tiposPermitidos.has(tipo)) return { ok: false, motivo: tipo === TIPO_OPERACAO.COMPRA_JA_PAGA ? "COMPRA_PELO_FLUXO_DE_DOCUMENTOS" : "TIPO_NAO_SUPORTADO" };
       const escopo = Object.freeze({ organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, usuarioId: sessao.usuarioId });
       const anterior = await abertaDaConversa(conversaChave);
       // §9 (S03): correção parcial = só o campo corrigido muda; o resto vem da versão anterior guardada pelo SERVIDOR
@@ -252,7 +281,7 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
       const base = { id: anterior?.tipo === tipo ? anterior.id.replace(/:v\d+$/, "") : randomUUID(), tipo, versao, dados: n.dados };
       const p = {
         ...base, id: `${base.id}:v${versao}`, raiz: base.id, conversaChave, organizacaoId: sessao.organizacaoId, unidadeId: sessao.unidadeId, autor,
-        args: structuredClone(args ?? {}), hojeDoPreparo: sessao.hoje, requisitos: n.requisitos, avisos: n.avisos, anexo: anexoEfetivo?.arquivo ? { arquivo: anexoEfetivo.arquivo, referencia: anexoEfetivo.referencia ?? "anexo", idTransacao: anexoEfetivo.idTransacao ?? null } : null, valorCentavos: n.valorCentavos ?? null, favorecidoChave: n.favorecidoChave ?? null,
+        args: structuredClone(args ?? {}), hojeDoPreparo: sessao.hoje, requisitos: n.requisitos, avisos: n.avisos, anexo: anexoEfetivo?.arquivo ? { arquivo: anexoEfetivo.arquivo, referencia: anexoEfetivo.referencia ?? "anexo", idTransacao: anexoEfetivo.idTransacao ?? null, valorCentavos: Number.isSafeInteger(anexoEfetivo.valorCentavos) ? anexoEfetivo.valorCentavos : null } : null, valorCentavos: n.valorCentavos ?? null, favorecidoChave: n.favorecidoChave ?? null,
         impressao: impressao({ tipo, dados: n.dados, unidadeId: sessao.unidadeId }), decisao,
         estado: n.requisitos.length ? ESTADO_PROPOSTA.AGUARDANDO_DADOS : decisao.nivel === NIVEL.PROIBIDO ? ESTADO_PROPOSTA.RECUSADA : decisao.nivel === NIVEL.SOMENTE_PROPOR ? ESTADO_PROPOSTA.EM_REVISAO_HUMANA : ESTADO_PROPOSTA.AGUARDANDO_CONFIRMACAO,
         criadaEm: agoraIso(), expiraEm: new Date(relogio() + validadeMs).toISOString(), resultado: null,
@@ -260,7 +289,17 @@ export function criarServicoDeOperacoes({ repositorio = criarRepositorioDePropos
       p.resumo = resumoDaProposta(p);
       const s = await repositorio.salvar(p);
       auditar("PREPARADA", s.proposta, { requisitos: p.requisitos, nivel: decisao.nivel, motivos: decisao.motivos });
-      return { ok: true, proposta: s.proposta, detalhes: n.detalhes ?? null };
+      const motivo = motivoParaConfirmar(s.proposta, decisao, autorizacaoDeEscrita);
+      if (motivo) {
+        if (decisao.nivel === NIVEL.APLICAR_AUTOMATICO && s.proposta.estado === ESTADO_PROPOSTA.AGUARDANDO_CONFIRMACAO) auditar("AUTOMATICA_RECUSADA", s.proposta, { motivo });
+        return { ok: true, proposta: s.proposta, detalhes: n.detalhes ?? null };
+      }
+      // mesma trava da confirmação: duas instâncias / dois preparos ⇒ só um executa; mesmas chaves idempotentes
+      const trava = await repositorio.salvar({ ...s.proposta, estado: ESTADO_PROPOSTA.EXECUTANDO, executandoDesde: agoraIso(), decisao }, { versaoEsperada: s.proposta.revisao });
+      if (!trava.ok) return { ok: true, proposta: s.proposta, detalhes: n.detalhes ?? null };
+      auditar("EXECUCAO_AUTOMATICA", trava.proposta, { nivel: decisao.nivel, politicaId: decisao.politicaId ?? null });
+      const execucao = await executar(trava.proposta);
+      return { ok: true, proposta: execucao.proposta, detalhes: n.detalhes ?? null, automatica: true, execucao };
     },
 
     /** Determinístico: só a proposta VIGENTE, completa, dentro da validade, da MESMA pessoa, com autorização de escrita AGORA. */
@@ -389,16 +428,18 @@ const RECUSAS = {
   SEM_SANGRIA_PENDENTE: "Não há sangria pendente de prestação de contas nesta unidade. Nada entrou no Financeiro.",
   SANGRIA_NAO_IDENTIFICADA: "Há mais de uma sangria pendente: pergunte qual (use a lista). Nada entrou no Financeiro.",
   TIPO_NAO_SUPORTADO: "O MOVA não prepara esse tipo de operação. Nada entrou no Financeiro.",
+  COMPRA_PELO_FLUXO_DE_DOCUMENTOS: "Compra já paga entra pelo COMPROVANTE: peça para a pessoa enviar o comprovante (foto ou PDF) aqui; o MOVA confere o documento e registra conforme a política (ou pede o que faltar). Nada entrou no Financeiro ainda.",
 };
 const fatoP = (v, significado, entidade = null) => (Number.isInteger(v) ? { valorCentavos: v, significado, entidade, periodo: null } : null);
 
-export function ferramentasDeOperacao() {
+export function ferramentasDeOperacao(tipos = Object.values(TIPO_OPERACAO)) {
+  const soSangria = !tipos.includes(TIPO_OPERACAO.COMPRA_JA_PAGA);
   return [
     {
       nome: "preparar_operacao",
-      descricao: "PREPARA (não grava) um lançamento que a pessoa pediu: COMPRA_JA_PAGA (compra nova já paga, com comprovante) ou PRESTACAO_DE_SANGRIA (o que foi gasto com uma retirada do caixa e o troco). O servidor confere fornecedor, categoria, sangria e política, e devolve a proposta, o que falta e como responder. Quem confirma é a PESSOA ('sim'); você nunca executa. Para corrigir, chame de novo com os dados certos (nova versão). Retirada para guardar no cofre/banco NÃO é despesa e não se prepara aqui.",
+      descricao: (soSangria ? "PREPARA um lançamento que a pessoa pediu: PRESTACAO_DE_SANGRIA (o que foi gasto com uma retirada do caixa e o troco). Compra já paga entra pelo COMPROVANTE (peça o comprovante: o fluxo de documentos confere e registra)." : "PREPARA (não grava) um lançamento que a pessoa pediu: COMPRA_JA_PAGA (compra nova já paga, com comprovante) ou PRESTACAO_DE_SANGRIA (o que foi gasto com uma retirada do caixa e o troco).") + " O servidor confere fornecedor, categoria, sangria e política, e devolve a proposta, o que falta e como responder. Quem confirma é a PESSOA ('sim'); você nunca executa. Para corrigir, chame de novo com os dados certos (nova versão). Retirada para guardar no cofre/banco NÃO é despesa e não se prepara aqui.",
       esquema: { type: "object", properties: {
-        tipo: { type: "string", enum: Object.values(TIPO_OPERACAO) },
+        tipo: { type: "string", enum: [...tipos] },
         valorCentavos: { type: "integer", minimum: 1, description: "COMPRA_JA_PAGA: valor pago, em centavos" },
         fornecedor: { type: "string", maxLength: 120, description: "de quem foi comprado, como a pessoa disse" },
         dataPagamento: { type: "string", pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
@@ -412,8 +453,14 @@ export function ferramentasDeOperacao() {
       valores: true, ops: [], escrita: "PROPOSTA",
       async executar({ args, sessao }) {
         if (!sessao.operacoes) return { erro: "MODULO_INDISPONIVEL", dados: { mensagem: "O preparo de lançamentos pelo MOVA não está ligado." } };
-        const r = await sessao.operacoes.preparar({ conversaChave: sessao.conversaChave, sessao, autor: sessao.autor, tipo: args.tipo, args, anexo: sessao.anexo ?? null });
+        const r = await sessao.operacoes.preparar({ conversaChave: sessao.conversaChave, sessao, autor: sessao.autor, tipo: args.tipo, args, anexo: sessao.anexo ?? null, autorizacaoDeEscrita: sessao.autorizacaoDeEscrita ?? null });
         sessao.preparouOperacao = true;
+        // execução AUTOMÁTICA: o texto do que foi feito sai do RESULTADO REAL, escrito pelo servidor (nunca pelo modelo)
+        if (r.automatica) {
+          sessao.desfechoAutomatico = r.execucao;
+          return { dados: { entrouNoFinanceiro: Boolean(r.execucao?.executada), automatica: true, estado: r.proposta?.estado ?? null,
+            comoResponder: "O SERVIDOR executou este pedido automaticamente (política aprovada) e envia LOGO EM SEGUIDA, numa mensagem própria, o que foi feito de verdade. Responda só com uma frase curta dizendo que a confirmação segue abaixo: não repita valores e não diga 'registrei'." }, fatos: [] };
+        }
         if (!r.ok) {
           const d = r.detalhes ?? {};
           return { dados: { entrouNoFinanceiro: false, recusado: r.motivo, comoResponder: RECUSAS[r.motivo] ?? "Nada entrou no Financeiro.", ...d },

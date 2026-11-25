@@ -33,7 +33,7 @@ export { criarRepositorioDeIdentidadePostgres, criarRepositorioDeMemoriaPostgres
 export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { registrar() {} }, ferramentasExtras: extrasDadas = [], ferramentasDaPessoa = null, memoria = criarMemoriaDeConversas(), opcoes = {}, relogio = () => Date.now(), glossario = null, operacoes = null, conhecimento = null, escalonamento = null }) {
   // F4 integrada: com o serviço de operações, o modelo ganha preparar_operacao / propostas_do_mova (NUNCA executar)
   // F5: com a base de conhecimento, o modelo ganha buscar_conhecimento / sugerir_conhecimento (sugere; NUNCA aprova)
-  const ferramentasExtras = [...extrasDadas, ...(operacoes ? ferramentasDeOperacao() : []), ...(conhecimento ? ferramentasDeConhecimento() : [])];
+  const ferramentasExtras = [...extrasDadas, ...(operacoes ? ferramentasDeOperacao(operacoes.tipos) : []), ...(conhecimento ? ferramentasDeConhecimento() : [])];
   const montar = (extras) => ({
     catalogo: { ...CATALOGO, ...Object.fromEntries(extras.map((f) => [f.nome, f])) },
     // F5: com a base de conhecimento ligada, como_funciona (temas fixos) SAI — buscar_conhecimento cobre e é versionada
@@ -97,7 +97,8 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       : conversa.fatos;
     const sessao = novaSessao({ conversa, fatos: fatosDaMemoria, organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, unidadesPermitidas: e.unidadesPermitidas, perfil: e.perfil, podeValores: e.podeValores, requisicaoId, hoje: e.hoje ?? null });
     sessao.fatos.push(...fatosDaMensagem(e.texto)); // números que a pessoa escreveu: só para repetir em frase neutra
-    Object.assign(sessao, { operacoes, conhecimento, conversaChave, autor, textoDaPessoa: String(e.texto ?? "").slice(0, 2000), anexo: documentoNoCore ? e.anexo : null });
+    // a autorização de escrita é CALCULADA pelo servidor (perfil da pessoa na unidade), nunca dita pelo modelo
+    Object.assign(sessao, { operacoes, conhecimento, conversaChave, autor, textoDaPessoa: String(e.texto ?? "").slice(0, 2000), anexo: documentoNoCore ? e.anexo : null, autorizacaoDeEscrita: e.autorizacaoDeEscrita ?? null });
     const recuperado = memoria.recuperar ? await memoria.recuperar(conversa, String(e.texto)) : null;
     // F3: o que cada conceito financeiro citado É no sistema (glossário versionado) — orienta, não substitui as ferramentas
     const orientacao = conceitos.orientacao(String(e.texto ?? ""));
@@ -153,6 +154,14 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
       conversa.ultimaLista = { tipo: lista.tipo, filtro: lista.filtro, pagina: lista.pagina, paginas: lista.paginas };
       if (r.motivo !== "RESPONDIDO" && r.motivo !== "RESPOSTA_PARCIAL_CONFERIDA") r = { ...r, texto: "Segue a lista, montada e conferida pelo sistema:", motivo: "LISTA_DO_SERVIDOR" };
       r = { ...r, blocos: lista.blocos };
+    }
+    // 25/11: execução automática — o que foi feito vai numa mensagem do SERVIDOR (resultado real da transação)
+    if (sessao.desfechoAutomatico) {
+      const feito = textoDoDesfecho(sessao.desfechoAutomatico);
+      if (feito) {
+        if (r.motivo !== "RESPONDIDO" && r.motivo !== "RESPOSTA_PARCIAL_CONFERIDA") r = { ...r, texto: feito, motivo: "OPERACAO_AUTOMATICA" };
+        else r = { ...r, blocos: [...(r.blocos ?? []), feito], motivo: "OPERACAO_AUTOMATICA" };
+      }
     }
     const notaDaEntrega = lista ? `\n[o servidor enviou em seguida a lista em ${lista.blocos.length} mensagem(ns), página ${lista.pagina} de ${lista.paginas}]` : "";
     await memoria.registrarTurno(conversa, { pergunta: e.texto, resposta: `${r.texto ?? ""}${notaDaEntrega}`, ferramentas: r.ferramentas.map((x) => x.nome), fatos: sessao.fatos, esclarecimentoPedido: r.motivo === "RESPONDIDO" && /\?\s*$/.test(String(r.texto ?? "")) && !(r.ferramentas ?? []).some((x) => x.ok) });
