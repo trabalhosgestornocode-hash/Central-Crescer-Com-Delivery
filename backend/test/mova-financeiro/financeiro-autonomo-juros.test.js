@@ -12,7 +12,7 @@ const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 let seq = 0;
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 10800, dataPagamento: "2026-10-10", competencia: "2026-10",
   favorecido: "Fornecedor Sintético", pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", instituicaoDestino: "Banco Destino Sintético",
-  idTransacao: `E0000000020261010JUROS${String(++seq).padStart(5, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
+  idTransacao: `E0000000020261010JUROS${String(++seq).padStart(10, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: "INSUMOS", ...x });
 const POLITICA = (x = {}) => ({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Política sintética de teste", vigenteDe: "2026-10-01", ...x });
 const CONCESSAO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento"];
@@ -121,12 +121,12 @@ const pagarAntes = async (s, valor, venc = "2026-10-10") => {
   const g = await s.m.cofre.guardar(s.cx, { conteudo: new TextEncoder().encode(`%PDF-1.4\n% comprovante anterior ${Math.random()}\n%%EOF\n`), tipoMime: "application/pdf" });
   const d = (await s.m.nucleo.registrarDocumento(s.cx, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "COMPROVANTE", recebidoEm: "2026-10-09", descricao: "Comprovante anterior (sintético)" })).documento;
   await s.m.nucleo.registrarPagamentoPorComprovante(s.cx, { obrigacaoId: o.obrigacoes[0].id, valorCentavos: valor, dataPagamento: "2026-10-09", documentoId: d.id,
-    idTransacao: `E0000000020261009ANTES${Math.floor(Math.random() * 1e6)}`, justificativa: "Pagamento anterior (sintético).", confirmar: true });
+    idTransacao: `E0000000020261009ANTES${String(Math.floor(Math.random() * 1e6)).padStart(10, "0")}`, justificativa: "Pagamento anterior (sintético).", confirmar: true });
   return o;
 };
 
 t("AUT-S1 mesmo pagamento já REGISTRADO (conta paga, mesmo fornecedor/valor/data próxima): pergunta antes de criar; 'sim' → nada novo; 'outra compra' → cria a despesa", async () => {
-  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800, idTransacao: "E0000000020261010AUTONSEM0001" }) });
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800, idTransacao: "E0000000020261010AUTONSEM0000001" }) });
   await pagarAntes(s, 10800);
   const antes = [(await s.contas()).length, (await s.liquidacoes()).length, (await s.despesas()).length];
   await s.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("S1") }));
@@ -137,7 +137,7 @@ t("AUT-S1 mesmo pagamento já REGISTRADO (conta paga, mesmo fornecedor/valor/dat
   assert.equal((await s.ultima()).decisao, "DUPLICADO");
   assert.match((await s.saida()).at(-1).texto, /Este pagamento já está registrado/);
   assert.deepEqual([(await s.contas()).length, (await s.liquidacoes()).length, (await s.despesas()).length], antes, "nenhuma despesa, baixa ou saída nova");
-  const s2 = await autonomo({ responder: () => PIX({ valorCentavos: 10800, idTransacao: "E0000000020261010AUTONSEM0002" }) });
+  const s2 = await autonomo({ responder: () => PIX({ valorCentavos: 10800, idTransacao: "E0000000020261010AUTONSEM0000002" }) });
   await pagarAntes(s2, 10800);
   await s2.enviar(gw({ texto: "MOVA brownies para a alfa", doc: pdf("S1b") }));
   await s2.enviar(gw({ texto: "outra compra", grupo: FIN }));
@@ -168,12 +168,12 @@ t("AUT-S3 sem nenhuma evidência parecida: a compra nova segue SEM pergunta (aut
 });
 
 t("AUT-B dados bancários do comprovante preservados na proposta (bancos, favorecido, valor, data/hora, ID), sem criar saída nem presumir a compensação", async () => {
-  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800, horaTransacao: "11:06:57", idTransacao: "E0000000020261010AUTONBANCO01" }), despesa: null });
+  const s = await autonomo({ responder: () => PIX({ valorCentavos: 10800, horaTransacao: "11:06:57", idTransacao: "E0000000020261010AUTONBANCO00001" }), despesa: null });
   await s.conta("2026-10-20", 10800);
   await s.enviar(gw({ texto: "MOVA pagamento da alfa", doc: pdf("B1") }));
   const [p] = await s.propostas();
   assert.deepEqual([p.leitura.instituicao, p.leitura.instituicaoDestino, p.leitura.favorecido, p.leitura.valorCentavos, p.leitura.dataPagamento, p.leitura.horaTransacao, p.leitura.idTransacao],
-    ["Banco Sintético", "Banco Destino Sintético", "Fornecedor Sintético", 10800, "2026-10-10", "11:06:57", "E0000000020261010AUTONBANCO01"]);
+    ["Banco Sintético", "Banco Destino Sintético", "Fornecedor Sintético", 10800, "2026-10-10", "11:06:57", "E0000000020261010AUTONBANCO00001"]);
   assert.equal(p.conciliacao.situacao, "AGUARDANDO_EXTRATO", "o extrato não foi presumido");
   assert.equal((await s.saidas()).length, 0);
 });

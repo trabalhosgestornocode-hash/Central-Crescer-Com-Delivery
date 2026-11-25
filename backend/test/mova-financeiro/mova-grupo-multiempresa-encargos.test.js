@@ -181,3 +181,100 @@ t("GM-6 sem a política de ENCARGO (JUROS_DOCUMENTAL) a compra com juros não é
   assert.equal((await s.contas(ORG_X, XIS)).length, 0);
   assert.doesNotMatch((await s.respostas()).at(-1), /registrada e paga/);
 });
+
+// ------------------------------------------------------------------ 25/11: período da legenda + identificação da conta + E2E recortado
+import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../../src/modules/mova-financeiro/dominio/periodo.js";
+
+const E2E = (n) => `E00000000202611251451${String(n).padStart(11, "0")}`; // forma completa (32), sintético
+/** Pix de benefício a uma funcionária SINTÉTICA (espelha o caso real sem dado real): R$ 90, sem competência impressa. */
+const PIX_BENEFICIO = (x = {}) => BOLETO_PAGO({ valorCentavos: 9000, valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, linhaDigitavel: null,
+  vencimento: null, dataPagamento: "2026-10-14", favorecido: "Fulana Sintética de Sousa", categoriaSugerida: "VALE_REFEICAO", idTransacao: E2E(++seq), ...x });
+const LEG = "Vale refeição entre os dias 08/10 a 14/10 Fulana loja xis";
+
+test("PE-0 período pela legenda: inequívoco vira competência; dois meses ⇒ ambíguo; data do pagamento nunca vira competência; E2E recortado descartado", () => {
+  const p = (t) => periodoDaLegenda(t, "2026-11-25");
+  assert.deepEqual(p("Vale refeição entre os dias 24/11 a 30/11 Fulana"), { inicio: "2026-11-24", fim: "2026-11-30", competencia: "2026-11", ambigua: false, meses: ["2026-11"] });
+  for (const [t, c] of [["Aluguel referente a novembro", "2026-11"], ["Vale-transporte da primeira semana de dezembro", "2026-12"], ["Energia referente a outubro", "2026-10"],
+    ["Pagamento dos entregadores de 16/11 a 22/11", "2026-11"], ["salário 10/2026", "2026-10"]]) assert.equal(p(t).competencia, c, t);
+  for (const t of ["VT de 28/11 a 04/12", "comissão outubro e novembro"]) assert.deepEqual([p(t).competencia, p(t).ambigua], [null, true], t);
+  for (const t of ["pago 25/11/2026", "FIT", "", null]) assert.equal(p(t), null, String(t));
+  const per = p("VR 24/11 a 30/11");
+  assert.equal(contaCompativelComPeriodo({ competencia: "2026-11", descricao: "Vale-refeição Fulana 17/11 a 23/11" }, per), false, "outra semana");
+  assert.equal(contaCompativelComPeriodo({ competencia: "2026-10", descricao: "Vale-refeição" }, per), false, "outra competência");
+  assert.equal(contaCompativelComPeriodo({ competencia: "2026-11", descricao: "Vale-refeição Fulana 24/11 a 30/11" }, per), true);
+  assert.equal(contaCompativelComPeriodo({ competencia: "2026-11", descricao: "Vale-refeição" }, per), true, "sem período na conta: decide pelos demais critérios");
+  assert.equal(contaCompativelComPeriodo({ competencia: "2026-10" }, null), true, "sem período informado: regra antiga");
+  assert.equal(idTransacaoConfiavel(E2E(1)), E2E(1));
+  assert.equal(idTransacaoConfiavel("E0000000020261125145"), null, "E2E cortado");
+  assert.equal(idTransacaoConfiavel("AUT123456"), "AUT123456");
+});
+
+t("PE-1 benefício pago sem conta: competência pela legenda (sem pergunta), conta nova + pagamento na mesma transação, categoria de benefício", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO() });
+  await s.enviar(gw({ texto: LEG, doc: pdf("PE1") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.unidadeId], ["EXECUTADO", XIS], h.motivo);
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.valorBaseCentavos, conta.situacao, conta.competencia], [9000, "QUITADA", "2026-10"]);
+  assert.deepEqual((await s.despesas(ORG_X, XIS)).map((l) => l.categoria), ["VALE_REFEICAO"]);
+  assert.equal((await s.liquidacoes(ORG_X, XIS)).length, 1);
+  assert.match((await s.respostas()).at(-1), /Situação: PAGO/);
+});
+
+t("PE-2 conta EM ABERTO da mesma pessoa e mesmo valor, mas de OUTRA semana: não é baixada; a semana paga ganha conta própria", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO() });
+  const f = await s.m.nucleo.registrarContraparte(s.c(ORG_X, XIS), { tipo: "FORNECEDOR", nome: "Fulana Sintética de Sousa" });
+  const antiga = await s.m.nucleo.registrarObrigacao(s.c(ORG_X, XIS), { contraparteId: f.id, valorOriginalCentavos: 9000, categoria: "VALE_REFEICAO",
+    descricao: "Vale-refeição Fulana 01/10 a 07/10", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento: "2026-10-08" });
+  await s.enviar(gw({ texto: LEG, doc: pdf("PE2") }));
+  const contas = await s.contas(ORG_X, XIS);
+  void antiga; const velha = contas.find((c) => String(c.descricao).includes("01/10 a 07/10"));
+  assert.deepEqual([velha.saldoCentavos, velha.situacao], [9000, "ABERTA"], "a semana anterior continua em aberto");
+  assert.equal(contas.length, 2);
+  assert.ok(s.escritas().every((x) => x.nome !== "registrarPagamentoPorComprovante" || x.contaId !== velha.id));
+});
+
+t("PE-3 conta em aberto da MESMA semana: baixa a existente, sem criar outra", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO() });
+  const f = await s.m.nucleo.registrarContraparte(s.c(ORG_X, XIS), { tipo: "FORNECEDOR", nome: "Fulana Sintética de Sousa" });
+  await s.m.nucleo.registrarObrigacao(s.c(ORG_X, XIS), { contraparteId: f.id, valorOriginalCentavos: 9000, categoria: "VALE_REFEICAO",
+    descricao: "Vale-refeição Fulana 08/10 a 14/10", competencia: "2026-10", dataEmissao: "2026-10-08", vencimento: "2026-10-14" });
+  await s.enviar(gw({ texto: LEG, doc: pdf("PE3") }));
+  const contas = await s.contas(ORG_X, XIS);
+  assert.deepEqual([contas.length, contas[0].situacao], [1, "QUITADA"], (await s.ultima()).motivo);
+});
+
+t("PE-4 período que atravessa dois meses: pergunta só o mês; nada gravado", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO() });
+  await s.enviar(gw({ texto: "Vale transporte de 28/10 a 03/11 Fulana loja xis", doc: pdf("PE4") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_AUSENTE"]);
+  assert.equal(s.escritas().length, 0);
+});
+
+t("PE-5 E2E recortado: não serve de chave nem permite baixa automática; pede o comprovante completo; reenvio em outro arquivo não grava nada", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO({ idTransacao: "E0000000020261125145" }) });
+  await s.enviar(gw({ texto: LEG, doc: pdf("PE5a") }));
+  const h = await s.ultima();
+  assert.notEqual(h.decisao, "EXECUTADO", "sem identificador confiável: não executa sozinho");
+  assert.equal(s.escritas().length, 0);
+  assert.match((await s.respostas()).at(-1), /comprovante completo/);
+  await s.enviar(gw({ texto: LEG, doc: pdf("PE5b") }));
+  assert.notEqual((await s.ultima()).motivo, "TRANSACAO_JA_RECEBIDA", "id recortado não decide duplicidade");
+  assert.deepEqual([s.escritas().length, (await s.liquidacoes(ORG_X, XIS)).length], [0, 0]);
+});
+
+// ------------------------------------------------------------------ 25/11: comprovante no grupo SEM o nome "MOVA" (caso real do Açaí)
+t("DOC-1 comprovante com legenda simples, sem 'MOVA', de participante da lista: processado e respondido; sem legenda, texto comum e pessoa fora da lista: ignorados", async () => {
+  const s = await grupo({ responder: () => PIX_BENEFICIO({ favorecido: "Prestador Sintético de Ar", pagador: "ALFA PRODUTOS", documentoPagador: null, valorCentavos: 26000, categoriaSugerida: null }) });
+  const r = await s.enviar(gw({ texto: "Serviço de manutenção e limpeza ar condicionado loja alfa", doc: pdf("DOC1") }));
+  assert.notEqual(r.status, "IGNORADO", JSON.stringify(r));
+  const h = await s.ultima();
+  assert.equal(h.unidadeId, ALFA, "unidade pelo titular");
+  assert.ok((await s.respostas()).length >= 1, "o participante recebe resposta");
+  // Casos negativos numa sessão NOVA (na mesma sessão a conversa aberta aciona por continuidade, como já era).
+  const n = await grupo({ responder: () => { throw new Error("IA não deve ser chamada"); } });
+  assert.equal((await n.enviar(gw({ doc: pdf("DOC1-sem-legenda") }))).motivo, "NAO_ACIONADO", "arquivo sem legenda");
+  assert.equal((await n.enviar(gw({ texto: "bom dia, pessoal" }))).motivo, "NAO_ACIONADO", "conversa comum continua exigindo o nome");
+  assert.equal((await n.enviar(gw({ texto: "Serviço de manutenção", doc: pdf("DOC1-x"), de: "5500000009999@s.whatsapp.net" }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
+});

@@ -17,7 +17,7 @@ const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 let seq = 0;
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 25900, dataPagamento: "2026-10-10", competencia: "2026-10",
   favorecido: ANDRESSA, pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", instituicaoDestino: "Banco Destino Sintético",
-  idTransacao: `E0000000020261010BROWN${String(++seq).padStart(5, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: null, ...x });
+  idTransacao: `E0000000020261010BROWN${String(++seq).padStart(10, "0")}`, situacaoTransacao: "CONCLUIDA", categoriaSugerida: null, ...x });
 const POLITICA = { operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
   responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante Pix concluído até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01" };
 const CONCESSAO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento"];

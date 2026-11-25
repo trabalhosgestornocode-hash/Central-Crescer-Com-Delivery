@@ -8,7 +8,7 @@ import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.j
 import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 
 const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c2"; // identidade OPERACIONAL (≠ identidade de leitura do MOVA)
-const ID_TX = "E00000000202610141200SINTLIQ01";
+const ID_TX = "E00000000202610141200SINTLIQ0001";
 const pdf = (marca) => `%PDF-1.4\n% comprovante sintetico ${marca}\n%%EOF\n`;
 const PIX = (x = {}) => base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 30000, dataPagamento: "2026-10-14",
   favorecido: "Fornecedor Sintético", pagador: "Loja Alfa Sintética", instituicao: "Banco Sintético", idTransacao: ID_TX, ...x });
