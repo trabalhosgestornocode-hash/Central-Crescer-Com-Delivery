@@ -8,6 +8,9 @@
 import { COMPETENCIA, DATA, REFERENCIA, TEXTO_CURTO } from "./esquema.js";
 import { resolverEntidade } from "./resolucao.js";
 import { bate, itemAPagar, todasAsPaginas, lerUmaVez, formatarListaDeContas, dataBr, SEM_FORNECEDOR } from "./leituras.js";
+/** Dinheiro da frente de caixa → significados que o verificador já conhece (vendas em dinheiro = faturamento; esperado/contado = saldo). */
+const SIGNIFICADO_DO_DINHEIRO = Object.freeze({ vendasEmDinheiroCentavos: "VENDAS:dinheiro", esperadoCentavos: "SALDO_ESPERADO_DO_CAIXA", contadoCentavos: "SALDO_CONTADO_DO_CAIXA",
+  diferencaCentavos: "DIFERENCA_DE_SALDO", fundoFixoCentavos: "SALDO_FUNDO_FIXO", aberturaCentavos: "SALDO_ABERTURA_DO_CAIXA" });
 export { bate, itemAPagar, todasAsPaginas };
 import { FERRAMENTA_ANALISAR } from "./analise.js"; // F2 (import circular seguro: analise só usa os auxiliares daqui em tempo de chamada)
 
@@ -299,7 +302,7 @@ export const FERRAMENTAS = [
   },
   {
     nome: "movimentos_do_caixa_fisico",
-    descricao: "Movimentos do CAIXA FÍSICO (sangrias, suprimentos, retiradas) já registrados num período.",
+    descricao: "FRENTE DE CAIXA num período: sangrias/retiradas, reforços e transferências importados do PDV e, por dia, o DINHEIRO do caixa (fundo fixo/abertura, vendas em dinheiro, saldo esperado, dinheiro contado, sobra/falta) e o valor para o COFRE (esperado, pela contagem; recebido só quando confirmado). Use para 'quanto faturamos em dinheiro', 'quanto foi retirado', 'quanto deveria ir para a gerência/cofre', 'houve diferença no fechamento'. Saldo físico desconhecido = não informado (nunca estime).",
     esquema: { type: "object", properties: { inicio: DATA, fim: DATA, unidade: UNIDADE }, required: ["inicio", "fim"] },
     valores: true, ops: ["consultarMovimentosDeCaixa"],
     async executar({ porta, escopo, args }) {
@@ -307,10 +310,17 @@ export const FERRAMENTAS = [
       const t = r?.totais ?? {};
       const periodo = `${args.inicio}..${args.fim}`;
       const dias = (r?.dias ?? []).slice(0, 31);
-      return { dados: { periodo, totais: t, dias, observacao: r?.observacao ?? null },
+      const dinheiro = (r?.dinheiroPorDia ?? []).slice(0, 31).map((d) => ({ data: d.data, fundoFixoCentavos: d.fundoFixoCentavos ?? null, aberturaCentavos: d.aberturaCentavos ?? null, origemDaAbertura: d.origemDaAbertura ?? null,
+        vendasEmDinheiroCentavos: d.vendasEmDinheiroCentavos ?? null, retiradasCentavos: d.retiradasCentavos ?? null, reforcosCentavos: d.reforcosCentavos ?? null, transferenciasCentavos: d.transferenciasCentavos ?? null,
+        esperadoCentavos: d.esperadoCentavos ?? null, contadoCentavos: d.informadoCentavos ?? null, diferencaCentavos: d.diferencaCentavos ?? null, situacao: d.situacao ?? null,
+        cofre: d.cofre ? { situacao: d.cofre.situacao, esperadoCentavos: d.cofre.esperadoCentavos, pelaContagemCentavos: d.cofre.pelaContagemCentavos, recomposicaoCentavos: d.cofre.recomposicaoCentavos, recebidoCentavos: d.cofre.confirmado ? d.cofre.recebidoCentavos : null, confirmado: d.cofre.confirmado === true } : null }));
+      return { dados: { periodo, totais: t, dias, dinheiroPorDia: dinheiro, observacao: r?.observacao ?? null,
+          nota: "Contado null = dinheiro físico NÃO informado. Valor para o cofre é PREVISÃO: só é entrega confirmada quando 'confirmado' for true. Abertura FUNDO_FIXO_CONFIGURADO é presumida." },
         fatos: fatos(fato(t.retiradas?.totalCentavos, "RETIRADAS_DO_CAIXA", { entidade: "sangrias", periodo }), fato(t.reforcos?.totalCentavos, "REFORCOS_DO_CAIXA", { entidade: "reforços", periodo }),
           fato(t.transferencias?.totalCentavos, "MOVIMENTO_DE_CAIXA", { entidade: "transferências", periodo }), fato(t.desconhecidas?.totalCentavos, "MOVIMENTO_DE_CAIXA", { entidade: "não identificados", periodo }),
-          dias.flatMap((d) => Object.entries(d ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:${kk}`, { periodo: d.data })))) };
+          dias.flatMap((d) => Object.entries(d ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:${kk}`, { periodo: d.data }))),
+          dinheiro.flatMap((d) => [...Object.entries(d).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, SIGNIFICADO_DO_DINHEIRO[kk] ?? `MOVIMENTO_DE_CAIXA:${kk}`, { entidade: "frente de caixa", periodo: d.data })),
+            ...Object.entries(d.cofre ?? {}).filter(([kk, v]) => kk.endsWith("Centavos") && Number.isInteger(v)).map(([kk, v]) => fato(v, `MOVIMENTO_DE_CAIXA:cofre_${kk}`, { entidade: "para o cofre", periodo: d.data }))])) };
     },
   },
   {

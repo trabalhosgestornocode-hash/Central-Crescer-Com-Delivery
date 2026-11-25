@@ -45,16 +45,33 @@ ${avisos.length ? `<ul class="mini mov-caixa__avisos">${avisos.map((a) => `<li>$
 </section>`;
 }
 
+const SITUACAO_COFRE = { PREVISTO_PELA_CONTAGEM: "Previsto pela contagem física", ESTIMATIVA_SEM_CONTAGEM: "Estimativa: sem contagem física",
+  RECOMPOR_FUNDO: "O dinheiro contado não cobre o fundo fixo: recompor o fundo", RECOMPOR_FUNDO_ESTIMADO: "Pela estimativa, o fundo fixo precisa ser recomposto" };
+/** Frente de caixa → cofre: esperado, pela contagem e recebido ficam SEPARADOS; previsão nunca é entrega confirmada. */
+function destinoAoCofre(k, fundo) {
+  if (!k || k.situacao === "SEM_FUNDO_FIXO_CONFIGURADO" || k.situacao === "SEM_CALCULO") return "";
+  const v = (x) => (x === null || x === undefined ? '<span class="valor valor--desconhecido">—</span>' : valor(x));
+  return `<h4>Para o cofre</h4>
+<dl class="ficha ficha--compacta">
+  <dt>Fundo fixo mantido</dt><dd>${v(fundo)}</dd>
+  <dt>Esperado para o cofre</dt><dd>${v(k.esperadoCentavos)}</dd>
+  <dt>Pela contagem física</dt><dd>${v(k.pelaContagemCentavos)}</dd>
+  ${k.recomposicaoCentavos ? `<dt>Recompor o fundo</dt><dd>${v(k.recomposicaoCentavos)}</dd>` : ""}
+  <dt>Recebido pela gerência</dt><dd>${k.confirmado ? v(k.recebidoCentavos) : '<span class="valor valor--desconhecido">não confirmado</span>'}</dd>
+</dl>
+<p class="nota">${esc(SITUACAO_COFRE[k.situacao] ?? k.situacao)}. Valor previsto não comprova que o dinheiro chegou ao cofre.</p>`;
+}
+
 /** Conferência do dinheiro do dia no fechamento: abertura + vendas + reforços − sangrias − transferências = esperado × informado. */
 export function conferenciaDoDinheiro(c) {
   if (!c) return "";
   const v = (x) => (x === null || x === undefined ? '<span class="valor valor--desconhecido">não informado</span>' : valor(x));
   const origem = (k) => (c.origem?.[k] ? `<br><span class="nota">${esc(ORIGEM[c.origem[k]] ?? c.origem[k])}</span>` : "");
-  const situacao = { CONFERE: ["Confere", "ok"], DIFERENTE: ["Diferença no caixa", "alerta"], REVISAR_MOVIMENTOS: ["Revisar movimentações antes de conferir", "erro"], SEM_VALOR_INFORMADO: ["Sem valor informado no fechamento", "neutro"] }[c.situacao];
+  const situacao = { CONFERE: ["Confere", "ok"], DIFERENTE: ["Diferença no caixa", "alerta"], SOBRA: ["Sobra de caixa", "alerta"], FALTA: ["Falta de caixa", "alerta"], REVISAR_MOVIMENTOS: ["Revisar movimentações antes de conferir", "erro"], SEM_VALOR_INFORMADO: ["Sem valor informado no fechamento", "neutro"] }[c.situacao];
   return `<section class="mov-caixa" aria-label="Conferência do dinheiro do dia">
 <h3>Conferência do dinheiro</h3>
 <dl class="ficha ficha--compacta">
-  <dt>Abertura</dt><dd>${v(c.aberturaCentavos)}${c.aberturaInformada ? "" : '<br><span class="nota">sem abertura informada: considerada zero</span>'}</dd>
+  <dt>Abertura</dt><dd>${v(c.aberturaCentavos)}${c.aberturaInformada ? "" : c.origemDaAbertura === "FUNDO_FIXO_CONFIGURADO" ? '<br><span class="nota">fundo fixo da unidade (abertura presumida, não comprovada)</span>' : '<br><span class="nota">sem abertura informada: considerada zero</span>'}</dd>
   <dt>Vendas em dinheiro</dt><dd>${v(c.vendasEmDinheiroCentavos)}${c.origemDasVendas ? `<br><span class="nota">${c.origemDasVendas === "IMPORTADO" ? "vendas importadas" : "informado no fechamento"}</span>` : ""}</dd>
   <dt>Sangrias</dt><dd>${v(c.retiradasCentavos)}${origem("retiradas")}</dd>
   <dt>Reforços</dt><dd>${v(c.reforcosCentavos)}${origem("reforcos")}</dd>
@@ -63,7 +80,7 @@ export function conferenciaDoDinheiro(c) {
   <dt>Dinheiro informado</dt><dd>${v(c.informadoCentavos)}</dd>
   <dt>Diferença</dt><dd>${v(c.diferencaCentavos)}</dd>
 </dl>
-${situacao ? `<p>${selo(situacao[0], situacao[1])}</p>` : ""}
+${situacao ? `<p>${selo(situacao[0], situacao[1])}</p>` : ""}${destinoAoCofre(c.cofre, c.fundoFixoCentavos)}
 </section>`;
 }
 

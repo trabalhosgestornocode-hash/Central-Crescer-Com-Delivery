@@ -22,6 +22,36 @@ export async function movimentosDoPeriodo(tx, cx, inicio, fim) {
 }
 
 const soma = (lista, f) => lista.reduce((s, x) => s + f(x), 0);
+
+/**
+ * FUNDO FIXO da frente de caixa (troco que fica para o próximo expediente), configurado por unidade (`fundoFixoCaixaCentavos` na
+ * configuração da unidade). Ausente ou inválido ⇒ null: o sistema NÃO presume valor (nada fixo no código).
+ */
+export const FUNDO_FIXO_MAXIMO_CENTAVOS = 10_000_000;
+export function fundoFixoDe(cfg) {
+  const v = cfg?.fundoFixoCaixaCentavos;
+  return Number.isInteger(v) && v >= 0 && v <= FUNDO_FIXO_MAXIMO_CENTAVOS ? v : null;
+}
+export async function fundoFixoDaUnidade(tx, cx) { return fundoFixoDe(await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade")); }
+
+/**
+ * Dinheiro que vai da frente de caixa para o COFRE, separado em três valores que nunca se confundem:
+ *   - esperado = saldo esperado − fundo fixo (o que DEVERIA ir, pelas contas);
+ *   - pela contagem = dinheiro contado − fundo fixo (o que a contagem física indica);
+ *   - recebido pela gerência = só o que for CONFIRMADO no cofre (aqui sempre null: previsão não comprova a entrega).
+ * Contagem abaixo do fundo ⇒ RECOMPOSIÇÃO do fundo (nunca transferência negativa). Sem contagem ⇒ só a estimativa.
+ */
+export function destinoAoCofre({ esperadoCentavos, informadoCentavos, fundoFixoCentavos }) {
+  if (!Number.isInteger(fundoFixoCentavos)) return { situacao: "SEM_FUNDO_FIXO_CONFIGURADO", esperadoCentavos: null, pelaContagemCentavos: null, recomposicaoCentavos: null, recebidoCentavos: null, confirmado: false };
+  const esperado = Number.isInteger(esperadoCentavos) ? esperadoCentavos - fundoFixoCentavos : null;
+  if (Number.isInteger(informadoCentavos)) {
+    const sobra = informadoCentavos - fundoFixoCentavos;
+    return { situacao: sobra < 0 ? "RECOMPOR_FUNDO" : "PREVISTO_PELA_CONTAGEM", esperadoCentavos: esperado !== null ? Math.max(esperado, 0) : null,
+      pelaContagemCentavos: Math.max(sobra, 0), recomposicaoCentavos: sobra < 0 ? -sobra : 0, recebidoCentavos: null, confirmado: false };
+  }
+  return { situacao: esperado === null ? "SEM_CALCULO" : esperado < 0 ? "RECOMPOR_FUNDO_ESTIMADO" : "ESTIMATIVA_SEM_CONTAGEM", esperadoCentavos: esperado !== null ? Math.max(esperado, 0) : null,
+    pelaContagemCentavos: null, recomposicaoCentavos: esperado !== null && esperado < 0 ? -esperado : null, recebidoCentavos: null, confirmado: false };
+}
 const bloco = (lista) => ({ quantidade: lista.length, totalCentavos: soma(lista, (r) => r.dados.valorAbsolutoCentavos) });
 
 /** Situação da comparação de UM tipo de movimento entre o relatório importado e o fechamento manual do dia. */
@@ -95,7 +125,7 @@ export function resumirMovimentosDoDia({ data, movimentos, fechamentos = [], ven
  * Cada movimento entra UMA vez: importado e manual iguais contam uma vez (e viram alerta de duplicidade); importado e manual diferentes
  * impedem o cálculo (REVISAR_MOVIMENTOS) em vez de escolher um lado.
  */
-export function dinheiroDoDia({ resumo, fechamentos = [], vendasEmDinheiroCentavos = null }) {
+export function dinheiroDoDia({ resumo, fechamentos = [], vendasEmDinheiroCentavos = null, fundoFixoCentavos = null }) {
   const manual = (campo) => {
     const valores = fechamentos.map((f) => f.dados?.dinheiro?.[campo]).filter((v) => v !== null && v !== undefined);
     return valores.length ? soma(valores, (v) => v) : null;
@@ -111,7 +141,9 @@ export function dinheiroDoDia({ resumo, fechamentos = [], vendasEmDinheiroCentav
   const ret = escolher(resumo?.retiradas.totalCentavos ?? 0, manual("retiradasCentavos"), c.retiradas);
   const ref = escolher(resumo?.reforcos.totalCentavos ?? 0, manual("reforcosCentavos"), c.reforcos);
   const tra = escolher(resumo?.transferencias.totalCentavos ?? 0, manual("transferenciasCentavos"), c.transferencias);
-  const abertura = manual("aberturaCentavos");
+  const aberturaManual = manual("aberturaCentavos");
+  // Sem abertura informada no dia, o FUNDO FIXO configurado é a abertura presumida (marcada: não comprova a abertura histórica).
+  const abertura = aberturaManual ?? (Number.isInteger(fundoFixoCentavos) ? fundoFixoCentavos : null);
   const vendasManual = manual("vendasCentavos");
   const vendas = vendasEmDinheiroCentavos ?? vendasManual;
   const informado = manual("informadoCentavos");
@@ -122,8 +154,11 @@ export function dinheiroDoDia({ resumo, fechamentos = [], vendasEmDinheiroCentav
     retiradasCentavos: ret.valorCentavos, reforcosCentavos: ref.valorCentavos, transferenciasCentavos: tra.valorCentavos,
     origem: { retiradas: ret.origem, reforcos: ref.origem, transferencias: tra.origem },
     esperadoCentavos: esperado, informadoCentavos: informado, diferencaCentavos: esperado !== null && informado !== null ? informado - esperado : null,
-    aberturaInformada: abertura !== null,
-    situacao: conflito ? "REVISAR_MOVIMENTOS" : informado === null ? "SEM_VALOR_INFORMADO" : esperado === informado ? "CONFERE" : "DIFERENTE",
+    aberturaInformada: aberturaManual !== null,
+    origemDaAbertura: aberturaManual !== null ? "INFORMADA" : abertura !== null ? "FUNDO_FIXO_CONFIGURADO" : null,
+    fundoFixoCentavos: Number.isInteger(fundoFixoCentavos) ? fundoFixoCentavos : null,
+    situacao: conflito ? "REVISAR_MOVIMENTOS" : informado === null ? "SEM_VALOR_INFORMADO" : esperado === informado ? "CONFERE" : informado > esperado ? "SOBRA" : "FALTA",
+    cofre: destinoAoCofre({ esperadoCentavos: esperado, informadoCentavos: informado, fundoFixoCentavos }),
   };
 }
 
@@ -147,7 +182,11 @@ export function operacoesDeMovimentosDeCaixa(b) {
           desconhecidas: bloco(movimentos.filter((r) => r.dados.natureza === N.DESCONHECIDA)),
           semCaixaIdentificado: movimentos.filter((r) => r.dados.considerar).length,
         };
-        return { periodoInicio: inicio, periodoFim: fim, dias, totais, observacao: "Retiradas de caixa são despesas pagas em dinheiro, mas só viram conta quando você as lança (etapa explícita). Reforço e transferência não são despesa. Nada aqui é faturamento." };
+        // Dinheiro do dia (abertura/fundo + vendas em dinheiro + reforços − sangrias − transferências; contado; para o cofre): os MESMOS
+        // cálculos do fechamento (diasDeFechamento), só leitura. Import tardio: fechamentoManual.js importa este módulo.
+        const { diasDeFechamento } = await import("./fechamentoManual.js");
+        const dinheiroPorDia = (await diasDeFechamento(tx, cx, inicio, fim)).filter((d) => d.dinheiroDoDia).map((d) => ({ data: d.data, ...d.dinheiroDoDia }));
+        return { periodoInicio: inicio, periodoFim: fim, dias, totais, dinheiroPorDia, fundoFixoCentavos: await fundoFixoDaUnidade(tx, cx), observacao: "Retiradas de caixa são despesas pagas em dinheiro, mas só viram conta quando você as lança (etapa explícita). Reforço e transferência não são despesa. Nada aqui é faturamento." };
       });
     },
   };

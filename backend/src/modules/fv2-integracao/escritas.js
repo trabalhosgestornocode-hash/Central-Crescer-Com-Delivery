@@ -393,7 +393,11 @@ export const ESCRITAS = Object.freeze({
     mensalidadeCentavos: centavos(b.mensalidade || "0,00"), servicosEPromocoesCentavos: centavos(b.servicosEPromocoes || "0,00"), ajustesCentavos: centavos(b.ajustes || "0,00"),
     liquidoInformadoCentavos: centavos(b.liquido), origem: b.origem, justificativa: b.justificativa,
   }) },
-  "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
+  "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa", "fundoFixoCaixa"], fazer: (n, c, b) => n.configurarUnidade(c, {
+    ...semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"]),
+    // fundo fixo da frente de caixa em reais ("106,00"); vazio = mantém o atual
+    ...(b.fundoFixoCaixa !== undefined && String(b.fundoFixoCaixa).trim() !== "" ? { fundoFixoCaixaCentavos: centavos(b.fundoFixoCaixa) } : {}),
+  }) },
   // Fontes de faturamento da unidade: pela tela vêm o sistema de loja (SAIPOS|SWF) e as plataformas marcadas; `fontes` (lista) também é aceito.
   "/configuracoes/fontes-faturamento": { campos: ["fontes", "sistemaDeLoja", "ifood", "noventaENoveFood", "lojasSwf", "justificativa"], fazer: (n, c, b) => n.configurarFontesDeFaturamento(c, {
     fontes: [...[].concat(b.fontes ?? []).flatMap((f) => String(f).split(",")), ...(b.sistemaDeLoja ? [String(b.sistemaDeLoja)] : []), ...(marcado(b.ifood) ? ["IFOOD"] : []), ...(marcado(b.noventaENoveFood) ? ["NOVENTA_E_NOVE_FOOD"] : [])].map((f) => f.trim()).filter(Boolean),
