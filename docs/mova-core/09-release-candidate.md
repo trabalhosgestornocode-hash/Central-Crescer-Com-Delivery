@@ -13,10 +13,9 @@ Nenhum merge, deploy, migração em produção, mudança de orçamento, escrita 
 | Propostas persistentes (0020): reinício, várias instâncias, CAS, retomada | pronto | PP-1..5 em PostgreSQL |
 | F5 conhecimento corporativo (0021) + corpo de 35 itens (PENDENTES) | pronto | CN-01..05 + CN-PG-1..3 |
 | Escalonamento Sonnet (só homologação, desligado em produção) | pronto, **recomendado manter desligado** | ES-01..04 + avaliação |
-| **Integração do motor de conversa ao pipeline do WhatsApp (sombra/resposta)** | **NÃO FEITO** | — |
+| Integração do motor de conversa ao pipeline do WhatsApp (sombra/resposta) | **feito** (`MOVA_CORE_CONVERSA`, desligado por padrão) | MC-01..07 + conversa real pelo pipeline (doc 10) |
 
-**Pendência material nº 1:** hoje só o vínculo está ligado ao backend de produção. O motor `criarMovaCore` não tem ponto
-de integração com a fila do MOVA atual. Sem esse adaptador, não há sombra nem conversa real.
+**Publicação controlada:** ver doc 10 (piloto Açaí, sem migração).
 
 ## 2. Ordem das migrações (schema `mova`)
 
@@ -100,7 +99,7 @@ vigente; a IA nunca chama escrita. Conhecimento: a IA só sugere (PENDENTE); apr
 
 ## 12. Pendências materiais
 
-1. **Adaptador do motor ao pipeline do WhatsApp (sombra e resposta)** — não feito.
+1. Adaptador ao pipeline: feito (doc 10).
 2. Migrações 0019–0021 não aplicadas em produção.
 3. Corpo de conhecimento inteiro PENDENTE: precisa de revisão e aprovação humana (script de aprovação a fazer na Central).
 4. Metas do conjunto cego não atingidas (ver relatório): decisão final e casos críticos abaixo da meta na rodada cega.

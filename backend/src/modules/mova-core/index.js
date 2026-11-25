@@ -116,7 +116,10 @@ export function criarMovaCore({ porta, cliente = null, orcamento, auditoria = { 
     const nomeDe = (id) => e.unidadesPermitidas.find((u) => u.id === id)?.nome ?? null;
     const avisoDeUnidade = unidadeAnterior && unidadeAnterior !== e.unidadeId && nomeDe(unidadeAnterior)
       ? `[servidor] A unidade desta conversa MUDOU de ${nomeDe(unidadeAnterior)} para ${nomeDe(e.unidadeId) ?? "outra unidade"}. As respostas anteriores se referiam a ${nomeDe(unidadeAnterior)} e continuam corretas para ela: não as chame de erradas; responda agora sobre ${nomeDe(e.unidadeId) ?? "a unidade atual"}.` : null;
-    const contexto = [orientacao, recuperado, notaDoServidor, avisoDeUnidade].filter(Boolean).join("\n") || null;
+    // Piloto só leitura (sem o serviço de operações): o modelo não pode oferecer proposta/confirmação que não existe nesta montagem,
+    // mesmo que a documentação do sistema descreva o recurso.
+    const notaSemEscrita = operacoes ? null : "[servidor] Nesta versão o MOVA só consulta e explica: não prepara proposta nem confirma lançamento pela conversa (não ofereça isso, mesmo que a documentação descreva). Comprovante enviado aqui segue o fluxo de documentos que já existe (fica guardado para conferência na Central); o lançamento é feito na tela do Financeiro.";
+    const contexto = [orientacao, recuperado, notaDoServidor, avisoDeUnidade, notaSemEscrita].filter(Boolean).join("\n") || null;
     const unidade = e.unidadesPermitidas.find((u) => u.id === e.unidadeId)?.nome ?? "—";
     const argsDoLaco = {
       cliente, executor, sessao, orcamento, ferramentas: definicoesDaVez, historico: memoria.historico(conversa, String(e.texto)), pergunta: String(e.texto).slice(0, 2000),

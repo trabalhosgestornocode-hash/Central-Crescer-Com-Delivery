@@ -383,9 +383,9 @@ const EXPLICACOES = Object.freeze({
 });
 const CAMINHOS = Object.freeze({
   RETIRADA_DO_CAIXA: "Registrar a retirada como movimento do caixa físico na tela Caixa e Bancos do Financeiro (pela conversa ainda não é registrado).",
-  DESPESA_JA_PAGA: "Enviar o comprovante ao MOVA para leitura e conferência; a despesa e a baixa são propostas para aprovação.",
-  PAGAMENTO_DE_CONTA_EXISTENTE: "Enviar o comprovante ao MOVA: ele procura a conta em aberto correspondente e propõe a baixa.",
-  COMPRA_NOVA_PAGA: "Enviar o comprovante ao MOVA dizendo que é compra nova já paga; a criação da despesa já paga depende de habilitação ainda desligada.",
+  DESPESA_JA_PAGA: "Enviar o comprovante (foto ou PDF) aqui no MOVA: ele segue o fluxo de documentos (conferência na Central). O lançamento pela conversa ainda não está habilitado; pode ser feito na tela do Financeiro.",
+  PAGAMENTO_DE_CONTA_EXISTENTE: "Enviar o comprovante (foto ou PDF) aqui no MOVA: ele segue o fluxo de documentos (conferência com a conta em aberto na Central). A baixa pela conversa ainda não está habilitada; pode ser feita na tela do Financeiro.",
+  COMPRA_NOVA_PAGA: "Enviar o comprovante (foto ou PDF) aqui no MOVA: ele segue o fluxo de documentos (conferência na Central). A criação da despesa pela conversa ainda não está habilitada; pode ser feita na tela do Financeiro.",
   OUTRO: "Registrar na tela do Financeiro.",
 });
 

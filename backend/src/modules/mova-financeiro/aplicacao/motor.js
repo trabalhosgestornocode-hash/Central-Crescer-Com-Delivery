@@ -82,7 +82,7 @@ export function respostaDaFalhaDeLeitura(lida, evento) {
   if (lida.motivo === "DOCUMENTO_ILEGIVEL") return RESPOSTA.falhaLeitura(); // único caso em que o MODELO leu e declarou ilegível
   return RESPOSTA.falhaTecnicaDeLeitura();
 }
-export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null, recebimentoDocumental = false, obterEvidencia = null }) {
+export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = () => new Date(), registrar = () => {}, redator = null, somenteConsultas = false, comandosDeterministicos = false, execucao = null, entregadores = null, recebimentoDocumental = false, obterEvidencia = null, conversaNova = null }) {
   const hoje = () => relogio().toISOString().slice(0, 10);
   const ACAO = porta.acoes;
   const servico = cfg.identidadeServico.usuarioId;
@@ -320,6 +320,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const injecao = sinaisDeInjecao(evento.texto) || sinaisDeInjecao(esclarecimento?.texto);
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoRestrito(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "DADO_RESTRITO", resposta: RESPOSTA.dadoRestrito(), injecao });
     if (evento.tipo === "TEXTO" && !esclarecimento && PEDIDO_DE_EXECUCAO.some((r) => r.test(evento.texto ?? ""))) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "INTENCAO_PROIBIDA:PEDIR_PAGAMENTO", resposta: RESPOSTA.operacaoBloqueada(), injecao });
+    // MOVA CORE (desligado por padrão): TEXTO livre na conversa PRIVADA de quem está na lista, numa unidade do piloto. As guardas de
+    // dado restrito e de pedido de execução acima continuam valendo. Sem resposta do núcleo (SOMBRA, fora do escopo, falha) ⇒ segue o
+    // motor atual, que é também o rollback imediato (MOVA_CORE_CONVERSA=DESLIGADO).
+    if (conversaNova && evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && !pendenteSemantico) {
+      const nova = await conversaNova.atender({ evento, grupo, participante });
+      if (nova?.texto) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `MOVA_CORE:${nova.motivo}`, escopo: { organizacaoId: nova.organizacaoId, unidadeId: nova.unidadeId }, resposta: nova.texto, injecao,
+        extra: { nucleo: "MOVA_CORE", requisicaoCore: nova.requisicaoId, ferramentas: nova.ferramentas, custoMicrousd: nova.custoMicrousd, latenciaMs: nova.latenciaMs } });
+    }
     if (evento.tipo === "TEXTO" && !esclarecimento && pedidoForaDoEscopo(evento.texto)) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "FORA_DO_ESCOPO", resposta: RESPOSTA.foraDoEscopo(), injecao });
     // 15H (H-1): saudação/pergunta sobre o MOVA, sem número nem palavra financeira ⇒ orientação determinística, SEM IA.
     if (evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && ehSaudacaoOuAjuda(evento.texto)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "SAUDACAO", resposta: somenteConsultas ? RESPOSTA.conversaPiloto() : RESPOSTA.conversaSemPedido(), injecao });

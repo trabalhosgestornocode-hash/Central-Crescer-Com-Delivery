@@ -46,6 +46,8 @@ import {
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
 import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
+import { configuracaoDaConversa } from "../mova-core/conversaWhatsapp.js";
+import { montarConversaCore } from "./movaCoreConversa.js";
 
 export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -154,6 +156,9 @@ export function lerConfiguracaoMova(env) {
     envioMaximoDia: env.MOVA_ENVIO_MAXIMO_DIA ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_DIA) : 0) : null,
     envioMaximoPorConversaDia: env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA ? (/^[0-9]{1,3}$/.test(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) : 0) : (env.MOVA_ENVIO_MAXIMO_DIA ? 10 : null),
     respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
+    // MOVA CORE: conversa natural (SOMBRA | RESPOSTA) só com a IA do MOVA ligada e só nas unidades de MOVA_CORE_CONVERSA_UNIDADES.
+    conversaCore: ia ? configuracaoDaConversa(env) : Object.freeze({ modo: "DESLIGADO", motivo: "SEM_IA", unidades: [] }),
+    modeloCore: env.MOVA_CORE_MODELO && /^claude-haiku-/.test(env.MOVA_CORE_MODELO) ? env.MOVA_CORE_MODELO : null,
     // 23/11: "<unidadeId>=<grupo>@g.us[,…]" — grupo da gerência COMPARTILHADO indicado pelo proprietário para os avisos de uma
     // unidade sem grupo exclusivo. Entrada inválida é ignorada (o aviso fica pendente, como sem grupo).
     avisosNoGrupo: Object.freeze(Object.fromEntries(String(env.MOVA_AVISOS_NO_GRUPO ?? "").split(",").map((x) => x.trim().toLowerCase().split("="))
@@ -255,6 +260,10 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
   const redator = cfg.ia && cfg.respostasNaturais && cfg.iaSomenteDocumentos !== true && criarClienteIa
     ? criarRedator({ cliente: clienteComOrcamento(criarClienteIa(), { orcamento, controle, teto: cfg.teto ?? null }), registrar })
     : null;
+  // MOVA CORE: o núcleo só é montado depois do MOVA (usa a porta dele); até lá, e sem unidade do piloto, devolve null (motor atual).
+  const conversaCore = cfg.conversaCore && cfg.conversaCore.modo !== "DESLIGADO" && criarClienteIa ? cfg.conversaCore : null;
+  let conversaReal = null;
+  const conversaNova = conversaCore ? Object.freeze({ atender: async (x) => (conversaReal ? conversaReal.atender(x) : null) }) : null;
   // Agente 2 — Frente C: a escrita só existe com a identidade OPERACIONAL implantada pela plataforma (núcleo de escrita + concessões
   // dela). Sem isso a montagem RECUSA (nada sobe pela metade); sem `escrita`, o MOVA confere e propõe, nunca escreve.
   let operacional = null;
@@ -263,7 +272,11 @@ export async function montarMova({ cfg, pool, repositorio, verificarBancoFinance
     if (!op?.nucleo || !op?.concessoes) throw Object.assign(new Error("Identidade operacional não implantada."), { codigo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
     operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova });
+  if (conversaCore) {
+    try { conversaReal = await montarConversaCore({ conversaCore, servicoUsuarioId: cfg.servicoUsuarioId, configuracao, porta: mova.porta, acaoVer: ACAO.VER, orcamento, controle, criarClienteIa, registrar, relogio, modelo: cfg.modeloCore ?? null }); }
+    catch (e) { registrar({ tipo: "MOVA_CORE_CONVERSA_NAO_MONTADA", erro: String(e?.message ?? e).slice(0, 200) }); } // falha segura: o motor atual segue sozinho
+  }
   const worker = cfg.processamento ? criarWorker({ receptor: mova.receptor, registrar }) : null;
   const enviadorBase = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
