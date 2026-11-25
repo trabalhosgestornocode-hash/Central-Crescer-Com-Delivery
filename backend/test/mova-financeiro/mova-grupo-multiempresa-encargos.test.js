@@ -272,7 +272,9 @@ t("DOC-1 comprovante com legenda simples, sem 'MOVA', de participante da lista: 
   const h = await s.ultima();
   assert.equal(h.unidadeId, ALFA, "unidade pelo titular");
   assert.ok((await s.respostas()).length >= 1, "o participante recebe resposta");
-  assert.equal((await s.enviar(gw({ doc: pdf("DOC1-sem-legenda") }))).motivo, "NAO_ACIONADO", "arquivo sem legenda");
-  assert.equal((await s.enviar(gw({ texto: "bom dia, pessoal" }))).motivo, "NAO_ACIONADO", "conversa comum continua exigindo o nome");
-  assert.equal((await s.enviar(gw({ texto: "Serviço de manutenção", doc: pdf("DOC1-x"), de: "5500000009999@s.whatsapp.net" }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
+  // Casos negativos numa sessão NOVA (na mesma sessão a conversa aberta aciona por continuidade, como já era).
+  const n = await grupo({ responder: () => { throw new Error("IA não deve ser chamada"); } });
+  assert.equal((await n.enviar(gw({ doc: pdf("DOC1-sem-legenda") }))).motivo, "NAO_ACIONADO", "arquivo sem legenda");
+  assert.equal((await n.enviar(gw({ texto: "bom dia, pessoal" }))).motivo, "NAO_ACIONADO", "conversa comum continua exigindo o nome");
+  assert.equal((await n.enviar(gw({ texto: "Serviço de manutenção", doc: pdf("DOC1-x"), de: "5500000009999@s.whatsapp.net" }))).motivo, "PARTICIPANTE_NAO_AUTORIZADO");
 });
