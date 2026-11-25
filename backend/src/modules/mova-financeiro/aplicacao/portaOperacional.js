@@ -29,6 +29,8 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   // 24/11: compra NOVA já paga — conta + comprovante + pagamento por comprovante numa ÚNICA transação do Financeiro (as mesmas
   // três ações que a sequência antiga já exigia; nenhuma concessão nova).
   registrarDespesaPagaPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO"],
+  // 25/11: compra nova paga com juros/multa DISCRIMINADOS no comprovante — a mesma operação atômica + `registrar_juros`.
+  registrarDespesaPagaComEncargo: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO", "REGISTRAR_JUROS"],
   // MOVA CORE F4 (24/11): prestação de contas da SANGRIA — despesa paga com a PRÓPRIA retirada (conta + liquidação contra a saída
   // da sangria, numa transação) e troco devolvido ao MESMO caixa. Nenhuma saída nova; o núcleo trava a retirada e recusa excedente.
   // 25/11: ação ESTREITA `prestar_sangria` (0032) — nunca a ampla `registrar` (que o provedor operacional recusa).

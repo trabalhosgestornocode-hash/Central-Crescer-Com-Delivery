@@ -194,7 +194,9 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
     if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_COMPROVANTE");
     const mime = proposta.evidencia.mime;
-    const r = await executor.chamar("registrarDespesaPagaPorComprovante", escopo, {
+    const encargos = proposta.comando?.encargos ?? null;
+    const r = await executor.chamar(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo, {
+      ...(encargos ? { encargos: { jurosCentavos: encargos.jurosCentavos, multaCentavos: encargos.multaCentavos } } : {}),
       obrigacao: { ...entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } },
       comprovante: { arquivo: { conteudo: bytes, nome: `comprovante-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime },
         descricao: `Comprovante recebido pelo MOVA (proposta ${curto(proposta.id)})`, competencia: proposta.datas?.competencia ?? null },
@@ -203,7 +205,10 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     });
     return { obrigacaoId: r.obrigacao.id, movimentacaoId: null, documentoId: r.documento.id, liquidacaoIds: [r.liquidacao.id], repetidoNoFinanceiro: Boolean(r.repetido),
       favorecido: proposta.leitura?.favorecido ?? null, parcial: false, dataPagamento, saldoDepoisCentavos: r.obrigacao.saldoCentavos ?? 0, situacaoPagamento: "PAGO_POR_COMPROVANTE",
-      conciliacao: "CONCILIACAO_PENDENTE", despesaCriada: r.efeito?.novasDespesas === 1, lancamentoId: r.lancamento?.id ?? null, categoria: entrada.categoria ?? null };
+      conciliacao: "CONCILIACAO_PENDENTE", despesaCriada: r.efeito?.novasDespesas === 1, lancamentoId: r.lancamento?.id ?? null, categoria: entrada.categoria ?? null,
+      ...(encargos ? { principalCentavos: r.efeito?.principalCentavos ?? encargos.principalCentavos, jurosCentavos: r.efeito?.jurosCentavos ?? encargos.jurosCentavos,
+        multaCentavos: r.efeito?.multaCentavos ?? encargos.multaCentavos, encargoCentavos: r.efeito?.encargoCentavos ?? encargos.encargoCentavos, pagoCentavos: r.efeito?.pagoCentavos ?? null,
+        vencimento: r.obrigacao?.vencimento ?? entrada.vencimento ?? null, situacaoConta: r.obrigacao?.situacao ?? null } : {}) };
   }
 
   /** Avaliação do comprovante guardada na proposta (ou refeita pela leitura, se a proposta é anterior à Execução 17). */
@@ -288,10 +293,16 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje(), conciliacao: { situacao: "AGUARDANDO_EXTRATO" }, comprovante,
       acumuladoCentavos: await acumuladoDocumental(escopo, proposta) });
     await a.propostas.anotar(escopo, proposta.id, { autonomiaDocumental: decisao, comprovante });
-    const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: decisao.motivos, motivosDocumentais: decisao.motivos, comprovante: comprovante?.situacao ?? null };
-    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
-    if (!operacional) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode("registrarDespesaPagaPorComprovante", escopo))) return { ...r0, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    // 25/11: juros/multa comprovados no documento — o ENCARGO tem a sua política (JUROS_DOCUMENTAL) e exige `registrar_juros`.
+    const encargos = proposta.comando?.encargos ?? null;
+    const doEncargo = encargos ? decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.JUROS_DOCUMENTAL, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: encargos.encargoCentavos, hoje: hoje(), conciliacao: { situacao: "AGUARDANDO_EXTRATO" }, comprovante }) : null;
+    if (doEncargo) await a.propostas.anotar(escopo, proposta.id, { autonomiaJuros: doEncargo });
+    const motivos0 = [...new Set([...decisao.motivos, ...(doEncargo?.motivos ?? [])])];
+    const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: motivos0, motivosDocumentais: motivos0, comprovante: comprovante?.situacao ?? null };
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO || (doEncargo && doEncargo.nivel !== NIVEL.APLICAR_AUTOMATICO)) return r0;
+    if (!operacional) return { ...r0, motivosDocumentais: [...motivos0, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo))) return { ...r0, motivosDocumentais: [...motivos0, "SEM_CONCESSAO_OPERACIONAL"] };
     const { reserva, repetida } = await reservar(OPERACAO.DESPESA_DOCUMENTAL, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, decisao.politicaId, operacional);
     if (repetida) return { ...r0, ...(repetida.ok ? { situacao: "PAGO_POR_COMPROVANTE", resultado: repetida.operacao?.resultado } : { motivo: repetida.motivo }) };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
@@ -346,9 +357,9 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     try {
       const doc = await anexarComprovante({ proposta, escopo, obrigacaoId: e.obrigacaoId, executor: operacional });
       const r = await operacional.chamar("registrarPagamentoComEncargo", escopo, {
-        obrigacaoId: e.obrigacaoId, valorCentavos: proposta.valorCentavos, encargoCentavos: juros.valorCentavos, tipoEncargo: "JUROS", dataPagamento: e.dataEfetiva,
+        obrigacaoId: e.obrigacaoId, valorCentavos: proposta.valorCentavos, encargoCentavos: juros.valorCentavos, tipoEncargo: juros.tipoEncargo ?? "JUROS", dataPagamento: e.dataEfetiva,
         documentoId: doc.documento.id, idTransacao: proposta.leitura?.idTransacao ?? null,
-        justificativa: `Pago por comprovante pelo MOVA com juros/multa confirmados pelo remetente (política de autonomia); conciliação com o extrato pendente.`, confirmar: true,
+        justificativa: (juros.confirmadoPor === "COMPROVANTE" ? `Pago por comprovante pelo MOVA com encargos discriminados no comprovante (juros ${juros.jurosCentavos ?? 0} e multa ${juros.multaCentavos ?? 0} centavos; política de autonomia); conciliação com o extrato pendente.` : `Pago por comprovante pelo MOVA com juros/multa confirmados pelo remetente (política de autonomia); conciliação com o extrato pendente.`), confirmar: true,
       });
       const resultado = { obrigacaoId: e.obrigacaoId, movimentacaoId: null, documentoId: doc.documento.id, liquidacaoIds: [r.liquidacao.id], repetidoNoFinanceiro: Boolean(r.repetido),
         favorecido: proposta.leitura?.favorecido ?? null, parcial: false, dataPagamento: e.dataEfetiva, saldoDepoisCentavos: r.titulo?.saldoCentavos ?? null,

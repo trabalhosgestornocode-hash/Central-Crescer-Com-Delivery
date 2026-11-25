@@ -108,7 +108,13 @@ export function validarConfiguracao(c) {
     exigir(consultasNoGrupo.every((x) => CONSULTAS.includes(x) && x !== "DADO_RESTRITO"), `${campo}.consultasNoGrupo`);
     const politicaResposta = g.politicaResposta ?? POLITICA_RESPOSTA.PRIVADO_RESTRITO;
     exigir(Object.values(POLITICA_RESPOSTA).includes(politicaResposta) && (politicaResposta === POLITICA_RESPOSTA.PRIVADO_RESTRITO || acesso === ACESSO.LISTA), `${campo}.politicaResposta`);
-    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
+    // 25/11: grupo COMPARTILHADO por duas empresas só com a marca explícita `multiempresa` (cadastro auditável). Cada mensagem
+    // continua resolvendo UMA unidade (titular/CNPJ do comprovante, apelido, pergunta) e o escopo nunca junta organizações.
+    const orgsDoGrupo = new Set(doGrupo.map((x) => unidades.find((u) => u.unidadeId === x)?.organizacaoId));
+    exigir(g.multiempresa == null || typeof g.multiempresa === "boolean", `${campo}.multiempresa`);
+    // (unidade cadastrada SEM grupo dentro de um grupo é recusada adiante, com o motivo próprio "unidades.semGrupo")
+    exigir(orgsDoGrupo.size === 1 || g.multiempresa === true || !g.grupoId.endsWith("@g.us") || doGrupo.some((x) => unidades.find((u) => u.unidadeId === x)?.semGrupo), `${campo}.multiempresa`);
+    return Object.freeze({ grupoId: g.grupoId, unidades: Object.freeze(doGrupo), acesso, participantes, multiempresa: orgsDoGrupo.size > 1, consultasNoGrupo: Object.freeze([...consultasNoGrupo]), politicaResposta, privada: !g.grupoId.endsWith("@g.us"), derivada: false });
   });
   exigir(new Set(grupos.map((g) => g.grupoId)).size === grupos.length, "gruposAutorizados.duplicados");
   exigir(unidades.every((u) => !u.semGrupo || (operacao && !grupos.some((g) => g.unidades.includes(u.unidadeId)))), "unidades.semGrupo");
@@ -126,7 +132,8 @@ export function validarConfiguracao(c) {
     exigir(u.acessoMultiempresa == null || typeof u.acessoMultiempresa === "boolean", `unidades[${i}].acessoMultiempresa`);
     return participantes.length ? [{ unidadeId, participantes, multiempresa: u.acessoMultiempresa === true }] : [];
   }) : [];
-  const multiempresa = new Set(semGrupo.filter((x) => x.multiempresa).map((x) => x.unidadeId));
+  // Unidades com acesso multiempresa explícito: a sem grupo marcada e as de um grupo compartilhado marcado (25/11).
+  const multiempresa = new Set([...semGrupo.filter((x) => x.multiempresa).map((x) => x.unidadeId), ...grupos.filter((g) => g.multiempresa).flatMap((g) => g.unidades)]);
   const permitida = (g) => {
     const orgs = new Set(g.unidades.map((u) => orgDe.get(u)));
     if (orgs.size === 1) return true;

@@ -279,8 +279,38 @@ insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}'
 `;
 }
 
+/** Estado do banco do MOVA em PRODUÇÃO depois da política de sangria (25/11): 0001–0018, 0020, 0022 e 0023. */
+export const ESTADO_PRODUCAO_APOS_POLITICA_SANGRIA = Object.freeze([...ESTADO_PRODUCAO_APOS_PROPOSTAS, "0023"]);
+/**
+ * aplicar-grupo-multiempresa.sql (25/11): SÓ a 0024 (marca multiempresa no grupo; padrão false, nenhum grupo muda). UMA transação;
+ * exige 0001–0018, 0020, 0022 e 0023 com o mesmo sha256 e a 0024 não registrada. Não marca grupo nenhum.
+ */
+export function gerarAplicarGrupoMultiempresa(migracoes = listarMigracoes()) {
+  const m = migracoes.find((x) => x.nome.startsWith("0024_"));
+  if (!m) throw new Error("migração 0024 inexistente");
+  const ja = migracoes.filter((x) => ESTADO_PRODUCAO_APOS_POLITICA_SANGRIA.includes(x.nome.slice(0, 4)));
+  const conferir = ja.map((x) => `  if not exists (select 1 from mova.mova_migracao where nome = '${x.nome}' and sha256 = '${x.sha256}') then raise exception 'MOVA 0024: ${x.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
+  return `-- MOVA — GRUPO MULTIEMPRESA em PRODUÇÃO: aplica SÓ ${m.nome} (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
+-- Aplicar como \`postgres\` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
+-- Exige as já instaladas (nome + sha256): ${ja.map((x) => x.nome.slice(0, 4)).join(", ")}. Reversão: recuperacao/reverter-0024.sql.
+
+do $$ begin
+  if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA 0024: schema mova não existe — nada foi feito'; end if;
+  if coalesce((select shobj_description(d.oid, 'pg_database') from pg_database d where d.datname = current_database()), '') like 'MOVA\\_HOMOLOGACAO:%' then
+    raise exception 'MOVA 0024: banco de HOMOLOGAÇÃO — nada foi feito';
+  end if;
+${conferir.join("\n")}
+  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA 0024: já aplicada — nada foi feito'; end if;
+end $$;
+
+-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})
+${m.sql.trimEnd()}
+insert into mova.mova_migracao (nome, sha256) values ('${m.nome}', '${m.sha256}');
+`;
+}
+
 function principal() {
-  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento(), "aplicar-propostas-core.sql": gerarAplicarPropostas(), "reverter-propostas-core.sql": gerarReverterPropostas(), "aplicar-politica-sangria.sql": gerarAplicarPoliticaSangria() };
+  const arquivos = { "instalar.sql": gerarInstalar(), "atualizar.sql": gerarAtualizar(), "inventario.sql": gerarInventario(), "aplicar-0017.sql": gerarAplicarUnica("0017", { tabelaExigida: "conversa_ativa" }), "aplicar-orcamento-renovavel.sql": gerarAplicarOrcamento(), "aplicar-propostas-core.sql": gerarAplicarPropostas(), "reverter-propostas-core.sql": gerarReverterPropostas(), "aplicar-politica-sangria.sql": gerarAplicarPoliticaSangria(), "aplicar-grupo-multiempresa.sql": gerarAplicarGrupoMultiempresa() };
   if (process.argv.includes("--conferir")) {
     const divergentes = Object.entries(arquivos).filter(([n, c]) => { try { return readFileSync(join(DESTINO, n), "utf8") !== c; } catch { return true; } }).map(([n]) => n);
     if (divergentes.length) { console.error(`pacote MOVA desatualizado: ${divergentes.join(", ")} — rode node scripts/mova/pacoteProducao.mjs`); process.exit(1); }
