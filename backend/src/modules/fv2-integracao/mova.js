@@ -339,6 +339,8 @@ export function criarRotinaPeriodica(passo, { intervaloMs = 5 * 60 * 1000, regis
 }
 /** Instante da subida DESTE processo (13 dígitos): identifica a instância mais nova numa troca de deploy. */
 const GERACAO_DA_INSTANCIA = Date.now();
+/** Conexões do papel de leitura por instância: o papel tem limite 2 no banco e o deploy mantém duas instâncias vivas. */
+export const LEITOR_CONEXOES_POR_INSTANCIA = 1;
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
   const cfg = lerConfiguracaoMova(env);
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;
@@ -350,6 +352,8 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     const ssl = ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
     // 25/11: as conexões levam a GERAÇÃO desta instância (instante da subida): numa troca de instância, a mais nova assume a fila.
     const pool = new pg.Pool({ connectionString: cfg.databaseUrl, max: 4, idleTimeoutMillis: 30000, ssl, application_name: `${NOME_DA_CONEXAO_DO_WORKER}:${GERACAO_DA_INSTANCIA}` });
+    // Pelo Supavisor o banco vê application_name = 'Supavisor': a geração vai também por SET na própria conexão (modo sessão).
+    pool.on("connect", (c) => { c.query(`set application_name = '${NOME_DA_CONEXAO_DO_WORKER}:${GERACAO_DA_INSTANCIA}'`).catch(() => {}); });
     pool.on("error", () => {});
     abertos.push(pool);
     const verificarBancoFinanceiro = async () => {
@@ -364,8 +368,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
       // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).
-      // 25/11: o papel de leitura aceita 2 conexões NO TOTAL; ocioso fecha em 5 s para a instância nova de um deploy não ficar sem vaga.
-      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: 2, idleTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
+      // 25/11: o papel de leitura aceita 2 conexões NO TOTAL, somando as instâncias. UMA por instância garante que, na troca
+      // de deploy (duas instâncias vivas), o total nunca passa de 2. Ocioso fecha em 5 s; esperar vaga tem limite (5 s) —
+      // nunca uma espera sem fim que trave o pool.
+      const poolLeitor = new pg.Pool({ connectionString: cfg.leituraUrl, max: LEITOR_CONEXOES_POR_INSTANCIA, idleTimeoutMillis: 5000, connectionTimeoutMillis: 5000, ssl, statement_timeout: 15000, application_name: cfg.modo === "OPERACAO" ? "mova-operacao-leitor" : "mova-piloto-leitor" });
       poolLeitor.on("error", () => {});
       abertos.push(poolLeitor);
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });

@@ -299,3 +299,26 @@ test("HR-14 núcleo: a lista do servidor segue em mensagens próprias depois da 
   assert.equal(linhas(r2.blocos).length, 30);
   assert.match(r2.blocos.at(-1), /Lista completa \(150 contas\)/);
 });
+
+// ------------------------------------------------------------------- conexões: pool mínimo sem travar (25/11, auditoria)
+test("HR-15 leitor com UMA conexão: leituras em paralelo sem token emitido não travam (antes: a transação segurava a conexão esperando a emissão do token, que precisava de outra)", async () => {
+  const { criarRepositorioPostgres } = await import("../../src/modules/financeiro-v2/infra/postgres/repositorioPostgres.js");
+  const { LEITOR_CONEXOES_POR_INSTANCIA } = await import("../../src/modules/fv2-integracao/mova.js");
+  assert.equal(LEITOR_CONEXOES_POR_INSTANCIA * 2 <= 2, true, "duas instâncias no deploy cabem no limite 2 do papel de leitura");
+  // pool falso com capacidade 1 e fila (como pg.Pool max 1, sem tempo-limite: a espera seria eterna)
+  let livres = 1; let emUso = 0; let pico = 0; const fila = [];
+  const pegar = async () => { if (livres > 0) livres--; else await new Promise((ok) => fila.push(ok)); emUso++; pico = Math.max(pico, emUso); };
+  const soltar = () => { emUso--; const p = fila.shift(); if (p) p(); else livres++; };
+  const E = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO };
+  const cliente = () => ({ async query(sql) { await new Promise((ok) => { setTimeout(ok, 2); });
+    return /fv2_assumir_sessao/.test(sql) ? { rows: [{ u: E.usuarioId, o: E.organizacaoId, n: E.unidadeId }] } : { rows: [] }; }, release: soltar });
+  const pool = { async connect() { await pegar(); return cliente(); }, async query() { await pegar(); try { return { rows: [{ t: "tok" }] }; } finally { soltar(); } } };
+  let emissoes = 0;
+  const repo = criarRepositorioPostgres({ pool, sessoes: { async emitir() { emissoes++; const r = await pool.query(); return r.rows[0].t; } } });
+  const ler = () => repo.leitura(async () => "ok", { escopo: E });
+  const tudo = Promise.all([ler(), ler(), ler()]);
+  const r = await Promise.race([tudo, new Promise((_, n) => { setTimeout(() => n(new Error("TRAVOU: pool preso esperando a emissão do token")), 2000); })]);
+  assert.deepEqual(r, ["ok", "ok", "ok"]);
+  assert.equal(pico, 1, "nunca mais de uma conexão ao mesmo tempo");
+  assert.equal(emissoes, 1, "o token é emitido uma vez e reaproveitado");
+});

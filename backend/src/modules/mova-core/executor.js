@@ -32,7 +32,7 @@ export function comReais(o, prof = 0) {
   return r;
 }
 
-export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12, leiturasSimultaneas: 2, esperaNovaTentativaMs: 400 });
+export const LIMITES_DO_EXECUTOR = Object.freeze({ tempoMs: 8000, maxCaracteres: 12000, cacheMs: 60_000, maxChamadasPorRequisicao: 12, leiturasSimultaneas: 1, esperaNovaTentativaMs: 400 });
 const esperar = (ms) => new Promise((ok) => { setTimeout(ok, ms); });
 /** Fila curta por mensagem: no máximo `vagas` leituras ao mesmo tempo (null = sem fila, para ferramentas locais). */
 async function comVaga(sessao, vagas, fn) {
@@ -117,7 +117,7 @@ export function criarExecutor({ catalogo, porta, auditoria = { registrar() {} },
     if (emCache && relogio() - emCache.em < limites.cacheMs && !semCache) { r = emCache.r; registro.cache = true; consultadoEm = emCache.em; } // do cache: vale a data da consulta ORIGINAL
     else {
       // 25/11 (homologação real): leituras da MESMA mensagem compartilham a carga (memória por mensagem) e no máximo
-      // `leiturasSimultaneas` vão ao Financeiro ao mesmo tempo (o papel de leitura do MOVA tem 2 conexões); o tempo-limite
+      // `leiturasSimultaneas` vão ao Financeiro ao mesmo tempo (o leitor do MOVA tem 1 conexão por instância); o tempo-limite
       // conta a partir da VAGA (esperar a vez não é lentidão da consulta). Falha transitória (conexão recusada, banco
       // momentaneamente indisponível) tem UMA nova tentativa curta — é leitura, repetir não tem efeito.
       sessao.portaDaMensagem ??= comMemoDeLeituras(porta);

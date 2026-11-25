@@ -458,6 +458,9 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
   }
 
   async function umaTentativa(fn, escopo, provisionamento) {
+    // 25/11: o token é emitido ANTES de pegar a conexão da transação. Emitir usa outra conexão do pool; com o pool cheio
+    // (pool pequeno, leituras em paralelo), segurar a conexão esperando a emissão travava o pool inteiro.
+    if (!provisionamento) await tokenDe(escopo);
     return comCliente(async (cliente, descartar) => {
       await cliente.query("begin");
       try {
@@ -490,8 +493,9 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     }
   }
 
-  function leitura(fn, opcoes) {
+  async function leitura(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
+    await tokenDe(escopo); // 25/11: emitido antes de pegar a conexão (ver umaTentativa)
     return comCliente(async (cliente) => {
       const iniciar = () => cliente.query("begin transaction isolation level repeatable read read only");
       await iniciar();
