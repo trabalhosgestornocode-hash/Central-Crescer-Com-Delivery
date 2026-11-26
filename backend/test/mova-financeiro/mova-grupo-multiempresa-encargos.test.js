@@ -8,6 +8,7 @@ import { AGORA } from "../financeiro-v2/helpers/cenario.js";
 import { ALFA, CONS, ESTRANHO, FIN, FINANCEIRO, GRUPO, ORG, ORG_X, SO_ALFA, XIS, base, cenario, gw, t } from "./helpers/operacao.js";
 import { podeConfirmarPendencia } from "../../src/modules/mova-financeiro/dominio/confirmacao.js";
 import { criarPortaOperacional, validarConfiguracao } from "../../src/modules/mova-financeiro/index.js";
+import { criarCofreDocumentosSupabase } from "../../src/modules/fv2-integracao/cofreDocumentos.js";
 import { competenciaDaResposta, composicaoComprovada, extracaoDaRespostaIA } from "../../src/modules/mova-financeiro/dominio/divergencia.js";
 import { validarSaidaDaIa, normalizarSentinelas } from "../../src/modules/mova-financeiro/ia/contratos.js";
 
@@ -50,9 +51,9 @@ const POL = (operacao, org, u, x = {}) => ({ operacao, organizacaoId: org, unida
 const ACOES = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_juros"];
 const ESCRITAS = ["enviarEvidencia", "registrarDespesaPagaComEncargo", "registrarDespesaPagaPorComprovante", "registrarPagamentoComEncargo", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 
-async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN], controle = null } = {}) {
+async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN], controle = null, cofre = undefined } = {}) {
   const s = await cenario({
-    responder, config,
+    responder, config, cofre,
     extras: ({ nucleo }) => ({
       autonomia: true, pagamentoPorComprovante: true, criarDespesas: true, criarContas: true, registrarJuros: true,
       operacional: ((real) => (controle ? { identidade: real.identidade, pode: async (...x) => (controle.ligada ? real.pode(...x) : false), chamar: (...x) => real.chamar(...x) } : real))(criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: SERVICO,
@@ -473,7 +474,7 @@ t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o mo
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo], ["PROPOSTA", "DESPESA_PAGA"], JSON.stringify(h));
   const msg = (await s.respostas()).at(-1);
-  assert.match(msg, /Não registrei automaticamente/);
+  assert.match(msg, /Não consegui concluir o registro/);
   assert.match(msg, /citando esta mensagem/);
   assert.deepEqual((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS }))[0].semExecucao?.motivos, ["SEM_CONCESSAO_OPERACIONAL"], "o motivo fica registrado na proposta");
   assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
@@ -509,4 +510,141 @@ test("RN-5 virada do ano e relativos: 'deste mês' e 'mês passado' contam a par
   for (const txt of ["Novembro de 2026. dia 25.", "Mês de novembro, dia 25.", "Referente a novembro.", "Mês 11", "11/2026", "Novembro"]) assert.equal(c(txt, "2026-11-25"), "2026-11", txt);
   assert.equal(extracaoDaRespostaIA({ competencia: "2027-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01");
   assert.equal(extracaoDaRespostaIA({ competencia: "2026-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01", "o modelo não escolhe o ano");
+});
+
+// ------------------------------------------------------------------ 26/11: categoria dita depois e documentos da MESMA compra
+const COMPRA = (x = {}) => BOLETO_PAGO({ valorCentavos: 46430, valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, linhaDigitavel: null, vencimento: null,
+  favorecido: "MATEUS SUPERMERCADOS S A", competencia: "2026-10", categoriaSugerida: null, ...x });
+const CUPOM = (x = {}) => COMPRA({ tipoDocumento: "NOTA_FISCAL", idTransacao: null, situacaoTransacao: null, favorecido: "MATEUS SUPERMERCADOS SA", ...x });
+
+t("CAT-1 'Coca cola - outras despesas' citando a resposta do MOVA COMPLETA a proposta (categoria do plano + descrição), não vira consulta; a política retoma e registra uma vez", async () => {
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => COMPRA(), controle });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("CAT1") }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PROPOSTA", "DESPESA_PAGA"]);
+  await entregar(s, "3EB0PROPOSTACAT1");
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "Coca cola - outras despesas", respostaA: "3EB0PROPOSTACAT1" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(h));
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.equal(conta.saldoCentavos, 0);
+  assert.match(String(conta.descricao ?? ""), /Coca cola/i);
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+});
+
+t("CAT-2 resposta ambígua mostra só as categorias compatíveis e a resposta pelo número escolhe; texto que não é classificação segue o fluxo normal", async () => {
+  const s = await grupo({ responder: () => COMPRA(), controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("CAT2") }));
+  await entregar(s, "3EB0PROPOSTACAT2");
+  await s.enviar(doGerente({ texto: "despesas", respostaA: "3EB0PROPOSTACAT2" }));
+  const h = await s.ultima();
+  assert.equal(h.motivo, "CATEGORIA_AMBIGUA", JSON.stringify(h));
+  const msg = (await s.respostas()).at(-1);
+  assert.match(msg, /1\. /); assert.match(msg, /2\. /);
+  assert.ok((msg.match(/^\d\. /gm) ?? []).length <= 4);
+  await entregar(s, "3EB0OPCOESCAT2");
+  await s.enviar(doGerente({ texto: "1", respostaA: "3EB0OPCOESCAT2" }));
+  // categoria aplicada; como a política autoriza o registro e a execução segue travada, o MOVA tenta, explica e preserva a proposta
+  assert.equal((await s.ultima()).motivo, "RETOMADA_NAO_EXECUTADA", JSON.stringify(await s.ultima()));
+  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.ok(p.comando.entrada.categoria && p.comando.entrada.categoria !== "A_CLASSIFICAR", "a categoria escolhida pelo número foi gravada na proposta");
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0], "nada foi lançado");
+});
+
+t("MC-1 Mateus: cupom/nota do MESMO valor e fornecedor de uma proposta em revisão ⇒ PERGUNTA se é a mesma compra; 'sim' anexa à proposta existente, sem 2ª proposta nem 2ª despesa", async () => {
+  let doc = COMPRA();
+  const s = await grupo({ responder: () => doc, controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("MC1a") }));
+  const [p1] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  doc = CUPOM();
+  await s.enviar(doGerente({ doc: pdf("MC1b") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "POSSIVEL_DOCUMENTO_COMPLEMENTAR"], JSON.stringify(h));
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS })).length, 1, "nenhuma proposta nova");
+  await entregar(s, "3EB0PERGUNTAMC1");
+  await s.enviar(doGerente({ texto: "sim, é da mesma compra", respostaA: "3EB0PERGUNTAMC1" }));
+  assert.equal((await s.ultima()).motivo, "DOCUMENTO_COMPLEMENTAR_VINCULADO", JSON.stringify(await s.ultima()));
+  const props = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 1);
+  assert.equal(props[0].id, p1.id);
+  assert.equal(props[0].documentosComplementares.length, 1);
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
+});
+
+t("MC-2 'não' trata como OUTRA compra (2ª proposta); fornecedor diferente com o mesmo valor NÃO gera pergunta (igualdade de valor sozinha não é duplicidade)", async () => {
+  let doc = COMPRA();
+  const s = await grupo({ responder: () => doc, controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("MC2a") }));
+  doc = CUPOM();
+  await s.enviar(doGerente({ doc: pdf("MC2b") }));
+  await entregar(s, "3EB0PERGUNTAMC2");
+  await s.enviar(doGerente({ texto: "não, é outra compra", respostaA: "3EB0PERGUNTAMC2" }));
+  assert.equal((await s.ultima()).motivo, "DESCRICAO_DA_COMPRA_AUSENTE", "outra compra, sem legenda: pergunta só o que foi comprado");
+  await entregar(s, "3EB0PERGUNTADESCMC2");
+  await s.enviar(doGerente({ texto: "refrigerantes", respostaA: "3EB0PERGUNTADESCMC2" }));
+  const props = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 2, JSON.stringify(await s.ultima()));
+  doc = COMPRA({ favorecido: "Padaria Outra Sintética", idTransacao: "AUTOUTRO20261014" });
+  await s.enviar(doGerente({ texto: "outra padaria", doc: pdf("MC2c") }));
+  assert.notEqual((await s.ultima()).motivo, "POSSIVEL_DOCUMENTO_COMPLEMENTAR", "sem sinal de mesma compra");
+});
+
+// ------------------------------------------------------------------ 26/11: PONTA A PONTA com o COFRE REAL (bucket privado simulado + antimalware simulado)
+function bucketFalso() {
+  const arquivos = new Map();
+  const storage = { async getBucket() { return { data: { public: false }, error: null }; }, from() { return {
+    async list(dir, { search } = {}) { return { data: [...arquivos.keys()].filter((k) => k.startsWith(`${dir}/`)).map((k) => ({ name: k.slice(dir.length + 1) })).filter((x) => !search || x.name === search), error: null }; },
+    async upload(k, c) { if (arquivos.has(k)) return { error: { message: "The resource already exists" } }; arquivos.set(k, Uint8Array.from(c)); return { error: null }; },
+    async download(k) { const c = arquivos.get(k); return c ? { data: { arrayBuffer: async () => c.buffer.slice(c.byteOffset, c.byteOffset + c.byteLength), type: "" }, error: null } : { data: null, error: { message: "not found" } }; },
+    async remove(ks) { for (const k of ks) arquivos.delete(k); return { error: null }; } }; } };
+  return { storage, arquivos, zonas: () => [...arquivos.keys()].map((k) => k.split("/")[0]) };
+}
+const PDF_REAL = (m) => ({ nome: "comprovante.pdf", mime: "application/pdf", conteudo: Buffer.from(`%PDF-1.4
+% comprovante sintetico ${m}
+%%EOF
+`) });
+
+t("E2E-1 cofre real: comprovante → proposta → 'registrar' → despesa paga, baixa e documento anexo; arquivo LIBERADO no bucket privado, ficha ligada, uma só vez", async () => {
+  const b = bucketFalso();
+  const cofre = criarCofreDocumentosSupabase({ supabase: { storage: b.storage }, bucket: "fv2-documentos", scanner: { verificar: async () => ({ estado: "LIMPO" }) } });
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => COMPRA(), controle, cofre });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("E2E1") }));
+  assert.equal((await s.ultima()).motivo, "DESPESA_PAGA");
+  await entregar(s, "3EB0PROPOSTAE2E1");
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "Coca cola - outras despesas", respostaA: "3EB0PROPOSTAE2E1" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(h));
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.saldoCentavos, conta.situacao], [0, "QUITADA"]);
+  assert.equal((await s.documentos(ORG_X, XIS)).length, 1, "ficha do documento ligada");
+  assert.deepEqual(b.zonas(), ["liberados"], "no bucket privado, liberado pelo antimalware, nada em quarentena");
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTAE2E1" }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, b.arquivos.size], [1, 1, 1], "repetir não duplica");
+});
+
+t("E2E-2 antimalware FORA DO AR: registra mesmo assim, documento fica em QUARENTENA (não abre); INFECTADO: recusa com motivo claro, nada lançado e proposta preservada", async () => {
+  const b = bucketFalso();
+  let estado = "INDISPONIVEL";
+  const cofre = criarCofreDocumentosSupabase({ supabase: { storage: b.storage }, bucket: "fv2-documentos", scanner: { verificar: async () => ({ estado, motivo: "TESTE", assinatura: "Teste.Sintetico" }) } });
+  const controle = { ligada: true };
+  const s = await grupo({ responder: () => COMPRA(), controle, cofre });
+  await s.enviar(doGerente({ texto: "compra de bebidas, outras despesas", doc: pdf("E2E2") }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, "EXECUTADO", JSON.stringify(h));
+  assert.deepEqual(b.zonas(), ["quarentena"]);
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+  // infectado: outro comprovante
+  estado = "INFECTADO";
+  const s2 = await grupo({ responder: () => COMPRA(), controle: { ligada: true }, cofre });
+  await s2.enviar(doGerente({ texto: "compra de bebidas, outras despesas", doc: pdf("E2E2B") }));
+  const h2 = await s2.ultima();
+  assert.notEqual(h2.decisao, "EXECUTADO", JSON.stringify(h2));
+  assert.equal((await s2.contas(ORG_X, XIS)).length, 0, "nada lançado");
+  const props = await s2.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 1, "proposta preservada");
+  assert.match((await s2.respostas()).at(-1), /Não consegui|não foi|segurança|verifica/i);
+  assert.ok(!b.zonas().includes("liberados"));
 });

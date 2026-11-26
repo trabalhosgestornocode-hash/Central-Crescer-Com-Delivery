@@ -45,7 +45,11 @@ function validarEnvio(e) {
 /** Passo 2 do protocolo: guarda no cofre e LÊ DE VOLTA conferindo o hash (fora da transação do banco). */
 export async function guardarNoCofreConferido(cofre, escopo, c) {
   const g = await cofre.guardar(escopo, { conteudo: c.conteudo, tipoMime: c.formato.tipoMime });
-  const lido = await cofre.ler(escopo, g.arquivoId);
+  // Arquivo em QUARENTENA (verificação antimalware pendente) não é lido de volta como conteúdo: o cofre confere o que gravou (hash/tamanho)
+  // sem devolver os bytes. Só o que já está LIBERADO é lido.
+  const lido = g.estado === "QUARENTENA" && typeof cofre.conferirEmQuarentena === "function"
+    ? await cofre.conferirEmQuarentena(escopo, g.arquivoId)
+    : await cofre.ler(escopo, g.arquivoId);
   if (lido.hashSha256 !== g.hashSha256) falhar(CODIGO.DOCUMENTO_ADULTERADO, "O arquivo guardado não confere com o enviado.");
   return g;
 }

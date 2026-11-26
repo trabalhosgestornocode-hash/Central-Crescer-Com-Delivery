@@ -60,11 +60,23 @@ export const RESPOSTA = Object.freeze({
   dadosInsuficientes: (o) => `Ainda não há dados suficientes registrados no Financeiro para responder sobre ${o}. Não vou estimar.`,
   // 25/11 — a política autorizou o registro automático, mas a execução não pôde acontecer: diz o motivo e como continuar pelo WhatsApp.
   semExecucaoAutomatica: (motivos = []) => {
+    const tem = (re) => motivos.some((x) => re.test(x));
     const m = motivos.includes("SEM_IDENTIDADE_OPERACIONAL") ? "o registro automático ainda não está ativado neste ambiente"
       : motivos.includes("SEM_CONCESSAO_OPERACIONAL") ? "a permissão operacional do MOVA nesta unidade não cobre essa operação"
+      : tem(/COFRE_INDISPONIVEL|DOCUMENTO_INDISPONIVEL/) ? "o armazenamento seguro do comprovante está temporariamente indisponível"
+      : tem(/DOCUMENTO_INVALIDO|DOCUMENTO_ADULTERADO/) ? "o arquivo do comprovante não foi aceito pela verificação de segurança (formato inválido ou arquivo suspeito)"
+      : tem(/COMPETENCIA/) ? "a competência dessa despesa está fechada ou indisponível"
+      : tem(/CONFLITO|IDEMPOTENCIA/) ? "outro registro igual foi feito ao mesmo tempo (conferi para não duplicar)"
       : "o registro automático não pôde ser concluído agora";
-    return `Não registrei automaticamente: ${m}. A proposta ficou guardada e nada foi lançado. Quando isso for resolvido, responda citando esta mensagem com "registrar" que eu continuo, sem novo comprovante.`;
+    const guardado = tem(/DOCUMENTO_INVALIDO|DOCUMENTO_ADULTERADO/) ? "Nenhum pagamento foi registrado e a proposta foi preservada; envie um comprovante em PDF ou imagem legível." : "A proposta foi preservada e nenhum pagamento foi registrado.";
+    return `Não consegui concluir o registro porque ${m}. ${guardado} Quando isso for resolvido, responda citando esta mensagem com "registrar" que eu continuo, sem novo comprovante.`;
   },
+  // 26/11 — complementos de uma proposta (classificação, documentos da mesma compra)
+  categoriaDefinida: (nome, descricao, seguePara) => `Classifiquei como "${nome}"${descricao ? ` (${descricao})` : ""}. ${seguePara}`,
+  categoriaOpcoes: (opcoes) => `Qual destas categorias é a certa? Responda citando esta mensagem com o número:\n${opcoes.map((o, i) => `${i + 1}. ${o.nome}`).join("\n")}`,
+  perguntaMesmaCompra: (valor, tipoDoc, favorecido, propostaId) => `Recebi ${tipoDoc ? `um documento (${tipoDoc.toLowerCase().replace(/_/g, " ")})` : "outro documento"} de ${reais(valor)}${favorecido ? ` (${String(favorecido).slice(0, 60)})` : ""}. Ele é da MESMA compra da proposta ${String(propostaId).slice(0, 8)}? Responda citando esta mensagem: "sim" anexa à proposta existente (não crio outra despesa); "não" trato como outra compra.`,
+  mesmaCompraSemResposta: () => 'Não entendi. Este documento é da mesma compra? Responda "sim" ou "não" citando a pergunta; nada foi registrado.',
+  documentoComplementarVinculado: (propostaId) => `Anexei o documento à proposta ${String(propostaId).slice(0, 8)}. Não criei outra despesa e nada novo foi lançado.`,
   propostaJaRegistrada: () => "Essa proposta já foi registrada. Não criei outro lançamento.",
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",

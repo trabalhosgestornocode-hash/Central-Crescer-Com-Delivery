@@ -21,6 +21,8 @@ import { criarAdministracaoDaPlataforma, criarConcessoesDaSessao, criarVinculosD
 import { criarRotasFinanceiroV2 } from "./rotas.js";
 import { criarFonteEntregadores } from "./fonteEntregadores.js";
 import { criarCofreNotasSupabase } from "./cofreNotasSupabase.js";
+import { criarCofreDocumentosSupabase } from "./cofreDocumentos.js";
+import { criarVerificadorClamd, verificadorDesligado } from "./verificadorAntimalware.js";
 import { criarAgendadorEntregadores, executarCiclo, lerConfiguracaoDoAgendador } from "./agendadorEntregadores.js";
 import { lerConfiguracaoMova, movaDaPlataforma, registrarDependenciasFv2 } from "./mova.js";
 export { iniciarMovaEmbutido, pararMovaEmbutido } from "./mova.js";
@@ -33,6 +35,17 @@ export function configuracaoDeEntregadores({ supabase, env = process.env }) {
   // Notas fiscais só com bucket privado configurado E aceite explícito de operar sem antimalware (decisão do proprietário).
   const cofreDeNotas = env.FV2_ENTREGADORES_BUCKET && env.FV2_ENTREGADORES_COFRE_ACEITO === "1" ? criarCofreNotasSupabase({ supabase, bucket: env.FV2_ENTREGADORES_BUCKET }) : null;
   return { fonte: criarFonteEntregadores({ db: supabase }), inicioDaOperacao: valido ? inicio : null, cofreDeNotas };
+}
+
+/**
+ * Cofre de DOCUMENTOS do Financeiro (comprovantes que o MOVA anexa às contas): bucket PRIVADO (FV2_DOCUMENTOS_BUCKET) com quarentena e
+ * verificação antimalware (CLAMAV_HOST/CLAMAV_PORT; sem eles os arquivos ficam em quarentena e não são abertos). Sem bucket ⇒ null:
+ * quem exige o cofre recusa com FV2_COFRE_INDISPONIVEL e a proposta fica guardada.
+ */
+export function cofreDeDocumentosDaPlataforma({ supabase, env = process.env, registrar = () => {} }) {
+  if (!env.FV2_DOCUMENTOS_BUCKET) return null;
+  const scanner = env.CLAMAV_HOST ? criarVerificadorClamd({ host: env.CLAMAV_HOST, porta: Number(env.CLAMAV_PORT) || 3310 }) : verificadorDesligado;
+  return criarCofreDocumentosSupabase({ supabase, bucket: env.FV2_DOCUMENTOS_BUCKET, scanner, registrar });
 }
 
 export { criarRotasFinanceiroV2 } from "./rotas.js";
@@ -92,7 +105,7 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
     return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, comAutomacaoMova: (fn) => automacao.run({ referencia: "automacao:mova" }, fn),
       // Execução 17: identidade OPERACIONAL do MOVA (só usada com MOVA_OPERACAO_ESCRITA=1; sessão própria, concessão no banco).
-      operacionalMova: criarOperacionalMova({ repositorio, rodar: (fn) => automacao.run({ referencia: "automacao:mova-operacional" }, fn), criarNucleoFinanceiro, criarConcessoesDoRepositorio }), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
+      operacionalMova: criarOperacionalMova({ cofre: cofreDeDocumentosDaPlataforma({ supabase, env, registrar }), repositorio, rodar: (fn) => automacao.run({ referencia: "automacao:mova-operacional" }, fn), criarNucleoFinanceiro, criarConcessoesDoRepositorio }), administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null, entregadores: configuracaoDeEntregadores({ supabase, env }) };
   };
   const dependencias = () => (compartilhadas ??= montar());
   dependenciasDaPlataforma = dependencias;
