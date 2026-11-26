@@ -20,7 +20,8 @@ create table if not exists public.mentoria_participantes (
   id uuid primary key default gen_random_uuid(),
   organizacao_id uuid not null unique references public.organizacoes(id) on delete cascade,
   status text not null default 'ativa' check (status in ('ativa', 'pausada', 'encerrada')),
-  data_entrada date not null,
+  -- NULL = data de entrada ainda não confirmada (vínculo pendente): nunca é presumida.
+  data_entrada date,
   data_renovacao date,
   mentor_nome text check (mentor_nome is null or length(mentor_nome) between 1 and 120),
   responsavel_nome text check (responsavel_nome is null or length(responsavel_nome) between 1 and 120),
@@ -28,13 +29,13 @@ create table if not exists public.mentoria_participantes (
   uf text check (uf is null or uf ~ '^[A-Z]{2}$'),
   modelo_operacao text check (modelo_operacao is null or modelo_operacao in ('marketplace', 'full_service', 'misto')),
   -- Qual fonte vence quando um mês existe na planilha E no Dashboard iFood (a outra aparece como divergência, nunca somada).
-  fonte_preferencial text not null default 'importacao' check (fonte_preferencial in ('importacao', 'dashboard_ifood')),
+  fonte_preferencial text not null default 'dashboard_ifood' check (fonte_preferencial in ('importacao', 'dashboard_ifood')),
   observacoes text check (observacoes is null or length(observacoes) <= 2000),
   criado_por uuid references public.perfis(id) on delete set null,
   atualizado_por uuid references public.perfis(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint ck_mentoria_renovacao_depois check (data_renovacao is null or data_renovacao > data_entrada)
+  constraint ck_mentoria_renovacao_depois check (data_renovacao is null or data_entrada is null or data_renovacao > data_entrada)
 );
 
 create table if not exists public.mentoria_importacoes (
@@ -75,7 +76,7 @@ create table if not exists public.mentoria_historico_mensal (
 create table if not exists public.mentoria_registros (
   id uuid primary key default gen_random_uuid(),
   organizacao_id uuid not null references public.organizacoes(id) on delete cascade,
-  tipo text not null check (tipo in ('diagnostico', 'estrategia', 'meta', 'evidencia', 'observacao')),
+  tipo text not null check (tipo in ('diagnostico', 'estrategia', 'meta', 'evidencia', 'observacao', 'mudanca_operacional')),
   data_registro date not null,
   titulo text not null check (length(titulo) between 1 and 160),
   descricao text check (descricao is null or length(descricao) <= 4000),
@@ -83,6 +84,9 @@ create table if not exists public.mentoria_registros (
   meta_indicador text,
   meta_valor numeric(14,4),
   meta_unidade text check (meta_unidade is null or meta_unidade in ('reais', 'percentual', 'quantidade')),
+  -- Mudança de modelo operacional (ex.: Marketplace -> Full Service): muda a estrutura de custos a partir do mês do registro.
+  modelo_anterior text check (modelo_anterior is null or modelo_anterior in ('marketplace', 'full_service', 'misto', 'outro')),
+  modelo_novo text check (modelo_novo is null or modelo_novo in ('marketplace', 'full_service', 'misto', 'outro')),
   privado boolean not null default true,
   autor_id uuid references public.perfis(id) on delete set null,
   autor_nome text,
@@ -90,6 +94,30 @@ create table if not exists public.mentoria_registros (
   updated_at timestamptz not null default now()
 );
 create index if not exists idx_mentoria_registros_org on public.mentoria_registros(organizacao_id, data_registro desc);
+alter table public.mentoria_registros drop constraint if exists ck_mentoria_mudanca_operacional;
+alter table public.mentoria_registros add constraint ck_mentoria_mudanca_operacional
+  check (tipo <> 'mudanca_operacional' or (modelo_novo is not null and modelo_anterior is distinct from modelo_novo));
+
+-- Escolha AUDITÁVEL da fonte válida por período e grupo de indicadores (quando planilha e Dashboard iFood divergem).
+-- Nunca altera nenhum dado: só diz ao cálculo qual das duas leituras usar. Não se apaga: revogar grava quem e por quê.
+create table if not exists public.mentoria_escolhas_fonte (
+  id uuid primary key default gen_random_uuid(),
+  organizacao_id uuid not null references public.organizacoes(id) on delete cascade,
+  mes_inicio date not null check (extract(day from mes_inicio) = 1),
+  mes_fim date not null check (extract(day from mes_fim) = 1),
+  grupo text not null check (grupo in ('financeiro', 'desempenho')),
+  fonte text not null check (fonte in ('importacao', 'dashboard_ifood')),
+  justificativa text not null check (length(btrim(justificativa)) between 10 and 1000),
+  criado_por uuid references public.perfis(id) on delete set null,
+  criado_por_nome text,
+  created_at timestamptz not null default now(),
+  revogada_em timestamptz,
+  revogada_por uuid references public.perfis(id) on delete set null,
+  motivo_revogacao text check (motivo_revogacao is null or length(btrim(motivo_revogacao)) between 10 and 1000),
+  constraint ck_mentoria_escolha_intervalo check (mes_fim >= mes_inicio),
+  constraint ck_mentoria_escolha_revogacao check ((revogada_em is null) = (motivo_revogacao is null))
+);
+create index if not exists idx_mentoria_escolhas_org on public.mentoria_escolhas_fonte(organizacao_id, created_at);
 
 create table if not exists public.mentoria_apresentacoes (
   id uuid primary key default gen_random_uuid(),
@@ -110,9 +138,10 @@ alter table public.mentoria_importacoes enable row level security;
 alter table public.mentoria_historico_mensal enable row level security;
 alter table public.mentoria_registros enable row level security;
 alter table public.mentoria_apresentacoes enable row level security;
+alter table public.mentoria_escolhas_fonte enable row level security;
 
 revoke all on public.mentoria_participantes, public.mentoria_importacoes, public.mentoria_historico_mensal,
-  public.mentoria_registros, public.mentoria_apresentacoes from anon, authenticated;
+  public.mentoria_registros, public.mentoria_apresentacoes, public.mentoria_escolhas_fonte from anon, authenticated;
 
 -- Uma apresentação gerada é um registro histórico: não se edita (nova versão = nova linha).
 create or replace function public.mentoria_apresentacao_imutavel() returns trigger language plpgsql as $$

@@ -47,6 +47,7 @@ import { abrirTabelasComerciaisDaUnidade } from "./abrirTabelasComerciais.js";
 import { precisaDesafioMfa, abrirDesafioMfa } from "./mfa.js";
 import { abrirPainelAdmin, fecharPainelAdmin } from "./admin.js";
 import { abrirPainelAdministrativo } from "./painelAdm.js";
+import { rotaAtual, limparRota, podeRestaurarPainel } from "./rotaPainelAdm.js";
 import { rotaPosAcessos, botaoPainelAdmVisivel } from "./encaminhamento.js";
 import { initTooltips } from "./tooltip.js";
 import { icon } from "./icons.js";
@@ -743,6 +744,15 @@ async function encaminhar({ preferirAdmin = false } = {}) {
     return;
   }
 
+  // Painel Administrativo no endereço (F5, link direto, outra aba): volta direto para lá. A conta precisa ter o
+  // acesso (flag do /me) e o backend confirma no /administrativo/ping; sem acesso, a rota é descartada.
+  const rotaAdm = rotaAtual();
+  if (rotaAdm) {
+    const u = state.sessao.usuario;
+    if (podeRestaurarPainel(rotaAdm, u) && await abrirAmbienteAdministrativo({ rota: rotaAdm })) return;
+    limparRota();
+  }
+
   // Contexto ainda válido (recarregou a página) — volta direto para o trabalho.
   // NUNCA pede perfil/PIN aqui: o Context Token já é a autoridade da sessão.
   if (!preferirAdmin && await restaurarContexto()) {
@@ -893,6 +903,7 @@ function entrarPorImpersonacao(contexto) {
 }
 
 async function sairDeTudo() {
+  limparRota();
   await logout();
   mostrarLogin();
 }
@@ -905,12 +916,14 @@ async function sairDeTudo() {
  * `aoAcessoRevogado`. Nenhum Context Token é criado; nenhuma empresa é
  * selecionada.
  */
-async function abrirAmbienteAdministrativo() {
-  await abrirPainelAdministrativo({
+async function abrirAmbienteAdministrativo({ rota = null } = {}) {
+  return abrirPainelAdministrativo({
+    rota,
     mostrarTela,
     usuario: state.sessao.usuario,
     aoTrocarAmbiente: voltarParaSelecao,
     aoAcessoRevogado: (msg) => {
+      limparRota();
       state.sessao.painelAdministrativo = false;
       el("#sel-painel-adm").hidden = true;
       toast(msg);
@@ -925,6 +938,7 @@ async function abrirAmbienteAdministrativo() {
  * restauraria o contexto). Login e acessos permanecem intactos.
  */
 async function voltarParaSelecao() {
+  limparRota();
   try {
     const dados = await listarAcessos();
     mostrarSelecao(dados);

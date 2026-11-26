@@ -23,6 +23,9 @@ export const ACOES_NUCLEO = Object.freeze({
   IMPORTACAO_CONFIRMADA: "nucleo_mentorados.importacao_confirmada",
   APRESENTACAO_GERADA: "nucleo_mentorados.apresentacao_gerada",
   APRESENTACAO_EXPORTADA: "nucleo_mentorados.apresentacao_exportada",
+  VINCULO_EM_MASSA: "nucleo_mentorados.vinculo_em_massa",
+  FONTE_ESCOLHIDA: "nucleo_mentorados.fonte_escolhida",
+  FONTE_REVOGADA: "nucleo_mentorados.fonte_escolha_revogada",
 });
 
 const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -121,23 +124,30 @@ async function carregarParticipantes(db, orgIds = null) {
 
 async function carregarSeries(db, orgIds) {
   if (!orgIds.length) return new Map();
-  const [importados, lancamentos, importacoes] = await Promise.all([
+  const [importados, lancamentos, importacoes, escolhas, mudancas] = await Promise.all([
     paginar(() => db.from("mentoria_historico_mensal").select("*").in("organizacao_id", orgIds).order("mes")),
     paginar(() => db.from("lancamentos_financeiros_diarios").select(COLUNAS_LANC).in("organizacao_id", orgIds).order("data_lancamento")),
     paginar(() => db.from("mentoria_importacoes").select("id, organizacao_id, arquivo_nome, arquivo_sha256, leitor_versao, mes_inicio, mes_fim, meses, metas, created_at, importado_por_email").in("organizacao_id", orgIds).order("created_at")),
+    paginar(() => db.from("mentoria_escolhas_fonte").select("*").in("organizacao_id", orgIds).order("created_at")),
+    paginar(() => db.from("mentoria_registros").select("organizacao_id, data_registro, titulo, modelo_anterior, modelo_novo").in("organizacao_id", orgIds).eq("tipo", "mudanca_operacional").order("data_registro")),
   ]);
   const por = (lista) => { const m = new Map(); for (const r of lista) (m.get(r.organizacao_id) ?? m.set(r.organizacao_id, []).get(r.organizacao_id)).push(r); return m; };
-  const imp = por(importados), lanc = por(lancamentos), imps = por(importacoes);
+  const imp = por(importados), lanc = por(lancamentos), imps = por(importacoes), esc = por(escolhas), mud = por(mudancas);
   const saida = new Map();
   for (const org of orgIds) {
     saida.set(org, {
       importacao: (imp.get(org) ?? []).map(calc.mesDaImportacao),
       dashboard: mesesDoDashboard(lanc.get(org) ?? []),
       importacoes: imps.get(org) ?? [],
+      escolhasBrutas: esc.get(org) ?? [],
+      escolhas: (esc.get(org) ?? []).map(escolhaParaCalc),
+      mudancas: (mud.get(org) ?? []).map((r) => ({ mes: r.data_registro, de: r.modelo_anterior, para: r.modelo_novo, titulo: r.titulo })),
     });
   }
   return saida;
 }
+
+const escolhaParaCalc = (e) => ({ id: e.id, inicio: e.mes_inicio, fim: e.mes_fim, grupo: e.grupo, fonte: e.fonte, criadaEm: e.created_at, revogada: !!e.revogada_em });
 
 /** Metas: as da importação mais recente (rótulos da planilha) + metas registradas pelo mentor (vencem). */
 function metasVigentes(importacoes, registros = []) {
@@ -151,9 +161,9 @@ function metasVigentes(importacoes, registros = []) {
 }
 
 function analisarEmpresa({ participante, serieFontes, registros = [], hojeIso }) {
-  const { meses, divergencias } = calc.consolidarSerie({ importacao: serieFontes.importacao, dashboard: serieFontes.dashboard, preferencia: participante.fonte_preferencial });
+  const { meses, divergencias } = calc.consolidarSerie({ importacao: serieFontes.importacao, dashboard: serieFontes.dashboard, preferencia: participante.fonte_preferencial, escolhas: serieFontes.escolhas });
   const metas = metasVigentes(serieFontes.importacoes, registros);
-  const analise = calc.analisar({ participante, serie: meses, divergencias, metas: metas.maximos, hojeIso });
+  const analise = calc.analisar({ participante, serie: meses, divergencias, metas: metas.maximos, hojeIso, mudancas: serieFontes.mudancas });
   return { serie: meses, divergencias, metas, analise };
 }
 
@@ -191,6 +201,8 @@ export async function listar({ hojeIso } = {}, deps = {}) {
       cicloEmCurso: vendasEmCurso ? { rotulo: emCurso.ciclo.rotulo, meses: emCurso.ciclo.meses, comparavel: vendasEmCurso.comparavel, percentual: vendasEmCurso.variacaoPercentual } : null,
       custosIfood: custos ? { comparavel: custos.comparavel, atual: custos.atual, referencia: custos.referencia, pontosPercentuais: custos.pontosPercentuais } : null,
       ultimoMesComDado: analise.ultimoMesComDado,
+      pendencias: [!p.data_entrada && "data de entrada", !p.data_renovacao && "data de renovação", !p.mentor_nome && "mentor"].filter(Boolean),
+      divergenciasPendentes: new Set(divergencias.filter((d) => !d.resolvidaPor).map((d) => d.mes)).size,
       disponibilidade: serie.some((m) => m.valorVendas != null) ? (analise.alertas.some((a) => a.codigo === "ANTES_INCOMPLETO") ? "parcial" : "completa") : "sem_dados",
       divergencias: new Set(divergencias.map((d) => d.mes)).size,
       alertas: analise.alertas,
@@ -200,14 +212,66 @@ export async function listar({ hojeIso } = {}, deps = {}) {
 }
 
 /** Empresas que podem ser cadastradas (todas as ativas; o cadastro é uma decisão explícita do administrador). */
-export async function candidatas(deps = {}) {
+export async function candidatas({ hojeIso } = {}, deps = {}) {
   const db = deps.supabase ?? supabase;
-  const [orgs, part] = await Promise.all([
+  const hoje = hojeIso ?? hojeIsoBrasil();
+  // "Usa o Dashboard iFood" = tem lançamento nos últimos 90 dias (leitura de 2 colunas, paginada).
+  const desde = new Date(Date.parse(hoje) - 90 * 864e5).toISOString().slice(0, 10);
+  const [orgs, part, lanc] = await Promise.all([
     paginar(() => db.from("organizacoes").select("id, nome, status, responsavel_nome").eq("eh_modelo", false).order("nome")),
     carregarParticipantes(db),
+    paginar(() => db.from("lancamentos_financeiros_diarios").select("organizacao_id, data_lancamento").gte("data_lancamento", desde).order("data_lancamento")),
   ]);
   const ja = new Set(part.map((p) => p.organizacao_id));
-  return { empresas: orgs.filter((o) => !ja.has(o.id)).map((o) => ({ id: o.id, nome: o.nome, status: o.status, responsavel: o.responsavel_nome })) };
+  const ultimo = new Map();
+  for (const l of lanc) if (!ultimo.has(l.organizacao_id) || l.data_lancamento > ultimo.get(l.organizacao_id)) ultimo.set(l.organizacao_id, l.data_lancamento);
+  return {
+    empresas: orgs.filter((o) => !ja.has(o.id)).map((o) => ({ id: o.id, nome: o.nome, status: o.status, responsavel: o.responsavel_nome,
+      usaDashboardIfood: ultimo.has(o.id), ultimoLancamento: ultimo.get(o.id) ?? null })),
+    janelaDashboardDesde: desde,
+  };
+}
+
+/**
+ * Vincula VÁRIAS empresas já cadastradas de uma vez (sem duplicar cadastro). Exige a confirmação explícita de que
+ * participam da mentoria. Datas são opcionais e nunca presumidas: sem data de entrada, o vínculo fica pendente.
+ * Empresas já vinculadas são devolvidas em `jaVinculadas` e não são alteradas. Uma única inserção (atômica).
+ */
+export async function vincularEmMassa({ corpo = {}, autor, req } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  if (corpo.confirmacao !== true) throw ApiError.badRequest("Confirme que as empresas selecionadas participam da mentoria.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
+  const itens = Array.isArray(corpo.itens) ? corpo.itens : [];
+  if (!itens.length || itens.length > 200) throw ApiError.badRequest("Selecione de 1 a 200 empresas.");
+  const mentorPadrao = texto(corpo.mentorPadrao, "Mentor", 120);
+  const vistos = new Set();
+  const linhas = itens.map((it, i) => {
+    const orgId = validarUuid(it?.organizacaoId, `itens[${i}].organizacaoId`);
+    if (vistos.has(orgId)) throw ApiError.badRequest("Empresa repetida na seleção.");
+    vistos.add(orgId);
+    const dataEntrada = validarData(it.dataEntrada, `Data de entrada (${i + 1})`);
+    const dataRenovacao = validarData(it.dataRenovacao, `Data de renovação (${i + 1})`);
+    if (dataEntrada && dataRenovacao && dataRenovacao <= dataEntrada) throw ApiError.badRequest(`Renovação deve ser posterior à entrada (${i + 1}).`);
+    return { organizacao_id: orgId, status: "ativa", data_entrada: dataEntrada, data_renovacao: dataRenovacao,
+      mentor_nome: texto(it.mentor, "Mentor", 120) ?? mentorPadrao, fonte_preferencial: "dashboard_ifood",
+      criado_por: autor?.id ?? null, atualizado_por: autor?.id ?? null };
+  });
+  const ids = linhas.map((l) => l.organizacao_id);
+  const [orgs, existentes] = await Promise.all([
+    db.from("organizacoes").select("id, nome, eh_modelo").in("id", ids).then(dados),
+    carregarParticipantes(db, ids),
+  ]);
+  const validas = new Set((orgs ?? []).filter((o) => !o.eh_modelo).map((o) => o.id));
+  const inexistentes = ids.filter((id) => !validas.has(id));
+  if (inexistentes.length) throw ApiError.badRequest("Há empresas inexistentes na seleção.", { codigo: "EMPRESA_INEXISTENTE", ids: inexistentes });
+  const ja = new Set(existentes.map((p) => p.organizacao_id));
+  const novas = linhas.filter((l) => !ja.has(l.organizacao_id));
+  const gravadas = novas.length ? dados(await db.from("mentoria_participantes").insert(novas).select("organizacao_id, data_entrada, data_renovacao, mentor_nome")) : [];
+  await (deps.auditar ?? auditar)({ acao: ACOES_NUCLEO.VINCULO_EM_MASSA, atorId: autor?.id, atorEmail: autor?.email, perfilId: autor?.perfilId,
+    entidade: "mentoria_participantes", entidadeId: null, detalhes: { vinculadas: gravadas.map((g) => g.organizacao_id), jaVinculadas: [...ja] }, ip: req?.ip });
+  return {
+    vinculadas: gravadas.length, jaVinculadas: [...ja],
+    pendentes: gravadas.filter((g) => !g.data_entrada || !g.data_renovacao || !g.mentor_nome).map((g) => g.organizacao_id),
+  };
 }
 
 async function exigirParticipante(db, orgId) {
@@ -232,7 +296,7 @@ export async function perfil({ organizacaoId, hojeIso } = {}, deps = {}) {
   return {
     empresa: orgArr?.[0] ?? { id: orgId }, participante, hojeIso: hoje,
     serie: r.serie, divergencias: r.divergencias, metas: r.metas, analise: r.analise,
-    importacoes: fontes.importacoes, registros: registros ?? [], apresentacoes: apresentacoes ?? [],
+    importacoes: fontes.importacoes, registros: registros ?? [], apresentacoes: apresentacoes ?? [], escolhasFonte: fontes.escolhasBrutas,
     fontes: { importacao: fontes.importacao.length, dashboard: fontes.dashboard.length, preferencial: participante.fonte_preferencial },
   };
 }
@@ -245,18 +309,18 @@ export async function salvarParticipante({ organizacaoId, corpo = {}, autor, req
   const linha = {
     organizacao_id: orgId,
     status: umDe(corpo.status, "status", ["ativa", "pausada", "encerrada"], "ativa"),
-    data_entrada: validarData(corpo.dataEntrada, "Data de entrada", { obrigatoria: true }),
+    data_entrada: validarData(corpo.dataEntrada, "Data de entrada"),
     data_renovacao: validarData(corpo.dataRenovacao, "Data de renovação"),
     mentor_nome: texto(corpo.mentor, "Mentor", 120),
     responsavel_nome: texto(corpo.responsavel, "Responsável", 120),
     cidade: texto(corpo.cidade, "Cidade", 80),
     uf: corpo.uf ? umDe(String(corpo.uf).toUpperCase(), "UF", UFS, null) : null,
     modelo_operacao: umDe(corpo.modeloOperacao, "Modelo de operação", ["marketplace", "full_service", "misto"], null),
-    fonte_preferencial: umDe(corpo.fontePreferencial, "Fonte preferencial", ["importacao", "dashboard_ifood"], "importacao"),
+    fonte_preferencial: umDe(corpo.fontePreferencial, "Fonte preferencial", ["importacao", "dashboard_ifood"], "dashboard_ifood"),
     observacoes: texto(corpo.observacoes, "Observações", 2000),
     atualizado_por: autor?.id ?? null,
   };
-  if (linha.data_renovacao && linha.data_renovacao <= linha.data_entrada) throw ApiError.badRequest("A renovação deve ser posterior à entrada.");
+  if (linha.data_entrada && linha.data_renovacao && linha.data_renovacao <= linha.data_entrada) throw ApiError.badRequest("A renovação deve ser posterior à entrada.");
   const existente = await carregarParticipantes(db, [orgId]);
   const salvo = dados(await db.from("mentoria_participantes")
     .upsert(existente.length ? linha : { ...linha, criado_por: autor?.id ?? null }, { onConflict: "organizacao_id" }).select("*"));
@@ -266,7 +330,8 @@ export async function salvarParticipante({ organizacaoId, corpo = {}, autor, req
   return { participante: salvo?.[0] ?? null };
 }
 
-const TIPOS_REGISTRO = ["diagnostico", "estrategia", "meta", "evidencia", "observacao"];
+const TIPOS_REGISTRO = ["diagnostico", "estrategia", "meta", "evidencia", "observacao", "mudanca_operacional"];
+const MODELOS = ["marketplace", "full_service", "misto", "outro"];
 const INDICADORES_VALIDOS = new Set(calc.INDICADORES.map((i) => i.chave).concat(["taxasMaisServicos", "custosIfoodTotal"]));
 
 function normalizarRegistro(corpo) {
@@ -278,8 +343,15 @@ function normalizarRegistro(corpo) {
     tipo, data_registro: validarData(corpo.data, "Data", { obrigatoria: true }),
     titulo: texto(corpo.titulo, "Título", 160, { obrigatorio: true }), descricao: texto(corpo.descricao, "Descrição", 4000),
     indicadores, privado: typeof corpo.privado === "boolean" ? corpo.privado : tipo === "observacao",
-    meta_indicador: null, meta_valor: null, meta_unidade: null,
+    meta_indicador: null, meta_valor: null, meta_unidade: null, modelo_anterior: null, modelo_novo: null,
   };
+  if (tipo === "mudanca_operacional") {
+    linha.modelo_novo = umDe(corpo.modeloNovo, "Novo modelo", MODELOS, null);
+    linha.modelo_anterior = umDe(corpo.modeloAnterior, "Modelo anterior", MODELOS, null);
+    if (!linha.modelo_novo) throw ApiError.badRequest("Informe o novo modelo operacional.");
+    if (linha.modelo_anterior === linha.modelo_novo) throw ApiError.badRequest("O novo modelo deve ser diferente do anterior.");
+    linha.privado = typeof corpo.privado === "boolean" ? corpo.privado : false; // contexto que a apresentação deve mostrar
+  }
   if (tipo === "meta") {
     linha.meta_indicador = corpo.metaIndicador ?? null;
     if (linha.meta_indicador && !INDICADORES_VALIDOS.has(linha.meta_indicador)) throw ApiError.badRequest("Indicador da meta inválido.");
@@ -326,6 +398,53 @@ export async function removerRegistro({ organizacaoId, registroId, autor, req } 
   await (deps.auditar ?? auditar)({ acao: ACOES_NUCLEO.REGISTRO_REMOVIDO, atorId: autor?.id, atorEmail: autor?.email, perfilId: autor?.perfilId,
     entidade: "mentoria_registros", entidadeId: id, organizacaoId: orgId, detalhes: apagado[0], ip: req?.ip });
   return { removido: id };
+}
+
+// ---------------------------------------------------------------------------
+// Escolha auditável da fonte válida (por período e grupo). Nunca altera dado nenhum.
+// ---------------------------------------------------------------------------
+const RE_YM = /^\d{4}-(0[1-9]|1[0-2])$/;
+const mesParaData = (ym, nome) => {
+  if (typeof ym !== "string" || !RE_YM.test(ym)) throw ApiError.badRequest(`${nome} inválido (use AAAA-MM).`);
+  return `${ym}-01`;
+};
+
+export async function escolherFonte({ organizacaoId, corpo = {}, autor, req } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const orgId = validarUuid(organizacaoId, "organizacaoId");
+  await exigirParticipante(db, orgId);
+  const linha = {
+    organizacao_id: orgId,
+    mes_inicio: mesParaData(corpo.inicio, "Mês inicial"), mes_fim: mesParaData(corpo.fim, "Mês final"),
+    grupo: umDe(corpo.grupo, "Grupo", ["financeiro", "desempenho"], null),
+    fonte: umDe(corpo.fonte, "Fonte", ["importacao", "dashboard_ifood"], null),
+    justificativa: texto(corpo.justificativa, "Justificativa", 1000, { obrigatorio: true }),
+    criado_por: autor?.id ?? null, criado_por_nome: autor?.nome ?? null,
+  };
+  if (!linha.grupo || !linha.fonte) throw ApiError.badRequest("Informe o grupo e a fonte.");
+  if (linha.mes_fim < linha.mes_inicio) throw ApiError.badRequest("O mês final deve ser igual ou posterior ao inicial.");
+  if (linha.justificativa.length < 10) throw ApiError.badRequest("Justificativa: escreva ao menos 10 caracteres.");
+  const salvo = dados(await db.from("mentoria_escolhas_fonte").insert(linha).select("*"));
+  await (deps.auditar ?? auditar)({ acao: ACOES_NUCLEO.FONTE_ESCOLHIDA, atorId: autor?.id, atorEmail: autor?.email, perfilId: autor?.perfilId,
+    entidade: "mentoria_escolhas_fonte", entidadeId: salvo?.[0]?.id, organizacaoId: orgId,
+    detalhes: { inicio: corpo.inicio, fim: corpo.fim, grupo: linha.grupo, fonte: linha.fonte, justificativa: linha.justificativa }, ip: req?.ip });
+  return { escolha: salvo?.[0] ?? null };
+}
+
+export async function revogarEscolhaFonte({ organizacaoId, escolhaId, corpo = {}, autor, req } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const orgId = validarUuid(organizacaoId, "organizacaoId");
+  const id = validarUuid(escolhaId, "escolhaId");
+  const motivo = texto(corpo.motivo, "Motivo", 1000, { obrigatorio: true });
+  if (motivo.length < 10) throw ApiError.badRequest("Motivo: escreva ao menos 10 caracteres.");
+  const atual = dados(await db.from("mentoria_escolhas_fonte").select("id, revogada_em").eq("id", id).eq("organizacao_id", orgId));
+  if (!atual?.length) throw ApiError.notFound("Escolha não encontrada.");
+  if (atual[0].revogada_em) throw ApiError.badRequest("Esta escolha já foi revogada.");
+  const salvo = dados(await db.from("mentoria_escolhas_fonte").update({ revogada_em: new Date().toISOString(), revogada_por: autor?.id ?? null, motivo_revogacao: motivo })
+    .eq("id", id).eq("organizacao_id", orgId).select("*"));
+  await (deps.auditar ?? auditar)({ acao: ACOES_NUCLEO.FONTE_REVOGADA, atorId: autor?.id, atorEmail: autor?.email, perfilId: autor?.perfilId,
+    entidade: "mentoria_escolhas_fonte", entidadeId: id, organizacaoId: orgId, detalhes: { motivo }, ip: req?.ip });
+  return { escolha: salvo?.[0] ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -406,7 +525,16 @@ export async function confirmarImportacao({ organizacaoId, corpo = {}, autor, re
       entidade: "mentoria_importacoes", entidadeId: linha?.importacao_id, organizacaoId: orgId,
       detalhes: { arquivo: nome, sha256: lido.sha256, meses: lido.meses.length, substituidos: diag.mesesSubstituidos.length }, ip: req?.ip });
   }
-  return { importacaoId: linha?.importacao_id ?? null, jaExistia: !!linha?.ja_existia, mesesGravados: linha?.meses_gravados ?? 0 };
+  // Opcional: manter a planilha como fonte válida nos meses que o Dashboard também tem (ex.: números já homologados
+  // cujas divergências ainda estão em análise). Vira uma escolha auditável comum, revogável depois.
+  let escolha = null;
+  const pres = corpo.preservarPlanilhaNaSobreposicao;
+  if (pres && diag.sobreposicaoDashboard.length) {
+    escolha = (await escolherFonte({ organizacaoId: orgId, autor, req, corpo: {
+      inicio: diag.sobreposicaoDashboard[0], fim: diag.sobreposicaoDashboard.at(-1), grupo: "financeiro", fonte: "importacao",
+      justificativa: pres.justificativa } }, deps)).escolha;
+  }
+  return { importacaoId: linha?.importacao_id ?? null, jaExistia: !!linha?.ja_existia, mesesGravados: linha?.meses_gravados ?? 0, escolhaId: escolha?.id ?? null };
 }
 
 // ---------------------------------------------------------------------------
@@ -423,11 +551,12 @@ export function montarSnapshot(p) {
       cidade: p.participante.cidade, uf: p.participante.uf, modeloOperacao: p.participante.modelo_operacao, fontePreferencial: p.participante.fonte_preferencial,
     },
     serie: p.serie, divergencias: p.divergencias, metas: p.metas, analise: p.analise,
-    registros: p.registros.map((r) => ({ id: r.id, tipo: r.tipo, data: r.data_registro, titulo: r.titulo, descricao: r.descricao, indicadores: r.indicadores, privado: r.privado, metaIndicador: r.meta_indicador, metaValor: r.meta_valor, metaUnidade: r.meta_unidade })),
+    registros: p.registros.map((r) => ({ id: r.id, tipo: r.tipo, data: r.data_registro, titulo: r.titulo, descricao: r.descricao, indicadores: r.indicadores, privado: r.privado, metaIndicador: r.meta_indicador, metaValor: r.meta_valor, metaUnidade: r.meta_unidade, modeloAnterior: r.modelo_anterior, modeloNovo: r.modelo_novo })),
     fontes: {
       importacoes: p.importacoes.map((i) => ({ id: i.id, arquivo: i.arquivo_nome, sha256: i.arquivo_sha256, leitor: i.leitor_versao, em: i.created_at, inicio: i.mes_inicio, fim: i.mes_fim })),
       dashboardIfood: { meses: p.fontes.dashboard, regra: "snapshot mensal oficial do Dashboard iFood (somente leitura)" },
       preferencial: p.fontes.preferencial,
+      escolhas: (p.escolhasFonte ?? []).filter((e) => !e.revogada_em).map((e) => ({ id: e.id, inicio: e.mes_inicio, fim: e.mes_fim, grupo: e.grupo, fonte: e.fonte, justificativa: e.justificativa, em: e.created_at, por: e.criado_por_nome })),
     },
   };
 }

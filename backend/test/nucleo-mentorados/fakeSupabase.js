@@ -13,6 +13,7 @@ export function fakeSupabase(tabelas = {}, { rpc = {}, ausentes = [] } = {}) {
       select() { if (st.op !== "select") st.retornar = true; return api; },
       in(c, vs) { st.filtros.push((r) => vs.includes(r[c])); st.log.push(["in", c, vs]); return api; },
       eq(c, v) { st.filtros.push((r) => r[c] === v); st.log.push(["eq", c, v]); return api; },
+      gte(c, v) { st.filtros.push((r) => r[c] >= v); return api; },
       order(c, { ascending = true } = {}) { st.ordem = { c, ascending }; return api; },
       range(a, b) { st.faixa = [a, b]; return api; },
       insert(v) { st.op = "insert"; st.valores = [].concat(v); return api; },

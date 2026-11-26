@@ -193,7 +193,7 @@ describe("cadastro, registros e apresentações", () => {
     await assert.rejects(S.salvarParticipante({ organizacaoId: ORG_X, corpo: { dataEntrada: "2026-01-01", dataRenovacao: "2025-12-01" }, autor: AUTOR }, deps), /posterior/);
     const r = await S.salvarParticipante({ organizacaoId: ORG_X, corpo: { dataEntrada: "2026-01-01", uf: "ba", mentor: "Ana" }, autor: AUTOR }, deps);
     assert.equal(r.participante.uf, "BA");
-    assert.equal((await S.candidatas(deps)).empresas.length, 0);
+    assert.equal((await S.candidatas({ hojeIso: HOJE }, deps)).empresas.length, 0);
   });
   test("registro de meta valida o indicador", async () => {
     const { deps } = cenario();
@@ -214,5 +214,77 @@ describe("cadastro, registros e apresentações", () => {
     await assert.rejects(S.obterApresentacao({ organizacaoId: ORG_B, apresentacaoId: a1.apresentacao.id }, deps), (e) => e.statusCode === 404);
     await S.registrarExportacao({ organizacaoId: ORG_A, apresentacaoId: a1.apresentacao.id, formato: "pdf", autor: AUTOR }, deps);
     assert.ok(auditorias.some((x) => x.acao === S.ACOES_NUCLEO.APRESENTACAO_EXPORTADA));
+  });
+});
+
+describe("vínculo em massa, escolha de fonte e mudança operacional", () => {
+  test("candidatas indicam uso do Dashboard iFood; vínculo exige confirmação e não duplica", async () => {
+    const { sb, deps, auditorias } = cenario();
+    sb.db.organizacoes.push({ id: "dddddddd-0000-4000-8000-00000000000d", nome: "Empresa D", status: "ativa", eh_modelo: false });
+    sb.db.lancamentos_financeiros_diarios.push({ organizacao_id: ORG_X, unidade_id: "x", data_lancamento: "2026-11-20", situacao: "normal" });
+    const c = await S.candidatas({ hojeIso: HOJE }, deps);
+    assert.deepEqual(c.empresas.map((e) => [e.nome, e.usaDashboardIfood]), [["Empresa X", true], ["Empresa D", false]].sort());
+    const itens = [{ organizacaoId: ORG_X, dataEntrada: "2026-02-01", mentor: "Ana" }, { organizacaoId: "dddddddd-0000-4000-8000-00000000000d" }, { organizacaoId: ORG_A }];
+    await assert.rejects(S.vincularEmMassa({ corpo: { itens } , autor: AUTOR }, deps), /Confirme/);
+    const r = await S.vincularEmMassa({ corpo: { itens, confirmacao: true, mentorPadrao: "Mentor Padrão" }, autor: AUTOR }, deps);
+    assert.equal(r.vinculadas, 2);
+    assert.deepEqual(r.jaVinculadas, [ORG_A]);
+    assert.deepEqual(r.pendentes.sort(), [ORG_X, "dddddddd-0000-4000-8000-00000000000d"].sort(), "sem renovação/entrada = pendente");
+    const d = sb.db.mentoria_participantes.find((p) => p.organizacao_id === "dddddddd-0000-4000-8000-00000000000d");
+    assert.equal(d.data_entrada, null, "data nunca presumida");
+    assert.equal(d.mentor_nome, "Mentor Padrão");
+    assert.equal(d.fonte_preferencial, "dashboard_ifood");
+    assert.equal(sb.db.mentoria_participantes.filter((p) => p.organizacao_id === ORG_A).length, 1);
+    assert.ok(auditorias.some((x) => x.acao === S.ACOES_NUCLEO.VINCULO_EM_MASSA));
+    const l = await S.listar({ hojeIso: HOJE }, deps);
+    const pend = l.mentorados.find((m) => m.organizacaoId === "dddddddd-0000-4000-8000-00000000000d");
+    assert.deepEqual(pend.pendencias, ["data de entrada", "data de renovação"]);
+    assert.equal(pend.alertas[0].codigo, "ENTRADA_PENDENTE");
+  });
+  test("vínculo recusa empresa inexistente ou repetida", async () => {
+    const { deps } = cenario();
+    await assert.rejects(S.vincularEmMassa({ corpo: { confirmacao: true, itens: [{ organizacaoId: "eeeeeeee-0000-4000-8000-00000000000e" }] } }, deps), /inexistentes/);
+    await assert.rejects(S.vincularEmMassa({ corpo: { confirmacao: true, itens: [{ organizacaoId: ORG_X }, { organizacaoId: ORG_X }] } }, deps), /repetida/);
+  });
+  test("escolha de fonte exige justificativa, vale no período, é auditada e revogável só na própria empresa", async () => {
+    const { sb, deps, auditorias } = cenario();
+    const buf = planilhaReferencia();
+    await S.confirmarImportacao({ organizacaoId: ORG_A, corpo: corpoArquivo(buf, { arquivoSha256: lerPlanilhaHistorico(buf).sha256 }), autor: AUTOR }, deps);
+    sb.db.mentoria_participantes.find((p) => p.organizacao_id === ORG_A).fonte_preferencial = "dashboard_ifood";
+    let p = await S.perfil({ organizacaoId: ORG_A, hojeIso: HOJE }, deps);
+    assert.equal(p.serie.find((m) => m.mes === "2026-05").valorVendas, 9848000, "padrão: Dashboard");
+    await assert.rejects(S.escolherFonte({ organizacaoId: ORG_A, corpo: { inicio: "2026-05", fim: "2026-05", grupo: "financeiro", fonte: "importacao", justificativa: "curta" }, autor: AUTOR }, deps), /10 caracteres/);
+    const { escolha } = await S.escolherFonte({ organizacaoId: ORG_A, corpo: { inicio: "2026-05", fim: "2026-05", grupo: "financeiro", fonte: "importacao", justificativa: "Extrato conferido com o mentor em reunião" }, autor: AUTOR }, deps);
+    p = await S.perfil({ organizacaoId: ORG_A, hojeIso: HOJE }, deps);
+    assert.equal(p.serie.find((m) => m.mes === "2026-05").valorVendas, 10050000);
+    assert.equal(p.divergencias.find((d) => d.mes === "2026-05" && d.campo === "valorVendas").resolvidaPor, escolha.id);
+    await assert.rejects(S.revogarEscolhaFonte({ organizacaoId: ORG_B, escolhaId: escolha.id, corpo: { motivo: "tentativa de outra empresa" } }, deps), (e) => e.statusCode === 404);
+    await S.revogarEscolhaFonte({ organizacaoId: ORG_A, escolhaId: escolha.id, corpo: { motivo: "Divergência explicada pelo suporte" }, autor: AUTOR }, deps);
+    p = await S.perfil({ organizacaoId: ORG_A, hojeIso: HOJE }, deps);
+    assert.equal(p.serie.find((m) => m.mes === "2026-05").valorVendas, 9848000);
+    assert.equal(p.escolhasFonte.length, 1, "revogar não apaga");
+    assert.ok(auditorias.some((x) => x.acao === S.ACOES_NUCLEO.FONTE_REVOGADA));
+    assert.ok(!sb.log.some((l) => l.tabela === "lancamentos_financeiros_diarios" && l.op !== "select"));
+  });
+  test("confirmar importação pode preservar a planilha nos meses sobrepostos (homologação)", async () => {
+    const { deps } = cenario();
+    const buf = planilhaReferencia();
+    const r = await S.confirmarImportacao({ organizacaoId: ORG_A, autor: AUTOR, corpo: corpoArquivo(buf, { arquivoSha256: lerPlanilhaHistorico(buf).sha256,
+      preservarPlanilhaNaSobreposicao: { justificativa: "Números homologados; divergências em análise" } }) }, deps);
+    assert.ok(r.escolhaId);
+    const p = await S.perfil({ organizacaoId: ORG_A, hojeIso: HOJE }, deps);
+    assert.deepEqual([p.escolhasFonte[0].mes_inicio, p.escolhasFonte[0].mes_fim], ["2026-05-01", "2026-09-01"]);
+  });
+  test("mudança operacional exige novo modelo e bloqueia comparação de entregadores", async () => {
+    const { deps } = cenario();
+    await assert.rejects(S.criarRegistro({ organizacaoId: ORG_A, corpo: { tipo: "mudanca_operacional", data: "2026-08-01", titulo: "x" }, autor: AUTOR }, deps), /novo modelo/);
+    const buf = planilhaReferencia();
+    await S.confirmarImportacao({ organizacaoId: ORG_A, corpo: corpoArquivo(buf, { arquivoSha256: lerPlanilhaHistorico(buf).sha256 }), autor: AUTOR }, deps);
+    const r = await S.criarRegistro({ organizacaoId: ORG_A, corpo: { tipo: "mudanca_operacional", data: "2026-08-01", titulo: "Passou a Full Service", modeloAnterior: "marketplace", modeloNovo: "full_service" }, autor: AUTOR }, deps);
+    assert.equal(r.registro.privado, false);
+    const p = await S.perfil({ organizacaoId: ORG_A, hojeIso: HOJE }, deps);
+    const c = p.analise.comparativos[p.analise.comparativoPrincipal];
+    assert.equal(c.indicadores.find((i) => i.chave === "pctCustosIfoodTotal").estruturaMudou, true);
+    assert.equal(p.analise.mudancas[0].texto, "Marketplace → Full Service em ago/26");
   });
 });

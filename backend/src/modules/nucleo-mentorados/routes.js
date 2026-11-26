@@ -22,7 +22,9 @@ const limiteEscrita = limiteDeTaxa({ escopo: "nucleo_mentorados_escrita", max: 6
 const org = (req) => req.params.organizacaoId;
 
 nucleoMentoradosRouter.get("/", asyncHandler(async (req, res) => ok(res, await s.listar({ hojeIso: hoje(req) }, deps(req)))));
-nucleoMentoradosRouter.get("/candidatas", asyncHandler(async (req, res) => ok(res, await s.candidatas(deps(req)))));
+nucleoMentoradosRouter.get("/candidatas", asyncHandler(async (req, res) => ok(res, await s.candidatas({ hojeIso: hoje(req) }, deps(req)))));
+nucleoMentoradosRouter.post("/vinculos", limiteEscrita, asyncHandler(async (req, res) =>
+  ok(res, await s.vincularEmMassa({ corpo: req.body, autor: autor(req), req }, deps(req)), 201)));
 nucleoMentoradosRouter.get("/:organizacaoId", asyncHandler(async (req, res) => ok(res, await s.perfil({ organizacaoId: org(req), hojeIso: hoje(req) }, deps(req)))));
 nucleoMentoradosRouter.put("/:organizacaoId", limiteEscrita, asyncHandler(async (req, res) =>
   ok(res, await s.salvarParticipante({ organizacaoId: org(req), corpo: req.body, autor: autor(req), req }, deps(req)))));
@@ -34,6 +36,10 @@ nucleoMentoradosRouter.put("/:organizacaoId/registros/:registroId", limiteEscrit
 nucleoMentoradosRouter.delete("/:organizacaoId/registros/:registroId", limiteEscrita, asyncHandler(async (req, res) =>
   ok(res, await s.removerRegistro({ organizacaoId: org(req), registroId: req.params.registroId, autor: autor(req), req }, deps(req)))));
 
+nucleoMentoradosRouter.post("/:organizacaoId/fontes", limiteEscrita, asyncHandler(async (req, res) =>
+  ok(res, await s.escolherFonte({ organizacaoId: org(req), corpo: req.body, autor: autor(req), req }, deps(req)), 201)));
+nucleoMentoradosRouter.post("/:organizacaoId/fontes/:escolhaId/revogacao", limiteEscrita, asyncHandler(async (req, res) =>
+  ok(res, await s.revogarEscolhaFonte({ organizacaoId: org(req), escolhaId: req.params.escolhaId, corpo: req.body, autor: autor(req), req }, deps(req)))));
 nucleoMentoradosRouter.post("/:organizacaoId/importacoes/previa", limiteEscrita, asyncHandler(async (req, res) =>
   ok(res, await s.previaImportacao({ organizacaoId: org(req), corpo: req.body }, deps(req)))));
 nucleoMentoradosRouter.post("/:organizacaoId/importacoes", limiteEscrita, asyncHandler(async (req, res) =>

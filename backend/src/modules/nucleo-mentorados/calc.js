@@ -123,6 +123,17 @@ export function mesCanonico(mes, v) {
 
 const TOLERANCIA_CENTAVOS = 100; // divergência abaixo de R$ 1,00 é arredondamento, não conflito
 
+/** Escolha vigente para o mês e o grupo: a criada por último entre as ativas que cobrem o mês. */
+export function escolhaVigente(escolhas, mes, grupo) {
+  let vigente = null;
+  for (const e of escolhas ?? []) {
+    if (e.grupo !== grupo || e.revogada) continue;
+    if (mes < ymDe(e.inicio) || mes > ymDe(e.fim)) continue;
+    if (!vigente || String(e.criadaEm ?? "") >= String(vigente.criadaEm ?? "")) vigente = e;
+  }
+  return vigente;
+}
+
 /**
  * Grupos de campos que vêm do MESMO relatório do iFood. Dentro de um grupo, um mês usa uma única fonte (nunca mistura
  * campo a campo, nunca soma). Os grupos são independentes: o extrato financeiro pode vir da planilha e a aba
@@ -140,7 +151,7 @@ export const GRUPOS = Object.freeze({
  * @param {{importacao: object[], dashboard: object[], preferencia?: 'importacao'|'dashboard_ifood'}} p
  * @returns {{meses: object[], divergencias: object[]}}
  */
-export function consolidarSerie({ importacao = [], dashboard = [], preferencia = "importacao" }) {
+export function consolidarSerie({ importacao = [], dashboard = [], preferencia = "dashboard_ifood", escolhas = [] }) {
   const porFonte = { importacao: new Map(), dashboard_ifood: new Map() };
   for (const m of importacao) porFonte.importacao.set(m.mes, m);
   for (const m of dashboard) porFonte.dashboard_ifood.set(m.mes, m);
@@ -151,10 +162,15 @@ export function consolidarSerie({ importacao = [], dashboard = [], preferencia =
   const divergencias = [];
   for (const mes of todos) {
     const lados = { [preferencia]: porFonte[preferencia].get(mes), [outra]: porFonte[outra].get(mes) };
-    const saida = { mes, fontes: {} };
+    const saida = { mes, fontes: {}, escolhas: {} };
     for (const [nomeGrupo, g] of Object.entries(GRUPOS)) {
       const temGrupo = (m) => m && m[g.chave] != null;
-      const fonte = temGrupo(lados[preferencia]) ? preferencia : temGrupo(lados[outra]) ? outra : null;
+      // Escolha explícita do administrador (a mais recente que cobre o mês) vence a preferência padrão,
+      // desde que a fonte escolhida tenha o dado; sem dado, vale a regra padrão e a escolha fica marcada.
+      const escolha = escolhaVigente(escolhas, mes, nomeGrupo);
+      const padrao = temGrupo(lados[preferencia]) ? preferencia : temGrupo(lados[outra]) ? outra : null;
+      const fonte = escolha && temGrupo(lados[escolha.fonte]) ? escolha.fonte : padrao;
+      if (escolha) saida.escolhas[nomeGrupo] = { id: escolha.id, aplicada: fonte === escolha.fonte };
       for (const c of g.campos) saida[c] = fonte ? lados[fonte][c] ?? null : null;
       saida.fontes[nomeGrupo] = fonte;
       const descartada = fonte === preferencia ? outra : preferencia;
@@ -165,9 +181,11 @@ export function consolidarSerie({ importacao = [], dashboard = [], preferencia =
         if (a == null && b == null) continue;
         const limite = CAMPOS[campo].tipo === "reais" ? TOLERANCIA_CENTAVOS : 0;
         if (a == null || b == null || Math.abs(a - b) > limite) {
-          divergencias.push({ mes, campo, rotulo: CAMPOS[campo].rotulo, tipo: CAMPOS[campo].tipo,
+          divergencias.push({ mes, campo, grupo: nomeGrupo, rotulo: CAMPOS[campo].rotulo, tipo: CAMPOS[campo].tipo,
             usado: { fonte, valor: a ?? null }, descartado: { fonte: descartada, valor: b ?? null },
-            diferenca: a != null && b != null ? a - b : null });
+            diferenca: a != null && b != null ? a - b : null,
+            // Resolvida = um administrador escolheu, com justificativa, qual fonte vale para este mês e grupo.
+            resolvidaPor: escolha && fonte === escolha.fonte ? escolha.id : null });
         }
       }
     }
@@ -407,23 +425,37 @@ export function alertas({ participante, periodos, agregados, divergencias = [], 
       if (!t.completo) lista.push({ nivel: "info", codigo: `INCOMPLETO_${campo.toUpperCase()}`, texto: `${CAMPOS[campo].rotulo}: ${t.mesesComDado} de ${t.mesesEsperados} ${t.mesesEsperados === 1 ? "mês" : "meses"} informados no ${ref.rotulo}.` });
     }
   }
-  const mesesDiv = new Set(divergencias.map((d) => d.mes));
-  if (mesesDiv.size) lista.push({ nivel: "atencao", codigo: "DIVERGENCIA_FONTES", texto: `Planilha e Dashboard iFood divergem em ${mesesDiv.size} mês(es).` });
+  const abertas = new Set(divergencias.filter((d) => !d.resolvidaPor).map((d) => d.mes));
+  const resolvidas = new Set(divergencias.filter((d) => d.resolvidaPor).map((d) => d.mes));
+  if (abertas.size) lista.push({ nivel: "atencao", codigo: "DIVERGENCIA_FONTES", texto: `Planilha e Dashboard iFood divergem em ${abertas.size} ${abertas.size === 1 ? "mês" : "meses"} sem escolha de fonte registrada.` });
+  else if (resolvidas.size) lista.push({ nivel: "info", codigo: "DIVERGENCIA_RESOLVIDA", texto: `Divergências entre planilha e Dashboard iFood em ${resolvidas.size} ${resolvidas.size === 1 ? "mês" : "meses"} usam a fonte escolhida e justificada (aba Histórico).` });
   return lista;
 }
 
 /** Monta tudo de uma vez para um mentorado (usado pela listagem, pelo perfil e pelo snapshot da apresentação). */
-export function analisar({ participante, serie, divergencias = [], metas = {}, hojeIso }) {
+export function analisar({ participante, serie, divergencias = [], metas = {}, hojeIso, mudancas = [] }) {
   const ultimoMesFechado = somarMeses(ymDe(hojeIso), -1);
   const comVendas = serie.filter((m) => m.valorVendas != null && m.mes <= ultimoMesFechado).map((m) => m.mes);
   const ultimoComDado = comVendas.length ? comVendas.at(-1) : null;
+  const mudancasOrd = normalizarMudancas(mudancas);
+  // Data de entrada pendente: nenhum período é presumido; só a série e os alertas.
+  if (!participante.data_entrada) {
+    return {
+      mesCorrente: ymDe(hojeIso), periodos: { entrada: null, antes: null, ciclos: [], mesesDeMentoria: 0 },
+      ultimoMesComDado: ultimoComDado, comparativos: [], comparativoPrincipal: -1, evolucao: evolucaoMensal(serie),
+      metas: [], mudancas: mudancasOrd,
+      alertas: [{ nivel: "atencao", codigo: "ENTRADA_PENDENTE", texto: "Data de entrada na mentoria não confirmada: comparativos indisponíveis até o cadastro." },
+        ...alertas({ participante, periodos: { ciclos: [] }, agregados: {}, divergencias, hojeIso })],
+    };
+  }
   const periodos = periodosDaMentoria({ dataEntrada: participante.data_entrada, ultimoMesFechado: ultimoComDado ?? ultimoMesFechado });
   const agregados = { antes: agregar(serie, periodos.antes.inicio, periodos.antes.fim) };
   const comparativos = [];
   for (const c of periodos.ciclos) {
     agregados[c.id] = agregar(serie, c.inicio, c.fim);
     const ref = agregar(serie, c.referencia.inicio, c.referencia.fim);
-    comparativos.push({ ciclo: c, referenciaAgregada: resumoAgregado(ref), atualAgregado: resumoAgregado(agregados[c.id]), indicadores: comparar(agregados[c.id], ref) });
+    const indicadores = protegerEstruturaDeCustos(comparar(agregados[c.id], ref), mudancasOrd, c.referencia.inicio, c.fim);
+    comparativos.push({ ciclo: c, referenciaAgregada: resumoAgregado(ref), atualAgregado: resumoAgregado(agregados[c.id]), indicadores });
   }
   const cicloAtual = periodos.ciclos.at(-1) ?? null;
   // Comparativo de destaque: o último ciclo completo; sem nenhum completo, o parcial em curso.
@@ -439,9 +471,46 @@ export function analisar({ participante, serie, divergencias = [], metas = {}, h
     comparativoPrincipal: principal,
     evolucao: evolucaoMensal(serie),
     // Metas avaliadas no mesmo ciclo de destaque (nunca num parcial de 1–2 meses quando há um ciclo completo).
-    metas: cicloAtual ? metasVersusRealizado(agregados[cicloDestaque?.id ?? cicloAtual.id], metas) : [],
-    alertas: alertas({ participante, periodos, agregados, divergencias, hojeIso, cicloDestaque }),
+    metas: cicloAtual ? marcarMetasComMudanca(metasVersusRealizado(agregados[cicloDestaque?.id ?? cicloAtual.id], metas), mudancasOrd, cicloDestaque ?? cicloAtual) : [],
+    mudancas: mudancasOrd,
+    alertas: [...alertas({ participante, periodos, agregados, divergencias, hojeIso, cicloDestaque }),
+      ...mudancasOrd.map((m) => ({ nivel: "info", codigo: "MUDANCA_OPERACIONAL", texto: `${m.texto}: custos de entregadores antes e depois não são comparáveis.` }))],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Mudanças de modelo operacional (ex.: Marketplace -> Full Service)
+// ---------------------------------------------------------------------------
+export const ROTULO_MODELO = { marketplace: "Marketplace", full_service: "Full Service", misto: "Misto", outro: "Outro modelo" };
+/** Indicadores cuja estrutura de custos muda com o modelo operacional (entregadores entram ou saem). */
+export const INDICADORES_ESTRUTURA = new Set(["taxasEntregadores", "pctTaxasEntregadores", "pctCustosIfoodTotal"]);
+
+export function normalizarMudancas(lista = []) {
+  return lista.filter((m) => m && m.mes && m.para)
+    .map((m) => ({ mes: ymDe(m.mes), de: m.de ?? null, para: m.para, titulo: m.titulo ?? null,
+      texto: `${m.de ? `${ROTULO_MODELO[m.de] ?? m.de} → ` : "Mudança para "}${ROTULO_MODELO[m.para] ?? m.para} em ${rotuloMes(m.mes)}` }))
+    .sort((a, b) => a.mes.localeCompare(b.mes));
+}
+
+/**
+ * Uma mudança de modelo dentro da janela comparada (depois do início da referência e até o fim do período atual)
+ * mistura estruturas de custos: os indicadores de entregadores deixam de ser comparáveis. Ausência de entregadores
+ * depois de virar Full Service NUNCA é lida como economia.
+ */
+export function protegerEstruturaDeCustos(indicadores, mudancas, inicioRef, fimAtual) {
+  const dentro = mudancas.filter((m) => m.mes > inicioRef && m.mes <= fimAtual);
+  if (!dentro.length) return indicadores;
+  const motivo = `Estrutura de custos mudou (${dentro.map((m) => m.texto).join("; ")}): entregadores não são comparáveis entre os períodos.`;
+  return indicadores.map((i) => (INDICADORES_ESTRUTURA.has(i.chave)
+    ? { ...i, comparavel: false, motivo, variacaoAbsoluta: null, variacaoPercentual: null, pontosPercentuais: null, leitura: null, estruturaMudou: true }
+    : i));
+}
+
+function marcarMetasComMudanca(metas, mudancas, ciclo) {
+  const dentro = ciclo ? mudancas.filter((m) => m.mes > ciclo.inicio && m.mes <= ciclo.fim) : [];
+  if (!dentro.length) return metas;
+  return metas.map((m) => (["taxasEntregadores", "custosIfoodTotal"].includes(m.chave)
+    ? { ...m, contexto: `Ciclo mistura modelos (${dentro.map((x) => x.texto).join("; ")}).` } : m));
 }
 
 /** Versão serializável do agregado (sem a lista de meses). */

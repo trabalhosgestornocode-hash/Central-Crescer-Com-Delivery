@@ -70,13 +70,16 @@
 .nm-tabela td.nm-num, .nm-tabela th.nm-num { text-align: right; white-space: nowrap; }
 .nm-tabela thead th.nm-num { text-align: right; }
 .nm-empresa-status { display: block; margin-top: 6px; }
-.nm-contrato { white-space: nowrap; }
-.nm-tabela--densa th, .nm-tabela--densa td { padding: 9px 12px; font-size: 13px; }
+.nm-contrato { min-width: 170px; max-width: 230px; }
+.nm-contrato .nm-sub { white-space: normal; }
+.nm-tabela td.nm-num .nm-sub { white-space: normal; }
+.nm-tabela--densa th, .nm-tabela--densa td { padding: 9px 10px; font-size: 13px; }
 .nm-tabela--compacta { border: 1px solid var(--linha); border-radius: var(--raio-sm); }
 .nm-tabela--compacta td:not(.nm-num) { text-align: left; }
 .nm-linha-div { background: color-mix(in srgb, var(--warn-bg) 55%, transparent); }
 .nm-acoes { white-space: nowrap; text-align: right; }
-.nm-tabela tbody th[scope=row] { min-width: 190px; }
+.nm-tabela--lista tbody th[scope=row] { min-width: 190px; }
+.nm-tabela--densa thead th { white-space: normal; }
 .nm-tabela td:nth-last-child(2) { min-width: 150px; max-width: 200px; }
 .nm-acoes .nm-btn { min-height: 40px; padding: 0 12px; font-size: 13px; }
 .nm-acoes .nm-btn + .nm-btn { margin-left: 6px; }
@@ -154,6 +157,24 @@ svg:has(.nm-g-ponto.is-ativo) .nm-g-barra { opacity: .45; }
 .nm-g-ponto.is-ativo .nm-g-barra { opacity: 1; }
 .nm-g-ponto.is-ativo .nm-g-alvo { fill: color-mix(in srgb, var(--texto) 5%, transparent); }
 .nm-g-ponto.is-ativo .nm-g-marcador { r: 6.5; }
+.nm-g-marco line { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 3 4; }
+.nm-g-marco text { fill: #8a5f00; font-size: 12px; font-weight: 700; font-family: Inter, system-ui, sans-serif; }
+.ap .nm-g-marco text { fill: var(--warn); font-size: 13px; }
+.nm-contexto--mudanca { display: flex; gap: 8px; align-items: flex-start; color: #8a5f00; background: var(--warn-bg); border-radius: var(--raio-sm); padding: 10px 14px; }
+.nm-revogada { opacity: .6; }
+.nm-origem { min-width: 150px; }
+.nm-origem .nm-sub { white-space: normal; }
+.nm-revogada strong { text-decoration: line-through; }
+.nm-lt--mudanca_operacional .nm-lt__tipo { color: #8a5f00; }
+.nm-vinculo-lista { max-height: 280px; overflow-y: auto; border: 1px solid var(--linha); border-radius: var(--raio-sm); }
+.nm-vinculo-lista label { display: grid; grid-template-columns: 24px 1fr auto; gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--linha); cursor: pointer; min-height: 44px; }
+.nm-vinculo-lista label:last-child { border-bottom: 0; }
+.nm-vinculo-lista label:hover { background: var(--superficie-2); }
+.nm-vinculo-sel { width: 100%; border-collapse: collapse; font-size: 13px; }
+.nm-vinculo-sel th, .nm-vinculo-sel td { padding: 6px 8px; border-bottom: 1px solid var(--linha); text-align: left; }
+.nm-vinculo-sel input { min-height: 36px; padding: 4px 8px; border: 1px solid var(--linha); border-radius: 8px; background: var(--campo-bg); font: inherit; width: 100%; }
+.nm-linha-ferramentas { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.nm-linha-ferramentas .nm-campo { flex: 1 1 220px; }
 .nm-dica { position: absolute; top: 18px; right: 24px; background: var(--texto); color: var(--card); padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; pointer-events: none; }
 .nm-legenda { list-style: none; display: flex; gap: 16px; margin: 0; padding: 0; font-size: 13px; color: var(--cinza); flex-wrap: wrap; }
 .nm-legenda li { display: inline-flex; align-items: center; gap: 6px; }

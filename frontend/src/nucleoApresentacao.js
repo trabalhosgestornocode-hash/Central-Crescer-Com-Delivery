@@ -15,7 +15,7 @@ let aberto = null;
 /**
  * @param {{apresentacao: object, aoExportar?: (id: string) => Promise<void>, imprimir?: boolean}} p
  */
-export function abrirApresentacao({ apresentacao, aoExportar, imprimir = false }) {
+export function abrirApresentacao({ apresentacao, aoExportar, imprimir = false, slideInicial = 1, aoMudarSlide = null, aoFechar = null }) {
   fecharApresentacao();
   const lista = montarSlides(apresentacao.snapshot, apresentacao.configuracao ?? {});
   if (!lista.length) return;
@@ -54,6 +54,7 @@ export function abrirApresentacao({ apresentacao, aoExportar, imprimir = false }
     notasTxt.innerHTML = lista[atual].notas ? esc(lista[atual].notas).replace(/\n/g, "<br>") : '<p class="nm-muted">Sem notas para este slide.</p>';
     raiz.querySelector('[data-ap="anterior"]').disabled = atual === 0;
     raiz.querySelector('[data-ap="proximo"]').disabled = atual === lista.length - 1;
+    aoMudarSlide?.(atual + 1);
   };
   const alternarNotas = () => {
     const n = raiz.querySelector(".ap-notas"); n.hidden = !n.hidden;
@@ -95,15 +96,15 @@ export function abrirApresentacao({ apresentacao, aoExportar, imprimir = false }
   });
   document.addEventListener("keydown", tecla);
   const desligarDicas = ligarDicas(raiz);
-  aberto = { raiz, tecla, anterior, desligarDicas };
-  ir(0);
+  aberto = { raiz, tecla, anterior, desligarDicas, aoFechar };
+  ir(Math.max(0, Math.min(lista.length - 1, (slideInicial || 1) - 1)));
   raiz.querySelector('[data-ap="proximo"]').focus();
   if (imprimir) setTimeout(pdf, 50);
 }
 
 export function fecharApresentacao() {
   if (!aberto) return;
-  const { raiz, tecla, anterior, desligarDicas } = aberto;
+  const { raiz, tecla, anterior, desligarDicas, aoFechar } = aberto;
   aberto = null;
   document.removeEventListener("keydown", tecla);
   desligarDicas?.();
@@ -111,4 +112,5 @@ export function fecharApresentacao() {
   raiz.remove();
   document.body.classList.remove("ap-aberta", "ap-imprimindo");
   anterior?.focus?.();
+  aoFechar?.();
 }

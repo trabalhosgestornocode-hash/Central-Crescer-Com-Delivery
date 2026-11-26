@@ -22,7 +22,8 @@ import {
 } from "./painelAdmViews.js";
 import { MESES } from "./painelAdmUi.js";
 import { resetScrollLock } from "./scrollLock.js";
-import { resetNucleo } from "./nucleoMentorados.js";
+import { resetNucleo, definirRotaInicialNucleo } from "./nucleoMentorados.js";
+import { gravarRota } from "./rotaPainelAdm.js";
 import { instalarMenuRetratil } from "./menuLateral.js";
 
 /** @type {{mostrarTela: Function, aoTrocarAmbiente: Function, aoAcessoRevogado: Function, usuario: object}|null} */
@@ -140,7 +141,9 @@ export async function abrirPainelAdministrativo(opcoes) {
   opcoes.mostrarTela("painelAdm");
   ligarEventos();
   renderCabecalho();
-  await irParaPadm(state.telaPainelAdm || TELAS_PADM[0].id);
+  // Rota do endereço (F5/link direto) vence a última tela da sessão; tela desconhecida cai na primeira.
+  const rota = opcoes.rota && TELAS_PADM.some((t) => t.id === opcoes.rota.tela) ? opcoes.rota : null;
+  await irParaPadm(rota?.tela || state.telaPainelAdm || TELAS_PADM[0].id, { rota });
   return true;
 }
 
@@ -239,12 +242,14 @@ function montarMenu() {
 }
 
 /** Aba de topo — zera a pilha e os filtros do Diário. O período NÃO é zerado. */
-export function irParaPadm(telaId) {
+export function irParaPadm(telaId, { rota = null } = {}) {
   const tela = TELAS_PADM.find((t) => t.id === telaId) ?? TELAS_PADM[0];
   state.telaPainelAdm = tela.id;
   resetFiltrosDiario();
   resetFiltrosIdentificacao();
   resetNucleo();
+  if (tela.id === "nucleo-mentorados" && rota?.org) definirRotaInicialNucleo(rota);
+  else gravarRota({ tela: tela.id });
   pilha = [{ tipo: "tela", id: tela.id }];
   els("#padm-menu li[data-tela]").forEach((li) =>
     li.classList.toggle("ativo", li.dataset.tela === tela.id));

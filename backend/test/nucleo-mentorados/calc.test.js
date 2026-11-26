@@ -161,6 +161,7 @@ describe("consolidação de fontes (duplicidade e divergência)", () => {
     const { meses, divergencias } = C.consolidarSerie({
       importacao: [{ mes: "2026-05", valorVendas: 100, taxasComissoes: 10, servicosPromocoes: 5, taxasEntregadores: 3, qtdPedidos: null }],
       dashboard: [{ mes: "2026-05", valorVendas: 100, taxasComissoes: 10, servicosPromocoes: 5, taxasEntregadores: 3, qtdPedidos: 2322, valorVendasDesempenho: 11541620, novosClientes: 576 }],
+      preferencia: "importacao",
     });
     assert.equal(meses[0].qtdPedidos, 2322);
     assert.deepEqual(meses[0].fontes, { financeiro: "importacao", desempenho: "dashboard_ifood" });
@@ -170,6 +171,7 @@ describe("consolidação de fontes (duplicidade e divergência)", () => {
     const { meses, divergencias } = C.consolidarSerie({
       importacao: [{ mes: "2026-09", valorVendas: 100, qtdPedidos: 2575, novosClientes: 831 }],
       dashboard: [{ mes: "2026-09", valorVendas: 100, qtdPedidos: 2500, novosClientes: 831 }],
+      preferencia: "importacao",
     });
     assert.equal(meses[0].qtdPedidos, 2575);
     assert.deepEqual(divergencias.map((d) => [d.campo, d.diferenca]), [["qtdPedidos", 75]]);
@@ -203,5 +205,60 @@ describe("metas, saldo de precificação e alertas", () => {
     assert.ok(codigos.includes("INCOMPLETO_QTDPEDIDOS"));
     assert.equal(a.ultimoMesComDado, "2026-09");
     assert.equal(a.comparativos.length, 1);
+  });
+});
+
+describe("escolha auditável de fonte, entrada pendente e mudança de modelo", () => {
+  const imp = [{ mes: "2026-05", valorVendas: 10050000, taxasComissoes: 1000 }, { mes: "2026-06", valorVendas: 20000, taxasComissoes: 10 }];
+  const dash = [{ mes: "2026-05", valorVendas: 9848000, taxasComissoes: 1000 }, { mes: "2026-06", valorVendas: 21000, taxasComissoes: 10 }];
+  test("padrão é o Dashboard iFood", () => {
+    const { meses } = C.consolidarSerie({ importacao: imp, dashboard: dash });
+    assert.equal(meses[0].valorVendas, 9848000);
+    assert.equal(meses[0].fonte, "dashboard_ifood");
+  });
+  test("escolha por período e grupo vence o padrão e marca a divergência como resolvida", () => {
+    const escolhas = [{ id: "e1", inicio: "2026-05", fim: "2026-05", grupo: "financeiro", fonte: "importacao", criadaEm: "2026-11-01" }];
+    const { meses, divergencias } = C.consolidarSerie({ importacao: imp, dashboard: dash, escolhas });
+    assert.equal(meses[0].valorVendas, 10050000);
+    assert.deepEqual(meses[0].escolhas.financeiro, { id: "e1", aplicada: true });
+    assert.equal(meses[1].fonte, "dashboard_ifood", "fora do período da escolha vale o padrão");
+    assert.equal(divergencias.find((d) => d.mes === "2026-05").resolvidaPor, "e1");
+    assert.equal(divergencias.find((d) => d.mes === "2026-06").resolvidaPor, null);
+  });
+  test("escolha revogada é ignorada; a mais recente vence", () => {
+    const escolhas = [
+      { id: "a", inicio: "2026-01", fim: "2026-12", grupo: "financeiro", fonte: "importacao", criadaEm: "2026-11-01" },
+      { id: "b", inicio: "2026-05", fim: "2026-05", grupo: "financeiro", fonte: "dashboard_ifood", criadaEm: "2026-11-02" },
+      { id: "c", inicio: "2026-05", fim: "2026-06", grupo: "financeiro", fonte: "importacao", criadaEm: "2026-11-03", revogada: true },
+    ];
+    const { meses } = C.consolidarSerie({ importacao: imp, dashboard: dash, escolhas });
+    assert.equal(meses[0].valorVendas, 9848000);
+    assert.equal(meses[1].valorVendas, 20000);
+  });
+  test("entrada pendente: sem períodos presumidos, alerta explícito", () => {
+    const a = C.analisar({ participante: { data_entrada: null }, serie: serieReferencia(), hojeIso: "2026-11-26" });
+    assert.equal(a.comparativos.length, 0);
+    assert.equal(a.periodos.antes, null);
+    assert.equal(a.alertas[0].codigo, "ENTRADA_PENDENTE");
+  });
+  test("mudança para Full Service dentro da janela: entregadores não comparáveis, demais indicadores intactos", () => {
+    const serie = serieReferencia().map((m) => ({ ...m, taxasEntregadores: m.taxasEntregadores ?? 0 }));
+    const sem = C.analisar({ participante: { data_entrada: "2025-10-01" }, serie, hojeIso: "2026-11-26" });
+    assert.equal(sem.comparativos[0].indicadores.find((i) => i.chave === "pctCustosIfoodTotal").comparavel, true);
+    const com = C.analisar({ participante: { data_entrada: "2025-10-01" }, serie, hojeIso: "2026-11-26", mudancas: [{ mes: "2026-08-01", de: "marketplace", para: "full_service" }] });
+    const ind = com.comparativos[0].indicadores;
+    for (const k of ["taxasEntregadores", "pctTaxasEntregadores", "pctCustosIfoodTotal"]) {
+      const i = ind.find((x) => x.chave === k);
+      assert.equal(i.comparavel, false, k);
+      assert.equal(i.leitura, null, k);
+      assert.match(i.motivo, /Marketplace → Full Service em ago\/26/);
+    }
+    assert.equal(ind.find((i) => i.chave === "pctTaxasMaisServicos").comparavel, true);
+    assert.ok(com.alertas.some((x) => x.codigo === "MUDANCA_OPERACIONAL"));
+  });
+  test("mudança fora da janela não afeta a comparação", () => {
+    const serie = serieReferencia().map((m) => ({ ...m, taxasEntregadores: m.taxasEntregadores ?? 0 }));
+    const a = C.analisar({ participante: { data_entrada: "2025-10-01" }, serie, hojeIso: "2026-11-26", mudancas: [{ mes: "2024-05-01", para: "marketplace" }] });
+    assert.equal(a.comparativos[0].indicadores.find((i) => i.chave === "pctCustosIfoodTotal").comparavel, true);
   });
 });

@@ -125,3 +125,41 @@ describe("gráficos", () => {
     assert.match(h, /meta: até 18%/);
   });
 });
+
+describe("pendências, escolhas de fonte e mudança operacional", () => {
+  test("lista mostra entrada pendente e filtra cadastro pendente", () => {
+    const d = { hojeIso: "2026-11-26", mentorados: [
+      { organizacaoId: "p", empresa: "Pendente", status: "ativa", dataEntrada: null, pendencias: ["data de entrada", "mentor"], alertas: [], disponibilidade: "sem_dados" },
+      { organizacaoId: "q", empresa: "Completa", status: "ativa", dataEntrada: "2025-01-01", dataRenovacao: "2027-01-01", pendencias: [], alertas: [], disponibilidade: "completa" },
+    ] };
+    const h = V.htmlLista(d);
+    assert.match(h, /Entrada pendente/);
+    assert.match(h, /pendente: data de entrada, mentor/);
+    assert.deepEqual(V.filtrar(d.mentorados, { ...V.filtrosPadrao(), dados: "pendente" }).map((m) => m.organizacaoId), ["p"]);
+    assert.match(h, /data-nm-vincular/);
+  });
+  test("marco da mudança aparece no gráfico e no rótulo acessível", () => {
+    const marcos = V.marcosDe([{ mes: "2026-08", para: "full_service", texto: "Marketplace → Full Service em ago/26" }]);
+    const h = V.graficoBarras({ titulo: "Vendas", pontos: [{ mes: "2026-07", valor: 1, grupo: "mentoria" }, { mes: "2026-08", valor: 1, grupo: "mentoria" }], marcos });
+    assert.match(h, /nm-g-marco/);
+    assert.match(h, /Full Service desde ago\/26/);
+    assert.match(h, /aria-label="Vendas\. Marketplace → Full Service em ago\/26"/);
+  });
+  test("escolhas listadas com justificativa; revogada aparece riscada e sem botão", () => {
+    const h = V.htmlEscolhas([
+      { id: "a", mes_inicio: "2026-05-01", mes_fim: "2026-09-01", grupo: "financeiro", fonte: "importacao", justificativa: "Números homologados", created_at: "2026-11-26", criado_por_nome: "Mentor" },
+      { id: "b", mes_inicio: "2026-05-01", mes_fim: "2026-05-01", grupo: "financeiro", fonte: "dashboard_ifood", justificativa: "Teste antigo", created_at: "2026-11-20", revogada_em: "2026-11-21", motivo_revogacao: "Substituída pela homologação" },
+    ]);
+    assert.match(h, /“Números homologados”/);
+    assert.match(h, /data-nm-revogar-fonte="a"/);
+    assert.doesNotMatch(h, /data-nm-revogar-fonte="b"/);
+    assert.match(h, /nm-revogada/);
+  });
+  test("slide de eficiência explica a mudança e não trata ausência como economia", () => {
+    const snap2 = structuredClone(snapshot);
+    snap2.analise.mudancas = [{ mes: "2026-08", de: "marketplace", para: "full_service", texto: "Marketplace → Full Service em ago/26" }];
+    const h = V.slides(snap2, {}).find((x) => x.id === "eficiencia").html;
+    assert.match(h, /não é economia/);
+    assert.match(h, /nm-g-marco/);
+  });
+});
