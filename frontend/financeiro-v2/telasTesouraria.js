@@ -547,32 +547,39 @@ ${paginacao(r.paginacao, "caixa-e-bancos")}
 
 // ----------------------------------------------------------------------------------------------------- calendário
 const SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+/** Vencendo (amarelo, piscando): vence de hoje até 2 dias à frente. Mais longe que isso: azul (a vencer). Vencida: vermelho, piscando. */
+export const JANELA_VENCENDO_DIAS = 2;
+const diasEntre = (de, ate) => Math.round((Date.parse(`${ate}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`)) / 86400000);
 export function calendario(cal, { selecionado = null, ctx = {} } = {}) {
   const deslocamento = (cal.dias[0].diaDaSemana + 6) % 7;
   // Marcador compacto: ponto de status + quantidade (o rótulo completo vai no title e no aria-label da célula).
   const marca = (n, classe, rotulo) => (n ? `<span class="cal-chip cal-chip--${classe}" title="${esc(`${n} ${rotulo}`)}"><i aria-hidden="true"></i>${n}</span>` : "");
   // Situação principal do dia: o que mais pede atenção define a faixa lateral.
-  const situacaoDoDia = (d) => (d.vencidas.quantidade ? "erro" : d.aVencer.quantidade ? "info" : d.pagas.quantidade ? "ok" : d.recorrentesPrevistas.quantidade ? "alerta" : "livre");
+  const situacaoDoDia = (d, vencendo) => (d.vencidas.quantidade ? "erro" : vencendo ? "breve" : d.aVencer.quantidade ? "info" : d.pagas.quantidade ? "ok" : d.recorrentesPrevistas.quantidade ? "neutro" : "livre");
   const rotuloLegenda = (classe, texto) => `<li><span class="cal-chip cal-chip--${classe}"><i aria-hidden="true"></i></span>${texto}</li>`;
   return `${cabecalho("Calendário financeiro", `${esc(competencia(cal.mes))} · posição em ${esc(dataBR(cal.dataBase))}`)}
 ${abas("calendario")}
 <div class="cal-nav"><button type="button" class="botao" data-mes="-1" aria-label="Mês anterior">‹ Anterior</button><strong>${esc(competencia(cal.mes))}</strong><button type="button" class="botao" data-mes="1" aria-label="Próximo mês">Próximo ›</button></div>
 <section class="resumo resumo--status" aria-label="Totais do mês">
-  <div class="resumo-item resumo-item--info">${card("A vencer", valor(cal.totais.aVencerCentavos))}</div><div class="resumo-item resumo-item--erro">${card("Vencido em aberto", valor(cal.totais.vencidoCentavos))}</div><div class="resumo-item resumo-item--ok">${card("Pago no mês", valor(cal.totais.pagoCentavos))}</div><div class="resumo-item resumo-item--alerta">${card("Recorrências previstas", valor(cal.totais.recorrentePrevistoCentavos), "Estimadas pelo último valor da série; não são contas lançadas.")}</div>
+  <div class="resumo-item resumo-item--info">${card("A vencer", valor(cal.totais.aVencerCentavos))}</div><div class="resumo-item resumo-item--erro">${card("Vencido em aberto", valor(cal.totais.vencidoCentavos))}</div><div class="resumo-item resumo-item--ok">${card("Pago no mês", valor(cal.totais.pagoCentavos))}</div><div class="resumo-item resumo-item--neutro">${card("Recorrências previstas", valor(cal.totais.recorrentePrevistoCentavos), "Estimadas pelo último valor da série; não são contas lançadas.")}</div>
 </section>
 <div class="cal-layout">
 <div class="cal-bloco">
-<ul class="legenda legenda--cal">${rotuloLegenda("info", "vencendo")}${rotuloLegenda("erro", "vencidas")}${rotuloLegenda("ok", "pagamentos")}${rotuloLegenda("alerta", "recorrentes previstas")}</ul>
+<ul class="legenda legenda--cal">${rotuloLegenda("breve", `vencendo (até ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("erro", "vencidas")}${rotuloLegenda("info", `a vencer (mais de ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("ok", "pagamentos")}${rotuloLegenda("neutro", "recorrentes previstas")}</ul>
 <div class="calendario" role="grid" aria-label="Dias de ${esc(competencia(cal.mes))}">
   ${SEMANA.map((s, i) => `<div class="cal-cab${i > 4 ? " cal-cab--fim" : ""}" role="columnheader">${s}</div>`).join("")}
   ${'<div class="cal-vazio" aria-hidden="true"></div>'.repeat(deslocamento)}
   ${cal.dias.map((d) => {
     const algo = d.titulos.length + d.pagamentos.length + d.recorrentes.length;
     const fimDeSemana = d.diaDaSemana === 0 || d.diaDaSemana === 6;
-    return `<button type="button" role="gridcell" class="cal-dia${d.hoje ? " cal-dia--hoje" : ""}${algo ? ` cal-dia--${situacaoDoDia(d)}` : " cal-dia--livre"}${fimDeSemana ? " cal-dia--fim" : ""}${d.data === selecionado ? " cal-dia--sel" : ""}" data-dia="${esc(d.data)}" aria-pressed="${d.data === selecionado}" aria-label="${esc(dataBR(d.data))}${d.hoje ? " (hoje)" : ""}: ${d.aVencer.quantidade} vencendo, ${d.vencidas.quantidade} vencida(s), ${d.pagas.quantidade} pagamento(s), ${d.recorrentesPrevistas.quantidade} recorrente(s)${d.emAbertoCentavos ? `, em aberto ${moeda(d.emAbertoCentavos)}` : ""}">
+    const faltam = diasEntre(cal.dataBase, d.data);
+    const vencendo = faltam >= 0 && faltam <= JANELA_VENCENDO_DIAS ? d.aVencer.quantidade : 0;
+    const longe = d.aVencer.quantidade - vencendo;
+    const rotuloVencendo = faltam === 0 ? "vence hoje" : `vence em ${faltam} dia(s)`;
+    return `<button type="button" role="gridcell" class="cal-dia${d.hoje ? " cal-dia--hoje" : ""}${algo ? ` cal-dia--${situacaoDoDia(d, vencendo)}` : " cal-dia--livre"}${fimDeSemana ? " cal-dia--fim" : ""}${d.data === selecionado ? " cal-dia--sel" : ""}" data-dia="${esc(d.data)}" aria-pressed="${d.data === selecionado}" aria-label="${esc(dataBR(d.data))}${d.hoje ? " (hoje)" : ""}: ${d.aVencer.quantidade} vencendo, ${d.vencidas.quantidade} vencida(s), ${d.pagas.quantidade} pagamento(s), ${d.recorrentesPrevistas.quantidade} recorrente(s)${d.emAbertoCentavos ? `, em aberto ${moeda(d.emAbertoCentavos)}` : ""}${vencendo ? `; atenção: ${rotuloVencendo}` : ""}">
       <span class="cal-num">${Number(d.data.slice(8))}</span>
       ${d.emAbertoCentavos ? `<span class="cal-valor">${esc(moeda(d.emAbertoCentavos))}</span>` : ""}
-      <span class="cal-marcas">${marca(d.vencidas.quantidade, "erro", "vencida(s)")}${marca(d.aVencer.quantidade, "info", "vencendo")}${marca(d.pagas.quantidade, "ok", "pagamento(s)")}${marca(d.recorrentesPrevistas.quantidade, "alerta", "recorrente(s) prevista(s)")}</span>
+      <span class="cal-marcas">${marca(d.vencidas.quantidade, "erro", "vencida(s)")}${marca(vencendo, "breve", `vencendo · ${rotuloVencendo}`)}${marca(longe, "info", "a vencer")}${marca(d.pagas.quantidade, "ok", "pagamento(s)")}${marca(d.recorrentesPrevistas.quantidade, "neutro", "recorrente(s) prevista(s)")}</span>
     </button>`;
   }).join("")}
 </div>
