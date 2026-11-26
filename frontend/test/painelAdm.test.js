@@ -273,7 +273,8 @@ describe("TELAS_PADM", () => {
     // Checkpoint H.3-A: nova aba "comunicacao" logo após "empresas" — mesmo
     // espírito (empresas cross-tenant), sem seletor de período (ver §"comunicacao"
     // na lista de telas sem recorte de período, em painelAdm.js).
-    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral-rede", "visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
+    // Núcleo Mentorados: empresas cadastradas na mentoria, antes da Rede de Associados (contas).
+    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral-rede", "visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "nucleo-mentorados", "mentorados", "relatorios", "desenvolvimento"]);
   });
 
   test("irParaPadm abre Relatórios com o período ativo", async () => {

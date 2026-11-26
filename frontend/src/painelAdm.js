@@ -22,6 +22,7 @@ import {
 } from "./painelAdmViews.js";
 import { MESES } from "./painelAdmUi.js";
 import { resetScrollLock } from "./scrollLock.js";
+import { resetNucleo } from "./nucleoMentorados.js";
 import { instalarMenuRetratil } from "./menuLateral.js";
 
 /** @type {{mostrarTela: Function, aoTrocarAmbiente: Function, aoAcessoRevogado: Function, usuario: object}|null} */
@@ -243,6 +244,7 @@ export function irParaPadm(telaId) {
   state.telaPainelAdm = tela.id;
   resetFiltrosDiario();
   resetFiltrosIdentificacao();
+  resetNucleo();
   pilha = [{ tipo: "tela", id: tela.id }];
   els("#padm-menu li[data-tela]").forEach((li) =>
     li.classList.toggle("ativo", li.dataset.tela === tela.id));
@@ -298,7 +300,7 @@ function tituloDoTopo() {
 function renderPadmAtual() {
   const seletor = el('#padm-cabecalho .padm-periodo');
   // Telas sem recorte de período (não olham "um mês por vez").
-  if (seletor) seletor.hidden = ['desenvolvimento', 'mentorados', 'comunicacao'].includes(topo().id);
+  if (seletor) seletor.hidden = ['desenvolvimento', 'mentorados', 'comunicacao', 'nucleo-mentorados'].includes(topo().id);
   const titulo = el("#padm-titulo");
   if (titulo) titulo.textContent = tituloDoTopo();
   return renderViewPadm(topo(), { api: apiAtual, mes: periodo().ym });

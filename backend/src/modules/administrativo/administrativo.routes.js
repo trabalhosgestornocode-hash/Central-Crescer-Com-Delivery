@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { performanceRouter } from './performance/performance.routes.js';
 import { desenvolvimentoRouter } from '../desenvolvimento/desenvolvimento.routes.js';
+import { nucleoMentoradosRouter } from '../nucleo-mentorados/routes.js';
 import * as c from "./administrativo.controller.js";
 import * as cc from "./administrativo.comunicacao.controller.js";
 import { m3Controller } from "../notificacoes/notificacoes.routes.js";
@@ -141,6 +142,10 @@ administrativoRouter.post("/comunicacao/conversas/:contatoId/mensagens", limiteD
 // Mesma autorização do módulo (`requirePainelAdministrativo`); nenhuma ação
 // administrativa do SuperAdmin é exposta. Ver administrativo.mentorados.js.
 administrativoRouter.get("/mentorados", c.mentorados);
+
+// ---- Núcleo Mentorados: empresas CADASTRADAS como participantes da mentoria, histórico, comparativos e apresentações.
+// Herda toda a cadeia deste router (painel + MFA + taxa). Ver nucleo-mentorados/routes.js.
+administrativoRouter.use("/nucleo-mentorados", nucleoMentoradosRouter);
 
 // ---- Desbloqueio administrativo de um dia do Dashboard iFood (migration 068).
 //

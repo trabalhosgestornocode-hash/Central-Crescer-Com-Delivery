@@ -78,6 +78,8 @@ export function createApp() {
     ["/api/v1/bonificacao-mensal/importar", "/api/v1/bonificacao-mensal/fechamento-mensal"],
     express.json({ limit: LIMITES_CORPO.bonificacaoMensalImportacao }),
   );
+  // Núcleo Mentorados: só a planilha de histórico (.xlsx em base64) da prévia/confirmação de importação.
+  app.use(/^\/api\/v1\/administrativo\/nucleo-mentorados\/[^/]+\/importacoes/, express.json({ limit: LIMITES_CORPO.nucleoMentoradosImportacao }));
   app.use(express.json({ limit: LIMITES_CORPO.padrao }));
 
   app.use(morgan(emProducao ? "combined" : "dev", {
