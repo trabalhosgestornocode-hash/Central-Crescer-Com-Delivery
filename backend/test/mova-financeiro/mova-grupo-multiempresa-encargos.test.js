@@ -127,7 +127,7 @@ t("GM-2 ACEITAÇÃO: boleto pago com juros e multa impressos, sem conta cadastra
   assert.match(aj.motivo, /juros R\$\s?5,77, multa R\$\s?173,44/, "detalhamento de juros e multa preservado");
   const liqs = await s.liquidacoes(ORG_X, XIS);
   assert.deepEqual([liqs.length, liqs[0].valorCentavos, liqs[0].movimentacaoId, liqs[0].dataEfetiva], [1, 885102, null, "2026-10-14"], "pagamento total, sem saída fictícia");
-  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 0]);
+  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 1]);
   assert.deepEqual([(await s.contas(ORG, ALFA)).length, (await s.despesas(ORG, ALFA)).length], [0, 0], "nada na outra empresa");
   assert.ok(s.escritas().every((x) => x.organizacaoId === ORG_X && x.unidadeId === XIS));
   const w = s.escritas().find((x) => x.nome === "registrarDespesaPagaComEncargo");
@@ -492,7 +492,7 @@ t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o mo
   assert.deepEqual([r.decisao, r.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(r));
   const [conta] = await s.contas(ORG_X, XIS);
   assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao], [867181, 0, "QUITADA"]);
-  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "comprovante comum não é arquivado (só os dados); retomada sem novo envio");
+  { const ds = await s.documentos(ORG_X, XIS); assert.deepEqual([ds.length, ds[0]?.arquivoArquivado], [1, false], "ficha do comprovante processado, declarada SEM arquivo; retomada sem novo envio"); }
   // repetir não duplica
   await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
   assert.notEqual((await s.ultima()).decisao, "EXECUTADO", "repetir não executa de novo");
@@ -597,7 +597,7 @@ t("NC-1 despesa paga SEM cofre: registra (conta quitada, sem documento simulado)
   assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA"], JSON.stringify(h));
   const [conta] = await s.contas(ORG_X, XIS);
   assert.deepEqual([conta.saldoCentavos, conta.situacao], [0, "QUITADA"]);
-  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "nenhum documento simulado");
+  { const ds = await s.documentos(ORG_X, XIS); assert.deepEqual([ds.length, ds[0]?.arquivoArquivado], [1, false], "só a ficha do comprovante processado, declarada sem arquivo (nenhum anexo simulado)"); }
   assert.ok(!/anexad|arquivad/i.test((await s.respostas()).at(-1)), "não afirma anexo");
   const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
   assert.equal(p.estado, "APLICADA");
