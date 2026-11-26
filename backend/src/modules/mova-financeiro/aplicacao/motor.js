@@ -29,7 +29,7 @@ import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from ".
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 export const DECISAO = Object.freeze({
@@ -287,6 +287,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         if (origemCitada?.eventoId && pedidoDeRetomar(evento.texto)) {
           const retomada = await retomarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
           if (retomada) return retomada;
+        }
+        // 5a'. 26/11 — a pessoa COMPLETA a proposta citando a resposta do MOVA (classificação/descrição, "outras despesas", o número da opção):
+        // não é uma consulta nova. Só vale para proposta DESPESA_PAGA ainda em revisão, nesta conversa, por quem pode complementá-la.
+        if (origemCitada?.eventoId && evento.texto) {
+          const complemento = await complementarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
+          if (complemento) return complemento;
         }
       }
       // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
@@ -590,7 +596,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     // Agente 2 — Frente C: depois de criada, a baixa é conferida com o extrato e, se a política autorizar, liquidada.
     const pos = posCriacao ? await posCriacao(proposta) : null;
     // 25/11: a política autorizou (APLICAR_AUTOMATICO) mas a execução não aconteceu por identidade/concessão ⇒ o motivo é registrado e dito.
-    const motivosExecucao = pos && pos.situacao === "PROPOSTA" ? [...new Set([...(pos.motivosDocumentais ?? []), ...(pos.motivos ?? [])])].filter((m) => ["SEM_IDENTIDADE_OPERACIONAL", "SEM_CONCESSAO_OPERACIONAL"].includes(m)) : [];
+    const motivosExecucao = pos && pos.situacao === "PROPOSTA" ? [...new Set([...(pos.motivosDocumentais ?? []), ...(pos.motivos ?? [])])].filter((m) => ["SEM_IDENTIDADE_OPERACIONAL", "SEM_CONCESSAO_OPERACIONAL"].includes(m) || /^FV2_/.test(m)) : [];
     if (motivosExecucao.length) await a.propostas.anotar(escopo, proposta.id, { semExecucao: { motivos: motivosExecucao, em: relogio().toISOString() } });
     const texto = (pos?.texto ?? textoResposta(proposta)) + (motivosExecucao.length ? ` ${RESPOSTA.semExecucaoAutomatica(motivosExecucao)}` : "") + (incompleta ? ` ${RESPOSTA.pendenteUnidadeIncompleta()}` : "");
     const extra = pos ? { conciliacao: pos.situacao, autonomia: pos.nivel, ...(pos.nivelDocumental ? { autonomiaDocumental: pos.nivelDocumental, comprovante: pos.comprovante } : {}), ...(pos.motivo ? { motivoExecucao: pos.motivo } : {}), ...(motivosExecucao.length ? { motivosExecucao } : {}) } : {};
@@ -601,16 +607,102 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
   }
 
   /** Categoria do plano da unidade pela descrição (uma só categoria casando); senão null → provisória "a classificar" (revisão humana). */
-  async function categoriaDaDespesa(escopo, saida, legenda) {
+  async function planoDaUnidade(escopo) {
     try {
       const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);
-      // 24/11 (correção): o plano vem como ÁRVORE (lista de grupos com `filhas`); antes só `categorias`/`itens` eram lidos e nenhuma
-      // categoria era escolhida (tudo ia para "a classificar"). Achata a árvore; a regra continua: só UMA categoria lançável casando.
+      // 24/11 (correção): o plano vem como ÁRVORE (lista de grupos com `filhas`); achata a árvore.
       const plano = [];
       const visitar = (xs) => { for (const c of xs ?? []) { plano.push(c); visitar(c?.filhas); } };
       visitar(Array.isArray(p) ? p : p?.categorias ?? p?.itens ?? []);
-      return escolherCategoria({ categorias: plano, categoriaSugerida: saida.categoriaSugerida, legenda });
-    } catch { return null; }
+      return plano;
+    } catch { return []; }
+  }
+  async function categoriaDaDespesa(escopo, saida, legenda) {
+    const plano = await planoDaUnidade(escopo);
+    return plano.length ? escolherCategoria({ categorias: plano, categoriaSugerida: saida.categoriaSugerida, legenda }) : null;
+  }
+
+  /**
+   * 26/11 — COMPLETA uma proposta DESPESA_PAGA em revisão com a classificação/descrição dita depois (citando a resposta do MOVA).
+   * Regras (determinísticas primeiro; Haiku só se não casar; o backend valida no PLANO DE CONTAS da unidade): uma categoria compatível ⇒
+   * aplica; várias ⇒ mostra só as compatíveis (até 4) e a resposta pelo número continua; nenhuma ⇒ não é com este fluxo.
+   * Proposta que a política autorizou a aplicar sozinha é retomada na sequência (tudo revalidado), sem pedir nada de novo.
+   * @returns {Promise<object|null>}
+   */
+  async function complementarProposta(evento, eventoOrigemId, ctxp) {
+    const { grupo, participante, daPessoa, podeConfirmar, recusarOutro } = ctxp;
+    if (typeof a.propostas.porEvento !== "function") return null;
+    let proposta = (await a.propostas.porEvento(eventoOrigemId)).find((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO") ?? null;
+    // a citada pode ser a pergunta de opções de categoria (gerada por uma mensagem de resposta): a proposta guarda de qual evento ela veio
+    if (!proposta) {
+      for (const u of cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId))) {
+        proposta = (await a.propostas.listar(escopoDe(u))).find((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO" && p.categoriaOpcoesEventoId === eventoOrigemId) ?? null;
+        if (proposta) break;
+      }
+    }
+    if (!proposta) return null;
+    const unidade = cfg.unidades.find((x) => x.unidadeId === proposta.unidadeId) ?? null;
+    if (!unidade || !daPessoa.unidades.includes(proposta.unidadeId)) return null;
+    const escopo = escopoDe(unidade);
+    const ev = await a.eventos.obter(proposta.eventoId);
+    const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? proposta.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+    if (!podeConfirmar(origem, { divergencia: { tipo: "COMPETENCIA", unidadeId: proposta.unidadeId }, saida: null })) return recusarOutro();
+    const plano = await planoDaUnidade(escopo);
+    if (!plano.length) return null;
+    const lancavel = (c) => c?.aceitaLancamento && c.ativa !== false && ["CUSTO", "DESPESA"].includes(c.natureza);
+    const base = { escopo, propostaId: proposta.id };
+    let leitura;
+    const numero = /^\s*([1-4])\s*[.)]?\s*$/.exec(evento.texto);
+    if (numero && Array.isArray(proposta.categoriaOpcoes) && proposta.categoriaOpcoes[Number(numero[1]) - 1]) {
+      const c = plano.find((x) => lancavel(x) && x.codigo === proposta.categoriaOpcoes[Number(numero[1]) - 1]);
+      leitura = { categoria: c?.codigo ?? null, opcoes: [], descricao: null };
+    } else {
+      leitura = interpretarCategoria({ texto: evento.texto, categorias: plano });
+      if (!leitura.categoria && !leitura.opcoes.length && evento.texto.length <= 120) {
+        // as regras não entenderam: o Haiku (já disponível) lê a mensagem; o backend só aceita um código que EXISTA no plano da unidade
+        try {
+          const lida = await lerDocumento({ eventoId: evento.eventoId, tipo: "TEXTO", texto: evento.texto, grupoId: evento.grupoId, midia: null }, grupo ?? { unidades: [escopo.unidadeId] }, null, { perguntaPendente: "Qual a categoria (classificação) e a descrição desta despesa?" });
+          if (lida.ok) {
+            const x = extracaoDaRespostaIA(lida.saida, { texto: evento.texto, dataPagamento: proposta.datas?.caixa ?? null });
+            const codigo = x.categoria ? escolherCategoria({ categorias: plano, categoriaSugerida: x.categoria, legenda: evento.texto }) : null;
+            if (codigo || x.descricao) leitura = { categoria: codigo, opcoes: [], descricao: x.descricao };
+          }
+        } catch { /* indisponível: não é com este fluxo */ }
+      }
+    }
+    if (!leitura.categoria && !leitura.opcoes.length) return null;
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "PROPOSTA_COMPLEMENTADA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    const privadoDe = async () => { const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]); return rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null; };
+    if (!leitura.categoria) {
+      await a.propostas.anotar(escopo, proposta.id, { categoriaOpcoes: leitura.opcoes.map((o) => o.codigo), categoriaOpcoesEventoId: evento.eventoId });
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CATEGORIA_AMBIGUA", ...base, resposta: RESPOSTA.categoriaOpcoes(leitura.opcoes), privado: await privadoDe() });
+    }
+    const nome = plano.find((c) => c.codigo === leitura.categoria)?.nome ?? leitura.categoria;
+    const descricao = leitura.descricao ? mascararDadosSensiveis(leitura.descricao).slice(0, 120) : null;
+    const entrada = proposta.comando?.entrada ?? {};
+    await a.propostas.anotar(escopo, proposta.id, { comando: { ...proposta.comando, entrada: { ...entrada, categoria: leitura.categoria, ...(descricao ? { descricao } : {}) } }, categoriaDefinida: true, categoriaOpcoes: null, categoriaOpcoesEventoId: null });
+    await a.auditoria.registrar({ acao: "PROPOSTA_CLASSIFICADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { categoria: leitura.categoria, descricao: Boolean(descricao) } });
+    // autorizada a aplicar sozinha e parada: segue para o registro (a MESMA execução, tudo revalidado)
+    if (proposta.semExecucao || proposta.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO") {
+      const r = await retomarProposta(evento, proposta.eventoId, ctxp);
+      if (r) return r;
+    }
+    return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CATEGORIA_DEFINIDA", ...base, privado: await privadoDe(),
+      resposta: RESPOSTA.categoriaDefinida(nome, descricao, "A proposta segue aguardando a confirmação de quem aprova no Centro Financeiro. Nada foi lançado ainda.") });
+  }
+
+  /**
+   * 26/11 — um documento novo pode ser DA MESMA COMPRA de uma proposta em revisão (cupom, nota, boleto, comprovante, recibo). Igualdade de
+   * valor e favorecido é só um SINAL: com sinal, o MOVA pergunta (nunca presume duplicidade nem cria outra despesa sozinho).
+   * @returns {Promise<object|null>} a proposta candidata, ou null
+   */
+  async function propostaDaMesmaCompra({ evento, escopo, saida }) {
+    if (!evento.midia || !(saida.valorCentavos > 0)) return null;
+    const recentes = (await a.propostas.listar(escopo)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO" && p.eventoId !== evento.eventoId
+      && p.valorCentavos === saida.valorCentavos && p.evidencia?.sha256 !== evento.midia.sha256);
+    const complementar = DOCUMENTOS_COMPLEMENTARES.includes(saida.tipoDocumento);
+    const candidatas = recentes.filter((p) => complementar || favorecidosCompativeis(p.leitura?.favorecido, saida.favorecido));
+    return candidatas.sort((x, y) => String(y.criadaEm ?? "").localeCompare(String(x.criadaEm ?? "")))[0] ?? null;
   }
 
   /**
@@ -698,6 +790,27 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (bloqueio) return bloqueio;
     const abertas = await porta.contasAPagarAbertas(escopo);
     const valor = saida.valorCentavos;
+    // 26/11 — resposta à pergunta "é da mesma compra?": sim ⇒ anexa à proposta existente (sem despesa nova); não ⇒ segue como outra compra.
+    let mesmaCompraNegada = false;
+    if (esclarecimento?.divergencia?.tipo === TIPO_DIVERGENCIA.MESMA_COMPRA) {
+      const sn = respostaSimNao(esclarecimento.texto);
+      const alvo = (await a.propostas.listar(escopo)).find((p) => p.id === esclarecimento.divergencia.propostaId) ?? null;
+      if (sn === null) return perguntar(ctx, esclarecimento.divergencia, RESPOSTA.mesmaCompraSemResposta(), "MESMA_COMPRA_SEM_RESPOSTA");
+      if (sn === true && alvo) {
+        const doc = { eventoId: evento.eventoId, sha256: evento.midia?.sha256 ?? null, referencia: evento.midia?.referencia ?? null, tipoDocumento: saida.tipoDocumento ?? null, valorCentavos: valor, em: relogio().toISOString() };
+        const ja = (alvo.documentosComplementares ?? []).some((x) => x.sha256 && x.sha256 === doc.sha256);
+        if (!ja) await a.propostas.anotar(escopo, alvo.id, { documentosComplementares: [...(alvo.documentosComplementares ?? []), doc] });
+        await a.auditoria.registrar({ acao: "DOCUMENTO_COMPLEMENTAR_VINCULADO", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: alvo.id, dados: { tipoDocumento: doc.tipoDocumento } });
+        return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "DOCUMENTO_COMPLEMENTAR_VINCULADO", escopo, propostaId: alvo.id, resposta: RESPOSTA.documentoComplementarVinculado(alvo.id), injecao });
+      }
+      mesmaCompraNegada = true;
+    } else if (!esclarecimento && evento.midia) {
+      const relacionada = await propostaDaMesmaCompra({ evento, escopo, saida });
+      if (relacionada) {
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.MESMA_COMPRA, valorCentavos: valor, candidatas: [], propostaId: relacionada.id }, RESPOSTA.perguntaMesmaCompra(valor, saida.tipoDocumento === "COMPROVANTE_PAGAMENTO" ? null : saida.tipoDocumento, relacionada.leitura?.favorecido ?? null, relacionada.id), "POSSIVEL_DOCUMENTO_COMPLEMENTAR");
+      }
+    }
+    void mesmaCompraNegada;
     const legenda = evento.midia ? legendaDoDocumento(evento.texto) : null; // legenda da mensagem original: descrição e evidência (entrada não confiável)
     // 25/11: juros/multa DISCRIMINADOS no comprovante e soma conferida (original + juros + multa − desconto = pago) ⇒ comprovado:
     // não pergunta se a diferença é juros. Genérico (qualquer boleto); a IA só lê os campos impressos, a conta é determinística.
@@ -745,7 +858,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         descricaoInformada = esclarecimento.descricao ?? descricaoDireta(esclarecimento.texto) ?? (await lerRespostaPorIA())?.descricao ?? null;
         if (!descricaoInformada) return perguntar(ctx, pend, RESPOSTA.naoEntendiDescricao(), "DESCRICAO_NAO_ENTENDIDA");
       }
-      let desf = pend.tipo === TIPO_DIVERGENCIA.DESCRICAO ? { desfecho: DESFECHO.NOVA } : interpretarResposta(esclarecimento.texto, pend);
+      let desf = pend.tipo === TIPO_DIVERGENCIA.DESCRICAO || pend.tipo === TIPO_DIVERGENCIA.MESMA_COMPRA ? { desfecho: DESFECHO.NOVA } : interpretarResposta(esclarecimento.texto, pend);
       // 24/11: as regras curtas não entenderam ⇒ vale o SENTIDO lido da resposta (só onde ele faz sentido; a IA nunca escolhe conta).
       if (desf.desfecho === DESFECHO.NAO_ENTENDI) desf = desfechoPorFinalidade(esclarecimento.finalidade ?? (await lerRespostaPorIA())?.finalidade ?? null, pend);
       // O saldo pode ter mudado entre a pergunta e a resposta: a conta é relida pelo id, nunca usada do que foi guardado.

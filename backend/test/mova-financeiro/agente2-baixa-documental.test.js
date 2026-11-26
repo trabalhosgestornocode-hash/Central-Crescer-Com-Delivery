@@ -60,7 +60,7 @@ t("A2-D1 manutenção R$ 400 (Pix concluído, política documental): PAGO POR CO
   let t1 = await s.titulo();
   assert.deepEqual([t1.situacaoPagamento, t1.situacaoConciliacao, t1.saldoCentavos], ["PAGO_POR_COMPROVANTE", "CONCILIACAO_PENDENTE", 0]);
   assert.equal((await s.saidas()).length, 0, "nenhuma saída inventada");
-  assert.deepEqual(s.escritas().map((x) => x.nome), ["enviarEvidencia", "registrarPagamentoPorComprovante"]);
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarPagamentoPorComprovante"]);
   for (const x of s.escritas()) assert.equal(x.permissoes.length, 2, "identidade operacional só com [ver, ação]");
   const [op] = await s.mova.armazenamento.operacoes.listar(s.escopo);
   assert.deepEqual([op.operacao, op.estado, op.executadaPor], ["BAIXA_DOCUMENTAL", "EXECUTADA", OPERADOR]);
@@ -160,7 +160,7 @@ t("A2-D8 extrato JÁ importado: segue a baixa pelo extrato (paga E conciliada), 
   await s.saidaDoExtrato();
   await s.enviar(gw({ texto: "MOVA comprovante da alfa", doc: pdf("D8") }));
   assert.deepEqual([(await s.ultima()).conciliacao], ["EXECUTADA"]);
-  assert.deepEqual(s.escritas().map((x) => x.nome), ["enviarEvidencia", "vincularPagamentoDoExtrato"]);
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["vincularPagamentoDoExtrato"]);
   assert.equal((await s.titulo()).situacaoConciliacao, "CONCILIADO_COM_EXTRATO");
 });
 

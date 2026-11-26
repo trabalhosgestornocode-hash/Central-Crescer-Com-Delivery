@@ -591,7 +591,8 @@ export function criarEvidenciasPostgres({ pool }) {
       if (!(bytes instanceof Uint8Array) || bytes.length === 0) throw new TypeError("bytes inválidos");
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       const referencia = `evd_${sha256.slice(0, 32)}`;
-      const r = await q("insert into mova.evidencia (sha256, referencia, mime, tamanho, nome_arquivo, conteudo) values ($1,$2,$3,$4,$5,$6) on conflict do nothing",
+      const r = await q(`insert into mova.evidencia (sha256, referencia, mime, tamanho, nome_arquivo, conteudo) values ($1,$2,$3,$4,$5,$6)
+         on conflict (sha256) do update set conteudo = excluded.conteudo, removida_em = null where mova.evidencia.removida_em is not null`,
         [sha256, referencia, mime, bytes.length, nomeArquivo, Buffer.from(bytes)]);
       return { referencia, sha256, tamanhoBytes: bytes.length, repetido: r.rowCount === 0 };
     },
@@ -606,6 +607,17 @@ export function criarEvidenciasPostgres({ pool }) {
       // Integridade: o conteúdo precisa bater com o hash gravado (adulteração no banco ⇒ recusa, nunca entrega).
       if (createHash("sha256").update(r.rows[0].conteudo).digest("hex") !== sha256) throw Object.assign(new Error("evidência adulterada"), { codigo: "EVIDENCIA_ADULTERADA" });
       return { bytes: r.rows[0].conteudo, mime: r.rows[0].mime, nomeArquivo: r.rows[0].nome_arquivo };
+    },
+    /** 26/11 — descarta o CONTEÚDO após a operação concluir (a ficha fica). Nunca descarta arquivo de proposta ainda aberta. */
+    async descartar(referencia) {
+      const r = await q(`with alvo as (
+          select e.sha256 from mova.evidencia e
+           where e.referencia = $1 and e.removida_em is null
+             and not exists (select 1 from mova.proposta p where p.dados->'evidencia'->>'sha256' = e.sha256 and p.estado in ('AGUARDANDO_REVISAO','APLICANDO'))
+        ), feito as (
+          update mova.evidencia e set conteudo = null, removida_em = now() from alvo where e.sha256 = alvo.sha256 returning e.sha256
+        ) select count(*)::int as n from feito`, [referencia]);
+      return Number(r.rows[0].n) > 0;
     },
     async expurgar(agora = new Date()) { return Number((await q("select mova.expurgar_evidencias($1) as n", [agora.toISOString()])).rows[0].n); },
   });

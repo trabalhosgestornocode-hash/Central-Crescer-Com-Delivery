@@ -10,7 +10,7 @@
 
 // 24/11: NOVA_OU_CONTA — o comprovante supera MUITO o saldo da única conta do favorecido (diferença grande demais para ser juros):
 // a pergunta é "é uma compra nova?" ("sim" = compra nova). DESCRICAO — compra nova sem descrição nem categoria: "o que foi comprado?".
-export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE", NOVA_OU_CONTA: "NOVA_OU_CONTA", DESCRICAO: "DESCRICAO", COMPETENCIA: "COMPETENCIA" });
+export const TIPO_DIVERGENCIA = Object.freeze({ MAIOR: "MAIOR", MENOR: "MENOR", VARIAS: "VARIAS", SEMELHANTE: "SEMELHANTE", NOVA_OU_CONTA: "NOVA_OU_CONTA", DESCRICAO: "DESCRICAO", COMPETENCIA: "COMPETENCIA", MESMA_COMPRA: "MESMA_COMPRA" });
 export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA: "NOVA", ESCOLHER: "ESCOLHER", MESMA: "MESMA", NAO_ENTENDI: "NAO_ENTENDI" });
 export const MAX_CANDIDATAS_NA_PERGUNTA = 5;
 
@@ -303,3 +303,77 @@ export function buscarSemelhantes({ todas, valorCentavos, favorecido, legenda, d
   }
   return achados.sort((a, b) => (a.situacao === b.situacao ? 0 : a.situacao === "PAGA" ? -1 : 1));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// 26/11 — COMPLEMENTOS DE UMA PROPOSTA: categoria/descrição ditas depois e documentos que pertencem à MESMA compra.
+// Determinístico e geral (nada específico de um produto/fornecedor); o que não casa vai para a IA (validada) ou vira pergunta.
+// ---------------------------------------------------------------------------------------------------------------------------
+const SEPARADORES = /\s*[-–—:;/|]\s+|\s*,\s*/;
+const SEM_VALOR = new Set(["categoria", "classificar", "classifica", "classificacao", "como", "na", "no", "e", "de", "do", "da", "em", "para", "que", "foi", "era", "eh"]);
+
+/**
+ * Lê uma mensagem que COMPLETA a proposta (classificação, descrição, finalidade) e a casa com o plano de contas da unidade.
+ * @returns {{categoria:string|null, opcoes:{codigo:string,nome:string}[], descricao:string|null}} nunca inventa código: só os do plano.
+ *   `categoria` = uma só categoria lançável compatível; `opcoes` = várias compatíveis (até 4); nenhuma ⇒ ambos vazios.
+ */
+export function interpretarCategoria({ texto, categorias }) {
+  const original = String(texto ?? "").trim();
+  const t = normalizar(original);
+  const vazio = { categoria: null, opcoes: [], descricao: null };
+  if (!t || t.length > 120 || original.includes("?")) return vazio;
+  const lancaveis = (categorias ?? []).filter((c) => c?.aceitaLancamento && c.ativa !== false && ["CUSTO", "DESPESA"].includes(c.natureza) && normalizar(c.nome));
+  const nomes = lancaveis.map((c) => ({ c, n: normalizar(c.nome) }));
+  const dito = (n) => ` ${t} `.includes(` ${n} `);
+  // 1) o NOME inteiro da categoria foi dito (a mais específica; "outras despesas" vence "despesas")
+  let fortes = nomes.filter((x) => dito(x.n));
+  fortes = fortes.filter((x) => !fortes.some((y) => y !== x && y.n.length > x.n.length && y.n.includes(x.n)));
+  let escolhida = null;
+  let opcoes = [];
+  if (fortes.length === 1) escolhida = fortes[0];
+  else if (fortes.length > 1) opcoes = fortes;
+  else {
+    // 2) sinônimos conhecidos (uma só categoria casando) e 3) palavras em comum com o nome (uma só ⇒ escolhe; várias ⇒ opções)
+    const viaSinonimo = escolherCategoria({ categorias: lancaveis, categoriaSugerida: null, legenda: original });
+    if (viaSinonimo) escolhida = nomes.find((x) => x.c.codigo === viaSinonimo) ?? null;
+    else {
+      const palavras = new Set(t.split(" ").filter((w) => w.length >= 4 && !SEM_VALOR.has(w)));
+      const parciais = nomes.filter((x) => x.n.split(" ").some((w) => w.length >= 4 && palavras.has(w)));
+      if (parciais.length === 1) escolhida = parciais[0]; else opcoes = parciais;
+    }
+  }
+  // descrição = o que sobra depois de tirar a categoria DITA (por separadores; sem separador, remove o nome do texto). Categoria
+  // inferida por sinônimo/palavra solta não gera descrição (o resto da frase pode ser só a própria classificação).
+  let descricao = null;
+  const alvo = fortes.length === 1 ? fortes[0].n : null;
+  if (alvo) {
+    const util = (p) => normalizar(p).split(" ").some((w) => w && !SEM_VALOR.has(w));
+    const partes = original.split(SEPARADORES).filter((x) => x.trim());
+    const restantes = partes.length > 1 ? partes.filter((x) => !` ${normalizar(x)} `.includes(` ${alvo} `) && util(x)) : [];
+    let resto = restantes.join(" ").trim();
+    if (!resto) resto = normalizar(original).replace(alvo, " ").split(" ").filter((w) => w && !SEM_VALOR.has(w)).join(" ").trim();
+    if (resto.length >= 3 && resto.length <= 60) descricao = resto.charAt(0).toUpperCase() + resto.slice(1);
+  }
+  return { categoria: escolhida?.c.codigo ?? null, opcoes: opcoes.slice(0, 4).map((x) => ({ codigo: x.c.codigo, nome: x.c.nome })), descricao };
+}
+
+/** "sim"/"não" curtos (e variações naturais). null = não é resposta sim/não. */
+export function respostaSimNao(texto) {
+  const t = normalizar(texto);
+  if (!t || t.length > 40) return null;
+  if (SIM.test(t) || /^(sim|e sim|e a mesma|mesma compra|e da mesma|do mesmo|pertence)\b/.test(t)) return true;
+  if (NAO.test(t) || /^(nao|outra compra|e outra|compra diferente)\b/.test(t)) return false;
+  return null;
+}
+
+/** Dois favorecidos parecem o mesmo (palavras úteis em comum, ignorando ruído societário). Só um SINAL — nunca prova sozinho. */
+export function favorecidosCompativeis(a, b) {
+  const ruido = new Set(["ltda", "sa", "s", "a", "me", "eireli", "epp", "cia", "comercio", "de", "da", "do", "dos", "das", "e"]);
+  const w = (x) => new Set(normalizar(x).split(" ").filter((p) => p.length >= 3 && !ruido.has(p)));
+  const [A, B] = [w(a), w(b)];
+  if (!A.size || !B.size) return false;
+  const comuns = [...A].filter((p) => B.has(p)).length;
+  return comuns >= Math.min(2, Math.min(A.size, B.size));
+}
+
+/** Tipos de documento que COMPLEMENTAM uma compra (não são, sozinhos, a prova do pagamento). */
+export const DOCUMENTOS_COMPLEMENTARES = Object.freeze(["NOTA_FISCAL", "CUPOM_FISCAL", "BOLETO", "RECIBO", "FATURA", "CUPOM"]);

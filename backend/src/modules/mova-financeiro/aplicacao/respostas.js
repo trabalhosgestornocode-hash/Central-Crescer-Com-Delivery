@@ -60,11 +60,23 @@ export const RESPOSTA = Object.freeze({
   dadosInsuficientes: (o) => `Ainda não há dados suficientes registrados no Financeiro para responder sobre ${o}. Não vou estimar.`,
   // 25/11 — a política autorizou o registro automático, mas a execução não pôde acontecer: diz o motivo e como continuar pelo WhatsApp.
   semExecucaoAutomatica: (motivos = []) => {
+    const tem = (re) => motivos.some((x) => re.test(x));
     const m = motivos.includes("SEM_IDENTIDADE_OPERACIONAL") ? "o registro automático ainda não está ativado neste ambiente"
       : motivos.includes("SEM_CONCESSAO_OPERACIONAL") ? "a permissão operacional do MOVA nesta unidade não cobre essa operação"
+      : tem(/COFRE_INDISPONIVEL|DOCUMENTO_INDISPONIVEL/) ? "o armazenamento seguro do comprovante está temporariamente indisponível"
+      : tem(/DOCUMENTO_INVALIDO|DOCUMENTO_ADULTERADO/) ? "o arquivo do comprovante não foi aceito pela verificação de segurança (formato inválido ou arquivo suspeito)"
+      : tem(/COMPETENCIA/) ? "a competência dessa despesa está fechada ou indisponível"
+      : tem(/CONFLITO|IDEMPOTENCIA/) ? "outro registro igual foi feito ao mesmo tempo (conferi para não duplicar)"
       : "o registro automático não pôde ser concluído agora";
-    return `Não registrei automaticamente: ${m}. A proposta ficou guardada e nada foi lançado. Quando isso for resolvido, responda citando esta mensagem com "registrar" que eu continuo, sem novo comprovante.`;
+    const guardado = tem(/DOCUMENTO_INVALIDO|DOCUMENTO_ADULTERADO/) ? "Nenhum pagamento foi registrado e a proposta foi preservada; envie um comprovante em PDF ou imagem legível." : "A proposta foi preservada e nenhum pagamento foi registrado.";
+    return `Não consegui concluir o registro porque ${m}. ${guardado} Quando isso for resolvido, responda citando esta mensagem com "registrar" que eu continuo, sem novo comprovante.`;
   },
+  // 26/11 — complementos de uma proposta (classificação, documentos da mesma compra)
+  categoriaDefinida: (nome, descricao, seguePara) => `Classifiquei como "${nome}"${descricao ? ` (${descricao})` : ""}. ${seguePara}`,
+  categoriaOpcoes: (opcoes) => `Qual destas categorias é a certa? Responda citando esta mensagem com o número:\n${opcoes.map((o, i) => `${i + 1}. ${o.nome}`).join("\n")}`,
+  perguntaMesmaCompra: (valor, tipoDoc, favorecido, propostaId) => `Recebi ${tipoDoc ? `um documento (${tipoDoc.toLowerCase().replace(/_/g, " ")})` : "outro documento"} de ${reais(valor)}${favorecido ? ` (${String(favorecido).slice(0, 60)})` : ""}. Ele é da MESMA compra da proposta ${String(propostaId).slice(0, 8)}? Responda citando esta mensagem: "sim" anexa à proposta existente (não crio outra despesa); "não" trato como outra compra.`,
+  mesmaCompraSemResposta: () => 'Não entendi. Este documento é da mesma compra? Responda "sim" ou "não" citando a pergunta; nada foi registrado.',
+  documentoComplementarVinculado: (propostaId) => `Anexei o documento à proposta ${String(propostaId).slice(0, 8)}. Não criei outra despesa e nada novo foi lançado.`,
   propostaJaRegistrada: () => "Essa proposta já foi registrada. Não criei outro lançamento.",
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
@@ -130,12 +142,12 @@ export const RESPOSTA = Object.freeze({
   documentoNoPrivado: () => "Recebi o documento. Os detalhes, com valores, foram para o seu privado.",
   documentoSemPrivado: () => "Recebi o documento e preparei para revisão no Centro Financeiro. Os valores não aparecem no grupo.",
   // Agente 2 — Frente C: baixa pelo extrato (nunca pagamento bancário; a saída já estava no extrato).
-  baixaExecutada: (p, r) => `Baixa registrada no Financeiro: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar, conferida com a saída do extrato de ${dataBr(r?.dataSaida)}. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  baixaExecutada: (p, r) => `Baixa registrada no Financeiro: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar, conferida com a saída do extrato de ${dataBr(r?.dataSaida)}. Registrei os dados do comprovante (valor, data, identificador e verificação do arquivo); o arquivo em si não é guardado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   baixaConferida: (p) => `Proposta ${curto(p.id)}: baixa de ${reais(p.valorCentavos)} conferida com a saída do extrato. Falta a confirmação de um responsável no Centro Financeiro. Nada foi lançado ainda.`,
   // Execução 17 — situações separadas: PAGO POR COMPROVANTE (conciliação bancária pendente) nunca é "conciliado".
-  pagoPorComprovante: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Situação: pago por comprovante. Conciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  pagoPorComprovante: (p, r) => `Pagamento registrado por comprovante: ${reais(p.valorCentavos)}${r?.parcial ? " (pagamento parcial)" : ""} na conta a pagar (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Situação: pago por comprovante. Conciliação bancária: pendente — confiro quando o extrato for importado. Registrei os dados do comprovante (valor, data, identificador e verificação do arquivo); o arquivo em si não é guardado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   // 23/11 — despesa SEM conta prévia: a conta foi registrada e paga por comprovante na mesma rotina.
-  despesaPagaPorComprovante: (p, r, x = {}) => `Despesa registrada e paga por comprovante: ${reais(p.valorCentavos)} (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Uma despesa e uma baixa, juntas${r?.despesaCriada === false ? " (já existia, reaproveitada)" : " (não havia conta cadastrada: conta nova criada)"}.\n${linhasDaCompra(p, x)}\nSituação: PAGO.${r?.encargoCentavos ? " Encargos lançados em juros e multas pagos a fornecedores (não na despesa)." : ""}\nConciliação bancária: pendente — confiro quando o extrato for importado. O comprovante ficou anexado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
+  despesaPagaPorComprovante: (p, r, x = {}) => `Despesa registrada e paga por comprovante: ${reais(p.valorCentavos)} (pago em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}). Uma despesa e uma baixa, juntas${r?.despesaCriada === false ? " (já existia, reaproveitada)" : " (não havia conta cadastrada: conta nova criada)"}.\n${linhasDaCompra(p, x)}\nSituação: PAGO.${r?.encargoCentavos ? " Encargos lançados em juros e multas pagos a fornecedores (não na despesa)." : ""}\nConciliação bancária: pendente — confiro quando o extrato for importado. Registrei os dados do comprovante (valor, data, identificador e verificação do arquivo); o arquivo em si não é guardado. Se houver erro, um responsável desfaz pelo Centro Financeiro.`,
   comprovanteAguardandoConfirmacao: (p) => `Proposta ${curto(p.id)}: comprovante de ${reais(p.valorCentavos)} conferido (transação concluída). Falta a confirmação de um responsável para registrar como pago por comprovante; a conciliação bancária ficará pendente até o extrato. Nada foi lançado ainda.`,
   comprovanteEmRevisao: (situacao) => `O comprovante ficou para conferência humana (${({ DOCUMENTO_INCONSISTENTE: "dados incompletos ou incertos na leitura", DOCUMENTO_ILEGIVEL: "documento ilegível", DOCUMENTO_SUSPEITO: "arquivo com sinais de alteração", COMPROVANTE_DUPLICADO: "comprovante já recebido" })[situacao] ?? "não deu para confirmar a conclusão da transação"}).`,
   comprovanteNaoConcluido: (situacao) => ({

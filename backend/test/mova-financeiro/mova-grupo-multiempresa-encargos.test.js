@@ -50,9 +50,9 @@ const POL = (operacao, org, u, x = {}) => ({ operacao, organizacaoId: org, unida
 const ACOES = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_juros"];
 const ESCRITAS = ["enviarEvidencia", "registrarDespesaPagaComEncargo", "registrarDespesaPagaPorComprovante", "registrarPagamentoComEncargo", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 
-async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN], controle = null } = {}) {
+async function grupo({ responder, config = CONFIG(), concessoes = [[ORG, ALFA], [ORG_X, XIS]], politicaJuros = true, membros = [FIN], controle = null, cofre = undefined } = {}) {
   const s = await cenario({
-    responder, config,
+    responder, config, cofre,
     extras: ({ nucleo }) => ({
       autonomia: true, pagamentoPorComprovante: true, criarDespesas: true, criarContas: true, registrarJuros: true,
       operacional: ((real) => (controle ? { identidade: real.identidade, pode: async (...x) => (controle.ligada ? real.pode(...x) : false), chamar: (...x) => real.chamar(...x) } : real))(criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: SERVICO,
@@ -127,14 +127,14 @@ t("GM-2 ACEITAÇÃO: boleto pago com juros e multa impressos, sem conta cadastra
   assert.match(aj.motivo, /juros R\$\s?5,77, multa R\$\s?173,44/, "detalhamento de juros e multa preservado");
   const liqs = await s.liquidacoes(ORG_X, XIS);
   assert.deepEqual([liqs.length, liqs[0].valorCentavos, liqs[0].movimentacaoId, liqs[0].dataEfetiva], [1, 885102, null, "2026-10-14"], "pagamento total, sem saída fictícia");
-  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 1]);
+  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 0]);
   assert.deepEqual([(await s.contas(ORG, ALFA)).length, (await s.despesas(ORG, ALFA)).length], [0, 0], "nada na outra empresa");
   assert.ok(s.escritas().every((x) => x.organizacaoId === ORG_X && x.unidadeId === XIS));
   const w = s.escritas().find((x) => x.nome === "registrarDespesaPagaComEncargo");
   assert.ok(w, "operação estreita com encargo");
   assert.equal(w.permissoes.length, 5, "[ver + 4 ações estreitas]");
   const msg = (await s.respostas()).at(-1);
-  for (const re of [/Loja Xis/, /MP ALIMENTOS LTDA/, /Energia Sintética/, /Valor original R\$\s?8\.671,81/, /Juros R\$\s?5,77/, /Multa R\$\s?173,44/, /Total pago R\$\s?8\.851,02/, /Vencimento 12\/10\/2026/, /Situação: PAGO/, /conta nova criada/, /comprovante ficou anexado/i]) assert.match(msg, re);
+  for (const re of [/Loja Xis/, /MP ALIMENTOS LTDA/, /Energia Sintética/, /Valor original R\$\s?8\.671,81/, /Juros R\$\s?5,77/, /Multa R\$\s?173,44/, /Total pago R\$\s?8\.851,02/, /Vencimento 12\/10\/2026/, /Situação: PAGO/, /conta nova criada/, /arquivo em si não é guardado/i]) assert.match(msg, re);
   // Reenvio do mesmo comprovante: nada duplica.
   await s.enviar(gw({ texto: "MOVA energia", doc: pdf("GM2") }));
   assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1]);
@@ -473,7 +473,7 @@ t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o mo
   const h = await s.ultima();
   assert.deepEqual([h.decisao, h.motivo], ["PROPOSTA", "DESPESA_PAGA"], JSON.stringify(h));
   const msg = (await s.respostas()).at(-1);
-  assert.match(msg, /Não registrei automaticamente/);
+  assert.match(msg, /Não consegui concluir o registro/);
   assert.match(msg, /citando esta mensagem/);
   assert.deepEqual((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS }))[0].semExecucao?.motivos, ["SEM_CONCESSAO_OPERACIONAL"], "o motivo fica registrado na proposta");
   assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
@@ -492,7 +492,7 @@ t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o mo
   assert.deepEqual([r.decisao, r.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(r));
   const [conta] = await s.contas(ORG_X, XIS);
   assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao], [867181, 0, "QUITADA"]);
-  assert.equal((await s.documentos(ORG_X, XIS)).length, 1, "o comprovante original, sem novo envio");
+  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "comprovante comum não é arquivado (só os dados); retomada sem novo envio");
   // repetir não duplica
   await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
   assert.notEqual((await s.ultima()).decisao, "EXECUTADO", "repetir não executa de novo");
@@ -509,4 +509,116 @@ test("RN-5 virada do ano e relativos: 'deste mês' e 'mês passado' contam a par
   for (const txt of ["Novembro de 2026. dia 25.", "Mês de novembro, dia 25.", "Referente a novembro.", "Mês 11", "11/2026", "Novembro"]) assert.equal(c(txt, "2026-11-25"), "2026-11", txt);
   assert.equal(extracaoDaRespostaIA({ competencia: "2027-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01");
   assert.equal(extracaoDaRespostaIA({ competencia: "2026-01" }, { texto: "janeiro", dataPagamento: "2026-12-28" }).competencia, "2027-01", "o modelo não escolhe o ano");
+});
+
+// ------------------------------------------------------------------ 26/11: categoria dita depois e documentos da MESMA compra
+const COMPRA = (x = {}) => BOLETO_PAGO({ valorCentavos: 46430, valorOriginalCentavos: null, jurosCentavos: null, multaCentavos: null, linhaDigitavel: null, vencimento: null,
+  favorecido: "MATEUS SUPERMERCADOS S A", competencia: "2026-10", categoriaSugerida: null, ...x });
+const CUPOM = (x = {}) => COMPRA({ tipoDocumento: "NOTA_FISCAL", idTransacao: null, situacaoTransacao: null, favorecido: "MATEUS SUPERMERCADOS SA", ...x });
+
+t("CAT-1 'Coca cola - outras despesas' citando a resposta do MOVA COMPLETA a proposta (categoria do plano + descrição), não vira consulta; a política retoma e registra uma vez", async () => {
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => COMPRA(), controle });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("CAT1") }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PROPOSTA", "DESPESA_PAGA"]);
+  await entregar(s, "3EB0PROPOSTACAT1");
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "Coca cola - outras despesas", respostaA: "3EB0PROPOSTACAT1" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(h));
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.equal(conta.saldoCentavos, 0);
+  assert.match(String(conta.descricao ?? ""), /Coca cola/i);
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+});
+
+t("CAT-2 resposta ambígua mostra só as categorias compatíveis e a resposta pelo número escolhe; texto que não é classificação segue o fluxo normal", async () => {
+  const s = await grupo({ responder: () => COMPRA(), controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("CAT2") }));
+  await entregar(s, "3EB0PROPOSTACAT2");
+  await s.enviar(doGerente({ texto: "despesas", respostaA: "3EB0PROPOSTACAT2" }));
+  const h = await s.ultima();
+  assert.equal(h.motivo, "CATEGORIA_AMBIGUA", JSON.stringify(h));
+  const msg = (await s.respostas()).at(-1);
+  assert.match(msg, /1\. /); assert.match(msg, /2\. /);
+  assert.ok((msg.match(/^\d\. /gm) ?? []).length <= 4);
+  await entregar(s, "3EB0OPCOESCAT2");
+  await s.enviar(doGerente({ texto: "1", respostaA: "3EB0OPCOESCAT2" }));
+  // categoria aplicada; como a política autoriza o registro e a execução segue travada, o MOVA tenta, explica e preserva a proposta
+  assert.equal((await s.ultima()).motivo, "RETOMADA_NAO_EXECUTADA", JSON.stringify(await s.ultima()));
+  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.ok(p.comando.entrada.categoria && p.comando.entrada.categoria !== "A_CLASSIFICAR", "a categoria escolhida pelo número foi gravada na proposta");
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0], "nada foi lançado");
+});
+
+t("MC-1 Mateus: cupom/nota do MESMO valor e fornecedor de uma proposta em revisão ⇒ PERGUNTA se é a mesma compra; 'sim' anexa à proposta existente, sem 2ª proposta nem 2ª despesa", async () => {
+  let doc = COMPRA();
+  const s = await grupo({ responder: () => doc, controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("MC1a") }));
+  const [p1] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  doc = CUPOM();
+  await s.enviar(doGerente({ doc: pdf("MC1b") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "POSSIVEL_DOCUMENTO_COMPLEMENTAR"], JSON.stringify(h));
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS })).length, 1, "nenhuma proposta nova");
+  await entregar(s, "3EB0PERGUNTAMC1");
+  await s.enviar(doGerente({ texto: "sim, é da mesma compra", respostaA: "3EB0PERGUNTAMC1" }));
+  assert.equal((await s.ultima()).motivo, "DOCUMENTO_COMPLEMENTAR_VINCULADO", JSON.stringify(await s.ultima()));
+  const props = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 1);
+  assert.equal(props[0].id, p1.id);
+  assert.equal(props[0].documentosComplementares.length, 1);
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG_X, XIS)).length], [0, 0]);
+});
+
+t("MC-2 'não' trata como OUTRA compra (2ª proposta); fornecedor diferente com o mesmo valor NÃO gera pergunta (igualdade de valor sozinha não é duplicidade)", async () => {
+  let doc = COMPRA();
+  const s = await grupo({ responder: () => doc, controle: { ligada: false } });
+  await s.enviar(doGerente({ texto: "compra de bebidas", doc: pdf("MC2a") }));
+  doc = CUPOM();
+  await s.enviar(doGerente({ doc: pdf("MC2b") }));
+  await entregar(s, "3EB0PERGUNTAMC2");
+  await s.enviar(doGerente({ texto: "não, é outra compra", respostaA: "3EB0PERGUNTAMC2" }));
+  assert.equal((await s.ultima()).motivo, "DESCRICAO_DA_COMPRA_AUSENTE", "outra compra, sem legenda: pergunta só o que foi comprado");
+  await entregar(s, "3EB0PERGUNTADESCMC2");
+  await s.enviar(doGerente({ texto: "refrigerantes", respostaA: "3EB0PERGUNTADESCMC2" }));
+  const props = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 2, JSON.stringify(await s.ultima()));
+  doc = COMPRA({ favorecido: "Padaria Outra Sintética", idTransacao: "AUTOUTRO20261014" });
+  await s.enviar(doGerente({ texto: "outra padaria", doc: pdf("MC2c") }));
+  assert.notEqual((await s.ultima()).motivo, "POSSIVEL_DOCUMENTO_COMPLEMENTAR", "sem sinal de mesma compra");
+});
+
+// ------------------------------------------------------------------ 26/11: SEM COFRE — comprovante comum não é arquivado; só dados, hash e auditoria
+t("NC-1 despesa paga SEM cofre: registra (conta quitada, sem documento simulado), resposta não diz 'anexado', arquivo temporário DESCARTADO; repetir e reenviar não duplicam", async () => {
+  const s = await grupo({ responder: () => COMPRA(), cofre: null });
+  await s.enviar(doGerente({ texto: "compra de bebidas, outras despesas", doc: pdf("NC1") }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA"], JSON.stringify(h));
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.saldoCentavos, conta.situacao], [0, "QUITADA"]);
+  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "nenhum documento simulado");
+  assert.ok(!/anexad|arquivad/i.test((await s.respostas()).at(-1)), "não afirma anexo");
+  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(p.estado, "APLICADA");
+  assert.equal(p.resultado.comprovanteArquivado, false);
+  assert.equal(await s.mova.evidencias.obter(p.evidencia.referencia), null, "arquivo temporário descartado após a conclusão");
+  assert.match(p.evidencia.sha256, /^[0-9a-f]{64}$/, "hash preservado");
+  await s.enviar(doGerente({ texto: "compra de bebidas, outras despesas", doc: pdf("NC1") }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length], [1, 1], "reenvio do mesmo comprovante não duplica");
+});
+
+t("NC-2 retomada após REINÍCIO sem cofre: a proposta guardada conclui uma vez, e o arquivo só é descartado depois", async () => {
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => COMPRA(), controle, cofre: null });
+  await s.enviar(doGerente({ texto: "compra de bebidas, outras despesas", doc: pdf("NC2") }));
+  const [p0] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(p0.estado, "AGUARDANDO_REVISAO");
+  assert.ok(await s.mova.evidencias.obter(p0.evidencia.referencia), "arquivo mantido enquanto há pendência");
+  await entregar(s, "3EB0PROPOSTANC2");
+  s.reiniciar();
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTANC2" }));
+  assert.equal((await s.ultima()).motivo, "DESPESA_PAGA_RETOMADA", JSON.stringify(await s.ultima()));
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
 });

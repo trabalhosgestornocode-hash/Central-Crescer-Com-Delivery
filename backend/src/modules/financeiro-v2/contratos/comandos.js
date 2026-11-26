@@ -535,7 +535,12 @@ export function validarMudancaDeEstado(e) {
  * despesa: só liquida (baixa) as contas com parte do valor ainda não alocado da saída.
  */
 export function validarVinculoDeExtrato(e) {
-  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar", "pagamentoAntecipado", "jurosCentavos"], "vinculo");
+  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "comprovanteSemArquivo", "justificativa", "confirmar", "pagamentoAntecipado", "jurosCentavos"], "vinculo");
+  // 26/11 — comprovante comum NÃO arquivado: só os dados conferidos do arquivo (hash) servem de evidência; nunca simula documento.
+  if (e.comprovanteSemArquivo !== undefined && e.comprovanteSemArquivo !== null) {
+    if (e.documentoId) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o documento OU os dados do comprovante sem arquivo, não os dois.", { campo: "comprovanteSemArquivo" });
+    if (typeof e.comprovanteSemArquivo !== "object" || !/^[0-9a-f]{64}$/.test(String(e.comprovanteSemArquivo.hashSha256 ?? ""))) falhar(CODIGO.ENTRADA_INVALIDA, "Dados do comprovante inválidos.", { campo: "comprovanteSemArquivo" });
+  }
   const alocacoes = exigirLista(e.alocacoes, "alocacoes", { min: 1, max: 50 }).map((a, i) => {
     semCamposDesconhecidos(a, ["obrigacaoId", "valorCentavos"], `alocacoes[${i}]`);
     return { obrigacaoId: exigirUuid(a.obrigacaoId, `alocacoes[${i}].obrigacaoId`), valorCentavos: exigirCentavos(a.valorCentavos, `alocacoes[${i}].valorCentavos`, { positivo: true }) };
@@ -545,6 +550,7 @@ export function validarVinculoDeExtrato(e) {
     movimentacaoId: exigirUuid(e.movimentacaoId, "movimentacaoId"),
     versaoMovimentacao: exigirInteiro(e.versaoMovimentacao, "versaoMovimentacao", { min: 1 }),
     alocacoes, documentoId: uuidOpcional(e.documentoId, "documentoId"),
+    comprovanteSemArquivo: e.comprovanteSemArquivo ? { hashSha256: e.comprovanteSemArquivo.hashSha256, tipoMime: typeof e.comprovanteSemArquivo.tipoMime === "string" ? e.comprovanteSemArquivo.tipoMime.slice(0, 80) : null, tamanhoBytes: Number.isSafeInteger(e.comprovanteSemArquivo.tamanhoBytes) ? e.comprovanteSemArquivo.tamanhoBytes : null } : null,
     justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
     confirmar: e.confirmar === true,
     // Execução 09: identificação EXPLÍCITA de pagamento antecipado (saída anterior à emissão da conta).

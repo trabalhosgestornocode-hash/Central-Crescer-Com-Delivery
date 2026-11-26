@@ -239,7 +239,7 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   }
   // Sem documento: cada conta precisa de conciliação confirmada com evidência (antecipada já foi recusada acima).
   // Na confirmação da conciliação (mesma transação), a correspondência que está sendo confirmada É a evidência do vínculo.
-  if (!documento && !opcoes.conciliacaoConfirmadaId) {
+  if (!documento && !opcoes.conciliacaoConfirmadaId && !c.comprovanteSemArquivo) {
     for (const o of contas) {
       if (!(await conciliacaoComprovada(tx, cx, mov.id, o.id))) {
         falhar(CODIGO.EVIDENCIA_EXIGIDA, "Vincular exige o documento que comprova o pagamento (comprovante, boleto pago) ou uma conciliação confirmada com evidência. Valor e data iguais não bastam.", { obrigacaoId: o.id });
@@ -255,7 +255,7 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
     const mudancas = aplicarLiquidacao(o, a.valorCentavos); // saldo nunca negativo; conta cancelada é recusada
     liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, {
       movimentacaoId: mov.id, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva,
-      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: documentoId, justificativa: c.justificativa,
+      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(c.comprovanteSemArquivo && !documentoId ? { comprovanteSemArquivo: c.comprovanteSemArquivo } : {}), ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: documentoId, justificativa: c.justificativa,
       antecipacao: antecipacoes[i] ? { ...antecipacoes[i], identificadaPor: cx.usuarioId, documentoTipo: documento?.tipo ?? null } : null,
     }, rotulo(antecipacoes[i])));
     titulos.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mudancas, EVENTO_HISTORICO.LIQUIDACAO, rotulo(antecipacoes[i])));
