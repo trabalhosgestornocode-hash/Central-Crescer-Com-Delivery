@@ -106,7 +106,7 @@ function validarConciliacaoDoComprovante(e) {
  * é registro de evidência processada, nunca um anexo. Mesma chave do documento real (`sha256:<hash>`): se o arquivo real for
  * enviado depois, a ficha é reaproveitada.
  */
-async function fichaSemArquivo(b, tx, cx, d) {
+export async function fichaSemArquivo(b, tx, cx, d) {
   const chave = `sha256:${d.hashSha256}`;
   const existente = await tx.buscarPorChave(cx, TIPO.DOCUMENTO, chave);
   if (existente) return existente;
@@ -152,6 +152,7 @@ export async function pagarPorComprovante(b, tx, cx, c) {
   }
   if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a conta, o valor e o comprovante e confirme o registro do pagamento.");
   if (c.dataPagamento > b.hoje()) falhar(CODIGO.DATA_INVALIDA, "A data do pagamento não pode estar no futuro (comprovante de agendamento não é pagamento).", { campo: "dataPagamento" });
+  if (c.semArquivo) await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
   const doc = c.semArquivo ? await fichaSemArquivo(b, tx, cx, c.semArquivo) : await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Comprovante");
   if (doc && doc.tipo !== "COMPROVANTE") falhar(CODIGO.EVIDENCIA_EXIGIDA, "Só um documento do tipo COMPROVANTE registra pagamento sem extrato.", { motivo: "DOCUMENTO_NAO_E_COMPROVANTE", tipo: doc.tipo });
   // A MESMA transação (identificador do banco) num outro arquivo também não baixa duas vezes.

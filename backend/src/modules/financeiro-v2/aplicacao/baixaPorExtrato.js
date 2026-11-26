@@ -24,6 +24,7 @@ import { aplicarLiquidacao } from "../dominio/titulos.js";
 import { CATEGORIA_JUROS_E_MULTAS, cadeiaDoSistema } from "../dominio/planoDeContas.js";
 import { CODIGO as COD } from "../dominio/erros.js";
 import { baseNaTransacao } from "./base.js";
+import { fichaSemArquivo } from "./baixaPorComprovante.js";
 import { operacoesEconomicas } from "./economico.js";
 import { validarPreviaDeVinculo, validarVinculoDeExtrato } from "../contratos/comandos.js";
 import { exigirSemComprovantePendente } from "./baixaPorComprovante.js";
@@ -226,7 +227,12 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   const antecipacoes = contas.map((o) => antecipacaoDe(mov, o));
   // A saída escolhida veio de um extrato importado: esse extrato É o documento que comprova o pagamento (a pessoa não precisa escolhê-lo).
   // Pagamento antecipado continua exigindo comprovante/contrato/nota/boleto escolhido de propósito.
-  const documento = documentoExplicito ?? (!antecipacoes.some(Boolean) && mov.documentoId ? await tx.obter(cx, TIPO.DOCUMENTO, mov.documentoId) : null);
+  let documento = documentoExplicito ?? (!antecipacoes.some(Boolean) && mov.documentoId ? await tx.obter(cx, TIPO.DOCUMENTO, mov.documentoId) : null);
+  // 26/11 — comprovante comum não arquivado: a evidência é a FICHA (hash) declarada sem arquivo; o banco exige documento para a baixa.
+  if (!documento && c.comprovanteSemArquivo && !antecipacoes.some(Boolean)) {
+    await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
+    documento = await fichaSemArquivo(b, tx, cx, c.comprovanteSemArquivo);
+  }
   const documentoId = documento?.id ?? null;
   if (antecipacoes.some(Boolean)) {
     const quais = contas.flatMap((o, i) => (antecipacoes[i] ? [{ obrigacaoId: o.id, ...antecipacoes[i] }] : []));
@@ -255,7 +261,7 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
     const mudancas = aplicarLiquidacao(o, a.valorCentavos); // saldo nunca negativo; conta cancelada é recusada
     liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, {
       movimentacaoId: mov.id, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva,
-      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(c.comprovanteSemArquivo && !documentoId ? { comprovanteSemArquivo: c.comprovanteSemArquivo } : {}), ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: documentoId, justificativa: c.justificativa,
+      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: documentoId, justificativa: c.justificativa,
       antecipacao: antecipacoes[i] ? { ...antecipacoes[i], identificadaPor: cx.usuarioId, documentoTipo: documento?.tipo ?? null } : null,
     }, rotulo(antecipacoes[i])));
     titulos.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mudancas, EVENTO_HISTORICO.LIQUIDACAO, rotulo(antecipacoes[i])));

@@ -17,15 +17,16 @@ export class ErroDeExecucao extends Error {
 /** Operação de escrita → nome da ação (chave de ACAO) que ela exige. Qualquer outra é recusada antes do núcleo. */
 export const OPERACOES_DE_ESCRITA = Object.freeze({
   enviarEvidencia: "ENVIAR_DOCUMENTO",
-  vincularPagamentoDoExtrato: "VINCULAR_PAGAMENTO",
+  // 26/11: sem arquivo arquivado, o comprovante vira uma FICHA (hash) no banco — o banco exige `enviar_documento` para gravar a ficha.
+  vincularPagamentoDoExtrato: ["VINCULAR_PAGAMENTO", "ENVIAR_DOCUMENTO"],
   anexarDocumentoDoEntregador: "ENVIAR_DOCUMENTO",
   // Execução 17: pagamento por comprovante (sem saída bancária) e, quando o extrato chega, a conciliação com a MESMA baixa.
-  registrarPagamentoPorComprovante: "BAIXAR_POR_COMPROVANTE",
+  registrarPagamentoPorComprovante: ["BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO"],
   conciliarPagamentoPorComprovante: "VINCULAR_PAGAMENTO",
   // 23/11: conta a pagar NOVA a partir do documento (só com a ação estreita; política e chave próprias).
   registrarObrigacaoDocumental: "REGISTRAR_OBRIGACAO",
   // 23/11: pagamento por comprovante COM encargo (juros/multa confirmados) — ação estreita `registrar_juros` (migração 0031).
-  registrarPagamentoComEncargo: ["BAIXAR_POR_COMPROVANTE", "REGISTRAR_JUROS"], // exige as DUAS ações (o contexto leva só [ver, as duas])
+  registrarPagamentoComEncargo: ["BAIXAR_POR_COMPROVANTE", "REGISTRAR_JUROS", "ENVIAR_DOCUMENTO"], // exige as DUAS ações (o contexto leva só [ver, as duas])
   // 24/11: compra NOVA já paga — conta + comprovante + pagamento por comprovante numa ÚNICA transação do Financeiro (as mesmas
   // três ações que a sequência antiga já exigia; nenhuma concessão nova).
   registrarDespesaPagaPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO"],

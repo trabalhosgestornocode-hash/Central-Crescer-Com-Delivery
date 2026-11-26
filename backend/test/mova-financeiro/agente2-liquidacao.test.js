@@ -61,7 +61,7 @@ t("A2-L2 política AUTOMÁTICA + identidade operacional: liquida pelo extrato (s
   assert.equal(t1.saldoCentavos, 0);
   // Escrita só pela identidade OPERACIONAL, só com [ver, ação], e nunca pagarContaAPagar (que criaria outra saída).
   assert.deepEqual(s.escritas().map((x) => x.nome), ["vincularPagamentoDoExtrato"]);
-  for (const x of s.escritas()) assert.equal(x.permissoes.length, 2);
+  for (const x of s.escritas()) assert.equal(x.permissoes.length, 3);
   const mov = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "MOVIMENTACAO" })).filter((m) => m.sentido === "SAIDA");
   assert.equal(mov.length, 1, "nenhuma saída nova");
   assert.equal(mov[0].alocadoCentavos, 30000);
