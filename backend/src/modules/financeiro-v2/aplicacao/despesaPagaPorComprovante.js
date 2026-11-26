@@ -62,7 +62,7 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       // A conta nasce pela ação estreita quando o contexto a tem; senão pelo cadastro comum (quem aprova na Central).
       const permissoes = ctx?.permissoes ?? [];
       const acaoDaConta = permissoes.includes(ACAO.REGISTRAR_OBRIGACAO) ? ACAO.REGISTRAR_OBRIGACAO : ACAO.REGISTRAR;
-      for (const acao of arquivarArquivo ? [acaoDaConta, ACAO.ENVIAR_DOCUMENTO] : [acaoDaConta]) b.autorizarContexto(ctx, acao);
+      for (const acao of [acaoDaConta, ACAO.ENVIAR_DOCUMENTO]) b.autorizarContexto(ctx, acao);
       const cx0 = b.autorizarContexto(ctx, ACAO.BAIXAR_POR_COMPROVANTE);
       if (!pagamento.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a despesa, o valor e o comprovante e confirme o registro.");
       if (arquivarArquivo && !cofre) falhar(CODIGO.COFRE_INDISPONIVEL, "Envio de documentos exige um cofre privado configurado.");
@@ -71,7 +71,7 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       const hashDoArquivo = arquivarArquivo ? null : createHash("sha256").update(arquivo.conteudo).digest("hex");
       return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, async (cx, tx) => {
         await b.exigirConcessaoVigente(tx, cx, acaoDaConta);
-        if (arquivarArquivo) await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
+        await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
         if (encargos) await b.exigirConcessaoVigente(tx, cx, ACAO.REGISTRAR_JUROS);
         const economico = operacoesEconomicas(baseNaTransacao(b, tx, cx));
         const ob = acaoDaConta === ACAO.REGISTRAR_OBRIGACAO

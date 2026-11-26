@@ -65,7 +65,7 @@ t("AUT-J1 juros CONFIRMADOS (política JUROS_DOCUMENTAL + chave + ação registr
   assert.deepEqual([(await s.liquidacoes()).length, (await s.saidas()).length, (await s.ajustes()).length], [1, 0, 1], "uma baixa, nenhuma saída, um ajuste de encargo");
   assert.deepEqual((await s.despesas()).map((l) => [l.categoria, l.valorCentavos]).sort(), [["INSUMOS", 23000], ["JUROS_E_MULTAS_DE_FORNECEDORES", 2000]], "a compra uma vez; o encargo como despesa financeira");
   assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarPagamentoComEncargo"]);
-  for (const x of s.escritas()) assert.equal(x.permissoes.length, x.nome === "registrarPagamentoComEncargo" ? 3 : 2, "identidade operacional só com [ver, ação(ões) da operação]");
+  for (const x of s.escritas()) assert.equal(x.permissoes.length, x.nome === "registrarPagamentoComEncargo" ? 4 : 2, "identidade operacional só com [ver, ação(ões) da operação]");
   const [op] = await s.mova.armazenamento.operacoes.listar(s.escopo);
   assert.deepEqual([op.operacao, op.estado, op.executadaPor], ["JUROS_DOCUMENTAL", "EXECUTADA", OPERADOR]);
   assert.match(await s.resposta(), /Pagamento registrado por comprovante: R\$ 250,00 = conta de R\$ 230,00 \+ juros de R\$ 20,00/);

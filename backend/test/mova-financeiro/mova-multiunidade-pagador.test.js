@@ -351,7 +351,7 @@ t("H-17 conciliação PENDENTE registrada: o pagamento por comprovante aparece n
   await s.enviar(s.privado({ texto: "MOVA brownies", doc: pdf("H17") }));
   const r = await s.m.nucleo.consultarPagamentosPorComprovanteAConciliar(s.c(ORG, ALFA));
   assert.equal(r.itens.length, 1);
-  assert.deepEqual([r.itens[0].valorCentavos, r.itens[0].dataPagamento, Boolean(r.itens[0].documentoId), Boolean(r.itens[0].idTransacao)], [10800, "2026-10-10", false, true]);
+  assert.deepEqual([r.itens[0].valorCentavos, r.itens[0].dataPagamento, Boolean(r.itens[0].documentoId), Boolean(r.itens[0].idTransacao)], [10800, "2026-10-10", true, true]);
   assert.equal((await s.saidas(ORG, ALFA)).length, 0);
 });
 

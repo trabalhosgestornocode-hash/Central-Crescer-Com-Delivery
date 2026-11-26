@@ -61,7 +61,7 @@ t("A2-D1 manutenção R$ 400 (Pix concluído, política documental): PAGO POR CO
   assert.deepEqual([t1.situacaoPagamento, t1.situacaoConciliacao, t1.saldoCentavos], ["PAGO_POR_COMPROVANTE", "CONCILIACAO_PENDENTE", 0]);
   assert.equal((await s.saidas()).length, 0, "nenhuma saída inventada");
   assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarPagamentoPorComprovante"]);
-  for (const x of s.escritas()) assert.equal(x.permissoes.length, 2, "identidade operacional só com [ver, ação]");
+  for (const x of s.escritas()) assert.equal(x.permissoes.length, 3, "identidade operacional só com [ver, ação]");
   const [op] = await s.mova.armazenamento.operacoes.listar(s.escopo);
   assert.deepEqual([op.operacao, op.estado, op.executadaPor], ["BAIXA_DOCUMENTAL", "EXECUTADA", OPERADOR]);
   const txt = await s.resposta();

@@ -127,7 +127,7 @@ t("GM-2 ACEITAÇÃO: boleto pago com juros e multa impressos, sem conta cadastra
   assert.match(aj.motivo, /juros R\$\s?5,77, multa R\$\s?173,44/, "detalhamento de juros e multa preservado");
   const liqs = await s.liquidacoes(ORG_X, XIS);
   assert.deepEqual([liqs.length, liqs[0].valorCentavos, liqs[0].movimentacaoId, liqs[0].dataEfetiva], [1, 885102, null, "2026-10-14"], "pagamento total, sem saída fictícia");
-  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 0]);
+  assert.deepEqual([(await s.saidas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [0, 1]);
   assert.deepEqual([(await s.contas(ORG, ALFA)).length, (await s.despesas(ORG, ALFA)).length], [0, 0], "nada na outra empresa");
   assert.ok(s.escritas().every((x) => x.organizacaoId === ORG_X && x.unidadeId === XIS));
   const w = s.escritas().find((x) => x.nome === "registrarDespesaPagaComEncargo");
@@ -492,7 +492,7 @@ t("RT-1 política autoriza mas a execução está indisponível: o MOVA DIZ o mo
   assert.deepEqual([r.decisao, r.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(r));
   const [conta] = await s.contas(ORG_X, XIS);
   assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao], [867181, 0, "QUITADA"]);
-  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "comprovante comum não é arquivado (só os dados); retomada sem novo envio");
+  { const ds = await s.documentos(ORG_X, XIS); assert.deepEqual([ds.length, ds[0]?.arquivoArquivado], [1, false], "ficha do comprovante processado, declarada SEM arquivo; retomada sem novo envio"); }
   // repetir não duplica
   await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTART1" }));
   assert.notEqual((await s.ultima()).decisao, "EXECUTADO", "repetir não executa de novo");
@@ -597,7 +597,7 @@ t("NC-1 despesa paga SEM cofre: registra (conta quitada, sem documento simulado)
   assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA"], JSON.stringify(h));
   const [conta] = await s.contas(ORG_X, XIS);
   assert.deepEqual([conta.saldoCentavos, conta.situacao], [0, "QUITADA"]);
-  assert.equal((await s.documentos(ORG_X, XIS)).length, 0, "nenhum documento simulado");
+  { const ds = await s.documentos(ORG_X, XIS); assert.deepEqual([ds.length, ds[0]?.arquivoArquivado], [1, false], "só a ficha do comprovante processado, declarada sem arquivo (nenhum anexo simulado)"); }
   assert.ok(!/anexad|arquivad/i.test((await s.respostas()).at(-1)), "não afirma anexo");
   const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
   assert.equal(p.estado, "APLICADA");
@@ -621,4 +621,58 @@ t("NC-2 retomada após REINÍCIO sem cofre: a proposta guardada conclui uma vez,
   await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTANC2" }));
   assert.equal((await s.ultima()).motivo, "DESPESA_PAGA_RETOMADA", JSON.stringify(await s.ultima()));
   assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+});
+
+// ------------------------------------------------------------------ 26/11: INTEGRADO tipo produção (rodar com FV2_REPOSITORIO=postgres: gatilhos, RLS e permissões reais)
+t("PROD-1 caso R$ 260 ponta a ponta: tentativa que falha → proposta preservada → 'registrar' conclui; despesa, baixa, ficha SEM arquivo, competência, categoria, auditoria, idempotência, sem caixa", async () => {
+  const controle = { ligada: false };
+  const s = await grupo({ responder: () => COMPRA({ valorCentavos: 26000, favorecido: "Wanderson", competencia: "2026-11", dataPagamento: "2026-10-14", categoriaSugerida: "OUTRAS_DESPESAS", idTransacao: "AUT20261014WANDERSON01" }), controle, cofre: null });
+  await s.enviar(doGerente({ texto: "manutenção e limpeza do ar-condicionado, outras despesas", doc: pdf("PROD1") }));
+  const [p0] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(p0.estado, "AGUARDANDO_REVISAO");
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, s.escritas().length], [0, 0], "tentativa malsucedida não grava nada");
+  await entregar(s, "3EB0PROPOSTAPROD1");
+  controle.ligada = true;
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTAPROD1" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(h));
+  // despesa e baixa
+  const contas = await s.contas(ORG_X, XIS);
+  assert.equal(contas.length, 1);
+  const [conta] = contas;
+  assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao, conta.competencia], [26000, 0, "QUITADA", "2026-11"]);
+  const plano = []; const visitar = (xs) => { for (const c of xs ?? []) { plano.push(c); visitar(c.filhas); } };
+  visitar(await s.m.nucleo.consultarPlanoDeContas(s.c(ORG_X, XIS)));
+  const catId = (await s.despesas(ORG_X, XIS))[0].categoriaId;
+  const cat = plano.find((c) => c.id === catId);
+  assert.match(cat?.nome ?? "", /Outras despesas/i, "categoria dita pela pessoa, do plano da unidade");
+  const despesas = await s.despesas(ORG_X, XIS);
+  assert.deepEqual([despesas.length, despesas[0].valorCentavos], [1, 26000], "a despesa entra uma vez");
+  const liqs = await s.liquidacoes(ORG_X, XIS);
+  assert.equal(liqs.length, 1);
+  assert.equal(liqs[0].movimentacaoId ?? null, null, "pagamento por comprovante, sem saída");
+  // evidência documental SEM arquivo arquivado e sem referência que permita baixar arquivo inexistente
+  const docs = await s.documentos(ORG_X, XIS);
+  assert.equal(docs.length, 1);
+  assert.deepEqual([docs[0].tipo, docs[0].arquivoArquivado], ["COMPROVANTE", false]);
+  assert.match(docs[0].hashSha256, /^[0-9a-f]{64}$/);
+  assert.equal(liqs[0].documentoId, docs[0].id);
+  assert.equal(await s.m.cofre?.existe?.({ organizacaoId: ORG_X, unidadeId: XIS }, docs[0].arquivoId) ?? false, false, "nada no cofre");
+  for (const finalidade of ["VISUALIZAR", "BAIXAR"]) {
+    await assert.rejects(() => s.m.nucleo.obterArquivoDoDocumento(s.c(ORG_X, XIS), { id: docs[0].id, finalidade }), (e) => ["FV2_COFRE_INDISPONIVEL", "FV2_DOCUMENTO_INDISPONIVEL"].includes(e.codigo), `${finalidade}: recusa com motivo claro, não há arquivo`);
+  }
+  // sem caixa físico
+  assert.equal((await s.saidas(ORG_X, XIS)).length, 0);
+  assert.equal((await s.m.nucleo.consultarRegistros(s.c(ORG_X, XIS), { tipo: "MOVIMENTACAO" })).length, 0, "nenhuma movimentação de caixa/banco");
+  // proposta, operação (falhou/ não houve falha prévia aqui) e auditoria
+  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(p.estado, "APLICADA");
+  const ops = await s.mova.armazenamento.operacoes.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(ops.filter((o) => o.estado === "EXECUTADA").length, 1);
+  const aud = (await s.banco.pool.query("select acao from mova.auditoria")).rows.map((r) => r.acao);
+  for (const a of ["OPERACAO_EXECUTADA"]) assert.ok(aud.includes(a), `auditoria ${a}`);
+  // idempotência: repetir 'registrar' e reenviar o comprovante não duplicam nada
+  await s.enviar(doGerente({ texto: "registrar", respostaA: "3EB0PROPOSTAPROD1" }));
+  await s.enviar(doGerente({ texto: "manutenção e limpeza do ar-condicionado, outras despesas", doc: pdf("PROD1") }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [1, 1, 1, 1]);
 });
