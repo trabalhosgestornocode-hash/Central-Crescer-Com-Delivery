@@ -100,6 +100,23 @@ export const painelAdmApi = {
    */
   mentorados: () => chamar("/mentorados"),
 
+  // ---- Núcleo Mentorados (empresas cadastradas na mentoria). Ver backend nucleo-mentorados/routes.js.
+  nucleoListar: () => chamar("/nucleo-mentorados"),
+  nucleoCandidatas: () => chamar("/nucleo-mentorados/candidatas"),
+  nucleoVincular: (corpo) => chamar("/nucleo-mentorados/vinculos", { method: "POST", json: corpo }),
+  nucleoEscolherFonte: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/fontes`, { method: "POST", json: corpo }),
+  nucleoRevogarFonte: (org, id, motivo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/fontes/${encodeURIComponent(id)}/revogacao`, { method: "POST", json: { motivo } }),
+  nucleoPerfil: (org) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}`),
+  nucleoSalvar: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}`, { method: "PUT", json: corpo }),
+  nucleoCriarRegistro: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/registros`, { method: "POST", json: corpo }),
+  nucleoAlterarRegistro: (org, id, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/registros/${encodeURIComponent(id)}`, { method: "PUT", json: corpo }),
+  nucleoRemoverRegistro: (org, id) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/registros/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  nucleoPreviaImportacao: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/importacoes/previa`, { method: "POST", json: corpo }),
+  nucleoConfirmarImportacao: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/importacoes`, { method: "POST", json: corpo }),
+  nucleoGerarApresentacao: (org, corpo) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/apresentacoes`, { method: "POST", json: corpo }),
+  nucleoApresentacao: (org, id) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/apresentacoes/${encodeURIComponent(id)}`),
+  nucleoRegistrarExportacao: (org, id, formato) => chamar(`/nucleo-mentorados/${encodeURIComponent(org)}/apresentacoes/${encodeURIComponent(id)}/exportacoes`, { method: "POST", json: { formato } }),
+
   /** Rollup por organização (conformidade = Σ/Σ). */
   empresas: ({ mes } = {}) => chamar("/empresas" + qs({ mes })),
 

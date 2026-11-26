@@ -159,6 +159,7 @@ export function headersComplementares(_req, res, next) {
 // esse teto vale só na rota que precisa dele; o resto da API fica em 1 MB.
 export const LIMITES_CORPO = {
   padrao: "1mb",
+  nucleoMentoradosImportacao: "8mb", // planilha de histórico do mentor (.xlsx até 5 MB) em base64
   vendasImportacao: "30mb",   // relatórios CSV/Excel/PDF em base64
   // Relatório de pedidos .xls/.xlsx em base64 (mesmo formato de vendasImportacao)
   // — decodificarArquivo já capa o arquivo cru em 15 MB (parserFoodDelivery.parser.js),

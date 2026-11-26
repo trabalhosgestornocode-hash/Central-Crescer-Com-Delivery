@@ -12,6 +12,7 @@ const ATRIBUTOS = 'viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 // cada tela (ver plano de rebrand) pra ficar óbvio onde cada um é usado.
 const PATHS = {
   // seções / abas
+  play: '<path d="M7 4.5v15l12-7.5z"/>',
   target: '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r=".6" fill="currentColor" stroke="none"/>',
   "bar-chart": '<path d="M3 21h18"/><rect x="5" y="12" width="3.5" height="7"/><rect x="10.2" y="8" width="3.5" height="11"/><rect x="15.5" y="4" width="3.5" height="15"/>',
   "pie-chart": '<path d="M21.2 15.9A10 10 0 1 1 8 2.8"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',

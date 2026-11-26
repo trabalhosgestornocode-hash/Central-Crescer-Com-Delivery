@@ -19,6 +19,7 @@ import { icon } from "./icons.js";
 import { painelAdmApi } from "./painelAdmApi.js";
 import { travarScroll, destravarScroll, resetScrollLock } from "./scrollLock.js";
 import { renderPerformance } from './performance.js';
+import { renderNucleoMentorados, sairNucleo } from './nucleoMentorados.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
 import { renderCentral, pararCentral, recarregarCentral } from './central/centralComunicacao.js';
 import { ligarGrupoInterno } from './central/centralGrupoInterno.js';
@@ -58,6 +59,7 @@ export const TELAS_PADM = [
   { id: "pendencias",  label: "Pendências",           icone: "alert-triangle" },
   { id: "empresas",    label: "Empresas",             icone: "building" },
   { id: "comunicacao", label: "Comunicação",          icone: "message-circle" },
+  { id: "nucleo-mentorados", label: "Núcleo Mentorados", icone: "trending-up" },
   { id: "mentorados",  label: "Rede de Associados",   icone: "users" },
   { id: "relatorios",  label: "Relatórios",           icone: "archive" },
   { id: 'desenvolvimento', label: 'Agenda de Demandas', icone: 'calendar' },
@@ -165,6 +167,8 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
   resetScrollLock();
   pararCentral();   // toda troca de tela encerra a Central (timers, assistente de conexão, listeners)
   if (entrada.id === 'comunicacao') return renderCentralComunicacao(v, api);
+  sairNucleo();
+  if (entrada.id === 'nucleo-mentorados') return renderNucleoMentorados(v, api, nav.aoAcessoRevogado);
   if (entrada.id === 'performance') return renderPerformance(v, api, mes, nav.aoAcessoRevogado);
   if (entrada.id === 'desenvolvimento') return renderDesenvolvimento(v, api, nav.aoAcessoRevogado);
 
