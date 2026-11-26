@@ -204,3 +204,26 @@ test("descrições técnicas viram texto para o gestor, com a original preservad
   const no = telas.arvore([{ nome: "Venda IFOOD", valorCentavos: 100, filhos: [] }]);
   assert.match(no, /title="Original: Venda IFOOD">Venda — iFood</);
 });
+
+test("calendário — vencendo (até 2 dias) amarelo piscando, vencida vermelha piscando, longe azul parado", () => {
+  const dia = (data, { aVencer = 0, vencidas = 0 } = {}) => ({
+    data, diaDaSemana: 1, hoje: data === "2026-11-20",
+    titulos: Array.from({ length: aVencer + vencidas }, () => ({})), pagamentos: [], recorrentes: [],
+    aVencer: { quantidade: aVencer }, vencidas: { quantidade: vencidas }, pagas: { quantidade: 0 }, recorrentesPrevistas: { quantidade: 0 }, emAbertoCentavos: 0,
+  });
+  const cal = { mes: "2026-11", dataBase: "2026-11-20", totais: {}, dias: [dia("2026-11-19", { vencidas: 1 }), dia("2026-11-20", { aVencer: 1 }), dia("2026-11-22", { aVencer: 2 }), dia("2026-11-23", { aVencer: 1 })] };
+  const html = tes.calendario(cal);
+  const botao = (d) => html.match(new RegExp(`<button[^>]*data-dia="${d}"[^]*?</button>`))[0];
+  assert.match(botao("2026-11-19"), /cal-dia--erro/);
+  assert.match(botao("2026-11-20"), /cal-dia--breve/);
+  assert.match(botao("2026-11-20"), /atenção: vence hoje/);
+  assert.match(botao("2026-11-22"), /cal-dia--breve/);
+  assert.match(botao("2026-11-22"), /cal-chip--breve" title="2 vencendo · vence em 2 dia\(s\)"/);
+  assert.doesNotMatch(botao("2026-11-23"), /cal-dia--breve|cal-dia--erro/);
+  assert.match(botao("2026-11-23"), /cal-dia--info/);
+  assert.match(botao("2026-11-23"), /cal-chip--info" title="1 a vencer"/);
+  const css = readFileSync(fileURLToPath(new URL("../financeiro-v2/fv2.css", import.meta.url)), "utf8");
+  assert.match(css, /\.cal-bloco \.cal-dia--breve \{[^}]*animation: cal-pulso/);
+  assert.match(css, /\.cal-bloco \.cal-dia--erro \{[^}]*animation: cal-pulso/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{ \* \{[^}]*animation: none !important/, "reduzir movimento desliga o piscar");
+});
