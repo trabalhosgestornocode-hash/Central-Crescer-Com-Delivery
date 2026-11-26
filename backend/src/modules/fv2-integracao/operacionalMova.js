@@ -32,11 +32,11 @@ export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(
  * @param {{repositorio:object, rodar:(fn:Function)=>Promise<any>, criarNucleoFinanceiro:Function, criarConcessoesDoRepositorio:Function, relogio?:Function}} deps
  * @returns {(p:{identidade:string, escopos:{organizacaoId:string, unidadeId:string}[]}) => Promise<{nucleo:object, concessoes:{listar:Function}}>}
  */
-export function criarOperacionalMova({ repositorio, rodar, criarNucleoFinanceiro, criarConcessoesDoRepositorio, relogio, cofre = null }) {
+export function criarOperacionalMova({ repositorio, rodar, criarNucleoFinanceiro, criarConcessoesDoRepositorio, relogio }) {
   if (!repositorio || typeof rodar !== "function") throw new TypeError("operacional do MOVA exige repositório e contexto de automação");
   return async ({ identidade, escopos }) => {
     if (!Array.isArray(escopos) || escopos.length === 0) throw Object.assign(new Error("sem escopos"), { codigo: "SEM_ESCOPO" });
-    const base = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, ...(relogio ? { relogio } : {}), ...(cofre ? { cofre } : {}) });
+    const base = criarNucleoFinanceiro({ repositorio, exigirConcessaoPersistida: true, escoposAutorizados: escopos, ...(relogio ? { relogio } : {}) });
     const nucleo = Object.freeze(Object.fromEntries(Object.entries(base).map(([k, f]) => [k, typeof f === "function" ? (...a) => rodar(() => f(...a)) : f])));
     const lista = criarConcessoesDoRepositorio({ repositorio, escopos });
     const concessoes = Object.freeze({

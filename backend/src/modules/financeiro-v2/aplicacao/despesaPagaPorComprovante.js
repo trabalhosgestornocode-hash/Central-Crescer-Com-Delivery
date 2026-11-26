@@ -15,6 +15,7 @@
 //     saída do extrato à MESMA liquidação, sem duplicar).
 // Permissões: as três ações (conta, `baixar_por_comprovante`, `enviar_documento`), conferidas no contexto E na concessão gravada.
 // Repetir o pedido (mesma fonte, mesmo arquivo) devolve o que já existe.
+import { createHash } from "node:crypto";
 import { baseNaTransacao } from "./base.js";
 import { operacoesEconomicas } from "./economico.js";
 import { pagarPorComprovante, validarPagamentoDaDespesaPaga } from "./baixaPorComprovante.js";
@@ -50,22 +51,27 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       const encargos = entrada?.encargos === undefined || entrada?.encargos === null ? null : validarEncargosDoComprovante(entrada.encargos);
       if (encargos) b.autorizarContexto(ctx, ACAO.REGISTRAR_JUROS);
       if (!entrada?.obrigacao || typeof entrada.obrigacao !== "object") falhar(CODIGO.ENTRADA_INVALIDA, "Informe a conta a pagar.", { campo: "obrigacao" });
-      semCamposDesconhecidos(entrada.comprovante ?? {}, ["arquivo", "descricao", "competencia"], "comprovante");
-      const arquivo = validarArquivoDeEvidencia({ ...(entrada.comprovante ?? {}), tipo: "COMPROVANTE" });
+      semCamposDesconhecidos(entrada.comprovante ?? {}, ["arquivo", "descricao", "competencia", "arquivar"], "comprovante");
+      // 26/11 — despesa comum: o arquivo é VALIDADO (formato, tamanho, conteúdo ativo) e conferido por hash, mas NÃO é arquivado
+      // (arquivar:false). Só as notas dos entregadores têm arquivamento permanente. Padrão (omitido) = arquivar, como antes.
+      const arquivarArquivo = entrada.comprovante?.arquivar !== false;
+      const { arquivar: _a, ...comprovanteSemFlag } = entrada.comprovante ?? {};
+      const arquivo = validarArquivoDeEvidencia({ ...comprovanteSemFlag, tipo: "COMPROVANTE" });
       const pagamento = validarPagamentoDaDespesaPaga(entrada.pagamento);
       if ((entrada.obrigacao.parcelas ?? 1) !== 1 || entrada.obrigacao.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Despesa paga por comprovante entra em uma parcela, sem repetição.", { campo: "parcelas" });
       // A conta nasce pela ação estreita quando o contexto a tem; senão pelo cadastro comum (quem aprova na Central).
       const permissoes = ctx?.permissoes ?? [];
       const acaoDaConta = permissoes.includes(ACAO.REGISTRAR_OBRIGACAO) ? ACAO.REGISTRAR_OBRIGACAO : ACAO.REGISTRAR;
-      for (const acao of [acaoDaConta, ACAO.ENVIAR_DOCUMENTO]) b.autorizarContexto(ctx, acao);
+      for (const acao of arquivarArquivo ? [acaoDaConta, ACAO.ENVIAR_DOCUMENTO] : [acaoDaConta]) b.autorizarContexto(ctx, acao);
       const cx0 = b.autorizarContexto(ctx, ACAO.BAIXAR_POR_COMPROVANTE);
       if (!pagamento.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a despesa, o valor e o comprovante e confirme o registro.");
-      if (!cofre) falhar(CODIGO.COFRE_INDISPONIVEL, "Envio de documentos exige um cofre privado configurado.");
+      if (arquivarArquivo && !cofre) falhar(CODIGO.COFRE_INDISPONIVEL, "Envio de documentos exige um cofre privado configurado.");
       // Cofre FORA da transação (protocolo de evidências): se a transação falhar, o arquivo fica sem ficha — invisível, reaproveitado.
-      const guardado = await guardarNoCofreConferido(cofre, { organizacaoId: cx0.organizacaoId, unidadeId: cx0.unidadeId }, arquivo);
+      const guardado = arquivarArquivo ? await guardarNoCofreConferido(cofre, { organizacaoId: cx0.organizacaoId, unidadeId: cx0.unidadeId }, arquivo) : null;
+      const hashDoArquivo = arquivarArquivo ? null : createHash("sha256").update(arquivo.conteudo).digest("hex");
       return b.executar(ctx, ACAO.BAIXAR_POR_COMPROVANTE, async (cx, tx) => {
         await b.exigirConcessaoVigente(tx, cx, acaoDaConta);
-        await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
+        if (arquivarArquivo) await b.exigirConcessaoVigente(tx, cx, ACAO.ENVIAR_DOCUMENTO);
         if (encargos) await b.exigirConcessaoVigente(tx, cx, ACAO.REGISTRAR_JUROS);
         const economico = operacoesEconomicas(baseNaTransacao(b, tx, cx));
         const ob = acaoDaConta === ACAO.REGISTRAR_OBRIGACAO
@@ -73,12 +79,12 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
           : await economico.registrarObrigacao(ctx, entrada.obrigacao);
         if (ob.obrigacoes.length !== 1) falhar(CODIGO.ENTRADA_INVALIDA, "Despesa paga por comprovante entra em uma parcela.", { campo: "parcelas" });
         const [conta] = ob.obrigacoes;
-        const documento = await gravarFichaEVinculo(b, tx, cx, { cofre, guardado, envio: { ...arquivo, vinculo: { registroTipo: TIPO.OBRIGACAO, registroId: conta.id } } });
+        const documento = arquivarArquivo ? await gravarFichaEVinculo(b, tx, cx, { cofre, guardado, envio: { ...arquivo, vinculo: { registroTipo: TIPO.OBRIGACAO, registroId: conta.id } } }) : null;
         // Liquidação INTEGRAL: o valor pago é o valor da despesa (nunca uma segunda despesa, nunca saída bancária inventada).
         // Com encargos: o pagamento é o TOTAL (original + juros + multa); o encargo é lançado à parte (nunca tudo como a despesa).
         const pagoCentavos = conta.valorBaseCentavos + (encargos?.encargoCentavos ?? 0);
         const pago = await pagarPorComprovante(b, tx, cx, {
-          obrigacaoId: conta.id, valorCentavos: pagoCentavos, dataPagamento: pagamento.dataPagamento, documentoId: documento.documento.id,
+          obrigacaoId: conta.id, valorCentavos: pagoCentavos, dataPagamento: pagamento.dataPagamento, ...(documento ? { documentoId: documento.documento.id } : { documentoId: null, semArquivo: { hashSha256: hashDoArquivo, tipoMime: arquivo.formato.tipoMime, tamanhoBytes: arquivo.formato.tamanhoBytes } }),
           idTransacao: pagamento.idTransacao, justificativa: pagamento.justificativa, confirmar: true,
           ...(encargos ? { encargoCentavos: encargos.encargoCentavos, tipoEncargo: encargos.tipoEncargo, detalheDoEncargo: encargos.detalhe } : {}),
         });
@@ -98,7 +104,7 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
         }
         return {
           repetido: Boolean(ob.repetido && pago.repetido),
-          lancamento: ob.lancamento, obrigacao: pago.titulo, documento: documento.documento, liquidacao: pago.liquidacao,
+          lancamento: ob.lancamento, obrigacao: pago.titulo, documento: documento?.documento ?? null, comprovanteArquivado: Boolean(documento), liquidacao: pago.liquidacao,
           conciliacao: pago.conciliacao,
           efeito: { novasDespesas: ob.repetido ? 0 : 1, novasSaidas: 0, pagoCentavos, ...(encargos ? { principalCentavos: conta.valorBaseCentavos, jurosCentavos: encargos.jurosCentavos, multaCentavos: encargos.multaCentavos, encargoCentavos: encargos.encargoCentavos } : {}) },
           ...(pago.encargo ? { encargo: pago.encargo } : {}),

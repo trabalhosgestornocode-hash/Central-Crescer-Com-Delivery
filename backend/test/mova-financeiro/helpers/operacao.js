@@ -72,7 +72,7 @@ export function clienteSimulado(responder) {
 }
 
 export async function cenario({ responder = () => base({}), comandosDeterministicos = true, config = CONFIG, extras = {}, cofre } = {}) {
-  const m = montar({ escopos: ESCOPOS, ...(cofre ? { cofre } : {}) });
+  const m = montar({ escopos: ESCOPOS, ...(cofre !== undefined ? { cofre } : {}) }); // 26/11: cofre: null prova que o MOVA não depende do cofre
   const c = (org, u) => ctx(org, u, TODAS, "eeeeeeee-0000-4000-8000-000000000001");
   const forn = await m.nucleo.registrarContraparte(c(ORG, ALFA), { tipo: "FORNECEDOR", nome: "Fornecedor Sintético" });
   const conta = async (vencimento, valor = 12345, u = ALFA, f = forn) => m.nucleo.registrarObrigacao(c(ORG, u), { contraparteId: f.id, valorOriginalCentavos: valor, categoria: "INSUMOS", descricao: "Compra sintética", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento });

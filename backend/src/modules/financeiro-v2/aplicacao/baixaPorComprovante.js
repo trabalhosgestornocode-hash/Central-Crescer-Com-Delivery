@@ -41,15 +41,29 @@ export const comprovantePendente = (l) => ehPorComprovante(l) && !l.movimentacao
 const distancia = (a, b) => { const [x, y] = [a, b].sort(); return diasEntre(x, y); };
 const ID_TRANSACAO = /^[A-Za-z0-9._:/-]{6,80}$/;
 
+/**
+ * 26/11 — o comprovante é um DOCUMENTO arquivado (documentoId) OU, para despesa comum, apenas os DADOS conferidos do arquivo
+ * (hash SHA-256 + formato): nesse caso nada é arquivado, nenhum documento é simulado e a idempotência é pelo hash.
+ */
+function documentoOuDados(e) {
+  if (e.documentoId !== undefined && e.documentoId !== null) {
+    if (e.comprovanteSemArquivo) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o documento OU os dados do comprovante sem arquivo, não os dois.", { campo: "comprovanteSemArquivo" });
+    return { documentoId: exigirUuid(e.documentoId, "documentoId"), semArquivo: null };
+  }
+  const d = e.comprovanteSemArquivo;
+  if (!d || typeof d !== "object" || !/^[0-9a-f]{64}$/.test(String(d.hashSha256 ?? ""))) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o comprovante (documento ou dados conferidos do arquivo).", { campo: "documentoId" });
+  return { documentoId: null, semArquivo: { hashSha256: d.hashSha256, tipoMime: typeof d.tipoMime === "string" ? d.tipoMime.slice(0, 80) : null, tamanhoBytes: Number.isSafeInteger(d.tamanhoBytes) ? d.tamanhoBytes : null } };
+}
+
 function validarBaixaPorComprovante(e) {
-  semCamposDesconhecidos(e ?? {}, ["obrigacaoId", "valorCentavos", "dataPagamento", "documentoId", "idTransacao", "justificativa", "confirmar"], "baixaPorComprovante");
+  semCamposDesconhecidos(e ?? {}, ["obrigacaoId", "valorCentavos", "dataPagamento", "documentoId", "comprovanteSemArquivo", "idTransacao", "justificativa", "confirmar"], "baixaPorComprovante");
   const idTransacao = e.idTransacao === undefined || e.idTransacao === null || e.idTransacao === "" ? null : String(e.idTransacao).trim();
   if (idTransacao !== null && !ID_TRANSACAO.test(idTransacao)) falhar(CODIGO.ENTRADA_INVALIDA, "Identificador de transação inválido.", { campo: "idTransacao" });
   return {
     obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"),
     valorCentavos: exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }),
     dataPagamento: exigirData(e.dataPagamento, "dataPagamento"),
-    documentoId: exigirUuid(e.documentoId, "documentoId"),
+    ...documentoOuDados(e),
     idTransacao,
     justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
     confirmar: e.confirmar === true,
@@ -87,7 +101,7 @@ function validarConciliacaoDoComprovante(e) {
 }
 
 /** Chave única do comprovante: o próprio documento (um comprovante baixa uma única vez, em qualquer conta). */
-const chaveDoComprovante = (c) => `comprovante:doc:${c.documentoId}`;
+const chaveDoComprovante = (c) => (c.semArquivo ? `comprovante:hash:${c.semArquivo.hashSha256}` : `comprovante:doc:${c.documentoId}`);
 /** Janela (dias) em que se procura o MESMO identificador de transação usado por outro documento. */
 const JANELA_ID_TRANSACAO = 90;
 
@@ -120,8 +134,8 @@ export async function pagarPorComprovante(b, tx, cx, c) {
   }
   if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a conta, o valor e o comprovante e confirme o registro do pagamento.");
   if (c.dataPagamento > b.hoje()) falhar(CODIGO.DATA_INVALIDA, "A data do pagamento não pode estar no futuro (comprovante de agendamento não é pagamento).", { campo: "dataPagamento" });
-  const doc = await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Comprovante");
-  if (doc.tipo !== "COMPROVANTE") falhar(CODIGO.EVIDENCIA_EXIGIDA, "Só um documento do tipo COMPROVANTE registra pagamento sem extrato.", { motivo: "DOCUMENTO_NAO_E_COMPROVANTE", tipo: doc.tipo });
+  const doc = c.semArquivo ? null : await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Comprovante");
+  if (doc && doc.tipo !== "COMPROVANTE") falhar(CODIGO.EVIDENCIA_EXIGIDA, "Só um documento do tipo COMPROVANTE registra pagamento sem extrato.", { motivo: "DOCUMENTO_NAO_E_COMPROVANTE", tipo: doc.tipo });
   // A MESMA transação (identificador do banco) num outro arquivo também não baixa duas vezes.
   if (c.idTransacao) {
     const tx0 = c.idTransacao.toUpperCase();
@@ -142,11 +156,11 @@ export async function pagarPorComprovante(b, tx, cx, c) {
   await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(c.dataPagamento)], referenciadas: [o.competencia], motivo: "pagamento registrado por comprovante" });
   const liquidacao = await b.criar(tx, cx, TIPO.LIQUIDACAO, {
     movimentacaoId: null, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: c.valorCentavos, estornadoCentavos: 0, dataEfetiva: c.dataPagamento,
-    situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: chave, origemDoVinculo: ORIGEM_COMPROVANTE, documentoId: doc.id, idTransacao: c.idTransacao,
+    situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: chave, origemDoVinculo: ORIGEM_COMPROVANTE, documentoId: doc?.id ?? null, idTransacao: c.idTransacao, ...(c.semArquivo ? { comprovanteSemArquivo: c.semArquivo } : {}),
   }, c.justificativa);
   const titulo = await b.alterar(tx, cx, TIPO.OBRIGACAO, o, aplicarLiquidacao(o, c.valorCentavos), EVENTO_HISTORICO.LIQUIDACAO, `Pago por comprovante: ${c.justificativa}`.slice(0, 500));
-  const chaveV = `${doc.id}|${TIPO.OBRIGACAO}|${o.id}`;
-  if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
+  const chaveV = doc ? `${doc.id}|${TIPO.OBRIGACAO}|${o.id}` : null;
+  if (doc && !(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
     await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: doc.id, registroTipo: TIPO.OBRIGACAO, registroId: o.id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento (conciliação com o extrato pendente)" }, c.justificativa);
   }
   return { repetido: false, liquidacao, titulo, conciliacao: CONCILIACAO_BANCARIA.PENDENTE, ...(encargo ? { encargo: { ajuste: encargo.ajuste, lancamento: encargo.lancamento, tipo: c.tipoEncargo, valorCentavos: c.encargoCentavos } } : {}),

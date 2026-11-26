@@ -60,7 +60,7 @@ t("A2-L2 política AUTOMÁTICA + identidade operacional: liquida pelo extrato (s
   const t1 = await s.titulo();
   assert.equal(t1.saldoCentavos, 0);
   // Escrita só pela identidade OPERACIONAL, só com [ver, ação], e nunca pagarContaAPagar (que criaria outra saída).
-  assert.deepEqual(s.escritas().map((x) => x.nome), ["enviarEvidencia", "vincularPagamentoDoExtrato"]);
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["vincularPagamentoDoExtrato"]);
   for (const x of s.escritas()) assert.equal(x.permissoes.length, 2);
   const mov = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "MOVIMENTACAO" })).filter((m) => m.sentido === "SAIDA");
   assert.equal(mov.length, 1, "nenhuma saída nova");
@@ -73,7 +73,7 @@ t("A2-L2 política AUTOMÁTICA + identidade operacional: liquida pelo extrato (s
   // Idempotência: a mesma proposta não liquida de novo (nem pela execução direta).
   const de2 = await s.mova.execucao.liquidar({ proposta: p, escopo: { organizacaoId: ORG, unidadeId: ALFA }, movimentacaoId: s.movs[0].id, nivel: "APLICAR_AUTOMATICO", executor: s.mova.execucao.operacional });
   assert.equal(de2.repetida, true);
-  assert.equal(s.escritas().length, 2);
+  assert.equal(s.escritas().length, 1, "repetir não escreve de novo");
 });
 
 t("A2-L3 sem concessão operacional não escreve; acima do limite pede CONFIRMAÇÃO e o responsável confirma na Central", async () => {
