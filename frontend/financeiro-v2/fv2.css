@@ -15,6 +15,7 @@
   /* status */
   --ok: #11703f; --ok-bg: #e5f3ea; --info: #23589f; --info-bg: #e8eff9;
   --alerta: #845300; --alerta-bg: #fbf0d5; --erro: #b0241c; --erro-bg: #fbe8e6; --neutro-bg: #eef0f3;
+  --breve: #e0a800; --breve-bg: #fff4b8; --neutro: #8a8f98;
   --foco: #2b63c6;
   /* séries — canais (categórica validada: CVD ≥ 12, visão normal ≥ 18) */
   --c-balcao: #2f6fd0; --c-ifood: #14967f; --c-anota-ai: #d39300; --c-outro: #7a5ad6; --c-sem-a: #a3a9b3; --c-sem-b: #d5d9df;
@@ -33,7 +34,7 @@
   --marca: #ff4d5a; --marca-texto: #ff8a93;
   --bg: #131216; --card: #1c1b20; --superficie: #211f25; --hover: #26242b;
   --texto: #ecebef; --suave: #a9a6b0; --linha: #2d2b32; --linha-forte: #3c3943;
-  --ok: #5cc98e; --ok-bg: #15291e; --info: #8db4ee; --info-bg: #17233a; --alerta: #e6b34d; --alerta-bg: #2e2410; --erro: #ff9a92; --erro-bg: #3a1816; --neutro-bg: #2a282f;
+  --ok: #5cc98e; --ok-bg: #15291e; --info: #8db4ee; --info-bg: #17233a; --alerta: #e6b34d; --alerta-bg: #2e2410; --erro: #ff9a92; --erro-bg: #3a1816; --neutro-bg: #2a282f; --breve: #ffd21f; --breve-bg: #3d3300; --neutro: #8f8c99;
   --foco: #8db4ee;
   --c-balcao: #4a88e6; --c-ifood: #1fa88e; --c-anota-ai: #b98000; --c-outro: #9580ea; --c-sem-a: #6b707b; --c-sem-b: #3d4048;
   --s-deducoes: #3b4150; --s-custos: #545c6c; --s-despesas: #707a8c; --s-financeiro: #8e98aa; --s-demais: #b1b9c8; --s-resultado: #3fb672;
@@ -766,7 +767,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .resumo-item { border-radius: var(--raio); border-left: 4px solid var(--linha-forte); }
 .resumo-item .card { border-top-left-radius: 0; border-bottom-left-radius: 0; height: 100%; }
 .resumo-item--info { border-left-color: var(--info); } .resumo-item--erro { border-left-color: var(--erro); }
-.resumo-item--ok { border-left-color: var(--ok); } .resumo-item--alerta { border-left-color: var(--alerta); }
+.resumo-item--ok { border-left-color: var(--ok); } .resumo-item--alerta { border-left-color: var(--alerta); } .resumo-item--neutro { border-left-color: var(--neutro); }
 
 .cal-layout { display: grid; gap: 16px; align-items: start; }
 .cal-bloco { min-width: 0; }
@@ -779,7 +780,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .legenda--cal li { color: var(--suave); }
 .cal-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--texto); }
 .cal-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
-.cal-chip--info { --c: var(--info); } .cal-chip--erro { --c: var(--erro); } .cal-chip--ok { --c: var(--ok); } .cal-chip--alerta { --c: var(--alerta); }
+.cal-chip--info { --c: var(--info); } .cal-chip--erro { --c: var(--erro); } .cal-chip--ok { --c: var(--ok); } .cal-chip--alerta { --c: var(--alerta); } .cal-chip--breve { --c: var(--breve); } .cal-chip--neutro { --c: var(--neutro); }
 .legenda--cal .cal-chip i { width: 10px; height: 10px; }
 
 .cal-bloco .calendario { gap: 6px; margin-bottom: 0; }
@@ -789,7 +790,16 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .cal-bloco .cal-dia--erro { --faixa: var(--erro); } .cal-bloco .cal-dia--info { --faixa: var(--info); }
 .cal-bloco .cal-dia--ok { --faixa: var(--ok); } .cal-bloco .cal-dia--alerta { --faixa: var(--alerta); }
 .cal-bloco .cal-dia--alerta { border-left-style: dashed; }
-.cal-bloco .cal-dia--fim:not(.cal-dia--erro):not(.cal-dia--info):not(.cal-dia--ok):not(.cal-dia--alerta) { background: var(--superficie); }
+.cal-bloco .cal-dia--neutro { --faixa: var(--neutro); border-left-style: dashed; }
+/* Alerta de vencimento: amarelo = vencendo (até 2 dias), vermelho = vencida. Os dois pulsam e o marcador pisca; azul (longe) fica parado.
+   Com "reduzir movimento" ligado no aparelho, a regra global desliga a animação e ficam só as cores fortes. */
+.cal-bloco .cal-dia--breve { --faixa: var(--breve); border-color: var(--breve); background: var(--breve-bg); animation: cal-pulso 1.1s ease-in-out infinite; }
+.cal-bloco .cal-dia--erro { border-color: var(--erro); background: var(--erro-bg); animation: cal-pulso 1.1s ease-in-out infinite; }
+.cal-bloco .cal-dia--breve:hover { background: var(--breve-bg); border-color: var(--breve); } .cal-bloco .cal-dia--erro:hover { background: var(--erro-bg); border-color: var(--erro); }
+.cal-bloco .cal-dia--breve .cal-chip--breve, .cal-bloco .cal-dia--erro .cal-chip--erro { animation: cal-pisca .9s steps(2, jump-none) infinite; }
+@keyframes cal-pulso { 0%, 100% { box-shadow: 0 0 0 0 transparent; transform: scale(1); } 50% { box-shadow: 0 0 0 3px var(--faixa), 0 0 14px 2px var(--faixa); transform: scale(1.03); } }
+@keyframes cal-pisca { 0% { opacity: 1; } 100% { opacity: .25; } }
+.cal-bloco .cal-dia--fim:not(.cal-dia--erro):not(.cal-dia--breve):not(.cal-dia--info):not(.cal-dia--ok):not(.cal-dia--alerta):not(.cal-dia--neutro) { background: var(--superficie); }
 .cal-bloco .cal-dia--livre { background: transparent; border: 1px dashed var(--linha); border-left: 4px solid transparent; color: var(--suave); }
 .cal-bloco .cal-dia--livre.cal-dia--fim { background: transparent; opacity: .7; }
 .cal-bloco .cal-dia:hover { background: var(--hover); border-color: var(--linha-forte); border-left-color: var(--faixa); }
