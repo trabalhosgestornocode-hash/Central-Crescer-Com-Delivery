@@ -592,13 +592,14 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
      * Cada item traz o pagador (unidade da consulta), o período, as entregas e o saldo; nunca dados de outro entregador.
      */
     async consultarBaixasDeEntregadores(ctx, e = {}) {
-      semCamposDesconhecidos(e, ["semanasAtras"], "baixas");
+      semCamposDesconhecidos(e, ["semanasAtras", "entregador"], "baixas");
+      const chave = e.entregador === undefined ? null : exigirTexto(e.entregador, "entregador", { max: 200 }); // atendimento privado: SO o proprio entregador
       const semanasAtras = e.semanasAtras === undefined ? 26 : e.semanasAtras;
       if (!Number.isInteger(semanasAtras) || semanasAtras < 1 || semanasAtras > 104) falhar(CODIGO.ENTRADA_INVALIDA, "Janela inválida.", { campo: "semanasAtras" });
       return b.consultar(ctx, async (cx, tx) => {
         const dia = hoje();
         const corte = somarDias(dia, -7 * semanasAtras);
-        const fechamentos = (await listarFechamentos(tx, cx)).filter((f) => f.obrigacaoId && f.semanaInicio >= corte);
+        const fechamentos = (await listarFechamentos(tx, cx, chave ? { entregadorChave: chave } : undefined)).filter((f) => f.obrigacaoId && f.semanaInicio >= corte);
         const porObrigacao = new Map(fechamentos.map((f) => [f.obrigacaoId, f]));
         const ids = [...porObrigacao.keys()];
         const lerPorLotes = async (tipo, campo, valores) => {

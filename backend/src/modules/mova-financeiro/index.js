@@ -50,7 +50,7 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, avisosDiarios = null, conversaNova = null, titularDaFila = null }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, interpretadorEntregador = null, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, avisosDiarios = null, conversaNova = null, titularDaFila = null }) {
   // 23/11: configuração VIVA (lista de entregadores recarregável) já vem validada: é usada como está, senão a recarga não chegaria aqui.
   const cfg = typeof configuracao?.recarregarEntregadores === "function" ? configuracao : validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
@@ -60,7 +60,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   // Agente 2 — Frente C: conferência com o extrato + política de autonomia (só com `autonomia`); escrita só com a porta OPERACIONAL.
   const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, pagamentoPorComprovante, criarDespesas, registrarJuros, criarContas, obterEvidencia: (r) => evidencias.obter(r), descartarEvidencia: (r) => evidencias.descartar?.(r), relogio, registrar, cfg }) : null;
   // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
-  const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, extrator, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar, avisosNoGrupo }) : null;
+  const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, extrator, interpretador: interpretadorEntregador, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar, avisosNoGrupo }) : null;
   // 27/11: notificacao de pagamento ao entregador (so leitura do Financeiro; a automacao ENTREGADORES_PAGAMENTO liga por unidade).
   const pagamentos = entregadores ? criarNotificacoesPagamento({ cfg, porta, armazenamento, relogio, registrar, avisosNoGrupo }) : null;
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,

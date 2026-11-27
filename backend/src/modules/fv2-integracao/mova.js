@@ -377,7 +377,10 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
   const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(async () => { await recarregar(); return mova.entregadores.rotina(); }, { registrar }) : null;
   // 26/11: aviso diário de contas a pagar — a MESMA rotina periódica (um passo a cada 5 min; idempotente por grupo/data/janela).
   const rotinaAvisos = mova.avisos ? criarRotinaPeriodica(() => mova.avisos.passo(), { registrar }) : null;
-  return { mova, worker, enviador, configuracao, controle, orcamento, rotina, rotinaAvisos };
+  // 27/11: notificação de pagamento ao entregador — passo a cada 60 s (idempotente; sem a automação ENTREGADORES_PAGAMENTO ligada na
+  // unidade não cria nem envia nada). Lê só as baixas já gravadas no Financeiro; a mensagem sai pelo mesmo enviador de sempre.
+  const rotinaPagamentos = cfg.rotinaEntregadores && mova.pagamentos ? criarRotinaPeriodica(async () => { await recarregar(); return mova.pagamentos.passada(); }, { registrar, intervaloMs: 60_000 }) : null;
+  return { mova, worker, enviador, configuracao, controle, orcamento, rotina, rotinaAvisos, rotinaPagamentos };
 }
 
 /** Cliente de envio pelo canal isolado do Gateway (rota /internal/mova/messages, segredo MOVA). */
@@ -631,7 +634,7 @@ export async function pararMovaEmbutido({ env }) {
   if (laco) { clearInterval(laco); laco = null; }
   const m = instanciaAtiva ?? (instancia ? await instancia : null);
   m?.worker?.parar();
-  m?.rotina?.parar(); m?.rotinaAvisos?.parar(); // 26/11: as rotinas periódicas também param (a idempotência no banco cobre o resto)
+  m?.rotina?.parar(); m?.rotinaAvisos?.parar(); m?.rotinaPagamentos?.parar(); // 26/11: as rotinas periódicas também param (a idempotência no banco cobre o resto)
   instanciaAtiva = null;
   marcar("PARADO", { proximaEm: null });
   void env;

@@ -16,6 +16,7 @@ import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
+import { INTENCAO, INTENCOES_PARA_IA, TEXTO_FIXO, interpretarPergunta, nomesDeOutros, redigirConsulta, validarInterpretacao } from "../dominio/consultaEntregador.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
 // AVISO_GRUPO = aviso de cada obrigação LIBERADA no grupo da unidade (a 1ª passada só registra o que já estava liberado).
@@ -49,7 +50,7 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
+export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, interpretador = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
   const { unidadeDe, rotuloDe, cnpjDe, grupoDaUnidade, escopoDe } = criarAuxiliaresDeUnidade({ cfg, avisosNoGrupo });
   const lerFechamentos = async (ent) => {
     try { return (await porta.ler("consultarEntregador", escopoDe(ent.unidadeId), { entregador: ent.chave })).fechamentos.filter((f) => f.entregador?.chave === ent.chave); }
@@ -66,11 +67,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       if (e instanceof ErroTransitorio) throw e; // a fila tenta de novo
       return { decisao: "CONSULTA", motivo: "FECHAMENTO_INDISPONIVEL", resposta: RESPOSTA_ENTREGADOR.indisponivel(), escopo: escopoDe(vinculos[0].unidadeId) };
     }
-    if (!evento.midia) {
-      // Uma seção por empresa, cada uma com o próprio fechamento (nunca somadas).
-      const secoes = porVinculo.map(({ ent, fechamentos }) => fechamentos[0] && mensagemSemanal(fechamentos[0], vinculos.length > 1 ? rotuloDe(ent.unidadeId) : {})).filter(Boolean);
-      return { decisao: "CONSULTA", motivo: secoes.length ? "FECHAMENTO_DO_ENTREGADOR" : "ENTREGADOR_SEM_FECHAMENTO", resposta: secoes.join("\n\n— — —\n\n") || RESPOSTA_ENTREGADOR.semFechamento(), escopo: escopoDe(vinculos[0].unidadeId) };
-    }
+    if (!evento.midia) return consultar(evento, grupo, vinculos, porVinculo);
     // Nota: em cada empresa, a semana mais antiga que ainda aguarda nota (sem duplicidade).
     const aguardando = porVinculo.map(({ ent, fechamentos }) => ({ ent, fechamento: [...fechamentos].reverse().find((f) => AGUARDANDO.includes(f.situacaoDocumental) && !f.duplicidade) ?? null })).filter((x) => x.fechamento);
     let ent = porVinculo[0].ent, alvo = porVinculo[0].fechamentos[0] ?? null, leituraPronta = null, retomada = null;
@@ -134,6 +131,70 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       registrar({ tipo: "MOVA_NOTA_ENTREGADOR_RECUSADA", codigo: e?.codigo ?? "ERRO" });
       return { decisao: "BLOQUEADO", motivo: "NOTA_RECUSADA_NO_FINANCEIRO", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
     }
+  }
+
+  const registrarMetrica = (unidadeId, via, intencao, extra = {}) => (typeof a.metricas?.registrar === "function"
+    ? a.metricas.registrar({ dia: local(relogio()).dia, unidadeId, via, intencao: /^[A-Z_]{2,40}$/.test(intencao) ? intencao : "DESCONHECIDA", ...extra }).catch(() => {}) : Promise.resolve());
+
+  /**
+   * 27/11 — pergunta de TEXTO no privado: regras determinísticas (sem IA) sobre os dados do PRÓPRIO entregador, por empresa.
+   * Só leitura. Pedido de dado de terceiros ou de ação administrativa é recusado com texto fixo. Com `interpretador` injetado, a IA
+   * só pode escolher uma intenção da lista fechada quando as regras não entendem (e só então).
+   */
+  async function consultar(evento, grupo, vinculos, porVinculo) {
+    const hoje = local(relogio()).dia;
+    const conversaId = { grupoId: grupo.grupoId, participanteId: grupo.grupoId };
+    const ctxAnterior = await a.conversas?.obter?.(conversaId).catch(() => null);
+    const anterior = ctxAnterior?.consulta ? { intencao: ctxAnterior.consulta, periodo: ctxAnterior.contexto?.p ?? null, empresa: ctxAnterior.contexto?.e ?? null } : null;
+    const rotulados = porVinculo.map(({ ent, fechamentos }) => ({ unidadeId: ent.unidadeId, ent, fechamentos, rotulo: rotuloDe(ent.unidadeId) }));
+    const meuNome = vinculos[0]?.nome ?? porVinculo[0]?.fechamentos[0]?.entregador?.nome ?? "";
+    const outrosNomes = nomesDeOutros({ meuNome, lista: (cfg.entregadores ?? []).filter((e) => e.ativo && vinculos.some((v) => v.unidadeId === e.unidadeId) && !vinculos.some((v) => v.chave === e.chave && v.unidadeId === e.unidadeId)) });
+    let it = interpretarPergunta(evento.texto ?? "", { hoje, vinculos: rotulados, outrosNomes, anterior });
+    let via = "DETERMINISTICA";
+    if (it.intencao === INTENCAO.DESCONHECIDA && interpretador) {
+      try {
+        const v = validarInterpretacao(await interpretador({ texto: evento.texto ?? "", intencoes: INTENCOES_PARA_IA, anterior: anterior?.intencao ?? null }));
+        if (v.ok) { it = { ...it, intencao: v.intencao }; via = "IA"; }
+      } catch (e) { if (e instanceof ErroTransitorio) throw e; via = "FALHA"; }
+    }
+    const primeira = vinculos[0].unidadeId;
+    if (it.intencao === INTENCAO.TERCEIRO || it.intencao === INTENCAO.ACAO_ADMINISTRATIVA) {
+      await registrarMetrica(primeira, "BLOQUEADA", it.intencao);
+      await a.auditoria.registrar({ acao: it.intencao === INTENCAO.TERCEIRO ? "ENTREGADOR_PEDIU_DADO_DE_TERCEIRO" : "ENTREGADOR_PEDIU_ACAO_ADMINISTRATIVA", atorTipo: "SISTEMA", alvo: evento.eventoId ?? null, dados: { unidade: primeira } }).catch(() => {});
+      return { decisao: "BLOQUEADO", motivo: it.intencao === INTENCAO.TERCEIRO ? "ENTREGADOR_PEDIU_DADO_DE_TERCEIRO" : "ENTREGADOR_PEDIU_ACAO_ADMINISTRATIVA", resposta: TEXTO_FIXO[it.intencao], escopo: escopoDe(primeira) };
+    }
+    if (it.intencao === INTENCAO.AJUDA) {
+      await registrarMetrica(primeira, via, it.intencao);
+      return { decisao: "CONSULTA", motivo: "ENTREGADOR_AJUDA", resposta: TEXTO_FIXO.AJUDA, escopo: escopoDe(primeira) };
+    }
+    const escolhidos = it.empresa ? rotulados.filter((v) => v.unidadeId === it.empresa) : rotulados;
+    const legado = it.intencao === INTENCAO.DESCONHECIDA || (it.intencao === INTENCAO.VALOR && !it.periodo);
+    let respostaTexto;
+    try {
+      if (legado) {
+        // Comportamento anterior, preservado: uma seção por empresa, cada uma com o próprio fechamento (nunca somadas).
+        const secoes = escolhidos.map(({ ent, fechamentos }) => fechamentos[0] && mensagemSemanal(fechamentos[0], vinculos.length > 1 ? rotuloDe(ent.unidadeId) : {})).filter(Boolean);
+        respostaTexto = secoes.join("\n\n— — —\n\n") || null;
+      } else {
+        const precisaBaixas = [INTENCAO.PAGAMENTOS, INTENCAO.PREVISAO, INTENCAO.COMPROVANTE].includes(it.intencao);
+        const precisaNotas = [INTENCAO.NOTA, INTENCAO.DIVERGENCIA].includes(it.intencao);
+        const dados = [];
+        for (const v of escolhidos) {
+          const baixas = precisaBaixas ? ((await porta.ler("consultarBaixasDeEntregadores", escopoDe(v.unidadeId), { entregador: v.ent.chave }).catch((e) => { if (naoEncontrado(e)) return { itens: [] }; throw e; })).itens ?? []).filter((b) => b.entregador?.chave === v.ent.chave) : [];
+          const notas = precisaNotas ? (await a.notasEntregador.listar(escopoDe(v.unidadeId))).filter((n) => n.entregador === v.ent.chave) : [];
+          dados.push({ rotulo: v.rotulo, fechamentos: v.fechamentos, baixas, notas });
+        }
+        respostaTexto = redigirConsulta({ intencao: it.intencao, periodo: it.periodo, vinculos: dados, hoje });
+      }
+    } catch (e) {
+      if (e instanceof ErroTransitorio) throw e;
+      await registrarMetrica(primeira, "FALHA", it.intencao);
+      return { decisao: "CONSULTA", motivo: "FECHAMENTO_INDISPONIVEL", resposta: RESPOSTA_ENTREGADOR.indisponivel(), escopo: escopoDe(primeira) };
+    }
+    await registrarMetrica(primeira, via === "FALHA" ? "DETERMINISTICA" : via, it.intencao);
+    await a.conversas?.registrar?.({ ...conversaId, unidadeId: primeira, consulta: legado && it.intencao === INTENCAO.DESCONHECIDA ? INTENCAO.VALOR : it.intencao, contexto: { p: it.periodo, e: it.empresa }, validadeMs: 20 * 60 * 1000 }).catch(() => {});
+    const motivo = legado ? (respostaTexto ? "FECHAMENTO_DO_ENTREGADOR" : "ENTREGADOR_SEM_FECHAMENTO") : `ENTREGADOR_CONSULTA_${it.intencao}`;
+    return { decisao: "CONSULTA", motivo, resposta: respostaTexto ?? RESPOSTA_ENTREGADOR.semFechamento(), escopo: escopoDe(primeira) };
   }
 
   /** Lê a NFS-e (IA, mesmo orçamento e teto). Devolve { leitura } ou { erro } — nunca lança. Uma leitura por nota. */
