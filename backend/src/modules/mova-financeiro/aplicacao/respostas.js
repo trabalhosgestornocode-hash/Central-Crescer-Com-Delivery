@@ -78,6 +78,22 @@ export const RESPOSTA = Object.freeze({
   mesmaCompraSemResposta: () => 'Não entendi. Este documento é da mesma compra? Responda "sim" ou "não" citando a pergunta; nada foi registrado.',
   documentoComplementarVinculado: (propostaId) => `Anexei o documento à proposta ${String(propostaId).slice(0, 8)}. Não criei outra despesa e nada novo foi lançado.`,
   propostaJaRegistrada: () => "Essa proposta já foi registrada. Não criei outro lançamento.",
+  // 27/11 — "Confirmado" sobre uma proposta que SÓ o Centro Financeiro pode aprovar: diz qual (id, unidade, valor) e por quê. Nada é executado.
+  propostaExigeAprovacao: ({ idCurto, unidade, valorCentavos, favorecido, motivos = [], duvida = null }) => {
+    const tem = (re) => motivos.some((x) => re.test(x));
+    const m = tem(/INCERTEZAS_NA_LEITURA|DOCUMENTO_INCONSISTENTE/) ? "a leitura do comprovante apontou uma dúvida" + (duvida ? ` (“${duvida}”)` : "") + ", e a política só deixa registrar sozinho quando o comprovante está sem dúvida"
+      : tem(/SEM_IDENTIFICADOR/) ? "o comprovante não traz o identificador da transação"
+      : tem(/NAO_E_COMPROVANTE/) ? "o documento enviado não é um comprovante de pagamento"
+      : "a política desta unidade pede aprovação humana para essa proposta";
+    return `A proposta ${idCurto} (${unidade}${favorecido ? ` · ${favorecido}` : ""} · ${reais(valorCentavos)}) continua aguardando aprovação no Centro Financeiro: ${m}. Por aqui eu não consigo aprovar nem executar essa proposta. Nada foi lançado; a proposta e o comprovante foram preservados.`;
+  },
+  qualProposta: (lista) => `Tenho ${lista.length} propostas aguardando confirmação. Responda citando a mensagem da proposta que você quer confirmar:\n${lista.map((p) => `• ${p.idCurto} — ${p.unidade} — ${reais(p.valorCentavos)}${p.favorecido ? ` — ${p.favorecido}` : ""}`).join("\n")}`,
+  // 27/11 — confirmação ("sim", "confirmado") citando uma mensagem do MOVA sem nada pendente: diz que não há operação, sem consultar outra unidade.
+  semOperacaoPendente: (unidade = null) => `Não encontrei nenhuma proposta ou pergunta minha aguardando confirmação ligada a essa mensagem${unidade ? ` (${unidade})` : ""}. Nada foi registrado. Se quiser registrar ou consultar algo, me diga o que precisa.`,
+  qualEmpresa: (nomes) => `Essa mensagem envolve mais de uma empresa (${nomes.join(" e ")}). Diga a qual delas você se refere, citando a mensagem da operação. Nada foi registrado.`,
+  // 27/11 — a pessoa disse um VALOR em reais diferente do comprovante: divergência real, a proposta segue protegida.
+  valorDivergenteNoEsclarecimento: (informado, comprovado) => `O valor que você informou (${reais(informado)}) é diferente do que o comprovante mostra (${reais(comprovado)}). Mantive a proposta em revisão, sem registrar nada. Confirme qual é o valor correto.`,
+  esclarecimentoRecebido: (qtd) => `Anotei o esclarecimento (${qtd === 1 ? "a dúvida da leitura foi resolvida" : "as dúvidas da leitura foram resolvidas"}); a leitura original continua guardada na auditoria. Reavaliei a proposta pela política vigente.`,
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
@@ -153,8 +169,9 @@ export const RESPOSTA = Object.freeze({
     `• ${c.descricao}${c.fornecedor ? ` — fornecedor ${c.fornecedor}` : " — fornecedor não informado"}`,
     `• Categoria: ${categoriaNome ?? `a classificar no Centro Financeiro${sugestaoDeCriacao ? ` (sugestão: criar "${sugestaoDeCriacao}")` : ""}`}`,
     `• Competência: ${c.competencia.slice(5)}/${c.competencia.slice(0, 4)}${c.forma ? ` • Forma: ${{ CARTAO: "cartão", BOLETO: "boleto", PIX: "Pix", DINHEIRO: "dinheiro", TRANSFERENCIA: "transferência" }[c.forma]}` : ""}`,
-    ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}`),
+    ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}${p.observacao ? ` (${p.observacao})` : ""}`),
     `• Total: ${reais(c.totalCentavos)} — situação: A PAGAR`,
+    ...(c.observacaoCompleta?.observacao ? [`• Observações: ${c.observacaoCompleta.observacao}`, ...(c.observacaoCompleta.cabe ? [] : ["• A descrição da conta tem limite de 200 caracteres: ela aponta para esta proposta, que guarda a observação completa."])] : []),
     ...(avisoFatura ? [avisoFatura] : []),
     `Responda "sim" para registrar ou "não" para cancelar. Nada foi registrado ainda.`,
   ].join("\n"),

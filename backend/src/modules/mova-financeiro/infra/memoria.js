@@ -78,6 +78,8 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async registrar(entrada) { historico.push(Object.freeze({ id: gerarId(), em: relogio().toISOString(), ...entrada })); },
       async listar({ organizacaoId, unidadeId }) { return historico.filter((h) => (h.organizacaoId ?? null) === organizacaoId && (h.unidadeId ?? null) === unidadeId); },
       async todos() { return [...historico]; },
+      /** 27/11: decisões de um evento (unidades envolvidas na mensagem que a pessoa citou). */
+      async porEvento(eventoId) { return historico.filter((h) => h.eventoId === eventoId); },
       async temDecisao(eventoId) {
         const doEvento = historico.filter((h) => h.eventoId === eventoId);
         const corte = doEvento.map((h) => h.decisao).lastIndexOf("REPROCESSAR");

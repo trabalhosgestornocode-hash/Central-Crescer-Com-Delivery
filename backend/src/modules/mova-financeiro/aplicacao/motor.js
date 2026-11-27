@@ -15,6 +15,7 @@
 // unidade pelo histórico do participante. Comprovante de obrigação existente = proposta de BAIXA (nunca despesa nova).
 import { camposAlterados, podeConfirmarPendencia, versaoDaConta } from "../dominio/confirmacao.js";
 import { chaveDoDocumento } from "../dominio/documentos.js";
+import { esclarecerIncertezas } from "../dominio/esclarecimento.js";
 import { SITUACAO_COMPROVANTE, avaliarComprovante } from "../dominio/comprovante.js";
 import { grupoAutorizado, mascarar, normalizar, requisitosParaOperacao } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
@@ -30,7 +31,7 @@ import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquiv
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { classificarContaRelatada, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 /** 26/11: fuso da operação (Açaí e Subway Saci): data da mensagem, competência e ano das parcelas relatadas. */
@@ -253,6 +254,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const conversa = typeof a.conversas?.obter === "function" ? await a.conversas.obter({ grupoId: evento.grupoId, participanteId: evento.participanteId }) : null;
     // 24/11: pergunta de divergência/descrição pendente DESTA pessoa (só lida), para a resposta LIVRE ser interpretada pela leitura.
     let pendenteSemantico = null;
+    let unidadeContexto = null; // 27/11: unidade da mensagem do MOVA que a pessoa citou (nunca a padrão do CORE)
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -309,6 +311,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           }
         }
         if (pend?.pendente) return retomarPendencia(evento, pend, motivoRelacao);
+        // 5a0. 27/11 — ESCLARECIMENTO de uma dúvida da leitura ("o 18.000 são os BTUs; o pagamento foi de R$ 260,00") citando a proposta:
+        // resolve ESSA dúvida (a original fica na auditoria) e reavalia a proposta pela política vigente. Mesma proposta, sem outra despesa.
+        if (origemCitada?.eventoId && evento.texto && !confirmacaoDeProposta(evento.texto)) {
+          const esc = await esclarecerProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
+          if (esc) return esc;
+        }
         // 5a. 25/11 — RETOMADA pela citação da resposta do MOVA sobre uma PROPOSTA (sem pergunta pendente): "registrar", "tenta de novo".
         // Nada novo é exigido (nem novo comprovante); a execução automática é refeita com TUDO revalidado (política, chaves, concessão,
         // competência aberta, duplicidade, fracionamento). Só vale para quem pode complementar a operação nesta unidade.
@@ -316,11 +324,32 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           const retomada = await retomarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
           if (retomada) return retomada;
         }
+        // 5a''. 27/11 — CONFIRMAÇÃO natural ("Confirmado", "pode lançar", "está correto") citando a resposta do MOVA que apresentou uma
+        // proposta DESPESA_PAGA: é desta proposta, na unidade DELA (nunca a padrão nem a última consultada). Se só o Centro Financeiro
+        // pode aprovar, diz isso; nada é executado por canal não autorizado.
+        if (origemCitada?.eventoId && (pedidoDeRetomar(evento.texto) || confirmacaoDeProposta(evento.texto))) {
+          const propostas = (await a.propostas.porEvento(origemCitada.eventoId)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO");
+          if (propostas.length) {
+            const r = await responderConfirmacaoDeProposta(evento, propostas, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
+            if (r) return r;
+          }
+        }
         // 5a'. 26/11 — a pessoa COMPLETA a proposta citando a resposta do MOVA (classificação/descrição, "outras despesas", o número da opção):
         // não é uma consulta nova. Só vale para proposta DESPESA_PAGA ainda em revisão, nesta conversa, por quem pode complementá-la.
         if (origemCitada?.eventoId && evento.texto) {
           const complemento = await complementarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
           if (complemento) return complemento;
+        }
+        // 5a-ctx. 27/11 — CONTEXTO da mensagem citada: as unidades da operação que gerou a resposta do MOVA citada. Uma só ⇒ a conversa
+        // continua nela (o CORE recebe a unidade; nunca a padrão nem a primeira do cadastro); mais de uma ⇒ pergunta qual empresa;
+        // confirmação sem nada pendente ⇒ diz isso, sem consultar outra unidade.
+        if (origemCitada?.eventoId && evento.texto) {
+          const doOrigem = await unidadesDoEvento(origemCitada.eventoId, daPessoa);
+          if (doOrigem.length === 1) unidadeContexto = doOrigem[0].unidadeId;
+          if (confirmacaoDeProposta(evento.texto)) {
+            if (doOrigem.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONFIRMACAO_EMPRESA_AMBIGUA", resposta: RESPOSTA.qualEmpresa(doOrigem.map((x) => x.nome)), extra: { retomou: null } });
+            return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONFIRMACAO_SEM_OPERACAO_PENDENTE", escopo: doOrigem[0] ? escopoDe(doOrigem[0]) : undefined, resposta: RESPOSTA.semOperacaoPendente(doOrigem[0]?.nome ?? null), extra: { retomou: null } });
+          }
         }
       }
       // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
@@ -355,6 +384,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // "sim"/"não" de quem NÃO pode confirmar a única pendência aberta: recusa explícita (a pendência continua para quem pode).
         if (elegiveis.length === 0 && abertas.length === 1 && respostaSimNao(evento.texto) !== null) {
           return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+        }
+      }
+      // 5b''. 27/11 — confirmação natural SEM citação ("MOVA, pode confirmar"): só com UMA proposta DESPESA_PAGA em revisão, criada na última
+      // hora nesta conversa, em unidade que a pessoa pode tratar; com várias, pergunta qual (citando a mensagem); com nenhuma, segue o fluxo.
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia && confirmacaoDeProposta(evento.texto)) {
+        const limite = Date.now() - 60 * 60 * 1000;
+        const abertas = [];
+        for (const u of cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId))) {
+          for (const p of await a.propostas.listar(escopoDe(u))) {
+            if (p.tipo !== "DESPESA_PAGA" || p.estado !== "AGUARDANDO_REVISAO" || Date.parse(p.criadaEm ?? 0) < limite) continue;
+            const ev = await a.eventos.obter(p.eventoId);
+            if ((ev?.grupoId ?? ev?.grupo_jid ?? null) === evento.grupoId) abertas.push(p);
+          }
+        }
+        if (abertas.length) {
+          const r = await responderConfirmacaoDeProposta(evento, abertas, { grupo, participante, daPessoa, podeConfirmar: () => true, recusarOutro: () => null });
+          if (r) return r;
         }
       }
       // 5c. 24/11 — resposta LIVRE a uma pergunta de divergência ou de descrição ("comprei brownies e já paguei", "brownies"): a
@@ -393,7 +439,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // dado restrito e de pedido de execução acima continuam valendo. Sem resposta do núcleo (SOMBRA, fora do escopo, falha) ⇒ segue o
     // motor atual, que é também o rollback imediato (MOVA_CORE_CONVERSA=DESLIGADO).
     if (conversaNova && evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && !pendenteSemantico) {
-      const nova = await conversaNova.atender({ evento, grupo, participante });
+      const nova = await conversaNova.atender({ evento: unidadeContexto ? { ...evento, unidadeContexto } : evento, grupo, participante });
       if (nova?.texto) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `MOVA_CORE:${nova.motivo}`, escopo: { organizacaoId: nova.organizacaoId, unidadeId: nova.unidadeId }, resposta: nova.texto, respostasExtras: nova.blocos ?? [], injecao,
         extra: { nucleo: "MOVA_CORE", mensagensExtras: (nova.blocos ?? []).length, requisicaoCore: nova.requisicaoId, ferramentas: nova.ferramentas, custoMicrousd: nova.custoMicrousd, latenciaMs: nova.latenciaMs } });
     }
@@ -759,6 +805,82 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       resposta: RESPOSTA.categoriaDefinida(nome, descricao, "A proposta segue aguardando a confirmação de quem aprova no Centro Financeiro. Nada foi lançado ainda.") });
   }
 
+  /** 27/11 — descrição da conta com a OBSERVAÇÃO dita; `cabe` = coube inteira nos 200 caracteres do núcleo (senão a proposta guarda o texto todo). */
+  function descricaoComObservacao(c) {
+    const obs = [c.observacao, ...c.parcelas.filter((p) => p.observacao).map((p) => `${p.numero}/${p.total} ${p.observacao}`)].filter(Boolean).join("; ") || null;
+    if (!obs) return { descricao: c.descricao.slice(0, 200), observacao: null, cabe: true };
+    const cheia = `${c.descricao} · ${obs}`;
+    return cheia.length <= 200 ? { descricao: cheia, observacao: obs, cabe: true } : { descricao: `${c.descricao} · obs. completa na proposta MOVA`.slice(0, 200), observacao: obs, cabe: false };
+  }
+
+  /** 27/11 — unidades (da pessoa, desta configuração) envolvidas num evento: propostas e decisões dele. */
+  async function unidadesDoEvento(eventoId, daPessoa) {
+    const ids = new Set();
+    if (typeof a.propostas.porEvento === "function") for (const p of await a.propostas.porEvento(eventoId)) if (p.unidadeId) ids.add(p.unidadeId);
+    if (typeof a.historico.porEvento === "function") for (const h of await a.historico.porEvento(eventoId)) if (h.unidadeId) ids.add(h.unidadeId);
+    return cfg.unidades.filter((u) => ids.has(u.unidadeId) && daPessoa.unidades.includes(u.unidadeId));
+  }
+
+  /**
+   * 27/11 — a pessoa ESCLARECE a dúvida da leitura de uma proposta DESPESA_PAGA em revisão (citando a proposta). Só vale para quem pode
+   * complementar a operação na unidade DELA. A dúvida esclarecida sai de `incertezas` (a original fica em `incertezasEsclarecidas`),
+   * o comprovante é reavaliado e a MESMA proposta é reexecutada pela política vigente (nada de outra proposta, nem de novo comprovante).
+   * Valor em reais diferente do comprovado = divergência real: protege e pergunta.
+   */
+  async function esclarecerProposta(evento, eventoOrigemId, ctxp) {
+    if (typeof a.propostas.porEvento !== "function") return null;
+    const { daPessoa } = ctxp;
+    const candidatas = (await a.propostas.porEvento(eventoOrigemId)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO" && (p.leitura?.incertezas ?? []).length
+      && daPessoa.unidades.includes(p.unidadeId) && cfg.unidades.some((x) => x.unidadeId === p.unidadeId));
+    if (candidatas.length !== 1) return null;
+    const p = candidatas[0];
+    const r = esclarecerIncertezas(evento.texto, p.leitura.incertezas, p.valorCentavos);
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (!r.ok) {
+      if (r.motivo !== "VALOR_DIVERGENTE") return null;
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "ESCLARECIMENTO_VALOR_DIVERGENTE", escopo: escopoDe(unidade), propostaId: p.id, resposta: RESPOSTA.valorDivergenteNoEsclarecimento(r.informadoCentavos, p.valorCentavos), extra: { retomou: null } });
+    }
+    const ev = await a.eventos.obter(eventoOrigemId);
+    const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+    if (!ctxp.podeConfirmar(origem, { divergencia: { tipo: "COMPETENCIA", unidadeId: p.unidadeId }, saida: null })) return ctxp.recusarOutro();
+    const leitura = { ...p.leitura, incertezas: r.restantes,
+      incertezasEsclarecidas: [...(p.leitura.incertezasEsclarecidas ?? []), ...r.esclarecidas.map((texto) => ({ texto, esclarecidoPor: evento.participanteId, esclarecidoEm: relogio().toISOString(), resposta: mascararDadosSensiveis(String(evento.texto)).slice(0, 300) }))] };
+    leitura.comprovante = avaliarComprovante(leitura, { hoje: hoje() });
+    await a.propostas.anotar(escopoDe(unidade), p.id, { leitura });
+    await a.auditoria.registrar({ acao: "INCERTEZA_ESCLARECIDA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: p.id, dados: { esclarecidas: r.esclarecidas.length, restantes: r.restantes.length } });
+    return retomarProposta(evento, eventoOrigemId, ctxp, { propostaId: p.id, motivoRelacao: "INCERTEZA_ESCLARECIDA_POR_CITACAO", aviso: RESPOSTA.esclarecimentoRecebido(r.esclarecidas.length) });
+  }
+
+  /**
+   * 27/11 — resposta à CONFIRMAÇÃO natural de uma ou mais propostas DESPESA_PAGA em revisão. A unidade é SEMPRE a da proposta.
+   * Várias ⇒ pergunta qual. Uma que a política autorizou a aplicar sozinha e ficou parada ⇒ a MESMA retomada de sempre (tudo revalidado).
+   * Uma que só o Centro Financeiro aprova ⇒ explica (id, unidade, valor, motivo) sem executar nada.
+   */
+  async function responderConfirmacaoDeProposta(evento, propostas, ctxp) {
+    const { grupo, participante, daPessoa } = ctxp;
+    // Só quem pode COMPLEMENTAR a operação nesta unidade (perfil financeiro da unidade, no mesmo grupo) recebe os dados da proposta.
+    const visiveis = [];
+    for (const p of propostas) {
+      if (!daPessoa.unidades.includes(p.unidadeId) || !cfg.unidades.some((x) => x.unidadeId === p.unidadeId)) continue;
+      const ev = await a.eventos.obter(p.eventoId);
+      const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+      if (podeConfirmarPendencia(cfg, origem, evento, { unidadeId: p.unidadeId, tipo: "COMPETENCIA", unidadesExigidas: null }).pode) visiveis.push(p);
+    }
+    if (!visiveis.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+    const descrever = (p) => ({ idCurto: String(p.id).slice(0, 8), unidade: cfg.unidades.find((x) => x.unidadeId === p.unidadeId)?.nome ?? "unidade", valorCentavos: p.valorCentavos, favorecido: p.leitura?.favorecido ?? null });
+    if (visiveis.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_PROPOSTAS_PENDENTES", resposta: RESPOSTA.qualProposta(visiveis.map(descrever)), extra: { retomou: null, propostas: visiveis.map((p) => String(p.id).slice(0, 8)) } });
+    const p = visiveis[0];
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO") {
+      const r = await retomarProposta(evento, p.eventoId, ctxp);
+      if (r) return r;
+    }
+    const duvida = (p.leitura?.incertezas ?? []).find((x) => typeof x === "string") ?? null;
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "CONFIRMACAO_DE_PROPOSTA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: unidade.organizacaoId, unidadeId: unidade.unidadeId, retomou: p.eventoId });
+    return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", escopo: escopoDe(unidade), propostaId: p.id,
+      resposta: RESPOSTA.propostaExigeAprovacao({ ...descrever(p), motivos: p.autonomiaDocumental?.motivos ?? [], duvida: duvida ? mascararDadosSensiveis(duvida).slice(0, 120) : null }), extra: { retomou: null, nivel: p.autonomiaDocumental?.nivel ?? null } });
+  }
+
   /**
    * 26/11 — um documento novo pode ser DA MESMA COMPRA de uma proposta em revisão (cupom, nota, boleto, comprovante, recibo). Igualdade de
    * valor e favorecido é só um SINAL: com sinal, o MOVA pergunta (nunca presume duplicidade nem cria outra despesa sozinho).
@@ -779,11 +901,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
    * concessão de agora; a duplicidade é barrada pela reserva idempotente e pela chave da fonte (MOVA:<proposta>).
    * @returns {Promise<object|null>} null = não é com este fluxo (segue a mensagem normal)
    */
-  async function retomarProposta(evento, eventoOrigemId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro }) {
+  async function retomarProposta(evento, eventoOrigemId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro }, { propostaId = null, motivoRelacao = "PROPOSTA_RETOMADA_POR_CITACAO", aviso = null } = {}) {
     if (typeof a.propostas.porEvento !== "function") return null;
     const propostas = (await a.propostas.porEvento(eventoOrigemId)).filter((p) => p.tipo === "DESPESA_PAGA");
     // só é retomável a proposta que a POLÍTICA autorizou a aplicar sozinha e que ficou parada (motivo registrado, ou criada antes do registro do motivo)
-    const proposta = propostas.find((p) => p.estado === "AGUARDANDO_REVISAO" && (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO")) ?? null;
+    const proposta = propostas.find((p) => p.estado === "AGUARDANDO_REVISAO" && (propostaId ? p.id === propostaId : (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO"))) ?? null;
     if (!proposta) return null;
     const unidade = cfg.unidades.find((x) => x.unidadeId === proposta.unidadeId) ?? null;
     if (!unidade || !daPessoa.unidades.includes(proposta.unidadeId)) return null;
@@ -793,7 +915,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (!podeConfirmar(origem, { divergencia: { tipo: "COMPETENCIA", unidadeId: proposta.unidadeId }, saida: null })) return recusarOutro();
     const base = { escopo, propostaId: proposta.id };
     const responder = (decisao, motivo, texto, extra = {}) => concluir(evento, { decisao, motivo, ...base, resposta: texto, extra });
-    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "PROPOSTA_RETOMADA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
     if (proposta.estado !== "AGUARDANDO_REVISAO" || !execucao?.criarDespesas) return responder(DECISAO.PEDIR_INFORMACAO, "PROPOSTA_NAO_RETOMAVEL", execucao?.criarDespesas ? RESPOSTA.propostaNaoRetomavel() : RESPOSTA.semExecucaoAutomatica(["SEM_IDENTIDADE_OPERACIONAL"]));
     const competencia = proposta.datas?.competencia ?? proposta.comando?.entrada?.competencia ?? null;
     if (proposta.competenciaPendente || !competencia) return responder(DECISAO.PEDIR_INFORMACAO, "COMPETENCIA_PENDENTE", RESPOSTA.perguntaCompetencia(proposta.valorCentavos, proposta.leitura?.favorecido ?? null));
@@ -805,10 +927,10 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
     if (r.situacao === "PAGO_POR_COMPROVANTE") {
-      return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "DESPESA_PAGA_RETOMADA", ...base, resposta: RESPOSTA.despesaPagaPorComprovante(proposta, r.resultado, resumo), privado, extra: { conciliacao: r.situacao, retomada: true } });
+      return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "DESPESA_PAGA_RETOMADA", ...base, resposta: (aviso ? `${aviso}\n` : "") + RESPOSTA.despesaPagaPorComprovante(proposta, r.resultado, resumo), privado, extra: { conciliacao: r.situacao, retomada: true } });
     }
     const motivos = [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])];
-    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: RESPOSTA.semExecucaoAutomatica(motivos), privado, extra: { retomada: true, motivosExecucao: motivos } });
+    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: (aviso ? `${aviso}\n` : "") + RESPOSTA.semExecucaoAutomatica(motivos), privado, extra: { retomada: true, motivosExecucao: motivos } });
   }
 
   /**
@@ -1135,7 +1257,9 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const sugestao = categoria ? null : sugestaoDeCriacao ?? cls.sugestaoDeCriacao ?? null;
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: c.fornecedor ?? FORNECEDOR_NAO_INFORMADO }, categoria: categoria ?? porta.categoriaProvisoria,
-      descricao: c.descricao.slice(0, 120), competencia: c.competencia, dataEmissao: c.dataEmissao,
+      // 27/11: o núcleo não tem campo de observação (só a descrição, até 200 caracteres). A observação dita (composição do total, desconto,
+      // observações das parcelas) acompanha a descrição quando CABE; senão a descrição aponta para a proposta, que guarda o texto inteiro.
+      descricao: descricaoComObservacao(c).descricao, competencia: c.competencia, dataEmissao: c.dataEmissao,
       parcelas: c.parcelas.map((p) => ({ vencimento: p.vencimento, valorCentavos: p.valorCentavos })), ...(c.forma ? { formaPagamento: c.forma } : {}),
     };
     try { porta.validarComandoDeContaParcelada(bruto); } catch (e) {
@@ -1145,7 +1269,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const impressao = JSON.stringify(bruto);
     // a categoria do resumo fica gravada na pendência: o "sim" confirma ESTA (a leitura da resposta não traz a sugestão da original)
     const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
-    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
+    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
     }
@@ -1163,6 +1287,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // sem categoria do plano: a proposta fica para a classificação no Centro Financeiro (com a sugestão de criar a dita, se houver)
       ...(categoria ? {} : { classificacao: { pendente: true, motivo: cls.motivo, sugestaoDeCriacao: sugestao } }),
       ...(evento.midia ? { evidenciaNaoFiscal: "FOTO_DO_PRODUTO" } : {}),
+      ...(descricaoComObservacao(c).observacao ? { observacaoCompleta: descricaoComObservacao(c).observacao, observacaoNaDescricao: descricaoComObservacao(c).cabe } : {}),
       comando: { operacao: "registrarContaParcelada", entrada: bruto },
     }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria }), {
       posCriacao: confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {

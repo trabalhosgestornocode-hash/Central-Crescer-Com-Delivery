@@ -26,12 +26,49 @@ const iso = (a, m, d) => `${a}-${pad(m)}-${pad(d)}`;
 const valida = (a, m, d) => { const x = new Date(Date.UTC(a, m - 1, d)); return x.getUTCFullYear() === a && x.getUTCMonth() === m - 1 && x.getUTCDate() === d; };
 const centavos = (s) => { const t = s.replace(/\./g, "").replace(",", "."); const v = Math.round(Number(t) * 100); return Number.isSafeInteger(v) && v > 0 ? v : null; };
 
+// 27/11: também o valor SEM "R$" quando traz centavos ("total 2.911,08") — número sem vírgula decimal (18.000, 400) nunca é tomado como dinheiro aqui.
+const RE_VALOR = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)|(?:(?<![\d/.,])(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?![\d/%])(?!\s*%))/gi;
+
 /** Valores em reais citados ("R$194,50", "R$ 1.779,90", "194,50 reais"), na ordem, sem repetir. */
 export function valoresCitados(texto) {
   const achados = [];
-  const re = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)/gi;
-  for (const m of String(texto ?? "").matchAll(re)) { const v = centavos(m[1] ?? m[2]); if (v && !achados.includes(v)) achados.push(v); }
+  for (const m of String(texto ?? "").matchAll(RE_VALOR)) { const v = centavos(m[1] ?? m[2] ?? m[3]); if (v && !achados.includes(v)) achados.push(v); }
   return achados;
+}
+
+/**
+ * 27/11 — TOTAL com COMPOSIÇÃO dita no texto ("Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08"): um valor que é a SOMA exata
+ * dos demais (2 ou mais) é o total; os demais viram componentes rotulados pela palavra que os antecede. Sem soma exata ⇒ null
+ * (continua "valores diferentes": nada é presumido).
+ */
+export function composicaoDoTotal(texto) {
+  const s = String(texto ?? "");
+  const itens = [];
+  for (const m of s.matchAll(RE_VALOR)) {
+    const v = centavos(m[1] ?? m[2] ?? m[3]);
+    if (!v) continue;
+    const antes = s.slice(0, m.index).replace(/(?:r\$)?\s*[:=-]?\s*$/i, "").match(/([\p{L}][\p{L}.']*)\s*$/u);
+    itens.push({ valorCentavos: v, rotulo: antes ? antes[1] : null });
+  }
+  if (itens.length < 3) return null;
+  const total = itens.find((x, i) => itens.reduce((acc, y, j) => (j === i ? acc : acc + y.valorCentavos), 0) === x.valorCentavos);
+  if (!total) return null;
+  const componentes = itens.filter((x) => x !== total);
+  return { totalCentavos: total.valorCentavos, componentes };
+}
+
+const brl = (c) => `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+
+/**
+ * 27/11 — OBSERVAÇÃO da conta: composição do total (quem pagou quanto) e a oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA, com as
+ * observações individuais das parcelas. Só o que foi DITO. Nunca é cortada em silêncio: o motor guarda o texto inteiro na proposta.
+ */
+export function observacaoDaConta(texto, comp = null) {
+  const partes = [];
+  if (comp) partes.push(`${comp.componentes.map((c) => `${c.rotulo ? `${c.rotulo} ` : ""}${brl(c.valorCentavos)}`).join(" + ")} = ${brl(comp.totalCentavos)}`);
+  const oracao = String(texto ?? "").match(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\.(?:\s|$)|;|\n|$)/i);
+  if (oracao) partes.push(oracao[0].trim().replace(/[,\s]+$/, ""));
+  return partes.length ? partes.join("; ") : null;
 }
 
 /** Datas dd/mm[/aaaa] citadas, resolvendo o ano sem inventar: a primeira a partir da mensagem; cada seguinte depois da anterior. */
@@ -51,6 +88,19 @@ export function datasCitadas(texto, dataMensagem) {
     anterior = x;
   }
   return { datas: saida, invalida: null };
+}
+
+/**
+ * 27/11 — OBSERVAÇÃO individual de cada parcela, só quando DITA junto da data: "10/12 (carência)" ou "10/01: reajuste". Nada é inventado.
+ * Devolve uma lista alinhada às datas (null onde não há observação).
+ */
+export function observacoesPorData(texto) {
+  const saida = [];
+  for (const m of String(texto ?? "").matchAll(/\b\d{1,2}\/\d{1,2}(?:\/(?:\d{2}|\d{4}))?\b\s*(?:\(([^)]{1,80})\)|[:-]\s*([^,;\n()]{1,80}?)(?=\s*(?:[,;\n]|$|\d{1,2}\/\d{1,2})))?/g)) {
+    const o = (m[1] ?? m[2] ?? "").trim();
+    saida.push(o || null);
+  }
+  return saida;
 }
 
 function quantidadeDeParcelas(t) {
@@ -88,12 +138,12 @@ function fornecedorDito(original) {
 export function descricaoLimpa(original, unidades = []) {
   // o chamado ("MOVA, ...", "Oi MOVA: ...") não é parte da descrição
   const semChamado = String(original ?? "").replace(/^\s*(?:(?:oi|ola|olá|bom dia|boa tarde|boa noite)[,!]?\s+)?mova\b\s*[,:!.-]?\s*/i, "");
-  const primeira = semChamado.split(/[,;\n]|\s+-\s+/)[0] ?? "";
+  const primeira = semChamado.split(/[,;\n]|\s+-\s+|\.\s/)[0] ?? "";
   let t = ` ${normalizar(primeira)} `;
   // 27/11: "chegou o boleto de internet" ⇒ "internet" (o aviso de chegada e o TIPO do papel não são o que se compra; "boleto" sozinho ainda corta)
   t = t.replace(/\s(?:chegou|chegaram|veio|vieram|recebi|recebemos)\s(?:(?:o|a|os|as)\s)?/g, " ").replace(/\s(?:boleto|fatura|conta)\s(?:de|do|da|dos|das)\s/g, " ");
   // a descrição termina onde começam valor, data, parcelas, forma de pagamento ou fornecedor
-  const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|no total)(?=\s|$)/);
+  const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|total|no total)(?=\s|$)/);
   if (corte > 0) t = `${t.slice(0, corte)} `;
   // 27/11: o PEDIDO ("registre conta a pagar") não é a descrição do que foi comprado
   t = t.replace(/\s(?:registre|registrar|registra|lance|lancar|lanca|cadastre|cadastrar|anote|anotar|inclua|incluir|coloque|colocar|por favor)(?=\s)/g, " ").replace(/\sa pagar(?=\s)/g, " ");
@@ -185,7 +235,8 @@ export function categoriaDaContaRelatada(descricao, categorias) {
 export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], tipoValor = null, porFoto = false }) {
   // datas e valores fora antes de procurar parcelas: normalizado, "vence em 25/10" vira "em 25 10" (não são 25 parcelas)
   const t = normalizar(String(texto ?? "").replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
-  const valores = valoresCitados(texto);
+  const comp = composicaoDoTotal(texto);
+  const valores = comp ? [comp.totalCentavos] : valoresCitados(texto);
   const { datas, invalida } = datasCitadas(texto, dataMensagem);
   let n = quantidadeDeParcelas(t);
   const forma = formaDePagamento(t);
@@ -207,28 +258,29 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   if (datas.some((d) => d < dataMensagem)) faltas.push("VENCIMENTO_ANTERIOR_A_COMPRA");
   const tipo = n === 1 ? TIPO_VALOR.TOTAL : tipoValor ?? tipoDoValor(t) ?? TIPO_VALOR.AMBIGUO;
   const ambiguo = tipo === TIPO_VALOR.AMBIGUO && valores.length === 1 && (n ?? 0) > 1;
+  const observacoes = observacoesPorData(texto);
   let parcelas = [];
   let total = null;
   if (!faltas.length && !ambiguo) {
     const [v] = valores;
     if (tipo === TIPO_VALOR.PARCELA) {
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v, observacao: observacoes[i] ?? null }));
       total = v * n;
     } else {
       const base = Math.floor(v / n);
       const resto = v - base * n;
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0) }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0), observacao: observacoes[i] ?? null }));
       total = v;
     }
   }
   return Object.freeze({
     ehConta: compra && valores.length > 0 && datas.length > 0, faltas, ambiguo, descricao, fornecedor, forma,
-    competencia: dataMensagem.slice(0, 7), dataEmissao: dataMensagem, parcelas, totalCentavos: total,
+    observacao: observacaoDaConta(texto, comp), composicao: comp, competencia: dataMensagem.slice(0, 7), dataEmissao: dataMensagem, parcelas, totalCentavos: total,
     valorCitadoCentavos: valores[0] ?? null, tipoValor: ambiguo ? TIPO_VALOR.AMBIGUO : tipo, quantidade: n,
   });
 }
 
-const COMPRA = /\b(?:compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
+const COMPRA = /\b(?:emprestimo|financiamento|compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
 
 /** Resposta à pergunta "total ou cada parcela?": PARCELA, TOTAL ou null (não entendeu — pergunta de novo, sem consumir). */
 export function interpretarRespostaDoValor(texto) {
