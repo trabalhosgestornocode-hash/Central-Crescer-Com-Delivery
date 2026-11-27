@@ -1043,8 +1043,9 @@ alter table mova.operacao_executada add constraint operacao_executada_operacao_c
 alter table mova.grupo_autorizado add column if not exists multiempresa boolean not null default false;
 comment on column mova.grupo_autorizado.multiempresa is 'Grupo compartilhado por unidades de organizações diferentes (autorização explícita do proprietário). Cada mensagem resolve uma única unidade.';
 
--- ------------------------------------------------------------------------- 0025_mova_contas_relatadas_intercompany_avisos.sql (arquivo 60b6a3a1ee6438c1b9442cdeca69574a47219781ff7bc15629f312774dc26889)
--- MOVA (26/11/2026): (1) operações CONTA_A_PAGAR_RELATADA (conta a pagar por texto, sem documento, em parcelas; ação estreita
+-- ------------------------------------------------------------------------- 0025_mova_contas_relatadas_intercompany_avisos.sql (arquivo 3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a)
+-- MOVA (26/11/2026; revisada 27/11): (1) operações CONTA_A_PAGAR_RELATADA (conta ÚNICA relatada, sem documento), CONTA_PARCELADA_RELATADA
+-- (2 a 24 parcelas; limite sobre a compra inteira) — ambas pela ação estreita
 -- `registrar_conta_parcelada` do Financeiro, migração 0033) e OPERACAO_ENTRE_EMPRESAS (pagamento feito por outra empresa do grupo;
 -- ação `registrar_intercompany`, migração 0034) nas listas fechadas das POLÍTICAS e das EXECUÇÕES. Nenhuma política é semeada: sem
 -- política o MOVA só PROPÕE (as políticas existentes — conta por boleto/nota, despesa paga — NÃO cobrem estas operações).
@@ -1053,11 +1054,11 @@ comment on column mova.grupo_autorizado.multiempresa is 'Grupo compartilhado por
 alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
 alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
 alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
 alter table mova.operacao_executada add constraint operacao_executada_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
 alter table mova.proposta drop constraint proposta_tipo_check;
 alter table mova.proposta add constraint proposta_tipo_check
   check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));
@@ -1109,7 +1110,7 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0022_mova_orcamento_uso.sql', '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9'),
   ('0023_mova_politica_sangria.sql', '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631'),
   ('0024_mova_grupo_multiempresa.sql', '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47'),
-  ('0025_mova_contas_relatadas_intercompany_avisos.sql', '60b6a3a1ee6438c1b9442cdeca69574a47219781ff7bc15629f312774dc26889');
+  ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin

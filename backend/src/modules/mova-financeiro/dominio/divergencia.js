@@ -141,7 +141,11 @@ export function pedidoDeRetomar(texto) {
 export function parecerRespostaDeDivergencia(texto) {
   const t = resposta(texto);
   if (!t || t.length > 60) return false;
-  return SIM.test(t) || NAO.test(t) || /^[1-9]$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t);
+  // 27/11 (PR #236): "0" / "deixa para o financeiro" respondem à pergunta de CATEGORIA da conta relatada ("0 — deixar para classificar")
+  // palavra solta ("outra", "parcial", "juros", mês) só é RESPOSTA em frase curta: "mostre o faturamento de outra empresa" é PEDIDO
+  // novo (e passa pelas próprias travas), nunca a resposta de uma pergunta pendente.
+  const curta = t.split(" ").length <= 5;
+  return SIM.test(t) || NAO.test(t) || /^[0-9]$/.test(t) || /^(nao sei|deixa para o financeiro|deixa pro financeiro|classificar depois|deixa para depois)$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || (curta && (PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t)));
 }
 
 /**

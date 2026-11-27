@@ -16,8 +16,13 @@ const SOCIO = "5500000000211@s.whatsapp.net"; // segundo FINANCEIRO do grupo (pa
 const CONFIG_GRUPO = { ...CONFIG, gruposAutorizados: CONFIG.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, politicaResposta: "GRUPO_FINANCEIRO",
   participantes: [{ ids: [FIN], perfil: "FINANCEIRO" }, { ids: [SOCIO], perfil: "FINANCEIRO" }, { ids: [OPER], perfil: "OPERACIONAL" }] } : g)) };
 const TEXTO = "MOVA, compra de bebedouro para a alfa, 2 parcelas no cartão, Dia 19/12 e 19/01 valor de R$194,50.";
-// IA simulada realista: só o relato é conta; "sim", "não", "cada parcela" sozinhos seriam OUTRA (nunca chegam à IA no fluxo certo).
-const LEITURA = (req) => (/bebedouro/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
+const POR_PARCELA = TEXTO.replace("valor de", "parcelas de");
+// conta ÚNICA (sem documento) com categoria do plano dita no texto; e com categoria que NÃO existe no plano
+const UNICA = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300,00, vence 10/12, categoria outras despesas";
+const FORA_DO_PLANO = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300,00, vence 10/12, categoria brinquedos";
+const LEGENDA_DA_FOTO = "bebedouro para a alfa, 2 parcelas no cartão, dia 19/12 e 19/01, parcelas de R$ 194,50";
+// IA simulada realista: só o relato é conta; "sim", "não", "cada parcela", "1" sozinhos seriam OUTRA (nunca chegam à IA no fluxo certo).
+const LEITURA = (req) => (/bebedouro|Polpa Norte/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
 
 async function relatada({ politica = null, concessao = null, criarContas = false } = {}) {
   const s = await cenario({
@@ -28,7 +33,8 @@ async function relatada({ politica = null, concessao = null, criarContas = false
         concessoes: criarConcessoesMemoria([{ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: ALFA, acoes: concessao }]) }) } : {}),
     }),
   });
-  if (politica) await s.mova.armazenamento.politicas.criar({ operacao: "CONTA_A_PAGAR_RELATADA", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 100000,
+  // 27/11: conta ÚNICA ⇒ CONTA_A_PAGAR_RELATADA; 2+ parcelas ⇒ CONTA_PARCELADA_RELATADA (cada uma com a SUA política)
+  if (politica) await s.mova.armazenamento.politicas.criar({ operacao: "CONTA_PARCELADA_RELATADA", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 100000,
     responsavel: "Administrador Sintético", motivo: "Contas relatadas por texto confirmadas no WhatsApp", vigenteDe: "2026-10-01", ...politica }, { criadaPor: HUMANO });
   await s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros: [FIN, SOCIO], verificadoEm: AGORA.toISOString() });
   const cx = s.c(ORG, ALFA);
@@ -39,7 +45,14 @@ async function relatada({ politica = null, concessao = null, criarContas = false
   // decisão da operação (a resposta que a retomou fica registrada depois como RELACIONADA, só após o sucesso)
   const decisao = async () => (await s.mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1);
   const relatadas = async () => (await propostas()).filter((p) => p.tipo === "CONTA_RELATADA");
-  return { ...s, cx, propostas: relatadas, contas, textos, ultimoTexto, decisao };
+  /** Bebedouro (equipamento): o MOVA PERGUNTA a categoria; a pessoa escolhe `escolha` ("1" = a 1ª opção listada). */
+  const ateOResumo = async (evento, escolha = "1") => {
+    await s.enviar(evento);
+    if ((await decisao()).motivo === "CONTA_RELATADA_PERGUNTA_CATEGORIA") await s.enviar(gw({ texto: escolha }));
+  };
+  /** Categoria de cada conta (fica no LANÇAMENTO da conta). */
+  const categoriasDas = async (cs) => { const ls = await s.m.nucleo.consultarRegistros(cx, { tipo: "LANCAMENTO" }); return cs.map((o) => ls.find((l) => l.id === o.lancamentoId)?.categoria ?? null); };
+  return { ...s, cx, propostas: relatadas, contas, textos, ultimoTexto, decisao, ateOResumo, categoriasDas };
 }
 
 t("CR-0 leitura pura: ano vira (19/12 → 2026, 19/01 → 2027), competência = mês da compra, fornecedor nunca inventado, 'total' ⇒ rateio sem centavo perdido", () => {
@@ -49,24 +62,37 @@ t("CR-0 leitura pura: ano vira (19/12 → 2026, 19/01 → 2027), competência = 
   const tot = interpretarContaRelatada({ texto: "Freezer R$ 1.000,01 em 3 parcelas 10/12, 10/01 e 10/02 total", dataMensagem: "2026-11-26" });
   assert.deepEqual([tot.parcelas.map((p) => p.valorCentavos), tot.totalCentavos], [[33333, 33333, 33335], 100001]);
   assert.ok(interpretarContaRelatada({ texto: "Bebedouro 2 parcelas 19/12 R$ 50,00 cada", dataMensagem: "2026-11-26" }).faltas.includes("VENCIMENTOS_DAS_PARCELAS"), "não inventa o 2º vencimento");
+  const u = interpretarContaRelatada({ texto: UNICA, dataMensagem: "2026-11-26", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([u.ehConta, u.parcelas.map((p) => [p.vencimento, p.valorCentavos]), u.ambiguo, u.fornecedor], [true, [["2026-12-10", 30000]], false, "Polpa Norte"], "conta ÚNICA: 1 parcela, sem pergunta de total × parcela");
+  // aviso de conta que CHEGOU não é compra: fica no fluxo comum (a competência nunca é presumida pelo mês da mensagem)
+  for (const texto of ["MOVA, chegou o boleto de internet da alfa, R$ 289,90, vence 25/10/2026", "MOVA, boleto da contabilidade de setembro da alfa, R$ 600,00, vencimento 05/11/2026"]) {
+    assert.equal(interpretarContaRelatada({ texto, dataMensagem: "2026-10-15", unidades: [{ apelidos: ["alfa"] }] }).ehConta, false, texto);
+  }
+  assert.equal(interpretarContaRelatada({ texto: "bebedouro, R$ 194,50, vence 19/12", dataMensagem: "2026-11-26", porFoto: true }).ehConta, true, "foto do produto: a legenda é o relato da compra");
 });
 
-t("CR-1 caso do bebedouro: pergunta UMA vez (total × cada parcela), mostra o resumo e só depois do 'sim' cria a proposta — nunca como paga, nada lançado sem política", async () => {
+t("CR-1 caso do bebedouro: pergunta o valor (total × cada parcela) e a CATEGORIA (nunca IMOBILIZADO sozinho), mostra o resumo e só depois do 'sim' cria a proposta — nunca como paga", async () => {
   const s = await relatada();
   await s.enviar(gw({ texto: TEXTO }));
   assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_VALOR_AMBIGUO");
   assert.match(await s.ultimoTexto(), /CADA parcela .* ou é o TOTAL/);
   await s.enviar(gw({ texto: "cada parcela" }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_CATEGORIA", "equipamento: a classificação (despesa × imobilizado) é de vocês");
+  const pergunta = await s.ultimoTexto();
+  for (const re of [/"Bebedouro" parece compra de equipamento/, /Em qual categoria registro\?/, /\n1 — Compra de equipamentos e bens\n/, /\n0 — deixar para classificar no Centro Financeiro/, /Nada foi registrado ainda/]) assert.match(pergunta, re);
+  await s.enviar(gw({ texto: "talvez" }));
+  assert.equal((await s.decisao()).motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO_SILENCIOSA", "conversa do grupo fora das opções: o MOVA não responde nem consome a pergunta");
+  await s.enviar(gw({ texto: "1" }));
   const resumo = await s.ultimoTexto();
-  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
-  for (const re of [/Bebedouro — fornecedor não informado/, /Compra de equipamentos e bens/, /1\/2: vence 19\/12\/2026 — R\$\s?194,50/, /2\/2: vence 19\/01\/2027 — R\$\s?194,50/, /Total: R\$\s?389,00 — situação: A PAGAR/, /cartão/]) assert.match(resumo, re);
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", "o valor já respondido não é perguntado de novo");
+  for (const re of [/Bebedouro — fornecedor não informado/, /Categoria: Compra de equipamentos e bens/, /1\/2: vence 19\/12\/2026 — R\$\s?194,50/, /2\/2: vence 19\/01\/2027 — R\$\s?194,50/, /Total: R\$\s?389,00 — situação: A PAGAR/, /cartão/]) assert.match(resumo, re);
   assert.equal((await s.propostas()).length, 0, "nada antes da confirmação");
   await s.enviar(gw({ texto: "sim" }));
   const [p] = await s.propostas();
   assert.deepEqual([p.tipo, p.valorCentavos, p.comando.operacao, p.comando.entrada.parcelas.length, p.comando.entrada.categoria, p.comando.entrada.contraparteNova.nome, p.esclarecidoPor],
-    ["CONTA_RELATADA", 38900, "registrarContaParcelada", 2, "IMOBILIZADO", "Fornecedor não informado", FIN]);
+    ["CONTA_RELATADA", 38900, "registrarContaParcelada", 2, "IMOBILIZADO", "Fornecedor não informado", FIN], "IMOBILIZADO só porque a pessoa ESCOLHEU");
   assert.equal((await s.contas()).length, 0, "sem política: só proposta, nada no Financeiro");
-  assert.equal(s.cliente.pedidos.length, 1, "uma única leitura de IA (as respostas 'cada parcela' e 'sim' não chamam a IA)");
+  assert.equal(s.cliente.pedidos.length, 2, "leitura do relato + a do 'talvez' (conversa comum); 'cada parcela', '1' e 'sim' não chamam a IA");
   // Central: quem aprova registra as DUAS parcelas, em aberto
   const aplicada = await s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id });
   assert.equal(aplicada.estado, "APLICADA");
@@ -80,8 +106,12 @@ t("CR-1 caso do bebedouro: pergunta UMA vez (total × cada parcela), mostra o re
 
 t("CR-2 'não' cancela (nada é criado); resposta que não é sim/não repete o resumo sem consumir", async () => {
   const s = await relatada();
-  await s.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
-  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", "'parcelas de' já diz que é por parcela: sem pergunta");
+  await s.enviar(gw({ texto: POR_PARCELA }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_CATEGORIA", "'parcelas de' já diz que é por parcela: sem a pergunta do valor");
+  await s.enviar(gw({ texto: "1" }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
+  await s.enviar(gw({ texto: "talvez" }));
+  assert.equal((await s.decisao()).motivo, "CONVERSA_SEM_PEDIDO_FINANCEIRO_SILENCIOSA", "não é sim/não: a pendência continua");
   await s.enviar(gw({ texto: "não" }));
   assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_CANCELADA");
   assert.equal((await s.propostas()).length, 0);
@@ -91,7 +121,7 @@ t("CR-2 'não' cancela (nada é criado); resposta que não é sim/não repete o 
 
 t("CR-3 colaboração: outro FINANCEIRO da unidade confirma sem citar (auditoria individual); perfil OPERACIONAL não confirma e a pendência continua", async () => {
   const s = await relatada();
-  await s.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+  await s.ateOResumo(gw({ texto: POR_PARCELA }));
   assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
   await s.enviar(gw({ texto: "sim", de: OPER }));
   assert.equal((await s.propostas()).length, 0, "OPERACIONAL não confirma efeito financeiro");
@@ -102,9 +132,12 @@ t("CR-3 colaboração: outro FINANCEIRO da unidade confirma sem citar (auditoria
   assert.equal(p.participanteId, FIN, "quem relatou também");
 });
 
-t("CR-4 reinício entre o resumo e o 'sim': a pendência está no banco — a confirmação continua (sem perguntar de novo, sem IA)", async () => {
+t("CR-4 reinício entre as perguntas e o 'sim': a pendência está no banco — a conversa continua (sem perguntar de novo, sem IA)", async () => {
   const s = await relatada();
-  await s.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+  await s.enviar(gw({ texto: POR_PARCELA }));
+  s.reiniciar();
+  await s.enviar(gw({ texto: "1" }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
   s.reiniciar();
   await s.enviar(gw({ texto: "sim" }));
   assert.equal((await s.propostas()).length, 1);
@@ -115,29 +148,82 @@ t("CR-5 cartão: fatura já registrada no mesmo mês ⇒ o resumo AVISA (pode j�
   const s = await relatada();
   const f = await s.m.nucleo.registrarContraparte(s.cx, { tipo: "FORNECEDOR", nome: "Cartão Sintético" });
   await s.m.nucleo.registrarObrigacao(s.cx, { contraparteId: f.id, valorOriginalCentavos: 250000, categoria: "INSUMOS", descricao: "Fatura do cartão", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-12-10" });
-  await s.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+  await s.ateOResumo(gw({ texto: POR_PARCELA }));
   assert.match(await s.ultimoTexto(), /Já existe fatura do cartão em aberto com vencimento 10\/12\/2026/);
   const s2 = await relatada();
   await s2.m.nucleo.registrarObrigacao(s2.cx, { contraparteId: s2.forn.id, valorOriginalCentavos: 19450, categoria: "INSUMOS", descricao: "Bebedouro", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-12-19" });
-  await s2.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+  await s2.enviar(gw({ texto: POR_PARCELA }));
   assert.equal((await s2.decisao()).decisao, "DUPLICADO");
 });
 
-t("CR-6 com a política CONTA_A_PAGAR_RELATADA e a concessão estreita: o 'sim' REGISTRA as parcelas em aberto (sem documento); a política de conta por documento NÃO serve", async () => {
-  const sem = await relatada({ politica: { operacao: "CONTA_A_PAGAR" }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
-  await sem.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
-  await sem.enviar(gw({ texto: "sim" }));
-  assert.equal((await sem.contas()).length, 0, "a política de outra modalidade não autoriza esta");
-  const s = await relatada({ politica: {}, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
-  await s.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+t("CR-6 parcelada: com a política CONTA_PARCELADA_RELATADA e a concessão estreita o 'sim' REGISTRA as parcelas em aberto; a política de conta ÚNICA (ou por documento) NÃO serve", async () => {
+  const CONC = ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"];
+  for (const operacao of ["CONTA_A_PAGAR", "CONTA_A_PAGAR_RELATADA"]) {
+    const sem = await relatada({ politica: { operacao }, concessao: CONC, criarContas: true });
+    await sem.ateOResumo(gw({ texto: POR_PARCELA }));
+    await sem.enviar(gw({ texto: "sim" }));
+    assert.equal((await sem.contas()).length, 0, `a política ${operacao} não autoriza conta PARCELADA`);
+    assert.equal((await sem.propostas()).length, 1, "fica a proposta para a Central");
+  }
+  const s = await relatada({ politica: {}, concessao: CONC, criarContas: true });
+  await s.ateOResumo(gw({ texto: POR_PARCELA }));
   await s.enviar(gw({ texto: "sim" }));
   assert.equal((await s.decisao()).decisao, "EXECUTADO");
   assert.match(await s.ultimoTexto(), /Conta a pagar registrada \(em aberto\): Bebedouro, 2 parcelas, total R\$\s?389,00/);
   const cs = await s.contas();
-  assert.deepEqual([cs.length, cs.every((x) => x.saldoCentavos === 19450), cs.every((x) => (x.documentoIds ?? []).length === 0)], [2, true, true]);
+  assert.deepEqual([cs.length, cs.every((x) => x.saldoCentavos === 19450), cs.every((x) => (x.documentoIds ?? []).length === 0), await s.categoriasDas(cs)], [2, true, true, ["IMOBILIZADO", "IMOBILIZADO"]], "IMOBILIZADO porque a pessoa escolheu a opção 1");
+  assert.ok(cs.every((x) => x.situacao !== "QUITADA"), "nunca registrada como paga");
   const sc = await relatada({ politica: {}, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao"], criarContas: true });
-  await sc.enviar(gw({ texto: TEXTO.replace("valor de", "parcelas de") }));
+  await sc.ateOResumo(gw({ texto: POR_PARCELA }));
   await sc.enviar(gw({ texto: "sim" }));
   assert.equal((await sc.contas()).length, 0, "sem a concessão própria: fica a proposta");
   assert.match(await sc.ultimoTexto(), /permissão operacional do MOVA nesta unidade não cobre/);
+  // acima do limite da política: fica a proposta
+  const acima = await relatada({ politica: { limiteCentavos: 30000 }, concessao: CONC, criarContas: true });
+  await acima.ateOResumo(gw({ texto: POR_PARCELA }));
+  await acima.enviar(gw({ texto: "sim" }));
+  assert.equal((await acima.contas()).length, 0, "total R$ 389,00 acima do limite de R$ 300,00: nada lançado");
+});
+
+t("CR-7 conta ÚNICA relatada: categoria do plano dita no texto ⇒ sem pergunta; com CONTA_A_PAGAR_RELATADA registra 1 conta em aberto; a política PARCELADA não serve", async () => {
+  const CONC = ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"];
+  const sem = await relatada({ politica: {}, concessao: CONC, criarContas: true }); // só CONTA_PARCELADA_RELATADA
+  await sem.enviar(gw({ texto: UNICA }));
+  assert.equal((await sem.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", "valor único + categoria do plano: direto ao resumo");
+  assert.match(await sem.ultimoTexto(), /Categoria: Outras despesas/);
+  await sem.enviar(gw({ texto: "sim" }));
+  assert.equal((await sem.contas()).length, 0, "a política de conta PARCELADA não autoriza conta única");
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA" }, concessao: CONC, criarContas: true });
+  await s.enviar(gw({ texto: UNICA }));
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).decisao, "EXECUTADO");
+  const cs = await s.contas();
+  assert.deepEqual(cs.map((x) => [x.vencimento, x.saldoCentavos, x.parcela?.total, x.situacao !== "QUITADA"]), [["2026-12-10", 30000, 1, true]]);
+  assert.deepEqual(await s.categoriasDas(cs), ["OUTRAS_DESPESAS"], "a categoria DITA, do plano");
+});
+
+t("CR-8 categoria dita FORA do plano: nada é inventado — pergunta com as opções e, com '0', fica A CLASSIFICAR (com a sugestão de criar) e nunca executa sozinha", async () => {
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA" }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.enviar(gw({ texto: FORA_DO_PLANO }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_CATEGORIA");
+  const pergunta = await s.ultimoTexto();
+  assert.match(pergunta, /A categoria "brinquedos" não existe no plano de contas desta unidade/);
+  assert.match(pergunta, /0 — deixar para classificar no Centro Financeiro \(com a sugestão de criar "brinquedos"\)/);
+  await s.enviar(gw({ texto: "0" }));
+  assert.match(await s.ultimoTexto(), /Categoria: a classificar no Centro Financeiro \(sugestão: criar "brinquedos"\)/);
+  await s.enviar(gw({ texto: "sim" }));
+  const [p] = await s.propostas();
+  assert.deepEqual([p.categoriaDefinida, p.classificacao?.pendente, p.classificacao?.sugestaoDeCriacao], [false, true, "brinquedos"]);
+  assert.equal((await s.contas()).length, 0, "a classificar: mesmo com política e concessão, nada é lançado sem categoria");
+});
+
+t("CR-9 FOTO do produto com legenda: a legenda é o relato; a foto fica como evidência NÃO fiscal; segue o mesmo fluxo (categoria → resumo → 'sim')", async () => {
+  const s = await relatada();
+  await s.ateOResumo(gw({ texto: LEGENDA_DA_FOTO, imagem: "jpeg-sintetico-do-bebedouro" }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
+  assert.match(await s.ultimoTexto(), /Total: R\$\s?389,00 — situação: A PAGAR/);
+  await s.enviar(gw({ texto: "sim" }));
+  const [p] = await s.propostas();
+  assert.deepEqual([p.evidenciaNaoFiscal, p.comando.entrada.parcelas.length, p.valorCentavos], ["FOTO_DO_PRODUTO", 2, 38900]);
+  assert.equal((await s.contas()).length, 0, "foto não é comprovante: nunca vira pagamento");
 });

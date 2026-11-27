@@ -1079,7 +1079,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (div && !String(div.tipo ?? "").startsWith("CONTA_RELATADA")) return null;
     // 27/11: FOTO do produto com legenda ⇒ a LEGENDA é o relato (a foto não é documento fiscal nem comprovante)
     const textoDaConta = evento.midia ? (legendaDoDocumento(evento.texto) ?? "") : evento.texto;
-    const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv });
+    const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv, porFoto: Boolean(evento.midia) });
     // estado acumulado da conversa (cada pergunta carrega as respostas anteriores; nada é perguntado duas vezes)
     let tipoValor = div?.tipoValor ?? null;
     let escolha = div?.categoriaEscolhida ?? null; // código do plano | "REVISAO" (a classificar no Centro Financeiro)
@@ -1107,7 +1107,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const fatura = c.forma === "CARTAO" ? todas.find((t) => /\b(fatura|cartao)\b/.test(normalizar(`${t.descricao ?? ""} ${t.fornecedor ?? t.favorecido ?? ""}`)) && c.parcelas.some((p) => String(t.vencimento ?? "").slice(0, 7) === p.vencimento.slice(0, 7))) : null;
     // CLASSIFICAÇÃO pelo plano da unidade (nunca IMOBILIZADO automático; categoria dita fora do plano ⇒ pergunta ou revisão)
     const plano = await planoDaUnidade(escopo);
-    const cls = classificarContaRelatada({ descricao: c.descricao, texto: textoDaConta, categorias: plano });
+    const cls = classificarContaRelatada({ descricao: c.descricao, texto: textoDaConta, categorias: plano, categoriaSugerida: ctx.saida?.categoriaSugerida ?? null });
     if (div?.tipo === "CONTA_RELATADA_CATEGORIA") {
       const r = interpretarRespostaDaCategoria(esclarecimento.texto, { opcoes: div.opcoes ?? [], categorias: plano });
       if (!r) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.contaRelatadaCategoria({ opcoes: div.opcoes ?? [], motivo: div.motivo, sugestaoDeCriacao, descricao: c.descricao })}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
@@ -1130,7 +1130,8 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       throw e;
     }
     const impressao = JSON.stringify(bruto);
-    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha, sugestaoDeCriacao: sugestao, impressao };
+    // a categoria do resumo fica gravada na pendência: o "sim" confirma ESTA (a leitura da resposta não traz a sugestão da original)
+    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
     const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
@@ -1204,7 +1205,14 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         credora: { organizacaoId: credora.organizacaoId, unidadeId: credora.unidadeId }, entrada, escolherConta: candidatas.length > 1 ? candidatas.map((t) => t.id) : null },
       // quem aplica precisa das permissões nas DUAS empresas (a aplicação confere de novo, com a concessão gravada em cada uma)
       exigeParaAplicar: [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR, ACAO.REGISTRAR_INTERCOMPANY].filter(Boolean),
-    }, (p) => RESPOSTA.entreEmpresasProposta(p, { devedora: devedora.nome, credora: credora.nome }));
+    }, (p) => RESPOSTA.entreEmpresasProposta(p, { devedora: devedora.nome, credora: credora.nome }), {
+      // 27/11: conta EXISTENTE + confirmação de quem é FINANCEIRO nas duas (já conferido acima) + política nas DUAS unidades
+      // (menor limite) + concessão estreita da identidade operacional nas duas ⇒ registra; senão fica a proposta para a Central.
+      posCriacao: existente && execucao?.criarContas && typeof execucao.aposIntercompany === "function" ? async (p) => {
+        const r = await execucao.aposIntercompany(p, escopo);
+        return r.situacao === "ENTRE_EMPRESAS_REGISTRADA" ? { ...r, texto: RESPOSTA.entreEmpresasRegistrada({ devedora: devedora.nome, credora: credora.nome, valorCentavos: valor }) } : r;
+      } : null,
+    });
   }
 
   async function tratarConta(ctx) {

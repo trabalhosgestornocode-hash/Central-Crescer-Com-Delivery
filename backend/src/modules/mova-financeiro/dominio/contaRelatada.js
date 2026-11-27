@@ -90,6 +90,8 @@ export function descricaoLimpa(original, unidades = []) {
   const semChamado = String(original ?? "").replace(/^\s*(?:(?:oi|ola|olá|bom dia|boa tarde|boa noite)[,!]?\s+)?mova\b\s*[,:!.-]?\s*/i, "");
   const primeira = semChamado.split(/[,;\n]|\s+-\s+/)[0] ?? "";
   let t = ` ${normalizar(primeira)} `;
+  // 27/11: "chegou o boleto de internet" ⇒ "internet" (o aviso de chegada e o TIPO do papel não são o que se compra; "boleto" sozinho ainda corta)
+  t = t.replace(/\s(?:chegou|chegaram|veio|vieram|recebi|recebemos)\s(?:(?:o|a|os|as)\s)?/g, " ").replace(/\s(?:boleto|fatura|conta)\s(?:de|do|da|dos|das)\s/g, " ");
   // a descrição termina onde começam valor, data, parcelas, forma de pagamento ou fornecedor
   const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|no total)(?=\s|$)/);
   if (corte > 0) t = `${t.slice(0, corte)} `;
@@ -129,9 +131,10 @@ function ordenarParaEquipamento(lista, equipamento) {
 
 /**
  * Classificação da conta relatada pelo PLANO da unidade. Nunca devolve categoria fora do plano e nunca escolhe IMOBILIZADO sozinha.
+ * `categoriaSugerida`: a da leitura da mensagem (só desempata dentro do plano; equipamento continua sempre perguntado).
  * @returns {{codigo:string|null, perguntar:boolean, motivo:string, opcoes:Array<{codigo,nome}>, sugestaoDeCriacao:string|null}}
  */
-export function classificarContaRelatada({ descricao, texto = "", categorias }) {
+export function classificarContaRelatada({ descricao, texto = "", categorias, categoriaSugerida = null }) {
   const plano = categorias ?? [];
   const t = normalizar(descricao);
   const equipamento = Boolean(t) && EQUIPAMENTO.test(t) && !SERVICO.test(t);
@@ -145,7 +148,8 @@ export function classificarContaRelatada({ descricao, texto = "", categorias }) 
     return { codigo: null, perguntar: true, motivo: "CATEGORIA_DITA_FORA_DO_PLANO", opcoes: opcoesDe(parecidas.length ? parecidas : ordenarParaEquipamento(todas, equipamento)), sugestaoDeCriacao: dita.slice(0, 60) };
   }
   if (equipamento) return { codigo: null, perguntar: true, motivo: "EQUIPAMENTO_EXIGE_CLASSIFICACAO", opcoes: opcoesDe(ordenarParaEquipamento(todas, true)), sugestaoDeCriacao: null };
-  const codigo = t ? escolherCategoria({ categorias: plano, categoriaSugerida: null, legenda: descricao }) : null;
+  // a sugestão da leitura só vale se casar com UMA categoria de CUSTO/DESPESA do plano (escolherCategoria nunca devolve IMOBILIZADO)
+  const codigo = t ? escolherCategoria({ categorias: plano, categoriaSugerida, legenda: descricao }) : null;
   if (codigo) return { codigo, perguntar: false, motivo: "REGRA_DO_PLANO", opcoes: [], sugestaoDeCriacao: null };
   return { codigo: null, perguntar: true, motivo: "SEM_CATEGORIA_SEGURA", opcoes: opcoesDe(todas), sugestaoDeCriacao: null };
 }
@@ -172,12 +176,13 @@ export function categoriaDaContaRelatada(descricao, categorias) {
 }
 
 /**
- * @param {{texto:string, dataMensagem:string, unidades?:Array<{apelidos:string[]}>, tipoValor?:string|null}} p
+ * @param {{texto:string, dataMensagem:string, unidades?:Array<{apelidos:string[]}>, tipoValor?:string|null, porFoto?:boolean}} p
+ *        `porFoto`: a legenda acompanha a FOTO do produto (a foto já mostra que é uma compra)
  *        `tipoValor`: a resposta à pergunta "total ou cada parcela?" (quando já foi perguntado)
  * @returns {{ehConta:boolean, faltas:string[], ambiguo:boolean, descricao, fornecedor, forma, competencia, dataEmissao,
  *           parcelas:Array<{numero,total,vencimento,valorCentavos}>, totalCentavos, valorCitadoCentavos, tipoValor}}
  */
-export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], tipoValor = null }) {
+export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], tipoValor = null, porFoto = false }) {
   // datas e valores fora antes de procurar parcelas: normalizado, "vence em 25/10" vira "em 25 10" (não são 25 parcelas)
   const t = normalizar(String(texto ?? "").replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
   const valores = valoresCitados(texto);
@@ -186,6 +191,10 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   const forma = formaDePagamento(t);
   const fornecedor = fornecedorDito(texto);
   const descricao = descricaoLimpa(texto, unidades);
+  // 27/11 (PR #236): a competência desta modalidade é o MÊS DA COMPRA (a mensagem). Só vale para o que a mensagem relata como
+  // COMPRA (palavra de compra, parcelas ditas, ou foto do produto). Aviso de conta que CHEGOU ("chegou o boleto de internet",
+  // "boleto da contabilidade de setembro") não é compra: segue o fluxo comum, onde a competência NUNCA é presumida.
+  const compra = porFoto || (n !== null && n > 1) || COMPRA.test(t);
   const faltas = [];
   if (invalida) faltas.push("DATA_INVALIDA");
   if (valores.length === 0) faltas.push("VALOR");
@@ -213,11 +222,13 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
     }
   }
   return Object.freeze({
-    ehConta: valores.length > 0 && datas.length > 0, faltas, ambiguo, descricao, fornecedor, forma,
+    ehConta: compra && valores.length > 0 && datas.length > 0, faltas, ambiguo, descricao, fornecedor, forma,
     competencia: dataMensagem.slice(0, 7), dataEmissao: dataMensagem, parcelas, totalCentavos: total,
     valorCitadoCentavos: valores[0] ?? null, tipoValor: ambiguo ? TIPO_VALOR.AMBIGUO : tipo, quantidade: n,
   });
 }
+
+const COMPRA = /\b(?:compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
 
 /** Resposta à pergunta "total ou cada parcela?": PARCELA, TOTAL ou null (não entendeu — pergunta de novo, sem consumir). */
 export function interpretarRespostaDoValor(texto) {

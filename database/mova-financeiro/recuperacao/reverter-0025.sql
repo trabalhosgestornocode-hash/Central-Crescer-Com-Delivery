@@ -3,8 +3,8 @@
 -- A tabela mova.aviso_diario só guarda metadados de envio (contagens/totais): removê-la apaga esse histórico — exportar antes, se preciso.
 do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql') then raise exception 'MOVA recuperação: 0025 não está aplicada — nada a desfazer'; end if;
-  if exists (select 1 from mova.politica_autonomia where operacao in ('CONTA_A_PAGAR_RELATADA', 'OPERACAO_ENTRE_EMPRESAS')) then raise exception 'MOVA recuperação: existe política das operações da 0025 (mesmo revogada) — nada foi feito'; end if;
-  if exists (select 1 from mova.operacao_executada where operacao in ('CONTA_A_PAGAR_RELATADA', 'OPERACAO_ENTRE_EMPRESAS')) then raise exception 'MOVA recuperação: existe operação executada da 0025 — nada foi feito'; end if;
+  if exists (select 1 from mova.politica_autonomia where operacao in ('CONTA_A_PAGAR_RELATADA', 'CONTA_PARCELADA_RELATADA', 'OPERACAO_ENTRE_EMPRESAS')) then raise exception 'MOVA recuperação: existe política das operações da 0025 (mesmo revogada) — nada foi feito'; end if;
+  if exists (select 1 from mova.operacao_executada where operacao in ('CONTA_A_PAGAR_RELATADA', 'CONTA_PARCELADA_RELATADA', 'OPERACAO_ENTRE_EMPRESAS')) then raise exception 'MOVA recuperação: existe operação executada da 0025 — nada foi feito'; end if;
   if exists (select 1 from mova.proposta where tipo in ('CONTA_RELATADA', 'INTERCOMPANY')) then raise exception 'MOVA recuperação: existem propostas dos tipos da 0025 — nada foi feito'; end if;
 end $$;
 drop table mova.aviso_diario;

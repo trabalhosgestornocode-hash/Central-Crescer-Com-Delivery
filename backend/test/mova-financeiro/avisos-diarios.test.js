@@ -11,13 +11,13 @@ const CONFIG_GRUPO = { ...CONFIG, gruposAutorizados: CONFIG.gruposAutorizados.ma
 // Fortaleza = UTC−3: 10h local = 13h UTC
 const em = (hhmm, dia = "2026-10-15") => new Date(`${dia}T${String(Number(hhmm.slice(0, 2)) + 3).padStart(2, "0")}:${hhmm.slice(3)}:00.000Z`);
 
-async function cena({ membros = [FIN, SOCIO], indisponivel = null, janelas } = {}) {
+async function cena({ membros = [FIN, SOCIO], indisponivel = null, janelas, atualizarMembros } = {}) {
   const relogio = { agora: em("09:00") };
   const s = await cenario({
     config: CONFIG_GRUPO,
     extras: ({ nucleo }) => ({
       relogio: () => relogio.agora,
-      avisosDiarios: { grupos: [GRUPO], ...(janelas ? { janelas } : {}) },
+      avisosDiarios: { grupos: [GRUPO], ...(janelas ? { janelas } : {}), ...(atualizarMembros ? { atualizarMembros: (g) => atualizarMembros(g, relogio.agora) } : {}) },
       // Financeiro fora do ar numa unidade: erro técnico (não de regra) ⇒ a porta traduz em FINANCEIRO_INDISPONIVEL
       nucleo: Object.fromEntries(Object.entries(nucleo).map(([k, f]) => [k, async (cx, ...a) => {
         if (indisponivel?.ativo && cx?.unidadeId === indisponivel.unidadeId) throw Object.assign(new Error("conexão recusada"), { code: "ECONNREFUSED" });
@@ -30,13 +30,15 @@ async function cena({ membros = [FIN, SOCIO], indisponivel = null, janelas } = {
     await s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros, verificadoEm: relogio.agora.toISOString() }); // retrato recente
     return s.mova.avisos.passo();
   };
+  /** 27/11: passo SEM mensagem recebida antes (o Gateway não mandou retrato novo): o retrato gravado é o da última conversa */
+  const passoSemConversa = async (hhmm, dia) => { relogio.agora = em(hhmm, dia); return s.mova.avisos.passo(); };
   const textos = async () => (await s.saida()).filter((r) => r.destino === GRUPO).map((r) => r.texto);
   const avisos = async () => (await s.banco.pool.query("select to_char(data, 'YYYY-MM-DD') data, janela, situacao, resumo, resposta_id from mova.aviso_diario order by criado_em")).rows;
   const cxA = s.c(ORG, ALFA); const cxB = s.c(ORG, BETA);
   const fornB = await s.m.nucleo.registrarContraparte(cxB, { tipo: "FORNECEDOR", nome: "Distribuidora Beta Sintética" });
   const bancoA = await s.m.nucleo.configurarContaFinanceira(cxA, { tipo: "BANCARIA", nome: "Banco Alfa", instituicao: "Banco Teste" });
   const pagar = (o, data = "2026-10-15") => s.m.nucleo.pagarContaAPagar(cxA, { obrigacaoId: o.id, contaId: bancoA.id, dataEfetiva: data, valorCentavos: o.saldoCentavos });
-  return { ...s, relogio, passo, textos, avisos, cxA, cxB, fornB, pagar };
+  return { ...s, relogio, passo, passoSemConversa, textos, avisos, cxA, cxB, fornB, pagar };
 }
 
 t("AD-0 regra pura: hora local de Fortaleza (virada do dia em UTC), janelas configuráveis e validadas", () => {
@@ -153,4 +155,50 @@ t("AD-6 contas ENTRE EMPRESAS em seção própria: devedora → credora, saldo, 
   assert.match(texto, /• Loja Beta deve à Loja Alfa — Distribuidora paga pela Alfa — saldo R\$ 6\.495,60 \(vence 15\/10\)/);
   assert.equal((texto.match(/deve à/g) ?? []).length, 1, "um vínculo = uma linha (não repete pelo lado credor)");
   assert.doesNotMatch(texto, /Vencidas em aberto/, "a conta do fornecedor foi liquidada pela outra empresa: não aparece como vencida");
+});
+
+// ------------------------------------------------------------------ 27/11 (PR #236): retrato dos membros VELHO numa manhã sem conversa
+const retratoDe9h = async (s, membros = [FIN, SOCIO]) => s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros, verificadoEm: em("09:00").toISOString() });
+
+t("AD-7 retrato de 1h atrás e nenhuma conversa: o MOVA pede retrato NOVO ao Gateway antes das 10h; todos FINANCEIRO ⇒ aviso COM valores; o novo fica gravado", async () => {
+  const pedidos = [];
+  const s = await cena({ atualizarMembros: async (g, agora) => { pedidos.push(g); return { membros: [FIN, SOCIO], verificadoEm: agora.toISOString() }; } });
+  await retratoDe9h(s);
+  await s.conta("2026-10-15", 19450);
+  await s.passoSemConversa("10:00");
+  assert.deepEqual(pedidos, [GRUPO], "um pedido, só para o grupo do aviso");
+  const [texto] = await s.textos();
+  assert.match(texto, /R\$\s?194,50/);
+  const [a] = await s.avisos();
+  assert.equal(a.resumo.valores, true);
+  const r = await s.mova.armazenamento.membros.obter(GRUPO);
+  assert.equal(new Date(r.verificadoEm).toISOString(), em("10:00").toISOString(), "retrato do Gateway gravado");
+});
+
+t("AD-8 a proteção dos membros continua: retrato NOVO com alguém não FINANCEIRO ⇒ sem valores; Gateway fora (ou retrato vazio) ⇒ sem valores, mas o aviso sai com as contagens", async () => {
+  const comOper = await cena({ atualizarMembros: async (g, agora) => ({ membros: [FIN, SOCIO, OPER], verificadoEm: agora.toISOString() }) });
+  await retratoDe9h(comOper);
+  await comOper.conta("2026-10-15", 19450);
+  await comOper.passoSemConversa("10:00");
+  assert.doesNotMatch((await comOper.textos())[0], /R\$/);
+  assert.equal((await comOper.avisos())[0].resumo.motivoDetalhe, "MEMBRO_SEM_AUTORIZACAO");
+  for (const atualizarMembros of [async () => { throw Object.assign(new Error("fora"), { codigo: "GATEWAY_INDISPONIVEL" }); }, async () => ({ membros: [], verificadoEm: new Date().toISOString() }), null]) {
+    const s = await cena(atualizarMembros ? { atualizarMembros } : {});
+    await retratoDe9h(s);
+    await s.conta("2026-10-15", 19450);
+    await s.passoSemConversa("10:00");
+    const [texto] = await s.textos();
+    assert.match(texto, /1 conta vence hoje/, "o aviso sai mesmo assim");
+    assert.doesNotMatch(texto, /R\$|Fornecedor Sintético/, "retrato velho nunca libera valores");
+    assert.equal((await s.avisos())[0].resumo.valores, false);
+  }
+});
+
+t("AD-9 retrato recente (menos de 5 min): nenhum pedido ao Gateway", async () => {
+  let pedidos = 0;
+  const s = await cena({ atualizarMembros: async (g, agora) => { pedidos++; return { membros: [FIN, SOCIO], verificadoEm: agora.toISOString() }; } });
+  await s.conta("2026-10-15", 19450);
+  await s.passo("10:00"); // registra o retrato no próprio minuto
+  assert.equal(pedidos, 0);
+  assert.match((await s.textos())[0], /R\$\s?194,50/);
 });

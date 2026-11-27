@@ -523,6 +523,38 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   }
 
   /**
+   * 27/11 (PR #236) — OPERAÇÃO ENTRE EMPRESAS confirmada no WhatsApp por quem é FINANCEIRO nas DUAS unidades. Executa sozinha só:
+   *   - conta EXISTENTE da devedora (uma só candidata) — conta nova fica para a aprovação humana (exigiria registrar conta);
+   *   - política OPERACAO_ENTRE_EMPRESAS em vigor nas DUAS unidades, ambas aceitando o valor (vale o MENOR limite das duas);
+   *   - identidade operacional com `registrar_intercompany` nas duas (concessão gravada). Tudo numa transação; idempotente pela chave.
+   */
+  async function aposIntercompany(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    const cmd = proposta.comando;
+    if (proposta.tipo !== "INTERCOMPANY" || cmd?.operacao !== "registrarPagamentoPorOutraEmpresa" || !cmd.devedora || !cmd.credora || !cmd.entrada) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    if (!cmd.entrada.obrigacaoId || cmd.entrada.obrigacaoNova || cmd.escolherConta?.length) return { ...base, motivos: ["CONTA_NOVA_OU_A_ESCOLHER_EXIGE_APROVACAO_HUMANA"] };
+    if (cmd.devedora.unidadeId !== escopo.unidadeId || cmd.devedora.organizacaoId !== escopo.organizacaoId) return { ...base, motivos: ["ESCOPO_DIVERGENTE"] };
+    const decidir = async (e) => decidirAutonomia({ politicas: await politicasDe(e.organizacaoId), operacao: OPERACAO.OPERACAO_ENTRE_EMPRESAS, organizacaoId: e.organizacaoId,
+      unidadeId: e.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    const [dD, dC] = [await decidir(cmd.devedora), await decidir(cmd.credora)];
+    const executa = (d) => [NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(d.nivel);
+    const decisao = { nivel: executa(dD) && executa(dC) ? dD.nivel : NIVEL.SOMENTE_PROPOR, motivos: [...new Set([...dD.motivos, ...dC.motivos.map((m) => `CREDORA:${m}`)])],
+      politicaId: dD.politicaId ?? null, politicaCredoraId: dC.politicaId ?? null };
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    if (!executa(dD) || !executa(dC) || !proposta.esclarecidoPor) return r0;
+    if (!operacional || typeof operacional.chamarEntreEmpresas !== "function") return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.podeEntreEmpresas("registrarPagamentoPorOutraEmpresa", [cmd.devedora, cmd.credora]))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao: OPERACAO.OPERACAO_ENTRE_EMPRESAS, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const x = await operacional.chamarEntreEmpresas("registrarPagamentoPorOutraEmpresa", [cmd.devedora, cmd.credora], cmd.entrada);
+      return { obrigacaoId: x.titulo?.id ?? cmd.entrada.obrigacaoId, vinculoId: x.vinculoId, repetido: x.repetido === true, credora: cmd.credora.unidadeId,
+        politicaCredoraId: decisao.politicaCredoraId, confirmadoPor: proposta.esclarecidoPor, movimentacaoId: null };
+    } });
+    return r.ok ? { ...r0, situacao: "ENTRE_EMPRESAS_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
    * 24/11 — NOTA FISCAL de uma conta JÁ registrada (proposta VINCULO_DE_DOCUMENTO): só ANEXA a nota à conta (nenhum valor muda,
    * nenhuma despesa nova). Automática com a chave MOVA_OPERACAO_CRIAR_CONTAS, a política ANEXAR_DOCUMENTO e `enviar_documento`.
    */
@@ -553,5 +585,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

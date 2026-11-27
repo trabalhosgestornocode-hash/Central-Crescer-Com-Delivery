@@ -166,6 +166,7 @@ export const RESPOSTA = Object.freeze({
     + "\nResponda sim ou não. Nada foi registrado ainda.",
   entreEmpresasRecusada: () => "Entendido: não registrei nada como operação entre empresas.",
   entreEmpresasSemPermissao: (devedora, credora) => `Para registrar um pagamento entre empresas é preciso permissão financeira nas duas: ${devedora} e ${credora}. Nada foi registrado.`,
+  entreEmpresasRegistrada: ({ devedora, credora, valorCentavos }) => `Registrado: a conta do ${devedora} (${reais(valorCentavos)}) ficou paga pela ${credora}, e o ${devedora} passa a dever esse valor à ${credora} (Contas entre Empresas). Nenhuma saída nova foi lançada; o reembolso é registrado quando acontecer.`,
   entreEmpresasProposta: (p, { devedora, credora }) => `Proposta ${curto(p.id)} criada para aprovação no Centro Financeiro: despesa de ${reais(p.valorCentavos)} no ${devedora}, paga pela ${credora}, e o mesmo valor como dívida do ${devedora} com a ${credora}. Nada foi lançado ainda (a aplicação exige permissão nas duas empresas).`,
   propostaObrigacao: (p) => `Proposta ${curto(p.id)} criada para revisão: conta a pagar de ${reais(p.valorCentavos)} com vencimento ${dataBr(p.datas.vencimento)} (competência ${p.datas.competencia}). Nada foi lançado ainda.`,
   financeiroIndisponivel: () => "O Financeiro não respondeu agora. Tente novamente mais tarde; nada foi registrado.",
