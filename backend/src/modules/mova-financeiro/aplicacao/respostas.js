@@ -94,6 +94,8 @@ export const RESPOSTA = Object.freeze({
   // 27/11 — a pessoa disse um VALOR em reais diferente do comprovante: divergência real, a proposta segue protegida.
   valorDivergenteNoEsclarecimento: (informado, comprovado) => `O valor que você informou (${reais(informado)}) é diferente do que o comprovante mostra (${reais(comprovado)}). Mantive a proposta em revisão, sem registrar nada. Confirme qual é o valor correto.`,
   esclarecimentoRecebido: (qtd) => `Anotei o esclarecimento (${qtd === 1 ? "a dúvida da leitura foi resolvida" : "as dúvidas da leitura foram resolvidas"}); a leitura original continua guardada na auditoria. Reavaliei a proposta pela política vigente.`,
+  // 27/11 — falta só o vencimento da conta (a data do desconto da remuneração NÃO é vencimento).
+  contaRelatadaVencimento: (temObservacao) => `Qual é o vencimento da conta (a data em que ela vence com o banco/fornecedor)?${temObservacao ? " A data do desconto da remuneração fica só nas observações." : ""} Responda citando esta mensagem. Nada foi registrado.`,
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",

@@ -65,7 +65,8 @@ const brl = (c) => `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\
  */
 /** 27/11 — oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA. A data dela (ex.: desconto em 07/12) NÃO é vencimento da conta. */
 export function oracaoDeDesconto(texto) {
-  const m = String(texto ?? "").match(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\.(?:\s|$)|;|\n|$)/i);
+  // termina no fim da frase OU antes de um vencimento dito na mesma frase ("…desconto em 07/12, vencimento do empréstimo 15/12")
+  const m = String(texto ?? "").match(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\s*[,;]?\s*(?:e\s+)?(?:o\s+|a\s+)?(?:primeiro\s+|1[ºo°]\s+)?(?:vencimento|vence|vencendo)\b|\.(?:\s|$)|;|\n|$)/i);
   return m ? m[0] : null;
 }
 
@@ -283,7 +284,8 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
     }
   }
   return Object.freeze({
-    ehConta: compra && valores.length > 0 && datas.length > 0, faltas, ambiguo, descricao, fornecedor, forma,
+    // 27/11: relato cuja ÚNICA data é a do desconto da remuneração continua sendo conta relatada (falta o vencimento ⇒ pergunta); nunca cai no fluxo comum, que poderia tomar o desconto como vencimento
+    ehConta: compra && valores.length > 0 && (datas.length > 0 || Boolean(desconto)), faltas, ambiguo, descricao, fornecedor, forma,
     observacao: observacaoDaConta(texto, comp), composicao: comp, competencia: dataMensagem.slice(0, 7), dataEmissao: dataMensagem, parcelas, totalCentavos: total,
     valorCitadoCentavos: valores[0] ?? null, tipoValor: ambiguo ? TIPO_VALOR.AMBIGUO : tipo, quantidade: n,
   });
