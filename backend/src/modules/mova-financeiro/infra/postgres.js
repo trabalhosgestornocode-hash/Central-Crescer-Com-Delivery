@@ -7,6 +7,7 @@
 // Falha de conexão (banco fora, rede) vira ErroTransitorio: o receptor responde "indisponível" (o Gateway reenvia) e a fila
 // tenta de novo. Erro de regra do banco (gatilhos MV00x, violação de chave) NÃO é transitório.
 import { createHash, randomUUID } from "node:crypto";
+import { classificarPadrao } from "../dominio/politicaEnvio.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { linhaDoRecebido } from "../dominio/documentos.js";
 
@@ -28,6 +29,12 @@ function consultar(pool) {
 const linhaCadastro = (r) => ({ id: r.id, chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, observacoes: r.observacoes ?? null, ativo: r.ativo,
   criadoEm: r.criado_em.toISOString(), cadastradoPor: r.cadastrado_por ?? null, verificadoEm: r.verificado_em?.toISOString() ?? null,
   revogadoEm: r.revogado_em?.toISOString() ?? null, revogadoPor: r.revogado_por ?? null, motivoRevogacao: r.motivo_revogacao ?? null });
+/** 28/11: a fila com prioridade só é usada depois da migração 0027 (detecção única por pool); antes dela tudo segue como era. */
+const filaNovaPorPool = new WeakMap();
+function filaNovaDe(pool) {
+  if (!filaNovaPorPool.has(pool)) filaNovaPorPool.set(pool, pool.query("select 1 from information_schema.columns where table_schema = 'mova' and table_name = 'resposta' and column_name = 'prioridade'").then((r) => r.rowCount > 0, () => false));
+  return filaNovaPorPool.get(pool);
+}
 async function emTransacao(pool, fn) {
   let cliente;
   try { cliente = await pool.connect(); } catch (e) { if (ehFalhaDeConexao(e)) throw new ErroTransitorio("BANCO_INDISPONIVEL"); throw e; }
@@ -65,6 +72,7 @@ const linhaOperacao = (x) => (x ? Object.freeze({ id: x.id, chave: x.chave, prop
 
 export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
   const q = consultar(pool);
+  const filaNova = () => filaNovaDe(pool);
   // Sonda da coluna `conversa_ativa.contexto` (migração 0017): ausente ⇒ formato antigo; reavalia a cada 60 s.
   const colunaContexto = (() => { let ate = 0; return {
     ok: () => Date.now() >= ate,
@@ -583,8 +591,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
     }),
     saida: Object.freeze({
-      async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
-        return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
+      /** 28/11: categoria, prioridade, validade e escopo (empresa/unidade) acompanham a mensagem; sem eles valem os padrões da política. */
+      async enfileirar({ grupoId, respostaA, texto, eventoId = null, categoria = null, prioridade = null, validaAte = null, organizacaoId = null, unidadeId = null }) {
+        if (!(await filaNova())) return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
+        const c = classificarPadrao({ eventoId, respostaA, categoria, prioridade });
+        return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto, categoria, prioridade, valida_ate, organizacao_id, unidade_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id",
+          [grupoId, respostaA, eventoId, texto, c.categoria, c.prioridade, validaAte, organizacaoId, unidadeId])).rows[0]?.id ?? null;
       },
       /** 23/11 (0016): situação de entrega de mensagens (id → { estado, erro }) e a mensagem para um destino numa janela de tempo. */
       async situacoes(ids) {
@@ -630,18 +642,30 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       // 15A: `naoAntesDe` (marco de ativação do envio) e `destinos` (conversas autorizadas) filtram NO BANCO — resposta antiga ou
       // para destino fora da lista nunca é sequer reservada (proteção contra envio retroativo, independente do descarte).
       async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date(), naoAntesDe = null, destinos = null } = {}) {
-        return emTransacao(pool, async (tx) => (await tx(`
+        if (!(await filaNova())) return emTransacao(pool, async (tx) => (await tx(`
           update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
            where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
                            and ($4::timestamptz is null or criada_em >= $4::timestamptz)
                            and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
           returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
+          [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows.sort((a, b) => Number(a.seq) - Number(b.seq)));
+        return emTransacao(pool, async (tx) => (await tx(`
+          update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
+           where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
+                           and ($4::timestamptz is null or criada_em >= $4::timestamptz)
+                           and ($5::text[] is null or grupo_jid = any($5::text[]))
+                           and (liberar_em is null or liberar_em <= $1::timestamptz)   -- 28/11: adiada (limite, ritmo, circuito, espera) ainda não sai
+                           and (valida_ate is null or valida_ate > $1::timestamptz)    -- vencida é expirada à parte (nunca sai velha)
+                         order by prioridade, seq limit $3 for update skip locked)
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    categoria, prioridade, adiamentos, organizacao_id as "organizacaoId", unidade_id as "unidadeId",
                     -- 15H: o JID com que o WhatsApp entregou a mensagem respondida (o endereço que o Gateway reconhece)
                     (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
         [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
-          // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
-          .sort((a, b) => Number(a.seq) - Number(b.seq)));
+          // 28/11: UPDATE … RETURNING não garante ordem — saem por prioridade e, dentro dela, na ordem em que foram criadas.
+          .sort((a, b) => a.prioridade - b.prioridade || Number(a.seq) - Number(b.seq)));
       },
       /**
        * 15A: DESCARTE auditável de respostas PENDENTES (nunca DELETE): estado SUPRIMIDA + motivo; uma linha de auditoria com
@@ -658,12 +682,76 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
           return { suprimidas: r.length, ids: r };
         });
       },
-      async marcarFalhaDeEnvio(id, codigo, { final }) {
-        await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo]);
+      async marcarFalhaDeEnvio(id, codigo, { final, liberarEm = null }) {
+        await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null, liberar_em = case when $2 = 'PENDENTE' then $4::timestamptz else liberar_em end where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo, liberarEm]);
+      },
+      /** 28/11: ADIA (nunca descarta): volta a PENDENTE com liberação futura; a tentativa reservada não conta como tentativa de envio. */
+      async adiar(id, { ate, motivo }) {
+        await q("update mova.resposta set estado = 'PENDENTE', lease_ate = null, tentativas = greatest(tentativas - 1, 0), liberar_em = $2::timestamptz, motivo_adiamento = $3, adiamentos = adiamentos + 1 where id = $1", [id, ate, String(motivo).slice(0, 60)]);
+      },
+      /** 28/11: pendentes cuja validade venceu viram EXPIRADA (visível, auditável); devolve as linhas para alerta. */
+      async expirarVencidas(agora = new Date()) {
+        return (await q("update mova.resposta set estado = 'EXPIRADA', ultimo_erro = 'VALIDADE_VENCIDA', lease_ate = null where estado = 'PENDENTE' and valida_ate is not null and valida_ate <= $1::timestamptz returning id, categoria, prioridade, unidade_id as \"unidadeId\"", [agora.toISOString()])).rows;
+      },
+      /**
+       * 28/11: uso do dia numa só leitura — contadas (categorias que consomem o teto proativo) por total/destino/categoria, e o ritmo
+       * do último minuto (TODAS as categorias) e as respostas por conversa na última hora.
+       */
+      async usoDeEnvio({ desde, agora = new Date() }) {
+        const enviada = "(estado = 'ENVIADA' or (estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE'))";
+        const contadas = "categoria in ('TRANSACIONAL','PROATIVA','ADMINISTRATIVA','ACOMPANHAMENTO','REENVIO')";
+        const [dia, minuto, hora] = await Promise.all([
+          q(`select grupo_jid, categoria, organizacao_id, unidade_id, count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and ${enviada} and ${contadas} group by 1,2,3,4`, [desde]),
+          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '60 seconds' and estado = 'ENVIADA' group by 1`, [agora.toISOString()]),
+          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '1 hour' and estado = 'ENVIADA' and categoria = 'RESPOSTA' group by 1`, [agora.toISOString()]),
+        ]);
+        const soma = (linhas, f) => { const m = new Map(); for (const l of linhas) m.set(f(l), (m.get(f(l)) ?? 0) + l.n); return m; };
+        return { dia: dia.rows.reduce((t, l) => t + l.n, 0), porDestino: soma(dia.rows, (l) => l.grupo_jid), porCategoria: soma(dia.rows, (l) => l.categoria),
+                 porUnidade: soma(dia.rows, (l) => l.unidade_id ?? "SEM_UNIDADE"), ultimoMinuto: minuto.rows.reduce((t, l) => t + l.n, 0), ultimoMinutoPorDestino: soma(minuto.rows, (l) => l.grupo_jid),
+                 respostasHoraPorDestino: soma(hora.rows, (l) => l.grupo_jid) };
+      },
+      /** 28/11: represamento — pendentes adiadas por prioridade e o motivo mais frequente (painel e alerta). */
+      async represamento(agora = new Date()) {
+        const r = await q("select prioridade, count(*)::int as n, min(criada_em) as mais_antiga from mova.resposta where estado = 'PENDENTE' and liberar_em is not null and liberar_em > $1::timestamptz group by 1 order by 1", [agora.toISOString()]);
+        const m = await q("select motivo_adiamento as motivo, count(*)::int as n from mova.resposta where estado = 'PENDENTE' and motivo_adiamento is not null and liberar_em > $1::timestamptz group by 1 order by 2 desc limit 5", [agora.toISOString()]);
+        return { porPrioridade: r.rows.map((x) => ({ prioridade: x.prioridade, quantidade: x.n, maisAntiga: x.mais_antiga })), motivos: m.rows };
       },
       async contagem() {
         return Object.fromEntries((await q("select estado, count(*)::int as n from mova.resposta group by estado")).rows.map((x) => [x.estado, x.n]));
       },
+    }),
+    /** 28/11: limites de envio configuráveis (sem deploy) e alertas de uso. Cada mudança grava o histórico na mesma transação. */
+    limitesDeEnvio: Object.freeze({
+      async listar() {
+        return (await q("select escopo, chave, campo, valor, ativo, atualizado_por as \"atualizadoPor\", atualizado_em as \"atualizadoEm\" from mova.limite_envio order by escopo, chave, campo")).rows;
+      },
+      async regrasAtivas() {
+        return (await q("select escopo, chave, campo, valor from mova.limite_envio where ativo")).rows.map((r) => ({ ...r, valor: r.campo === "alertaFaixas" ? r.valor : Number(r.valor) }));
+      },
+      async definir({ escopo, chave, campo, valor, ativo = true, ator, justificativa }) {
+        if (!ator || String(justificativa ?? "").trim().length < 10) throw new TypeError("alterar limite exige ator e justificativa (10+ caracteres)");
+        return emTransacao(pool, async (tx) => {
+          const antes = (await tx("select valor, ativo from mova.limite_envio where escopo = $1 and chave = $2 and campo = $3 for update", [escopo, chave, campo])).rows[0] ?? null;
+          await tx(`insert into mova.limite_envio (escopo, chave, campo, valor, ativo, atualizado_por) values ($1,$2,$3,$4,$5,$6)
+                    on conflict (escopo, chave, campo) do update set valor = excluded.valor, ativo = excluded.ativo, atualizado_por = excluded.atualizado_por, atualizado_em = now()`,
+            [escopo, chave, campo, String(valor), ativo, String(ator).slice(0, 80)]);
+          await tx("insert into mova.limite_envio_historico (escopo, chave, campo, valor_antes, valor_depois, ativo_depois, ator, justificativa) values ($1,$2,$3,$4,$5,$6,$7,$8)",
+            [escopo, chave, campo, antes?.valor ?? null, String(valor), ativo, String(ator).slice(0, 80), String(justificativa).trim().slice(0, 500)]);
+          await tx("insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('LIMITE_DE_ENVIO_ALTERADO', 'USUARIO', $1, 'limite_envio', $2)",
+            [String(ator).slice(0, 80), JSON.stringify({ escopo, chave, campo, antes: antes?.valor ?? null, depois: String(valor), ativo })]);
+          return { antes: antes?.valor ?? null };
+        });
+      },
+      async historico(limite = 50) {
+        return (await q("select escopo, chave, campo, valor_antes as \"valorAntes\", valor_depois as \"valorDepois\", ativo_depois as \"ativoDepois\", ator, justificativa, em from mova.limite_envio_historico order by seq desc limit $1", [Math.min(Math.max(Number(limite) || 50, 1), 200)])).rows;
+      },
+    }),
+    alertasDeEnvio: Object.freeze({
+      /** Um alerta por dia/tipo/chave/faixa: devolve true só na primeira vez (quem alerta o grupo/painel). */
+      async registrar({ dia, tipo, chave, faixa = 0, detalhe = {} }) {
+        return (await q("insert into mova.alerta_envio (dia, tipo, chave, faixa, detalhe) values ($1::date,$2,$3,$4,$5) on conflict do nothing returning 1", [dia, tipo, String(chave).slice(0, 160), faixa, JSON.stringify(detalhe)])).rowCount > 0;
+      },
+      async listar(dia) { return (await q("select tipo, chave, faixa, detalhe, criado_em as \"criadoEm\" from mova.alerta_envio where dia = $1::date order by criado_em desc limit 100", [dia])).rows; },
     }),
     aprovacoes: Object.freeze({
       async registrar({ propostaId, acao, usuarioId, motivo = null, resultado = null }) {

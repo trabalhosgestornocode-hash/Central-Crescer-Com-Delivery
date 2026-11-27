@@ -9,6 +9,7 @@
 //   ENVIADA com o id do provedor — o eco dessa mensagem é reconhecido e ignorado (sem laço). Falha: tenta de novo até o teto.
 
 import { mesmoCelularBr } from "../dominio/configuracao.js";
+import { LIMITES_PADRAO, NOME_DA_PRIORIDADE, classificarPadrao, criarCircuito, decidirEnvio, esperaDaTentativa, faixaDeUso, resolverLimites } from "../dominio/politicaEnvio.js";
 /**
  * @param {{receptor:{trabalhar:Function}, concorrencia?:number, intervaloMs?:number, agendar?:Function, cancelar?:Function, registrar?:Function}} deps
  */
@@ -56,7 +57,7 @@ export function enderecoDeEnvio(r) {
 }
 /** Quantas respostas antes do teto passam a avisar no próprio texto (e a 1ª delas gera auditoria). */
 export const AVISO_TETO = 3;
-export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null , maximoPorDia = null, maximoPorConversaDia = null, relogio = () => new Date()}) {
+export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = false, maxTentativas = 3, registrar = () => {}, controle = null, limitePorRodada = 5, naoAntesDe = null, destinosPermitidos = null, rele = null, maximoDeEnvios = null , maximoPorDia = null, maximoPorConversaDia = null, relogio = () => new Date(), politica = null }) {
   // 15I: teto de respostas entregues ao transporte. Agente 2: a contagem é PERSISTENTE (respostas enviadas desde o marco, no
   // banco), então reiniciar ou publicar não zera o teto. Perto do fim, a própria resposta avisa no grupo e fica na auditoria;
   // atingido, a resposta excedente não sai (FALHOU, com auditoria). O teto nunca é ampliado aqui.
@@ -124,6 +125,79 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       else if (s.estado === "FALHOU" || s.estado === "CANCELADA") await armazenamento.saida.marcarFalhaDeEnvio(s.id, String(s.codigo ?? s.estado).slice(0, 60), { final: true });
     }
   }
+  // 28/11: ENVIO COM POLÍTICA (fila priorizada). Com `politica` ({ regras(), avisarAdministracao?(aviso) }) o enviador deixa de FALHAR
+  // mensagem por teto: ADIA (continua pendente, persistente), na ordem de prioridade, com capacidade reservada à crítica, ritmo por
+  // minuto e circuit breaker valendo para TODAS as categorias, expiração só depois da validade, e alerta de uso (70/85/95%) e de
+  // represamento. Sem `politica`, tudo funciona exatamente como antes (tetos legados).
+  const circuito = politica ? criarCircuito({ falhasSeguidas: LIMITES_PADRAO.circuitoFalhasSeguidas, pausaSegundos: LIMITES_PADRAO.circuitoPausaSegundos }) : null;
+  let regrasEmCache = { em: 0, regras: [] };
+  const lerRegras = async () => {
+    const agora = relogio().getTime();
+    if (agora - regrasEmCache.em > 30_000) { try { regrasEmCache = { em: agora, regras: (await politica.regras()) ?? [] }; } catch { /* mantém as regras anteriores */ } }
+    return regrasEmCache.regras;
+  };
+  const diaLocal = (d) => new Date(d.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+  async function alertar(tipo, chave, faixa, detalhe, texto, unidadeId = null) {
+    let nova = false;
+    try { nova = await armazenamento.alertasDeEnvio.registrar({ dia: diaLocal(relogio()), tipo, chave, faixa, detalhe }); } catch { return; }
+    if (!nova) return;
+    await auditar("MOVA_ENVIO_ALERTA", { tipo, chave, faixa, ...detalhe });
+    try { await politica.avisarAdministracao?.({ tipo, chave, faixa, texto, unidadeId }); } catch { /* o alerta nunca impede o envio */ }
+  }
+  async function enviarComPolitica({ limite, destinos }) {
+    const agora = relogio();
+    for (const e of (await armazenamento.saida.expirarVencidas(agora)) ?? [])
+      await alertar("EXPIRADA", `${e.unidadeId ?? "SEM_UNIDADE"}|${e.categoria}`, e.prioridade, { prioridade: e.prioridade, categoria: e.categoria },
+        `⚠️ MOVA: uma mensagem ${e.categoria.toLowerCase()} venceu a validade sem poder ser enviada (prioridade ${NOME_DA_PRIORIDADE[e.prioridade]}). Ela ficou registrada como EXPIRADA para revisão.`, e.unidadeId);
+    const regras = await lerRegras();
+    const base = resolverLimites({ regras });
+    const uso = await armazenamento.saida.usoDeEnvio({ desde: naoAntesDe && Date.parse(naoAntesDe) > Date.parse(inicioDoDia()) ? naoAntesDe : inicioDoDia(), agora });
+    const lote = await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos, agora });
+    let enviadas = 0, adiadas = 0;
+    for (const r of lote) {
+      const cat = classificarPadrao({ eventoId: r.eventoId, respostaA: r.respostaA, categoria: r.categoria, prioridade: r.prioridade });
+      const item = { categoria: cat.categoria, prioridade: cat.prioridade, destinoTipo: String(r.grupoId).endsWith("@g.us") ? "GRUPO" : "PRIVADO" };
+      const limites = resolverLimites({ regras, empresaId: r.organizacaoId ?? null, unidadeId: r.unidadeId ?? null, destino: r.grupoId, categoria: item.categoria });
+      const decisao = decidirEnvio({ item, limites, agora: relogio(), circuitoAbertoAte: circuito.abertoAte,
+        uso: { dia: uso.dia, porDestino: uso.porDestino.get(r.grupoId) ?? 0, ultimoMinuto: uso.ultimoMinuto, ultimoMinutoDestino: uso.ultimoMinutoPorDestino.get(r.grupoId) ?? 0, respostasHoraDestino: uso.respostasHoraPorDestino.get(r.grupoId) ?? 0 } });
+      if (decisao.acao === "ADIAR") {
+        await armazenamento.saida.adiar(r.id, { ate: decisao.liberarEm, motivo: decisao.motivo });
+        adiadas += 1;
+        if (decisao.motivo === "LIMITE_DIARIO" || decisao.motivo === "LIMITE_DA_CONVERSA")
+          await alertar("REPRESAMENTO", `${decisao.motivo}|${decisao.motivo === "LIMITE_DA_CONVERSA" ? r.grupoId : "GERAL"}`, 100, { motivo: decisao.motivo, prioridade: item.prioridade },
+            `⚠️ MOVA: o limite ${decisao.motivo === "LIMITE_DIARIO" ? "diário de mensagens proativas" : "da conversa"} foi atingido. As mensagens continuam na fila, em ordem de prioridade, e saem quando houver capacidade. Ajuste em Financeiro > MOVA > Limites, se necessário.`, r.unidadeId ?? null);
+        if (decisao.motivo === "CIRCUITO_ABERTO") await alertar("CIRCUITO", "GATEWAY", 100, {}, "⚠️ MOVA: o envio foi pausado por falhas seguidas do Gateway do WhatsApp. As mensagens seguem na fila e saem quando o envio normalizar.", r.unidadeId ?? null);
+        continue;
+      }
+      if (!destinos.includes(r.grupoId)) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "DESTINO_NAO_AUTORIZADO", { final: true }); registrar({ tipo: "MOVA_ENVIO_DESTINO_RECUSADO" }); continue; }
+      if (controle && !(await controle.ligado("envio"))) { await armazenamento.saida.marcarFalhaDeEnvio(r.id, "ENVIO_SUSPENSO", { final: false }); continue; }
+      const marcarUso = () => { if (decisao.contada) { uso.dia += 1; uso.porDestino.set(r.grupoId, (uso.porDestino.get(r.grupoId) ?? 0) + 1); } uso.ultimoMinuto += 1; uso.ultimoMinutoPorDestino.set(r.grupoId, (uso.ultimoMinutoPorDestino.get(r.grupoId) ?? 0) + 1); };
+      const destino = enderecoDeEnvio(r);
+      try {
+        if (rele) { await rele.publicar({ id: r.id, destino, texto: r.texto }); await armazenamento.saida.marcarNoRele(r.id); }
+        else { const { providerMessageId } = await enviar({ grupoId: destino, texto: r.texto, respostaA: r.respostaA, idempotencia: `mova-resposta:${r.id}` }); await armazenamento.saida.marcarEnviada(r.id, providerMessageId); }
+        circuito.sucesso(); marcarUso(); enviadas += 1; entregues += 1;
+      } catch (err) {
+        const codigo = err?.codigo ?? err?.code ?? (rele ? "RELE_INDISPONIVEL" : "FALHA_NO_GATEWAY");
+        const repetivel = rele ? true : ERROS_ANTES_DO_ENVIO.includes(codigo);
+        const final = !repetivel || r.tentativas >= maxTentativas;
+        await armazenamento.saida.marcarFalhaDeEnvio(r.id, String(codigo).slice(0, 60), { final, liberarEm: final ? null : new Date(relogio().getTime() + esperaDaTentativa(r.tentativas)).toISOString() });
+        circuito.falha(relogio());
+        registrar({ tipo: "MOVA_ENVIO_FALHOU", codigo });
+      }
+    }
+    // Uso do dia: alerta nas faixas configuradas (70/85/95%) para o total e para cada conversa.
+    const faixas = base.alertaFaixas;
+    const f = faixaDeUso(uso.dia, base.proativasDia, faixas);
+    if (f.faixa) await alertar("USO_DIARIO", "GERAL", f.faixa, { usado: uso.dia, limite: base.proativasDia, pct: f.pct }, `📊 MOVA: ${f.pct}% do limite diário de mensagens proativas foi usado (${uso.dia} de ${base.proativasDia}).`);
+    for (const [destinoJid, n] of uso.porDestino) {
+      const tipoDestino = String(destinoJid).endsWith("@g.us") ? base.proativasPorGrupoDia : base.proativasPorPrivadoDia;
+      const fc = faixaDeUso(n, tipoDestino, faixas);
+      if (fc.faixa) await alertar("USO_CONVERSA", destinoJid, fc.faixa, { usado: n, limite: tipoDestino, pct: fc.pct }, `📊 MOVA: ${fc.pct}% do limite diário desta conversa foi usado (${n} de ${tipoDestino}).`);
+    }
+    return { enviadas, adiadas, desligado: false, politica: true };
+  }
+
   // 15A (Fase D): habilitado EXIGE marco de ativação e lista fechada de destinos — sem eles, o enviador fica desligado
   // (nunca "envia tudo o que está pendente" desde o início da homologação).
   const marcoValido = typeof naoAntesDe === "string" && !Number.isNaN(Date.parse(naoAntesDe));
@@ -146,6 +220,7 @@ export function criarEnviadorDeRespostas({ armazenamento, enviar, habilitado = f
       await sincronizarDia();
       const destinos = lerDestinos();
       if (!destinos) return { enviadas: 0, desligado: false, semDestinos: true };
+      if (politica) return enviarComPolitica({ limite, destinos });
       if (tetoAtingido()) {
         // Atingido: as pendentes não ficam esperando em silêncio — cada uma vira FALHOU com auditoria (gestor vê o motivo).
         for (const r of await armazenamento.saida.tomarParaEnvio({ limite: Math.min(limite, limitePorRodada), naoAntesDe, destinos })) {
