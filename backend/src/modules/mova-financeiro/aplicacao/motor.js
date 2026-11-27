@@ -167,7 +167,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const textos = (esclarecimento ? [esclarecimento.texto] : [evento.texto]).filter(Boolean);
     // Só as unidades em que ESTA pessoa envia documentos: a pergunta de unidade nunca oferece uma unidade que ela não pode usar.
     const comDocumentos = { ...daPessoa, unidades: daPessoa.unidades.filter((x) => CAPACIDADES[perfilNa(participante, x)]?.documentos) };
-    const u = resolverUnidade({ cfg, grupo: comDocumentos, textos });
+    const u = resolverUnidade({ cfg, grupo: comDocumentos, textos, marcaBasta: Boolean(esclarecimento) });
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
       const nomes = cfg.unidades.filter((x) => comDocumentos.unidades.includes(x.unidadeId)).map((x) => x.nome);
       if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
@@ -177,7 +177,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
       }
-      const resposta = u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
+      const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
+        : u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
         : u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
       return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: u.resultado, resposta, injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
     }
@@ -207,7 +208,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   function ehEsclarecimentoDeUnidade(texto, grupo) {
     const t = String(texto ?? "").trim();
     if (!t || t.length > 60 || /\d/.test(t)) return false;
-    const u = resolverUnidade({ cfg, grupo, textos: [t] });
+    const u = resolverUnidade({ cfg, grupo, textos: [t], marcaBasta: true }); // resposta a "de qual unidade?": a marca basta
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) return false;
     let resto = ` ${normalizar(t)} `;
     for (const ap of [...u.unidade.apelidos].sort((a, b) => b.length - a.length)) resto = resto.split(` ${ap} `).join(" ");
@@ -495,7 +496,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // unidade pelo cadastro `pagadores`. Relato só por texto não tem documento: o pagador dito no texto não conta.
     const doDocumento = Boolean(evento.midia) && [...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento);
     let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida,
-      pagador: doDocumento ? saida.pagador ?? null : null, documentoPagador: doDocumento ? saida.documentoPagador ?? null : null });
+      pagador: doDocumento ? saida.pagador ?? null : null, documentoPagador: doDocumento ? saida.documentoPagador ?? null : null,
+      // 27/11: a MARCA sozinha só basta na resposta a "de qual unidade?" (se não houver outra loja da marca) e em consulta (só leitura).
+      marcaBasta: Boolean(esclarecimento && !esclarecimento.divergencia), somenteLeitura: Boolean(consulta) && !evento.midia });
     // Agente 2 — CONSULTA (só leitura) sem unidade no texto: a unidade da conversa em andamento DESTA pessoa (janela curta).
     // Documento/lançamento continua exigindo evidência própria (nunca pelo histórico do participante).
     if (consulta && u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA && conversa?.unidadeId && daPessoa.unidades.includes(conversa.unidadeId)) {
@@ -516,7 +519,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
       }
-      const resposta = u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
+      const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
+        : u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
         : u.resultado === RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE || u.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO ? RESPOSTA.documentoDeOutraUnidade() : RESPOSTA.unidadeConflitante();
       return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: u.resultado, resposta, injecao, extra: { evidenciaUnidade: u.evidencia } });
     }
@@ -635,6 +639,8 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
         pagador: saida.pagador ?? null, documentoPagador: saida.documentoPagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        // 27/11: evidências de unidade lidas do documento, para REVALIDAR a unidade antes de executar/aprovar a proposta.
+        unidadeSugerida: saida.unidadeSugerida ?? null, documentoDestinatario: saida.documentoDestinatario ?? null,
         // 23/11: evidências bancárias do comprovante para a conciliação (nunca confirmam compensação): banco do recebedor, data e hora impressas, valor.
         instituicaoDestino: saida.instituicaoDestino ?? null, horaTransacao: saida.horaTransacao ?? null, dataPagamento: saida.dataPagamento ?? null, valorCentavos: saida.valorCentavos ?? null,
         // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).

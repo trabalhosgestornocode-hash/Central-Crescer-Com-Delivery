@@ -15,7 +15,10 @@ import { OPERACAO, validarPoliticas } from "../../src/modules/mova-financeiro/do
 const literal = (t) => `'${String(t).replace(/'/g, "''")}'`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Operações que dependem de uma migração do MOVA (precondição do SQL). */
-const MIGRACAO = { DESPESA_DOCUMENTAL: "0010_mova_despesa_documental.sql", JUROS_DOCUMENTAL: "0012_mova_juros_documental.sql" };
+const M0025 = "0025_mova_contas_relatadas_intercompany_avisos.sql";
+const MIGRACAO = { DESPESA_DOCUMENTAL: "0010_mova_despesa_documental.sql", JUROS_DOCUMENTAL: "0012_mova_juros_documental.sql",
+  // 27/11 (PR #236): operações novas só existem depois da MOVA 0025 (sem ela, nada é feito).
+  CONTA_A_PAGAR_RELATADA: M0025, CONTA_PARCELADA_RELATADA: M0025, OPERACAO_ENTRE_EMPRESAS: M0025 };
 
 /**
  * @param {{organizacaoId:string, unidadeId:string, criadaPor:string, responsavel:string, motivo:string, vigenteDe:string, vigenteAte?:string|null,

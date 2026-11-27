@@ -19,6 +19,7 @@ import { requisitosParaOperacao, unidadePorId } from "../dominio/configuracao.js
 import { exigirContratoFinanceiro } from "./portaFinanceira.js";
 import { executorDaPessoa } from "./portaOperacional.js";
 import { NIVEL, validarPolitica } from "../dominio/autonomia.js";
+import { revalidarUnidadeDaProposta } from "../dominio/unidade.js";
 
 export class ErroDeAprovacao extends Error {
   constructor(codigo, detalhes = {}) { super(codigo); this.name = "ErroDeAprovacao"; this.codigo = codigo; this.detalhes = detalhes; }
@@ -164,6 +165,16 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       // Agente 2 — Frente C: baixa JÁ conferida com uma saída do extrato só por confirmarBaixaPorExtrato (vincula a saída que
       // existe). Aplicar pelo caminho antigo criaria uma SEGUNDA saída (pagarContaAPagar) para o mesmo pagamento.
       if (p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA") throw new ErroDeAprovacao("BAIXA_CONFERIDA_COM_EXTRATO");
+      // 27/11: a unidade é REVALIDADA com o cadastro e as regras atuais. Evidência que aponta OUTRA loja (não habilitada,
+      // conflito, divergente) nunca é aprovada — nem por uma pessoa. Evidência só insuficiente: a pessoa, autenticada NESTA
+      // unidade, confirma ao aplicar (fica na auditoria).
+      const evOrigem = p.eventoId ? await a.eventos.obter(p.eventoId) : null;
+      const unidadeOk = revalidarUnidadeDaProposta({ cfg, proposta: p, evento: evOrigem });
+      if (!unidadeOk.ok && unidadeOk.contradiz) {
+        await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: `UNIDADE_NAO_CONFIRMADA:${unidadeOk.motivo}` });
+        throw new ErroDeAprovacao("UNIDADE_NAO_CONFIRMADA", { motivo: unidadeOk.motivo });
+      }
+      if (!unidadeOk.ok) await a.auditoria.registrar({ acao: "UNIDADE_CONFIRMADA_PELO_APROVADOR", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { motivo: unidadeOk.motivo } });
       if (!requisitosParaOperacao(unidadePorId(cfg, p.unidadeId), p.tipo)) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
@@ -260,6 +271,9 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       if (!p) throw new ErroDeAprovacao("PROPOSTA_NAO_ENCONTRADA");
       if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
       if (p.conciliacao?.situacao !== "CONFERIDA" || !p.conciliacao.movimentacaoId) throw new ErroDeAprovacao("EXTRATO_NAO_CONFERIDO");
+      // 27/11 (#238): proposta antiga revalidada; evidência que aponta outra loja nunca é liquidada.
+      const unidadeDaBaixa = revalidarUnidadeDaProposta({ cfg, proposta: p, evento: p.eventoId ? await a.eventos.obter(p.eventoId) : null });
+      if (!unidadeDaBaixa.ok && unidadeDaBaixa.contradiz) throw new ErroDeAprovacao("UNIDADE_NAO_CONFIRMADA", { motivo: unidadeDaBaixa.motivo });
       if (!requisitosParaOperacao(unidadePorId(cfg, p.unidadeId), p.tipo)) throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
       const r = await execucao.liquidar({ proposta: p, escopo: esc, movimentacaoId: p.conciliacao.movimentacaoId, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
         politicaId: p.autonomia?.politicaId ?? null, executor: executorDaPessoa({ nucleo, ctx }) });

@@ -18,8 +18,20 @@ export const MODELO_PADRAO = "claude-haiku-5-5";
 export const MODELOS_PERMITIDOS = Object.freeze(["claude-haiku-5-5"]);
 /** Modelos em que `thinking: {type: "disabled"}` é aceito (até esforço high). */
 export const MODELOS_SEM_RACIOCINIO = Object.freeze(["claude-haiku-5-5"]);
-/** Teto padrão de saída: o JSON do contrato ocupa ~240 tokens; sem raciocínio, 600 dá folga sem expor custo. */
-export const SAIDA_MAXIMA_PADRAO = 600;
+/** Teto padrão de saída. 27/11 (produção): o JSON do contrato (40 campos obrigatórios + justificativa/incertezas) chegou a
+ *  559–594 tokens em leituras normais e passou de 600 em duas imagens reais (stop_reason "max_tokens" → IA_RESPOSTA_TRUNCADA).
+ *  1200 dá ~2x de folga; custo extra só existe quando o modelo usa os tokens (≈ US$ 0,003 por chamada no pior caso). */
+export const SAIDA_MAXIMA_PADRAO = 1200;
+/**
+ * 27/11 (autorizado pelo proprietário): UMA nova tentativa, com saída de até 2400 tokens, SÓ quando a primeira resposta foi
+ * interrompida por max_tokens. Resposta cortada nunca é lida (nem a primeira, nem a segunda).
+ */
+export const SAIDA_MAXIMA_RETENTATIVA = 2400;
+/** Custo máximo da LEITURA inteira (as duas chamadas somadas), em µUS$ — o mesmo teto por requisição do orçamento (US$ 0,10). */
+export const LIMITE_DA_LEITURA_MICROUSD = 100_000;
+/** Pior preço tabelado do Haiku 5.5 (µUS$ por token; faixa >100K, entrada como escrita de cache de 1 h) — conservador. */
+const PIOR_PRECO_HAIKU = Object.freeze({ entrada: 1, saida: 2.5 });
+const custoPiorCaso = (entrada, saida) => Math.ceil(entrada * PIOR_PRECO_HAIKU.entrada + saida * PIOR_PRECO_HAIKU.saida);
 const ehModeloPermitido = (m) => MODELOS_PERMITIDOS.includes(String(m ?? "").replace(/-\d{8}$/, ""));
 const MIDIA_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -78,25 +90,38 @@ export function criarExtratorAnthropic({ cliente, obterEvidencia, transcritor = 
       // 24/11: a pergunta que o MOVA fez a ESTA pessoa e ainda espera resposta (texto do SISTEMA, sem dado do usuário).
       const linhaPendente = contexto.perguntaPendente ? `\nPERGUNTA PENDENTE DO MOVA (sistema; a mensagem pode ser a resposta): ${String(contexto.perguntaPendente).replace(/<<<|>>>/g, "").slice(0, 300)}` : "";
       const system = `${entrada.instrucoes}\nDATA DE REFERÊNCIA (hoje): ${referencia}. Unidades possíveis: ${(contexto.unidades ?? []).join("; ") || "não informadas"}.${linhaConversa}${linhaPendente}`;
-      let resposta;
-      try {
-        resposta = await cliente.beta.messages.create({
-          model: modelo, max_tokens: SAIDA_MAXIMA_PADRAO,
-          output_config: { effort: esforco, format: { type: "json_schema", schema: esquema } },
-          // Execução 13C: extração estruturada não precisa de raciocínio; só os modelos que ACEITAM desligá-lo (Opus 5.5 recusa: 400).
-          ...(MODELOS_SEM_RACIOCINIO.includes(modelo) && ["low", "medium", "high"].includes(esforco) ? { thinking: { type: "disabled" } } : {}),
-          system,
-          messages: [{ role: "user", content: [...blocos, { type: "text", text: entrada.conteudo }] }],
-        });
-      } catch (e) {
-        if (e instanceof ErroDeIa) throw e; // orçamento/controle (Execução 05): código preservado, a chamada nem saiu
-        if (ehFalhaTransitoriaDeIa(e)) throw new ErroTransitorio("IA_INDISPONIVEL");
-        throw new ErroDeIa(Number(e?.status) === 400 ? "IA_REQUISICAO_INVALIDA" : Number(e?.status) === 401 || Number(e?.status) === 403 ? "IA_SEM_AUTORIZACAO" : "IA_ERRO_PERMANENTE");
+      const chamar = async (maxTokens) => {
+        let r;
+        try {
+          r = await cliente.beta.messages.create({
+            model: modelo, max_tokens: maxTokens,
+            output_config: { effort: esforco, format: { type: "json_schema", schema: esquema } },
+            // Execução 13C: extração estruturada não precisa de raciocínio; só os modelos que ACEITAM desligá-lo (Opus 5.5 recusa: 400).
+            ...(MODELOS_SEM_RACIOCINIO.includes(modelo) && ["low", "medium", "high"].includes(esforco) ? { thinking: { type: "disabled" } } : {}),
+            system,
+            messages: [{ role: "user", content: [...blocos, { type: "text", text: entrada.conteudo }] }],
+          });
+        } catch (e) {
+          if (e instanceof ErroDeIa) throw e; // orçamento/controle (Execução 05): código preservado, a chamada nem saiu
+          if (ehFalhaTransitoriaDeIa(e)) throw new ErroTransitorio("IA_INDISPONIVEL");
+          throw new ErroDeIa(Number(e?.status) === 400 ? "IA_REQUISICAO_INVALIDA" : Number(e?.status) === 401 || Number(e?.status) === 403 ? "IA_SEM_AUTORIZACAO" : "IA_ERRO_PERMANENTE");
+        }
+        // Sem fallback: se outro modelo respondeu (roteamento inesperado), a saída é descartada (o custo já foi registrado).
+        if (r?.model && !ehModeloPermitido(r.model)) throw new ErroDeIa("IA_MODELO_INESPERADO");
+        if (r?.stop_reason === "refusal") throw new ErroDeIa("IA_RECUSOU");
+        return r;
+      };
+      let resposta = await chamar(SAIDA_MAXIMA_PADRAO);
+      if (resposta?.stop_reason === "max_tokens") {
+        // 27/11: UMA nova tentativa com saída maior, só se as DUAS chamadas somadas (a 1ª pelo uso real, a 2ª pelo pior caso)
+        // cabem no custo máximo da leitura. O orçamento renovável (mensal/diário) continua reservando cada chamada.
+        const u = resposta?.usage ?? {};
+        const entradaUsada = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+        const total = custoPiorCaso(entradaUsada, u.output_tokens ?? SAIDA_MAXIMA_PADRAO) + custoPiorCaso(entradaUsada, SAIDA_MAXIMA_RETENTATIVA);
+        if (!entradaUsada || total > LIMITE_DA_LEITURA_MICROUSD) throw Object.assign(new ErroDeIa("IA_RESPOSTA_TRUNCADA"), { detalhe: "SEM_NOVA_TENTATIVA_CUSTO" });
+        resposta = await chamar(SAIDA_MAXIMA_RETENTATIVA);
+        if (resposta?.stop_reason === "max_tokens") throw Object.assign(new ErroDeIa("IA_RESPOSTA_TRUNCADA"), { detalhe: "APOS_NOVA_TENTATIVA" });
       }
-      // Sem fallback: se outro modelo respondeu (roteamento inesperado), a saída é descartada (o custo já foi registrado).
-      if (resposta?.model && !ehModeloPermitido(resposta.model)) throw new ErroDeIa("IA_MODELO_INESPERADO");
-      if (resposta?.stop_reason === "refusal") throw new ErroDeIa("IA_RECUSOU");
-      if (resposta?.stop_reason === "max_tokens") throw new ErroDeIa("IA_RESPOSTA_TRUNCADA");
       const textoJson = (resposta?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("");
       let saida;
       try { saida = JSON.parse(textoJson); } catch { throw new ErroDeIa("IA_JSON_INVALIDO"); }

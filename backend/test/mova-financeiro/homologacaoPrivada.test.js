@@ -268,7 +268,8 @@ t("13C resposta truncada em TEXTO: FALHA_LEITURA com pedido de reenvio curto, um
   const s = await cenario(() => ({ stop_reason: "max_tokens", content: [] }));
   await s.enviar(msg({ texto: "MOVA, paguei 150 de luz da alfa" }));
   const h = await s.ultima();
-  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA");
+  // 27/11 (#239): sem `usage` na resposta cortada não há como somar o custo das duas chamadas ⇒ nenhuma nova tentativa (motivo registrado)
+  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA:SEM_NOVA_TENTATIVA_CUSTO");
   const [r] = await s.mova.armazenamento.saida.listar();
   assert.match(r.texto, /Não consegui interpretar a mensagem/);
   assert.equal(s.pedidos.length, 1);
