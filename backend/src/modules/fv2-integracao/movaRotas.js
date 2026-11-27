@@ -38,6 +38,7 @@
 //   GET  /api/mova/linha-do-tempo?proposta=  etapas do documento: recebimento → … → pagamento → extrato → conciliação (ver)
 //   POST /acoes/mova/conciliar-comprovante  responsável liga a saída do extrato à MESMA baixa (vincular_pagamento; nunca 2ª baixa)
 import { ACAO, ErroFinanceiro } from "../financeiro-v2/index.js";
+import { faixaDeUso, resolverLimites, validarRegra } from "../mova-financeiro/dominio/politicaEnvio.js";
 import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, linhaDoTempo, montarConferencia } from "../mova-financeiro/index.js";
 import { normalizarTelefoneBr } from "../mova-financeiro/dominio/entregadores.js";
 
@@ -256,6 +257,32 @@ export const CONSULTAS_MOVA = Object.freeze({
       atendimento: metricas, atendimentoResumo: { respostas: total, deterministicas: metricas.filter((m) => m.via === "DETERMINISTICA").reduce((t, m) => t + m.respostas, 0), ia: metricas.filter((m) => m.via === "IA").reduce((t, m) => t + m.respostas, 0), bloqueadas: metricas.filter((m) => m.via === "BLOQUEADA").reduce((t, m) => t + m.respostas, 0), tokens: metricas.reduce((t, m) => t + m.tokensEntrada + m.tokensSaida, 0) },
     };
   },
+  // 28/11: PAINEL DE ENVIO — uso do dia, limites efetivos, represamento, alertas, falhas e consumo de IA. Escopo da unidade da sessão; os totais
+  // gerais (todas as empresas) só com a permissão de configurar. Nunca devolve texto de mensagem nem telefone (só contagens e identificadores mascarados).
+  "/mova/envio-painel": async ({ ctx, mova, params = {} }) => {
+    exigirVer(ctx);
+    const a = mova.armazenamento;
+    if (!a.limitesDeEnvio || typeof a.saida.usoDeEnvio !== "function") return { disponivel: false, motivo: "SEM_MIGRACAO_0027" };
+    const agora = new Date();
+    const desde = new Date(Date.UTC(...(() => { const f = new Date(agora.getTime() - 3 * 3600_000); return [f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), 3]; })())).toISOString();
+    const dia = new Date(agora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+    const geral = Boolean(ctx.permissoes?.includes(ACAO.CONFIGURAR));
+    const [uso, regras, alertas, represamento, historico] = await Promise.all([a.saida.usoDeEnvio({ desde, agora }), a.limitesDeEnvio.regrasAtivas(), a.alertasDeEnvio.listar(dia), a.saida.represamento(agora), geral ? a.limitesDeEnvio.historico(30) : []]);
+    const efetivo = resolverLimites({ regras, empresaId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
+    const mascarar = (j) => { const d = String(j ?? "").split("@")[0].replace(/D/g, ""); return d ? `…${d.slice(-4)}` : "—"; };
+    const daUnidade = uso.porUnidade.get(ctx.unidadeId) ?? 0;
+    const metricas = a.metricas ? await a.metricas.resumo({ unidadeId: ctx.unidadeId, desde: dia }).catch(() => []) : [];
+    const estados = await a.saida.contagem();
+    return {
+      disponivel: true, dia, limites: efetivo, regras: regras.filter((r) => geral || r.escopo === "GLOBAL" || r.chave === ctx.unidadeId || r.chave === ctx.organizacaoId),
+      uso: { unidade: daUnidade, pctDaUnidade: faixaDeUso(daUnidade, efetivo.proativasDia).pct, porCategoria: Object.fromEntries(uso.porCategoria), ...(geral ? { total: uso.dia, pctTotal: faixaDeUso(uso.dia, efetivo.proativasDia).pct, porUnidade: Object.fromEntries(uso.porUnidade),
+        porConversa: [...uso.porDestino].sort((x, y) => y[1] - x[1]).slice(0, 20).map(([j, n]) => ({ conversa: mascarar(j), tipo: String(j).endsWith("@g.us") ? "GRUPO" : "PRIVADO", enviadas: n })) } : {}) },
+      fila: { ...(geral ? { estados } : {}), represamento: geral ? represamento : { porPrioridade: [], motivos: [] } },
+      alertas: geral ? alertas : [], historicoDeLimites: historico,
+      ia: { respostas: metricas.reduce((t, m) => t + m.respostas, 0), deterministicas: metricas.filter((m) => m.via === "DETERMINISTICA").reduce((t, m) => t + m.respostas, 0), chamadasIa: metricas.reduce((t, m) => t + m.chamadasIa, 0), tokensEntrada: metricas.reduce((t, m) => t + m.tokensEntrada, 0), tokensSaida: metricas.reduce((t, m) => t + m.tokensSaida, 0) },
+      podeConfigurar: geral, filaPrioritariaLigada: Boolean(mova.cfg?.filaPrioridade),
+    };
+  },
   "/mova/entregadores-oficiais": async ({ ctx, nucleo }) => {
     exigirVer(ctx);
     return { itens: await entregadoresConhecidos({ ctx, nucleo }) };
@@ -313,6 +340,22 @@ export const CONSULTAS_MOVA = Object.freeze({
 });
 
 export const ACOES_MOVA = Object.freeze({
+  // 28/11: ajuste administrativo de UM limite de envio (sem deploy). Exige configurar; escopo EMPRESA/UNIDADE só da própria sessão; GLOBAL e
+  // GRUPO/FINALIDADE só com a permissão de configurar. Valida faixa, exige justificativa, grava histórico + auditoria (na mesma transação).
+  "/mova/limite-envio": { campos: ["escopo", "chave", "campo", "valor", "ativo", "justificativa"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!mova.armazenamento.limitesDeEnvio) throw recusa(503, "LIMITES_INDISPONIVEIS", "Limites de envio indisponíveis (migração 0027 não aplicada).");
+      const regra = { escopo: b.escopo, chave: b.escopo === "GLOBAL" ? "*" : b.chave, campo: b.campo, valor: b.campo === "alertaFaixas" ? String(b.valor) : Number(b.valor) };
+      const v = validarRegra(regra);
+      if (!v.ok) throw recusa(400, v.erro, "Limite inválido.");
+      if (regra.escopo === "EMPRESA" && regra.chave !== ctx.organizacaoId) throw recusa(403, "ESCOPO_FORA_DA_SESSAO", "Só é possível alterar limites da própria empresa.");
+      if (regra.escopo === "UNIDADE" && regra.chave !== ctx.unidadeId) throw recusa(403, "ESCOPO_FORA_DA_SESSAO", "Só é possível alterar limites da própria unidade.");
+      if (typeof b.justificativa !== "string" || b.justificativa.trim().length < 10) throw recusa(400, "JUSTIFICATIVA_OBRIGATORIA", "Informe a justificativa (10+ caracteres).");
+      const r = await mova.armazenamento.limitesDeEnvio.definir({ ...regra, valor: regra.valor, ativo: b.ativo !== false, ator: String(ctx.usuarioId ?? "usuario"), justificativa: b.justificativa });
+      return { escopo: regra.escopo, chave: regra.chave, campo: regra.campo, valor: regra.valor, antes: r.antes };
+    } },
+
   // 27/11: reenvio MANUAL de uma notificação de pagamento que falhou (Gateway recusou, sem telefone, sem grupo). Máx. 3, auditado, sem
   // tocar no Financeiro. Quem pode: configurar. O reenvio refaz o texto a partir do que foi gravado no evento.
   "/mova/notificacao-reenviar": { campos: ["eventoId"], escreveNoFinanceiro: false,
