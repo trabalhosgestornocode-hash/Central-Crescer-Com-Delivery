@@ -29,7 +29,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RE
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { categoriaPatrimonialDoRelato, classificarContaRelatada, competenciaDoRelato, complementoDaResposta, ehPatrimonialForaDaDre, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
+import { categoriaPatrimonialDoRelato, observacaoDoTexto, classificarContaRelatada, competenciaDoRelato, complementoDaResposta, ehPatrimonialForaDaDre, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
@@ -227,7 +227,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   async function retomarPendencia(evento, pend, motivo, extra = {}) {
     let r;
     try {
-      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, ...extra } });
+      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, ...extra } });
     } catch (e) {
       try {
         await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
@@ -504,7 +504,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const pend = await a.mensagens.tomarPendente(pendenteSemantico.mensagemId);
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "RESPOSTA_DE_DIVERGENCIA_POR_INTERPRETACAO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, porEvento: evento.eventoId, participanteId: evento.participanteId,
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId,
             finalidade: saida.finalidadePagamento ?? null, descricao: saida.descricaoCompra ?? null, ia: { competencia: saida.competencia ?? null, descricaoCompra: saida.descricaoCompra ?? null, finalidadePagamento: saida.finalidadePagamento ?? null, categoriaSugerida: saida.categoriaSugerida ?? null, favorecido: saida.favorecido ?? null, jurosCentavos: saida.jurosCentavos ?? null, multaCentavos: saida.multaCentavos ?? null } } });
         }
       }
@@ -583,7 +583,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 27/11: também depois de um esclarecimento a pergunta GUARDA a pendência (antes: "responda a esta mensagem" sem pendência =
       // beco sem saída; a resposta caía na conversa comum/CORE). A nova pendência é a operação original, do zero (nada é presumido).
       if (u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) {
-        await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: esclarecimento?.saida ?? saida } });
+        await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: esclarecimento?.saida ?? saida, ...(esclarecimento?.observacoes?.length ? { observacoes: esclarecimento.observacoes } : {}) } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
       }
       const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
@@ -958,11 +958,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
    * 23/11 — PERGUNTA objetiva de divergência: guarda a pendência (a resposta continua a operação) e responde no grupo ou, com valor,
    * conforme a política de resposta (privado). Nada é gravado no Financeiro.
    */
-  async function perguntar({ evento, escopo, saida, injecao, unidade, grupo = null, participante = null }, divergencia, texto, motivo) {
+  async function perguntar({ evento, escopo, saida, injecao, unidade, grupo = null, participante = null, esclarecimento = null }, divergencia, texto, motivo) {
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
     // A resposta vem na MESMA conversa em que a pergunta saiu (grupo ou privado): é por ela que a memória curta reencontra a pendência.
-    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia: { ...divergencia, unidadeId: unidade.unidadeId } } });
+    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia: { ...divergencia, unidadeId: unidade.unidadeId }, ...(esclarecimento?.observacoes?.length ? { observacoes: esclarecimento.observacoes } : {}) } });
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
   }
 
@@ -1189,6 +1189,8 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const comDesconto = Number.isSafeInteger(saida.valorOriginalCentavos) && Number.isSafeInteger(saida.descontoCentavos) && saida.descontoCentavos > 0
       && saida.valorOriginalCentavos - saida.descontoCentavos === valor ? ` — original ${reaisCurto(saida.valorOriginalCentavos)}, desconto ${reaisCurto(saida.descontoCentavos)}, pago ${reaisCurto(valor)}` : "";
     const descricao = (descricaoInformada ?? legenda) ? `${descricaoInformada ?? legenda}${comDesconto}` : null;
+    // 27/11: observações (#244) também no comprovante: as da LEGENDA e as informadas na conversa desta operação vão com a proposta até a conta
+    const observacaoDoPagamento = [observacaoDoTexto(legenda), ...(esclarecimento?.observacoes ?? [])].filter(Boolean).join("; ") || null;
     // Compra nova pelo comprovante sem descrição e sem categoria: pergunta SÓ o que foi comprado (uma vez), em vez de lançar às cegas.
     if (evento.midia && !descricao && !categoria && esclarecimento?.divergencia?.tipo !== TIPO_DIVERGENCIA.DESCRICAO) {
       return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.DESCRICAO, valorCentavos: valor, candidatas: [] }, RESPOSTA.perguntaDescricao(valor), "DESCRICAO_DA_COMPRA_AUSENTE");
@@ -1201,13 +1203,13 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     // 25/11: com encargos comprovados, a conta nasce pelo valor ORIGINAL (o encargo é lançado à parte) e vence no vencimento impresso.
     const vencimentoDaConta = composicao && saida.vencimento ? saida.vencimento : saida.dataPagamento;
-    const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria });
+    const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria, observacao: observacaoDoPagamento });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
     // Resumo consolidado: unidade, categoria e as contas em aberto do MESMO favorecido que este comprovante NÃO baixou.
     // A resposta NUNCA repete o texto recebido: só a descrição CURTA lida pela IA, mascarada e sem sinal de instrução, aparece.
     const descricaoExibivel = descricaoInformada && !sinaisDeInjecao(descricaoInformada) ? mascararDadosSensiveis(descricaoInformada).slice(0, 60) : null;
     const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [], contaNova: true,
-      ...(patrimonialDoPagamento ? { patrimonial: true, comDesconto: comDesconto || null } : {}) };
+      ...(patrimonialDoPagamento ? { patrimonial: true, comDesconto: comDesconto || null } : {}), ...(observacaoDoPagamento ? { observacao: observacaoDoPagamento } : {}) };
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
       datas: { competencia, caixa: saida.dataPagamento, vencimento: vencimentoDaConta }, competenciaPendente: !competencia,
@@ -1492,11 +1494,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
   const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
 
   /** Comando no contrato REAL do Financeiro v2; categoria PROVISÓRIA (a sugestão da IA fica ao lado, para quem aprova). */
-  function comandoDeObrigacao(saida, { competencia, vencimento, descricao = null, categoria = null }) {
+  function comandoDeObrigacao(saida, { competencia, vencimento, descricao = null, categoria = null, observacao = null }) {
     // 15A: competência pendente — os DEMAIS campos são validados (com um mês provisório só para a validação) e o comando é
     // guardado SEM competência; quem revisa informa a competência e a aplicação recusa enquanto ela faltar.
     if (!competencia) {
-      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento, descricao, categoria });
+      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento, descricao, categoria, observacao });
       if (!r.ok) return r;
       const { competencia: _provisoria, ...semCompetencia } = r.valor;
       return { ok: true, valor: semCompetencia };
@@ -1508,6 +1510,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       descricao: descricao ?? `${saida.tipoDocumento === "BOLETO" ? "Boleto" : saida.tipoDocumento === "NOTA_FISCAL" ? "Nota fiscal" : "Comprovante"} recebido pelo MOVA`,
       competencia, dataEmissao: emissao, vencimento,
       ...(saida.identificadorDocumento ? { identificador: saida.identificadorDocumento } : {}),
+      ...(observacao ? { observacao: observacao.length > 500 ? `${observacao.slice(0, 497)}...` : observacao } : {}),
     };
     try {
       return { ok: true, valor: porta.validarComandoDeObrigacao(bruto) };

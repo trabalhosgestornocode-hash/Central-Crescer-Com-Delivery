@@ -90,7 +90,7 @@ export function operacoesEconomicas(b) {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
             competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: explicitas ? explicitas[i].vencimento : somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
-            ...(c.identificador ? { identificador: c.identificador } : {}), ...(c.extrasDaObrigacao ?? {}),
+            ...(c.identificador ? { identificador: c.identificador } : {}), ...(c.observacao ? { observacao: c.observacao } : {}), ...(c.extrasDaObrigacao ?? {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
           }));
         }
