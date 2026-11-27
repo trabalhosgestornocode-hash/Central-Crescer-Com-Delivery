@@ -96,14 +96,28 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     return { obrigacaoId, movimentacaoId: pg.movimentacao?.id ?? null };
   }
 
-  async function aplicarEntreEmpresas(nucleo, ctx, ctxC, p, { obrigacaoId }) {
+  async function aplicarEntreEmpresas(nucleoDaSessao, ctx, ctxDado, p, { obrigacaoId, entreEmpresas = null }) {
     const cmd = p.comando;
     if (cmd?.operacao !== "registrarPagamentoPorOutraEmpresa" || !cmd.credora || !cmd.entrada) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
-    // a sessão da plataforma é de UMA unidade: sem o contexto verificado da credora (mesma pessoa), nada é aplicado
+    // A sessão da plataforma é de UMA unidade. 27/11: a rota fornece a AUTORIZAÇÃO VINCULADA (`entreEmpresas`): contexto verificado
+    // da credora (mesma pessoa, 2º fator recente) + núcleo com os dois escopos, cuja sessão de banco na credora fica presa a ESTA
+    // operação. Sem ela (ou sem o contexto dado), nada é aplicado.
+    let ctxC = ctxDado; let nucleo = nucleoDaSessao; let autorizacao = null;
+    if (!ctxC && typeof entreEmpresas === "function") {
+      try {
+        autorizacao = await entreEmpresas({ organizacaoId: cmd.credora.organizacaoId, unidadeId: cmd.credora.unidadeId, chave: cmd.entrada.chave, propostaId: p.id });
+      } catch (e) {
+        await a.auditoria.registrar({ acao: "AUTORIZACAO_VINCULADA_RECUSADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { motivo: e?.detalhes?.motivo ?? e?.codigo ?? "RECUSADA", credora: cmd.credora.unidadeId } });
+        throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao("CONTRAPARTE_NAO_AUTORIZADA", { motivo: e?.detalhes?.motivo ?? e?.codigo ?? null });
+      }
+      ctxC = autorizacao.ctx; nucleo = autorizacao.nucleo;
+    }
     if (!ctxC) throw new ErroDeAprovacao("CONTRAPARTE_SEM_SESSAO", { unidadeId: cmd.credora.unidadeId });
     const esc = escopo(ctx); const escC = escopo(ctxC);
     if (ctxC.usuarioId !== ctx.usuarioId || escC.organizacaoId !== cmd.credora.organizacaoId || escC.unidadeId !== cmd.credora.unidadeId) throw new ErroDeAprovacao("CONTRAPARTE_INVALIDA");
-    await exigir(ctxC, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR]);
+    // Na credora basta a ação ESTREITA (o banco restringe a sessão vinculada a ver + registrar_intercompany).
+    await exigir(ctxC, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR_INTERCOMPANY]);
+    const rodar = autorizacao?.executar ?? ((fn) => fn());
     // várias contas compatíveis: quem revisa escolhe UMA delas (nunca o MOVA); conta nova exige a competência revisada
     const entrada = { ...cmd.entrada };
     if (cmd.escolherConta?.length) {
@@ -120,11 +134,11 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
     try {
-      const r = await nucleo.registrarPagamentoPorOutraEmpresa(ctx, ctxC, entrada);
+      const r = await rodar(() => nucleo.registrarPagamentoPorOutraEmpresa(ctx, ctxC, entrada));
       const resultado = { obrigacaoId: r.titulo?.id ?? entrada.obrigacaoId ?? null, vinculoId: r.vinculoId, movimentacaoId: null, repetido: r.repetido === true };
       const aplicada = await a.propostas.transicionar(esc, p.id, "APLICANDO", "APLICADA", resultado);
       await a.aprovacoes.registrar({ propostaId: p.id, acao: "APLICADA", usuarioId: ctx.usuarioId, resultado });
-      await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado, credora: escC.unidadeId } });
+      await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado, credora: escC.unidadeId, autorizacaoVinculada: Boolean(autorizacao) } });
       return aplicada;
     } catch (e) {
       const codigo = e instanceof ErroDeAprovacao ? e.codigo : e instanceof ErroFinanceiro ? e.codigo : "FALHA_NA_APLICACAO";
@@ -139,7 +153,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
      * @param {object} ctx contexto VERIFICADO do Financeiro v2 (sessão da plataforma)
      * @param {{propostaId:string, contaId?:string, categoria?:string}} e  contaId obrigatório para baixa/despesa paga
      */
-    async aplicar(ctx, { propostaId, contaId = null, categoria = null, obrigacaoId = null } = {}, { nucleo = nucleoPadrao, ctxContraparte = null } = {}) {
+    async aplicar(ctx, { propostaId, contaId = null, categoria = null, obrigacaoId = null } = {}, { nucleo = nucleoPadrao, ctxContraparte = null, entreEmpresas = null } = {}) {
       await exigir(ctx, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR]);
       const esc = escopo(ctx);
       const p = UUID.test(propostaId ?? "") ? await a.propostas.obter(esc, propostaId) : null;
@@ -186,7 +200,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       }
       // 26/11 — operação ENTRE EMPRESAS: a MESMA pessoa, com contexto VERIFICADO nas DUAS unidades (a da proposta = devedora, e a
       // credora). O Financeiro confere permissão e concessão em cada uma e grava os dois lados numa transação só.
-      if (p.tipo === "INTERCOMPANY") return aplicarEntreEmpresas(nucleo, ctx, ctxContraparte, p, { obrigacaoId });
+      if (p.tipo === "INTERCOMPANY") return aplicarEntreEmpresas(nucleo, ctx, ctxContraparte, p, { obrigacaoId, entreEmpresas });
       if (!["NOVA_OBRIGACAO", "CONTA_RELATADA"].includes(p.tipo) && !porComprovante && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
       const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
       if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");

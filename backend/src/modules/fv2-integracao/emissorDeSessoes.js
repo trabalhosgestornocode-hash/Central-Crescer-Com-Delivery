@@ -71,6 +71,45 @@ export function criarEmissorDeSessoes({ poolAutoridade, obterUsuario, mfa, relog
         return recusa(403, "BANCO_RECUSOU", { codigoBanco: e?.code ?? null });
       }
     },
+    /**
+     * 27/11 (PR #236) — AUTORIZAÇÃO VINCULADA À OPERAÇÃO ENTRE EMPRESAS. A sessão da plataforma continua sendo de UMA unidade;
+     * a autoridade emite UMA sessão curta para a OUTRA empresa da operação, presa à chave dela, quando:
+     *   - o token é da conta da sessão (provedor) e a política aceita a sessão como ação SENSÍVEL (impersonação, exibição,
+     *     conta compartilhada, expiração — as mesmas recusas de sempre);
+     *   - há prova VERIFICADA de segundo fator recente da mesma conta (aal2, ≤ 10 min) — sem ela, nada;
+     *   - a pessoa do pedido é a da sessão e o escopo pedido é o da contraparte declarada (nunca o próprio, nunca outro);
+     *   - o BANCO confere aprovar + aplicar + registrar_intercompany da MESMA pessoa nas DUAS unidades, restringe a sessão a
+     *     ver + registrar_intercompany e grava a auditoria (fv2_abrir_sessao_vinculada).
+     * @param {{sessao:object, contaPessoal:boolean, token:string, escopo:{organizacaoId,unidadeId,usuarioId}, vinculo:{organizacaoId,unidadeId,chave,propostaId?}}} e
+     */
+    async emitirSessaoVinculada({ sessao, contaPessoal, token, escopo, vinculo }) {
+      const id = await conferirIdentidade(token, sessao);
+      if (!id.ok) return recusa(401, id.motivo);
+      const prova = await mfa.provar({ tokenDeAcesso: token, contaId: id.contaId }).catch(() => ({ ok: false }));
+      if (!prova?.ok || !Number.isFinite(prova.segundoFatorEm)) return recusa(403, prova?.motivo ?? "SEM_PROVA_DE_SEGUNDO_FATOR", { finalidade: "INTERCOMPANY" });
+      const d = decidirEmissao({ sessao, pedido: { finalidade: FINALIDADE.ACAO_SENSIVEL }, prova, contaPessoal: contaPessoal === true, acoesConcedidas: ["CONFERIDA_PELO_BANCO"], agoraMs: relogio().getTime() });
+      if (!d.emitir) return recusa(403, d.motivo, { finalidade: "INTERCOMPANY" });
+      const min = (x) => String(x ?? "").toLowerCase();
+      const chave = typeof vinculo?.chave === "string" ? vinculo.chave.trim() : "";
+      if (!chave || chave.length > 300) return recusa(400, "VINCULO_SEM_CHAVE", { finalidade: "INTERCOMPANY" });
+      if (!escopo || min(escopo.usuarioId) !== d.escopo.usuarioId || min(escopo.organizacaoId) !== min(vinculo.organizacaoId) || min(escopo.unidadeId) !== min(vinculo.unidadeId)) {
+        return recusa(403, "ESCOPO_DIFERENTE_DO_VINCULO", { finalidade: "INTERCOMPANY" });
+      }
+      if (min(escopo.organizacaoId) === d.escopo.organizacaoId && min(escopo.unidadeId) === d.escopo.unidadeId) return recusa(403, "VINCULO_PARA_A_PROPRIA_UNIDADE", { finalidade: "INTERCOMPANY" });
+      const validadeSegundos = Math.min(120, d.validadeSegundos);
+      try {
+        const { rows } = await poolAutoridade.query(
+          "select fv2_abrir_sessao_vinculada($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::integer, 'INTERCOMPANY', $7::text, $8::uuid, 'aal2', $9::timestamptz) as t",
+          [d.escopo.usuarioId, d.escopo.organizacaoId, d.escopo.unidadeId, min(escopo.organizacaoId), min(escopo.unidadeId), validadeSegundos, chave,
+            /^[0-9a-f-]{36}$/i.test(String(vinculo.propostaId ?? "")) ? vinculo.propostaId : null, new Date(prova.segundoFatorEm).toISOString()],
+        );
+        log({ tipo: "SESSAO_VINCULADA_EMITIDA", finalidade: "INTERCOMPANY", organizacaoId: min(escopo.organizacaoId), unidadeId: min(escopo.unidadeId),
+          principal: { organizacaoId: d.escopo.organizacaoId, unidadeId: d.escopo.unidadeId }, pessoa: d.escopo.usuarioId, operacao: chave, validadeSegundos });
+        return { ok: true, token: rows[0].t, validadeSegundos };
+      } catch (e) {
+        return recusa(403, "BANCO_RECUSOU", { codigoBanco: e?.code ?? null, finalidade: "INTERCOMPANY" });
+      }
+    },
     conferirIdentidade,
     log,
     recusa,

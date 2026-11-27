@@ -269,3 +269,153 @@ begin
   end if;
   return new;
 end $$;
+
+-- =====================================================================================================================
+-- 27/11 (revisão do PR #236) — AUTORIZAÇÃO VINCULADA À OPERAÇÃO (fim do CONTRAPARTE_SEM_SESSAO)
+--
+-- A sessão da plataforma é de UMA unidade e a autoridade só emite sessão de banco para o escopo DESSA sessão (regra mantida).
+-- Para a operação entre empresas, a autoridade passa a poder emitir UMA sessão para a OUTRA empresa quando, e só quando:
+--   * a MESMA pessoa (usuario_id) tem concessão ATIVA com aprovar + aplicar + registrar_intercompany NAS DUAS unidades;
+--   * a autenticação é aal2 com segundo fator RECENTE (≤ 10 min), conferido pela autoridade e registrado aqui;
+--   * a finalidade é INTERCOMPANY e a sessão fica PRESA à chave da operação (só grava o registro/reembolso dessa chave);
+--   * a validade é curta (≤ 120 s) e as ações da sessão ficam RESTRITAS a ver + registrar_intercompany (acoes_autorizadas),
+--     mesmo que a concessão da pessoa seja mais ampla — portanto vale o regime ESTREITO (fv2_so_intercompany) nessa empresa;
+--   * cada emissão fica na auditoria fv2_autorizacao_vinculada (sem exclusão nem alteração).
+-- Sessões comuns não mudam (acoes_autorizadas nulo ⇒ regra de sempre). RLS, MFA e escopo continuam valendo.
+-- =====================================================================================================================
+
+create table fv2_autorizacao_vinculada (
+  id                          uuid primary key default gen_random_uuid(),
+  sessao_id                   uuid not null unique references fv2_sessao_banco (id),
+  usuario_id                  uuid not null,
+  organizacao_id              uuid not null,            -- escopo da sessão vinculada (a outra empresa)
+  unidade_id                  uuid not null,
+  principal_organizacao_id    uuid not null,            -- escopo da sessão da plataforma (onde a pessoa aprovou)
+  principal_unidade_id        uuid not null,
+  finalidade                  text not null check (finalidade = 'INTERCOMPANY'),
+  chave                       text not null check (length(chave) between 1 and 300),
+  proposta_id                 uuid,
+  nivel_autenticacao          text not null check (nivel_autenticacao = 'aal2'),
+  segundo_fator_em            timestamptz not null,
+  emitida_por                 text not null default session_user,
+  emitida_em                  timestamptz not null default clock_timestamp(),
+  expira_em                   timestamptz not null,
+  foreign key (organizacao_id, unidade_id) references fv2_escopo,
+  foreign key (principal_organizacao_id, principal_unidade_id) references fv2_escopo,
+  check ((organizacao_id, unidade_id) <> (principal_organizacao_id, principal_unidade_id)),
+  check (expira_em > emitida_em and expira_em <= emitida_em + interval '121 seconds')
+);
+create function fv2_autorizacao_vinculada_imutavel() returns trigger language plpgsql as $$
+begin
+  raise exception 'Financeiro v2: a autorização vinculada é registro de auditoria e não se altera.' using errcode = 'FV002';
+end $$;
+create trigger fv2_autorizacao_vinculada_sem_delete before delete on fv2_autorizacao_vinculada for each row execute function fv2_proibir_exclusao();
+create trigger fv2_autorizacao_vinculada_sem_update before update on fv2_autorizacao_vinculada for each row execute function fv2_autorizacao_vinculada_imutavel();
+alter table fv2_autorizacao_vinculada enable row level security;
+alter table fv2_autorizacao_vinculada force row level security;
+-- leitura (auditoria) nas DUAS unidades envolvidas, com sessão operacional; gravação só pela função da autoridade (abaixo)
+create policy fv2_autorizacao_vinculada_ler on fv2_autorizacao_vinculada for select using ((select fv2_sessao_operacional()) and (
+  (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
+  or (principal_organizacao_id = (select fv2_org()) and principal_unidade_id = (select fv2_uni()))));
+create policy fv2_autorizacao_vinculada_guardiao on fv2_autorizacao_vinculada to fv2_guardiao using (true) with check (true);
+revoke all on fv2_autorizacao_vinculada from public;
+grant select on fv2_autorizacao_vinculada to fv2_app;
+grant select, insert on fv2_autorizacao_vinculada to fv2_guardiao;
+
+-- Permissão por ação passa a respeitar as ações RESTRITAS da sessão (só as sessões vinculadas as têm; as comuns: nulo).
+create or replace function fv2_tem_acao(p_acoes text[]) returns boolean
+language sql stable security definer set search_path = pg_catalog, public, pg_temp as $$
+  select exists (
+    select 1
+      from fv2__sessao_vigente() s
+      join fv2_concessao c on c.organizacao_id = s.organizacao_id and c.unidade_id = s.unidade_id and c.usuario_id = s.usuario_id
+     where s.finalidade = 'OPERACAO' and c.situacao = 'ATIVA' and c.acoes ?| p_acoes
+       and (s.acoes_autorizadas is null or s.acoes_autorizadas ?| p_acoes)
+  )
+$$;
+
+/** Chave da operação a que a sessão VIGENTE está presa (null = sessão comum). */
+create function fv2__chave_vinculada() returns text language sql stable security definer set search_path = pg_catalog, public, pg_temp as $$
+  select a.chave from fv2__sessao_vigente() s join fv2_autorizacao_vinculada a on a.sessao_id = s.sessao_id
+$$;
+alter function fv2__chave_vinculada() owner to fv2_guardiao;
+revoke all on function fv2__chave_vinculada() from public;
+grant execute on function fv2__chave_vinculada() to fv2_app;
+
+create function fv2_abrir_sessao_vinculada(p_usuario uuid, p_principal_organizacao uuid, p_principal_unidade uuid, p_organizacao uuid,
+  p_unidade uuid, p_validade_segundos integer, p_finalidade text, p_chave text, p_proposta uuid, p_nivel_autenticacao text,
+  p_segundo_fator_em timestamptz)
+returns text language plpgsql volatile security definer set search_path = pg_catalog, public, pg_temp as $$
+declare
+  token text := fv2__novo_token();
+  exigidas text[] := array['financeiro_v2.aprovar', 'financeiro_v2.aplicar', 'financeiro_v2.registrar_intercompany'];
+  sessao uuid;
+  expira timestamptz;
+begin
+  if p_usuario is null or p_principal_organizacao is null or p_principal_unidade is null or p_organizacao is null or p_unidade is null then
+    raise exception 'Financeiro v2: autorização vinculada incompleta.' using errcode = '22023';
+  end if;
+  if p_organizacao = p_principal_organizacao and p_unidade = p_principal_unidade then
+    raise exception 'Financeiro v2: a autorização vinculada é para a OUTRA empresa da operação.' using errcode = '22023';
+  end if;
+  if p_finalidade is distinct from 'INTERCOMPANY' or coalesce(length(btrim(p_chave)), 0) not between 1 and 300 then
+    raise exception 'Financeiro v2: autorização vinculada só para operação entre empresas, com a chave da operação.' using errcode = '22023';
+  end if;
+  if p_validade_segundos is null or p_validade_segundos < 1 or p_validade_segundos > 120 then
+    raise exception 'Financeiro v2: autorização vinculada vale no máximo 120 s.' using errcode = '22023';
+  end if;
+  if p_nivel_autenticacao is distinct from 'aal2' or p_segundo_fator_em is null
+     or p_segundo_fator_em < clock_timestamp() - interval '10 minutes' or p_segundo_fator_em > clock_timestamp() + interval '1 minute' then
+    raise exception 'Financeiro v2: a autorização vinculada exige segundo fator recente (aal2, últimos 10 minutos).' using errcode = 'FV020';
+  end if;
+  if not exists (select 1 from fv2_escopo e where e.organizacao_id = p_organizacao and e.unidade_id = p_unidade)
+     or not exists (select 1 from fv2_escopo e where e.organizacao_id = p_principal_organizacao and e.unidade_id = p_principal_unidade) then
+    raise exception 'Financeiro v2: escopo não configurado.' using errcode = 'FV020';
+  end if;
+  -- Compartilhada nas duas unidades: uma revogação em andamento nunca é "furada".
+  perform fv2__trava_concessoes(p_principal_organizacao, p_principal_unidade, false);
+  perform fv2__trava_concessoes(p_organizacao, p_unidade, false);
+  -- a MESMA pessoa, com as permissões de aprovar a operação, NAS DUAS empresas (concessão gravada e ativa agora)
+  if not exists (select 1 from fv2_concessao c where c.organizacao_id = p_principal_organizacao and c.unidade_id = p_principal_unidade
+                  and c.usuario_id = p_usuario and c.situacao = 'ATIVA' and c.acoes ?& exigidas)
+     or not exists (select 1 from fv2_concessao c where c.organizacao_id = p_organizacao and c.unidade_id = p_unidade
+                  and c.usuario_id = p_usuario and c.situacao = 'ATIVA' and c.acoes ?& exigidas) then
+    raise exception 'Financeiro v2: a pessoa precisa de aprovar, aplicar e registrar_intercompany nas duas empresas.' using errcode = 'FV020';
+  end if;
+  expira := clock_timestamp() + make_interval(secs => p_validade_segundos);
+  insert into fv2_sessao_banco (token_hash, usuario_id, organizacao_id, unidade_id, finalidade, pode_escrever, acoes_autorizadas, referencia, expira_em)
+  values (sha256(convert_to(token, 'UTF8')), p_usuario, p_organizacao, p_unidade, 'OPERACAO', true,
+          '["financeiro_v2.registrar_intercompany", "financeiro_v2.ver"]'::jsonb, left('vinculada:INTERCOMPANY:' || p_chave, 200), expira)
+  returning id into sessao;
+  insert into fv2_autorizacao_vinculada (sessao_id, usuario_id, organizacao_id, unidade_id, principal_organizacao_id, principal_unidade_id,
+    finalidade, chave, proposta_id, nivel_autenticacao, segundo_fator_em, expira_em)
+  values (sessao, p_usuario, p_organizacao, p_unidade, p_principal_organizacao, p_principal_unidade, p_finalidade, p_chave, p_proposta,
+          p_nivel_autenticacao, p_segundo_fator_em, expira);
+  return token;
+end $$;
+alter function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) owner to fv2_guardiao;
+revoke all on function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) from public;
+grant execute on function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) to fv2_autoridade;
+
+-- A sessão vinculada só grava a operação da SUA chave: o lado novo (insert) e o reembolso cuja liquidação nova tem a mesma chave.
+create function fv2_intercompany_da_chave() returns trigger language plpgsql as $$
+declare
+  ch text := fv2__chave_vinculada();
+begin
+  if ch is null then
+    return new;
+  end if;
+  if tg_op = 'INSERT' then
+    if new.chave_idempotencia not in ('intercompany:' || ch || ':DEVEDORA', 'intercompany:' || ch || ':CREDORA') then
+      raise exception 'Financeiro v2: a autorização vinculada não cobre esta operação entre empresas.' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+  if new.movimentacao_id is distinct from old.movimentacao_id
+     or jsonb_array_length(new.liquidacoes) <> jsonb_array_length(old.liquidacoes) + 1
+     or (new.liquidacoes -> (jsonb_array_length(new.liquidacoes) - 1))->>'chave' is distinct from ch then
+    raise exception 'Financeiro v2: a autorização vinculada só registra o reembolso da sua chave.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+create trigger fv2_intercompany_chave_vinculada before insert or update on fv2_intercompany for each row execute function fv2_intercompany_da_chave();

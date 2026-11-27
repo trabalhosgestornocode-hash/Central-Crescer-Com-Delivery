@@ -1884,6 +1884,17 @@ export function criarSessaoBaileys({
       if (!grupos.includes(grupoJid)) { const e = erro(CODIGOS.GRUPO_NAO_AUTORIZADO, "grupo fora do MOVA"); e.preEnvio = true; throw e; }
       return enviarTextoAGrupo({ grupoJid, texto, correlationId });
     },
+
+    /**
+     * 27/11 — retrato ATUAL dos membros de um grupo AUTORIZADO do MOVA (somente leitura: groupMetadata, cache de 60 s).
+     * Fora da lista, sem conexão ou sem retrato confiável ⇒ null. Nunca envia mensagem nem altera o grupo.
+     */
+    async retratoMembrosMova({ grupoJid }) {
+      const grupos = Array.isArray(config?.movaGrupos) ? config.movaGrupos : [];
+      if (typeof grupoJid !== "string" || !grupos.includes(grupoJid) || typeof mova?.retratarMembros !== "function") return null;
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket) return null;
+      try { return await mova.retratarMembros(grupoJid, socket); } catch { return null; }
+    },
   };
 
   /**

@@ -15,6 +15,16 @@ const armazenamento = new AsyncLocalStorage();
  */
 export const comIdentidadeDaRequisicao = (dados, fn) => armazenamento.run(Object.freeze({ ...dados }), fn);
 export const identidadeDaRequisicao = () => armazenamento.getStore() ?? null;
+/**
+ * 27/11 — vínculo da operação entre empresas em curso (`{organizacaoId, unidadeId, chave, propostaId}` da CONTRAPARTE), quando
+ * o escopo pedido é exatamente o dela. Só a rota de aplicação que montou a operação o declara (comIdentidadeDaRequisicao).
+ */
+export function vinculoDaRequisicao(e) {
+  const v = identidadeDaRequisicao()?.vinculo;
+  if (!v || typeof v.chave !== "string" || !v.chave) return null;
+  const igual = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
+  return igual(v.organizacaoId, e?.organizacaoId) && igual(v.unidadeId, e?.unidadeId) ? v : null;
+}
 
 /** Só o necessário da sessão da plataforma (nada de e-mail, nome, permissões antigas ou módulos). */
 export function resumoDaSessao({ user, tenant, acesso }) {
@@ -62,7 +72,14 @@ export function criarClienteDoGateway({ url, chave, fetch: buscar = globalThis.f
     return j.token;
   }
   return Object.freeze({
-    emitir: (e) => pedir("/v1/sessoes", { escopo: { organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId }, permissoes: e.permissoes ?? [] }),
+    emitir: (e) => {
+      const escopo = { organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId };
+      const v = vinculoDaRequisicao(e);
+      return v ? pedir("/v1/sessoes-vinculadas", { escopo, vinculo: { organizacaoId: v.organizacaoId, unidadeId: v.unidadeId, chave: v.chave, propostaId: v.propostaId ?? null } })
+        : pedir("/v1/sessoes", { escopo, permissoes: e.permissoes ?? [] });
+    },
+    vinculoPara: (e) => vinculoDaRequisicao(e)?.chave ?? null,
+    marcaDaSessao: () => identidadeDaRequisicao()?.sessao?.acesso?.sessionId ?? null,
     emitirProvisionamento: (ato) => pedir("/v1/provisionamentos", { ato }),
   });
 }

@@ -390,7 +390,16 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
 
   /** Tokens já emitidos, por usuário + unidade (só em memória do processo; o banco guarda apenas o hash). */
   const tokens = new Map();
-  const chaveDoToken = (e) => `${e.usuarioId}|${e.organizacaoId}|${e.unidadeId}`;
+  // 27/11: token VINCULADO a uma operação entre empresas (autorização vinculada) tem marca própria: nunca é reaproveitado por
+  // outra operação nem por operações comuns na mesma unidade, e um token comum guardado nunca substitui o vinculado.
+  const vinculoDe = (e) => { try { return typeof sessoes.vinculoPara === "function" ? sessoes.vinculoPara(e) ?? null : null; } catch { return null; } };
+  // e o token é da SESSÃO DA PLATAFORMA que o pediu: um token emitido para a sessão de outra unidade nunca serve a esta.
+  const sessaoDe = () => { try { return typeof sessoes.marcaDaSessao === "function" ? sessoes.marcaDaSessao() ?? null : null; } catch { return null; } };
+  const chaveDoToken = (e) => {
+    const v = vinculoDe(e); const s = sessaoDe();
+    return `${e.usuarioId}|${e.organizacaoId}|${e.unidadeId}${s ? `|sessao:${s}` : ""}${v ? `|vinculo:${v}` : ""}`;
+  };
+  const REUSO_VINCULADO_MS = 60 * 1000; // a sessão vinculada vale ≤ 120 s no banco
   async function emitir(e) {
     try {
       return await sessoes.emitir({ organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, permissoes: e.permissoes ?? [] });
@@ -403,7 +412,7 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     const guardado = tokens.get(k);
     if (!renovar && guardado && guardado.ate > relogio()) return guardado.promessa;
     const promessa = emitir(e);
-    tokens.set(k, { promessa, ate: relogio() + reusoDoTokenMs });
+    tokens.set(k, { promessa, ate: relogio() + (vinculoDe(e) ? Math.min(REUSO_VINCULADO_MS, reusoDoTokenMs) : reusoDoTokenMs) });
     promessa.catch(() => { if (tokens.get(k)?.promessa === promessa) tokens.set(k, { promessa, ate: 0 }); }); // recusa não fica guardada
     return promessa;
   }

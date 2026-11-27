@@ -134,10 +134,20 @@ export const RESPOSTA = Object.freeze({
   notaComVariasContas: (p) => `Esta nota combina com mais de uma conta a pagar. Encaminhei para conferência (proposta ${curto(p.id)}); nada foi lançado.`,
   // 26/11 — CONTA RELATADA POR TEXTO (sem documento)
   contaRelatadaValorAmbiguo: (c) => `O valor de ${reais(c.valorCitadoCentavos)} é de CADA parcela (total ${reais(c.valorCitadoCentavos * c.quantidade)}) ou é o TOTAL da compra (${c.quantidade} parcelas somando ${reais(c.valorCitadoCentavos)})? Responda "cada parcela" ou "total". Nada foi registrado.`,
-  contaRelatadaResumo: (c, { unidade, categoriaNome, avisoFatura }) => [
+  // 27/11: classificação pelo plano de contas — nunca imobilizado automático; "0" deixa para o Centro Financeiro.
+  contaRelatadaCategoria: ({ opcoes = [], motivo, sugestaoDeCriacao = null, descricao = null }) => [
+    motivo === "CATEGORIA_DITA_FORA_DO_PLANO" && sugestaoDeCriacao ? `A categoria "${sugestaoDeCriacao}" não existe no plano de contas desta unidade.`
+      : motivo === "EQUIPAMENTO_EXIGE_CLASSIFICACAO" ? `${descricao ? `"${descricao}" parece` : "Parece"} compra de equipamento: a classificação (despesa ou imobilizado) precisa ser escolhida por vocês.`
+        : "Não encontrei uma categoria segura no plano de contas para esta conta.",
+    "Em qual categoria registro?",
+    ...opcoes.map((o, i) => `${i + 1} — ${o.nome}`),
+    `0 — deixar para classificar no Centro Financeiro${sugestaoDeCriacao ? ` (com a sugestão de criar "${sugestaoDeCriacao}")` : ""}`,
+    "Responda com o número. Nada foi registrado ainda.",
+  ].join("\n"),
+  contaRelatadaResumo: (c, { unidade, categoriaNome, avisoFatura, sugestaoDeCriacao = null }) => [
     `Confere antes de eu registrar (${unidade}):`,
     `• ${c.descricao}${c.fornecedor ? ` — fornecedor ${c.fornecedor}` : " — fornecedor não informado"}`,
-    `• Categoria: ${categoriaNome ?? "a classificar"}`,
+    `• Categoria: ${categoriaNome ?? `a classificar no Centro Financeiro${sugestaoDeCriacao ? ` (sugestão: criar "${sugestaoDeCriacao}")` : ""}`}`,
     `• Competência: ${c.competencia.slice(5)}/${c.competencia.slice(0, 4)}${c.forma ? ` • Forma: ${{ CARTAO: "cartão", BOLETO: "boleto", PIX: "Pix", DINHEIRO: "dinheiro", TRANSFERENCIA: "transferência" }[c.forma]}` : ""}`,
     ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}`),
     `• Total: ${reais(c.totalCentavos)} — situação: A PAGAR`,
@@ -146,7 +156,7 @@ export const RESPOSTA = Object.freeze({
   ].join("\n"),
   contaRelatadaCancelada: () => "Ok, não registrei essa conta. Nada foi lançado.",
   contaRelatadaRegistrada: (c, r) => `Conta a pagar registrada (em aberto): ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}; primeiro vencimento ${dataBr(c.parcelas[0].vencimento)}. Aparece no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
-  contaRelatadaProposta: (p, c) => `Proposta ${curto(p.id)} criada para aprovação no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}. Nada foi lançado ainda.`,
+  contaRelatadaProposta: (p, c, { aClassificar = false } = {}) => `Proposta ${curto(p.id)} criada para ${aClassificar ? "classificação e aprovação" : "aprovação"} no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}. Nada foi lançado ainda.`,
   contaRelatadaFaturaDoCartao: (f) => `⚠ Já existe fatura do cartão em aberto com vencimento ${dataBr(f.vencimento)} (${reais(f.saldoCentavos ?? f.valorOriginalCentavos)}). Se esta compra já está nessa fatura, responda "não" para não contar duas vezes.`,
   // 26/11 — operação entre empresas (uma empresa do grupo pagou pela outra). Texto da pergunta conforme o pedido do proprietário.
   entreEmpresasPergunta: ({ credora, devedora, valorCentavos, existente, varias }) => `Identifiquei que a ${credora} realizou um pagamento de ${reais(valorCentavos)} referente ao ${devedora}. Confirma que devo registrar a despesa no ${devedora} e o valor como uma dívida do ${devedora} com a ${credora}?`

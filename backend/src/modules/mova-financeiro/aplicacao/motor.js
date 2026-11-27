@@ -28,7 +28,7 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RE
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { categoriaDaContaRelatada, interpretarContaRelatada, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
+import { classificarContaRelatada, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
@@ -582,7 +582,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const relatoConta = textoPuro && saida.intencao === "REGISTRAR_CONTA";
     // 26/11: conta relatada por TEXTO com valor e data(s) ⇒ leitura determinística das parcelas, resumo e confirmação (antes das
     // conferências de valor da IA: "total ou cada parcela?" é pergunta do MOVA, não falha de leitura). Sem valor+data, segue o fluxo comum.
-    if (relatoConta || (textoPuro && String(esclarecimento?.divergencia?.tipo ?? "").startsWith("CONTA_RELATADA"))) {
+    // 27/11: FOTO DO PRODUTO com legenda ("bebedouro para o açaí, 2x de 97,25, dia 19/12 e 19/01"): não é comprovante, boleto nem
+    // nota (tipo lido fora de PAGAMENTOS/CONTAS) ⇒ a LEGENDA vira o relato da conta. Comprovante/boleto/nota seguem o fluxo documental.
+    const fotoDeProduto = Boolean(evento.midia) && String(evento.midia.mime ?? "").startsWith("image/") && ![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento);
+    const fluxoRelatado = String(esclarecimento?.divergencia?.tipo ?? "").startsWith("CONTA_RELATADA");
+    if (relatoConta || fotoDeProduto || ((textoPuro || fotoDeProduto) && fluxoRelatado)) {
       const relatada = await tratarContaRelatada(ctx);
       if (relatada) return relatada;
     }
@@ -1073,24 +1077,26 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const { evento, escopo, unidade, esclarecimento, injecao } = ctx;
     const div = esclarecimento?.divergencia ?? null;
     if (div && !String(div.tipo ?? "").startsWith("CONTA_RELATADA")) return null;
+    // 27/11: FOTO do produto com legenda ⇒ a LEGENDA é o relato (a foto não é documento fiscal nem comprovante)
+    const textoDaConta = evento.midia ? (legendaDoDocumento(evento.texto) ?? "") : evento.texto;
+    const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv });
+    // estado acumulado da conversa (cada pergunta carrega as respostas anteriores; nada é perguntado duas vezes)
     let tipoValor = div?.tipoValor ?? null;
+    let escolha = div?.categoriaEscolhida ?? null; // código do plano | "REVISAO" (a classificar no Centro Financeiro)
+    const sugestaoDeCriacao = div?.sugestaoDeCriacao ?? null;
     if (div?.tipo === "CONTA_RELATADA_VALOR") {
       tipoValor = interpretarRespostaDoValor(esclarecimento.texto);
-      if (!tipoValor) {
-        const c0 = interpretarContaRelatada({ texto: evento.texto, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades });
-        return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR" }, RESPOSTA.contaRelatadaValorAmbiguo(c0), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
-      }
+      if (!tipoValor) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(ler(null)), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
     }
-    const c = interpretarContaRelatada({ texto: evento.texto, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor });
+    const c = ler(tipoValor);
     if (!c.ehConta) return null;
-    // conta ÚNICA relatada por texto segue o fluxo de sempre (proposta de conta a pagar); este fluxo é o das PARCELAS (2 ou mais)
-    if (!div && !((c.quantidade ?? 0) > 1)) return null;
+    // 27/11 (revisão do PR #236): conta ÚNICA e PARCELADA seguem o MESMO fluxo (resumo → confirmação → registro em aberto).
     if (c.faltas.length) {
       const nomes = { DATA_INVALIDA: "uma data válida (dia/mês)", VALOR: "valor", VALORES_DIFERENTES: "qual é o valor (a mensagem tem mais de um)", DESCRICAO: "o que foi comprado",
         PARCELAS: "quantidade de parcelas (1 a 24)", VENCIMENTO: "vencimento", VENCIMENTOS_DAS_PARCELAS: "o vencimento de cada parcela", VENCIMENTO_ANTERIOR_A_COMPRA: "vencimentos a partir da data da compra" };
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONTA_RELATADA_INCOMPLETA:${c.faltas.join(",")}`, escopo, resposta: RESPOSTA.faltaInformacao(c.faltas.map((f) => nomes[f] ?? f)), injecao });
     }
-    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR" }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
+    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
     const bloqueio = await competenciaAberta(ctx, c.competencia);
     if (bloqueio) return bloqueio;
     // Duplicidade: mesma parcela (valor + vencimento) já registrada nesta unidade ⇒ nada novo.
@@ -1099,8 +1105,21 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (igual) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "OBRIGACAO_JA_REGISTRADA", escopo, resposta: RESPOSTA.obrigacaoJaExiste(igual), injecao });
     // Cartão: a compra pode já estar dentro de uma FATURA registrada — avisa no resumo (a pessoa decide; nunca conta duas vezes calado).
     const fatura = c.forma === "CARTAO" ? todas.find((t) => /\b(fatura|cartao)\b/.test(normalizar(`${t.descricao ?? ""} ${t.fornecedor ?? t.favorecido ?? ""}`)) && c.parcelas.some((p) => String(t.vencimento ?? "").slice(0, 7) === p.vencimento.slice(0, 7))) : null;
+    // CLASSIFICAÇÃO pelo plano da unidade (nunca IMOBILIZADO automático; categoria dita fora do plano ⇒ pergunta ou revisão)
     const plano = await planoDaUnidade(escopo);
-    const categoria = plano.length ? categoriaDaContaRelatada(c.descricao, plano) : null;
+    const cls = classificarContaRelatada({ descricao: c.descricao, texto: textoDaConta, categorias: plano });
+    if (div?.tipo === "CONTA_RELATADA_CATEGORIA") {
+      const r = interpretarRespostaDaCategoria(esclarecimento.texto, { opcoes: div.opcoes ?? [], categorias: plano });
+      if (!r) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.contaRelatadaCategoria({ opcoes: div.opcoes ?? [], motivo: div.motivo, sugestaoDeCriacao, descricao: c.descricao })}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+      escolha = r.revisao ? "REVISAO" : r.codigo;
+    }
+    if (!escolha && cls.perguntar) {
+      if (!plano.length) escolha = "REVISAO"; // plano indisponível: nada é inventado; fica a classificar
+      else return perguntar(ctx, { tipo: "CONTA_RELATADA_CATEGORIA", tipoValor: c.tipoValor, opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao },
+        RESPOSTA.contaRelatadaCategoria({ opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao, descricao: c.descricao }), "CONTA_RELATADA_PERGUNTA_CATEGORIA");
+    }
+    const categoria = escolha === "REVISAO" ? null : escolha ? (plano.some((x) => x.codigo === escolha) ? escolha : null) : cls.codigo;
+    const sugestao = categoria ? null : sugestaoDeCriacao ?? cls.sugestaoDeCriacao ?? null;
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: c.fornecedor ?? FORNECEDOR_NAO_INFORMADO }, categoria: categoria ?? porta.categoriaProvisoria,
       descricao: c.descricao.slice(0, 120), competencia: c.competencia, dataEmissao: c.dataEmissao,
@@ -1111,24 +1130,27 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       throw e;
     }
     const impressao = JSON.stringify(bruto);
+    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha, sugestaoDeCriacao: sugestao, impressao };
+    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
-      const categoriaNome = plano.find((x) => x.codigo === categoria)?.nome ?? null;
-      const texto = RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome, avisoFatura: fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null });
-      return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, texto, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
+      return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
     }
     const sim = respostaSimNao(esclarecimento.texto);
     if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_RELATADA_CANCELADA", escopo, resposta: RESPOSTA.contaRelatadaCancelada(), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
-    if (sim !== true) return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, `Não entendi. ${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura: null })}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+    if (sim !== true) return perguntar(ctx, estado, resumo("Não entendi. "), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
     // O que foi confirmado é exatamente o que vai para a proposta (plano/dados mudaram no meio ⇒ mostra de novo, nada é criado).
-    if (div.impressao && div.impressao !== impressao) return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, `Os dados mudaram desde o resumo. ${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura: null })}`, "CONTA_RELATADA_CONFIRMACAO_DESATUALIZADA");
+    if (div.impressao && div.impressao !== impressao) return perguntar(ctx, estado, resumo("Os dados mudaram desde o resumo. "), "CONTA_RELATADA_CONFIRMACAO_DESATUALIZADA");
     // Execução automática só quando QUEM CONFIRMOU é FINANCEIRO nesta unidade (operacional/consulta: fica a proposta para a Central).
     const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
     const confirmadorFinanceiro = perfilNa(confirmador, unidade.unidadeId) === "FINANCEIRO";
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.CONTA_RELATADA, valorCentavos: c.totalCentavos, parcial: false,
       datas: { competencia: c.competencia, caixa: null, vencimento: c.parcelas[0].vencimento }, categoriaDefinida: Boolean(categoria),
+      // sem categoria do plano: a proposta fica para a classificação no Centro Financeiro (com a sugestão de criar a dita, se houver)
+      ...(categoria ? {} : { classificacao: { pendente: true, motivo: cls.motivo, sugestaoDeCriacao: sugestao } }),
+      ...(evento.midia ? { evidenciaNaoFiscal: "FOTO_DO_PRODUTO" } : {}),
       comando: { operacao: "registrarContaParcelada", entrada: bruto },
-    }, (p) => RESPOSTA.contaRelatadaProposta(p, c), {
+    }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria }), {
       posCriacao: confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
         const r = await execucao.aposContaRelatada(p, escopo);
         return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRelatadaRegistrada(c, r.resultado) } : r;

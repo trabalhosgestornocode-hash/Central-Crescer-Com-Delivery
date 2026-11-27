@@ -359,6 +359,25 @@ export function criarEnvioPeloCanal({ gatewayUrl, segredo, fetchFn = (...a) => f
   };
 }
 
+/**
+ * 27/11 — retrato ATUAL dos membros de um grupo MOVA pelo canal isolado (rota /internal/mova/membros, segredo MOVA, somente leitura).
+ * Devolve {membros, verificadoEm} ou null (Gateway fora, grupo fora da lista, sem conexão). Nunca lança.
+ */
+export function criarRetratoPeloCanal({ gatewayUrl, segredo, fetchFn = (...a) => fetch(...a), timeoutMs = 10_000 }) {
+  const caminho = "/internal/mova/membros";
+  return async (grupoId) => {
+    const corpo = JSON.stringify({ grupoJid: grupoId });
+    const headers = { ...assinarRequisicao({ segredo, metodo: "POST", caminho, corpo }), "Content-Type": "application/json" };
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const r = await fetchFn(`${String(gatewayUrl).replace(/\/$/, "")}${caminho}`, { method: "POST", headers, body: corpo, signal: ctrl.signal });
+      if (!r.ok) return null;
+      const j = await r.json().catch(() => null);
+      return j && Array.isArray(j.membros) && typeof j.verificadoEm === "string" ? { membros: j.membros.filter((x) => typeof x === "string").slice(0, 1024), verificadoEm: j.verificadoEm } : null;
+    } catch { return null; } finally { clearTimeout(t); }
+  };
+}
+
 // ------------------------------------------------------------------ montagem da PLATAFORMA (preguiçosa, única por processo)
 let instancia = null;
 let obterDependenciasFv2 = null;
@@ -389,7 +408,7 @@ export const LEITOR_CONEXOES_POR_INSTANCIA = 1;
  */
 export const LEITOR_OCIOSO_MS = 120_000;
 export async function movaDaPlataforma({ env, registrar = () => {} }) {
-  const cfg = lerConfiguracaoMova(env);
+  let cfg = lerConfiguracaoMova(env); // 27/11: let — o aviso diário recebe o retrato pelo canal (abaixo)
   if (!cfg.habilitado || (!obterDependenciasFv2 && cfg.modo !== "PILOTO" && cfg.modo !== "OPERACAO")) return null;
   if (instancia) return instancia;
   const abertos = []; // 24/11: pools desta TENTATIVA — fechados se a montagem falhar (senão cada nova tentativa vazaria conexões)
@@ -412,6 +431,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
     if (cfg.ia && !env.ANTHROPIC_API_KEY) registrar({ evento: "MOVA_IA_SEM_CHAVE", aviso: "MOVA_IA_HABILITADA=1 sem ANTHROPIC_API_KEY: leitura por IA fica desligada" }); // falha segura: o resto segue
     if (cfg.ia && env.ANTHROPIC_API_KEY) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 0, timeout: 60_000 }); } // sem nova tentativa oculta: cada tentativa passa pela reserva
     const enviarAoGateway = cfg.envio && cfg.transporteEnvio === "DIRETO" ? criarEnvioPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) : null;
+    // 27/11: o aviso diário pede um retrato NOVO dos membros pelo MESMO canal isolado (somente leitura) quando o guardado está velho.
+    if (enviarAoGateway && cfg.avisosDiarios?.grupos?.length) {
+      cfg = { ...cfg, avisosDiarios: Object.freeze({ ...cfg.avisosDiarios, atualizarMembros: criarRetratoPeloCanal({ gatewayUrl: env.MOVA_GATEWAY_URL, segredo: env.MOVA_GATEWAY_SECRET }) }) };
+    }
     const releSaida = cfg.envio && cfg.transporteEnvio === "RELE" ? criarSaidaPeloRele({ pool: obterPoolRele(env) }) : null;
     if (cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
       // 16A: Financeiro REAL só pela credencial de leitura do MOVA (pool próprio, 2 conexões, consulta com teto de tempo).

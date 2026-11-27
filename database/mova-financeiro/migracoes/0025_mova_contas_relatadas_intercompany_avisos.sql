@@ -1,4 +1,5 @@
--- MOVA (26/11/2026): (1) operações CONTA_A_PAGAR_RELATADA (conta a pagar por texto, sem documento, em parcelas; ação estreita
+-- MOVA (26/11/2026; revisada 27/11): (1) operações CONTA_A_PAGAR_RELATADA (conta ÚNICA relatada, sem documento), CONTA_PARCELADA_RELATADA
+-- (2 a 24 parcelas; limite sobre a compra inteira) — ambas pela ação estreita
 -- `registrar_conta_parcelada` do Financeiro, migração 0033) e OPERACAO_ENTRE_EMPRESAS (pagamento feito por outra empresa do grupo;
 -- ação `registrar_intercompany`, migração 0034) nas listas fechadas das POLÍTICAS e das EXECUÇÕES. Nenhuma política é semeada: sem
 -- política o MOVA só PROPÕE (as políticas existentes — conta por boleto/nota, despesa paga — NÃO cobrem estas operações).
@@ -7,11 +8,11 @@
 alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
 alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
 alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
 alter table mova.operacao_executada add constraint operacao_executada_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
 alter table mova.proposta drop constraint proposta_tipo_check;
 alter table mova.proposta add constraint proposta_tipo_check
   check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));

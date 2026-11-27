@@ -65,6 +65,13 @@ export function criarGateway({ poolAutoridade, chave, obterUsuario, mfa, relogio
     if (!r.ok) return responder(res, r.status, { motivo: r.motivo, mensagem: "Pedido recusado pela autoridade financeira.", ...(r.codigoBanco ? { codigoBanco: r.codigoBanco } : {}) });
     return responder(res, 200, { token: r.token, validadeSegundos: r.validadeSegundos });
   }
+  // 27/11: autorização vinculada à operação entre empresas (regra em emissorDeSessoes.emitirSessaoVinculada; o banco decide no fim).
+  async function sessoesVinculadas(corpo, token, res) {
+    const { sessao, escopo, contaPessoal, vinculo } = corpo;
+    const r = await emissor.emitirSessaoVinculada({ sessao, escopo, contaPessoal, vinculo, token });
+    if (!r.ok) return responder(res, r.status, { motivo: r.motivo, mensagem: "Pedido recusado pela autoridade financeira.", ...(r.codigoBanco ? { codigoBanco: r.codigoBanco } : {}) });
+    return responder(res, 200, { token: r.token, validadeSegundos: r.validadeSegundos });
+  }
 
   async function provisionamentos(corpo, token, res) {
     const { sessao, ato } = corpo;
@@ -91,7 +98,7 @@ export function criarGateway({ poolAutoridade, chave, obterUsuario, mfa, relogio
     try {
       const caminho = new URL(req.url, "http://gateway").pathname;
       if (req.method === "GET" && caminho === "/saude") return responder(res, 200, { ok: true });
-      if (req.method !== "POST" || !["/v1/sessoes", "/v1/provisionamentos"].includes(caminho)) return responder(res, 404, { motivo: "NAO_ENCONTRADO" });
+      if (req.method !== "POST" || !["/v1/sessoes", "/v1/sessoes-vinculadas", "/v1/provisionamentos"].includes(caminho)) return responder(res, 404, { motivo: "NAO_ENCONTRADO" });
       let corpoTexto;
       try { corpoTexto = await lerCorpo(req); } catch { return recusar(res, 413, "CORPO_GRANDE_DEMAIS"); }
       const canal = conferirPedido({ chave, metodo: "POST", caminho, corpo: corpoTexto, cabecalhos: req.headers, agoraMs: relogio().getTime(), noncesVistos });
@@ -99,7 +106,9 @@ export function criarGateway({ poolAutoridade, chave, obterUsuario, mfa, relogio
       let corpo;
       try { corpo = JSON.parse(corpoTexto); } catch { return recusar(res, 400, "CORPO_INVALIDO"); }
       const token = String(req.headers[CABECALHO.TOKEN] ?? "");
-      return caminho === "/v1/sessoes" ? await sessoes(corpo, token, res) : await provisionamentos(corpo, token, res);
+      if (caminho === "/v1/sessoes") return await sessoes(corpo, token, res);
+      if (caminho === "/v1/sessoes-vinculadas") return await sessoesVinculadas(corpo, token, res);
+      return await provisionamentos(corpo, token, res);
     } catch {
       return responder(res, 500, { motivo: "FALHA_DO_GATEWAY" });
     }

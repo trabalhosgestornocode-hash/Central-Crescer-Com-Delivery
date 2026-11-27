@@ -190,8 +190,45 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, m
       });
   }
 
+  /**
+   * 27/11 (PR #236) — contexto VERIFICADO da OUTRA empresa de uma operação entre empresas, para a MESMA pessoa da sessão.
+   * Não troca a unidade ativa nem amplia a sessão: só confirma, a cada operação, que a pessoa tem acesso na plataforma à
+   * unidade da contraparte, que ela está liberada para escrita, que há concessão do v2 lá, e que o segundo fator é RECENTE
+   * (prova do token). A sessão de banco da contraparte é emitida à parte (autorização vinculada, presa à operação).
+   * @param {object} sessao { user, tenant, acesso } da plataforma
+   * @param {{organizacaoId:string, unidadeId:string, tokenDeAcesso:string}} alvo
+   */
+  async function contextoDaContraparte(sessao, { organizacaoId, unidadeId, tokenDeAcesso = null } = {}) {
+    const { s } = await verificarBase(sessao);
+    if (!ehUuid(organizacaoId) || !ehUuid(unidadeId)) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.SEM_UNIDADE, "Empresa da contraparte inválida.");
+    const org = minusc(organizacaoId); const uni = minusc(unidadeId);
+    if (org === s.organizacaoId && uni === s.unidadeId) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.CONTEXTO_DIVERGENTE, "A contraparte é a própria unidade da sessão.");
+    const l = await liberada(org, uni);
+    if (!l.unidade) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.UNIDADE_NAO_LIBERADA, "O Financeiro v2 não está liberado para a outra empresa.");
+    if (!l.escrita) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.UNIDADE_NAO_LIBERADA, "A outra empresa ainda não foi liberada para lançamentos.");
+    const alvo = { ...s, organizacaoId: org, unidadeId: uni };
+    if (!(await unidadesDaPessoa(alvo)).has(uni)) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.UNIDADE_NAO_AUTORIZADA, "Sem acesso à outra empresa na plataforma.");
+    const concessao = (await concedidas(alvo)).find((c) => c.unidadeId === uni);
+    if (!concessao) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.SEM_CONCESSAO, "Sem concessão do Financeiro v2 na outra empresa.");
+    if (!mfa || typeof mfa.provar !== "function") recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.MFA_INDISPONIVEL, "A verificação em duas etapas ainda não está disponível neste ambiente: a operação entre empresas fica bloqueada.");
+    let prova;
+    try { prova = await mfa.provar({ tokenDeAcesso, contaId: s.contaId }); } catch { prova = { ok: false, motivo: MOTIVO_PROVA.ASSINATURA_INVALIDA }; }
+    if (!prova?.ok) {
+      recusar(CODIGO.PERMISSAO_INSUFICIENTE, prova?.motivo ?? MOTIVO_PROVA.ASSINATURA_INVALIDA, prova?.motivo === MOTIVO_PROVA.ANTIGA
+        ? "A operação entre empresas exige confirmar o segundo fator de novo (últimos 10 minutos)." : "A operação entre empresas exige verificação em duas etapas comprovada.");
+    }
+    return Object.freeze({
+      contexto: exigirContexto({ organizacaoId: org, unidadeId: uni, usuarioId: s.perfilId, permissoes: concessao.acoes }),
+      ator: Object.freeze({ perfilId: s.perfilId, contaId: s.contaId }),
+      escritaDaUnidade: true,
+      autenticacao: Object.freeze({ aal: "aal2", mfaRecente: true, motivo: null, provaVerificada: true, segundoFatorEm: prova.segundoFatorEm ?? null }),
+      origem: Object.freeze({ tipo: "CONTRAPARTE_VINCULADA", sessaoId: s.sessaoId, expiraEm: s.expiraEm, principal: Object.freeze({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId }) }),
+    });
+  }
+
   return Object.freeze({
     contexto,
+    contextoDaContraparte,
 
     /**
      * Unidades em que a pessoa pode operar o v2: acesso na plataforma ∩ liberadas ∩ com concessão. Para o seletor.

@@ -6,9 +6,12 @@
 //   - "valor de R$ 194,50" com 2 parcelas é AMBÍGUO (total ou de cada parcela?) ⇒ perguntar UMA vez; "cada", "parcelas de", "2x de"
 //     ⇒ por parcela; "total", "no total" ⇒ total;
 //   - competência = mês da COMPRA (data da mensagem), nunca o mês do vencimento;
-//   - categoria pelo PLANO DE CONTAS da unidade: equipamento ⇒ IMOBILIZADO (quando existe e aceita lançamento); senão a regra comum
-//     sobre a DESCRIÇÃO LIMPA (sem o nome da unidade nem "compra", que puxariam "insumos").
-import { escolherCategoria, normalizar } from "./divergencia.js";
+//   - categoria pelo PLANO DE CONTAS da unidade (27/11, revisão do PR #236): NUNCA automática para equipamento (despesa ×
+//     imobilizado é decisão contábil, não do MOVA); categoria DITA ("categoria Equipamentos") só vale se existir no plano; sem
+//     categoria segura ⇒ PERGUNTA com as opções do plano, ou "0" ⇒ fica para a classificação no Centro Financeiro (com a sugestão
+//     de criar a categoria dita, quando ela não existe). Regra comum sobre a DESCRIÇÃO LIMPA (sem a unidade nem "compra").
+//   - vale para conta ÚNICA (1 parcela) e PARCELADA, por texto ou por FOTO do produto com legenda (a foto não é documento fiscal).
+import { escolherCategoria, interpretarCategoria, normalizar } from "./divergencia.js";
 
 export const TIPO_VALOR = Object.freeze({ PARCELA: "PARCELA", TOTAL: "TOTAL", AMBIGUO: "AMBIGUO" });
 export const FORMA = Object.freeze({ CARTAO: "CARTAO", BOLETO: "BOLETO", PIX: "PIX", DINHEIRO: "DINHEIRO", TRANSFERENCIA: "TRANSFERENCIA" });
@@ -90,6 +93,8 @@ export function descricaoLimpa(original, unidades = []) {
   // a descrição termina onde começam valor, data, parcelas, forma de pagamento ou fornecedor
   const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|no total)(?=\s|$)/);
   if (corte > 0) t = `${t.slice(0, corte)} `;
+  // 27/11: o PEDIDO ("registre conta a pagar") não é a descrição do que foi comprado
+  t = t.replace(/\s(?:registre|registrar|registra|lance|lancar|lanca|cadastre|cadastrar|anote|anotar|inclua|incluir|coloque|colocar|por favor)(?=\s)/g, " ").replace(/\sa pagar(?=\s)/g, " ");
   t = t.replace(/\s(?:compra|compramos|comprei|comprou|conta|despesa|pagamento)\s(?:de|do|da)?\s?/g, " ");
   const apelidos = [...new Set(unidades.flatMap((u) => u.apelidos ?? []))].sort((a, b) => b.length - a.length);
   for (const ap of apelidos) t = t.split(` ${ap} `).join(" ");
@@ -105,15 +110,65 @@ export function descricaoLimpa(original, unidades = []) {
   return bonito.charAt(0).toUpperCase() + bonito.slice(1);
 }
 
-/** Categoria do PLANO da unidade para a conta relatada (código) ou null — nunca uma categoria fora do plano. */
-export function categoriaDaContaRelatada(descricao, categorias) {
+/** "categoria Equipamentos", "categoria: manutenção" — a categoria DITA na mensagem (texto livre) ou null. */
+export function categoriaDita(texto) {
+  const m = String(texto ?? "").match(/\bcategoria\s*:?\s+([\p{L}][\p{L} ]{1,40}?)(?=\s*(?:[,.;!\n]|$)|\s+(?:no|na|para|pro|pra|do|da|valor|dia|vence|vencimento|r\$|em)\b)/iu);
+  return m ? m[1].trim() : null;
+}
+
+const MAX_OPCOES = 8;
+const lancaveisDoPlano = (categorias, { comImobilizado }) => (categorias ?? []).filter((c) => c?.aceitaLancamento && c.ativa !== false && c.codigo
+  && (["CUSTO", "DESPESA"].includes(c.natureza) || (comImobilizado && c.codigo === "IMOBILIZADO")));
+
+/** Para equipamento: imobilizado e despesas de equipamento/manutenção/utensílios primeiro (só a ORDEM das opções; nada é escolhido). */
+function ordenarParaEquipamento(lista, equipamento) {
+  if (!equipamento) return lista;
+  const peso = (c) => (c.codigo === "IMOBILIZADO" ? 0 : /equipament|manutenc|utensil|material|moveis|bens/.test(normalizar(c.nome)) ? 1 : 2);
+  return [...lista].sort((a, b) => peso(a) - peso(b));
+}
+
+/**
+ * Classificação da conta relatada pelo PLANO da unidade. Nunca devolve categoria fora do plano e nunca escolhe IMOBILIZADO sozinha.
+ * @returns {{codigo:string|null, perguntar:boolean, motivo:string, opcoes:Array<{codigo,nome}>, sugestaoDeCriacao:string|null}}
+ */
+export function classificarContaRelatada({ descricao, texto = "", categorias }) {
+  const plano = categorias ?? [];
   const t = normalizar(descricao);
-  if (!t) return null;
-  if (EQUIPAMENTO.test(t) && !SERVICO.test(t)) {
-    const imob = (categorias ?? []).find((c) => c?.codigo === "IMOBILIZADO" && c.aceitaLancamento && c.ativa !== false);
-    if (imob) return imob.codigo;
+  const equipamento = Boolean(t) && EQUIPAMENTO.test(t) && !SERVICO.test(t);
+  const todas = lancaveisDoPlano(plano, { comImobilizado: equipamento });
+  const opcoesDe = (lista) => lista.slice(0, MAX_OPCOES).map((c) => ({ codigo: c.codigo, nome: c.nome }));
+  const dita = categoriaDita(texto);
+  if (dita) {
+    const r = interpretarCategoria({ texto: dita, categorias: plano });
+    if (r.categoria) return { codigo: r.categoria, perguntar: false, motivo: "CATEGORIA_DITA", opcoes: [], sugestaoDeCriacao: null };
+    const parecidas = (r.opcoes ?? []).map((o) => todas.find((c) => c.codigo === o.codigo)).filter(Boolean);
+    return { codigo: null, perguntar: true, motivo: "CATEGORIA_DITA_FORA_DO_PLANO", opcoes: opcoesDe(parecidas.length ? parecidas : ordenarParaEquipamento(todas, equipamento)), sugestaoDeCriacao: dita.slice(0, 60) };
   }
-  return escolherCategoria({ categorias, categoriaSugerida: null, legenda: descricao });
+  if (equipamento) return { codigo: null, perguntar: true, motivo: "EQUIPAMENTO_EXIGE_CLASSIFICACAO", opcoes: opcoesDe(ordenarParaEquipamento(todas, true)), sugestaoDeCriacao: null };
+  const codigo = t ? escolherCategoria({ categorias: plano, categoriaSugerida: null, legenda: descricao }) : null;
+  if (codigo) return { codigo, perguntar: false, motivo: "REGRA_DO_PLANO", opcoes: [], sugestaoDeCriacao: null };
+  return { codigo: null, perguntar: true, motivo: "SEM_CATEGORIA_SEGURA", opcoes: opcoesDe(todas), sugestaoDeCriacao: null };
+}
+
+/**
+ * Resposta à pergunta de categoria: número da opção, nome de categoria do plano, ou "0"/"não sei"/"deixa para o financeiro"
+ * (fica a classificar no Centro Financeiro). `{codigo}` | `{revisao:true}` | null (não entendeu: pergunta de novo, sem consumir).
+ */
+export function interpretarRespostaDaCategoria(texto, { opcoes = [], categorias = [] } = {}) {
+  const t = normalizar(texto);
+  if (!t || t.length > 80) return null;
+  if (/^(0|zero|nao sei|deixa|deixe|deixar|depois|classificar depois|para o financeiro|pro financeiro|nenhuma)\b/.test(t)) return { revisao: true };
+  const n = t.match(/^(\d{1,2})$/);
+  if (n) { const o = opcoes[Number(n[1]) - 1]; return o ? { codigo: o.codigo } : null; }
+  const porNome = opcoes.find((o) => normalizar(o.nome) === t);
+  if (porNome) return { codigo: porNome.codigo };
+  const r = interpretarCategoria({ texto, categorias });
+  return r.categoria ? { codigo: r.categoria } : null;
+}
+
+/** Compatibilidade: o código só quando é seguro decidir SEM perguntar; senão null. */
+export function categoriaDaContaRelatada(descricao, categorias) {
+  return classificarContaRelatada({ descricao, categorias }).codigo;
 }
 
 /**

@@ -177,15 +177,17 @@ log("info", "mova.privados_config", { ativo: privadosMova.ativo, motivo: privado
 // Canal isolado obrigatório: sem ele o MOVA não liga (nenhum evento MOVA vai ao backend de produção).
 const canalMova = lerCanalMova({ url: config.movaBackendUrl, segredo: config.movaBackendSecret, segredoPrincipal: config.segredoHmac });
 const canal = canalMova.ativo ? criarCanalMova({ url: canalMova.url, segredo: canalMova.segredo, log: (nivel, evento, dados) => log(nivel, evento, dados) }) : null;
+// Retrato dos membros (somente leitura, cache de 60 s): o backend só mostra valores no grupo se TODOS estiverem autorizados.
+// 27/11: a MESMA instância serve o encaminhador (retrato junto do evento) e a rota /internal/mova/membros (aviso diário).
+const retratoDeMembros = criarRetratoDeMembros();
 const encaminhador = !canal || (gruposMova.length === 0 && !contatoHomologacao) ? null : criarEncaminhadorMova({
   grupos: gruposMova, contatoHomologacao,
-  // Retrato dos membros (somente leitura, cache de 60 s): o backend só mostra valores no grupo se TODOS estiverem autorizados.
-  retratarMembros: criarRetratoDeMembros(),
+  retratarMembros: retratoDeMembros,
   notificar: (payload) => canal.notificar(payload),
   baixarMidia: (m, sock) => downloadMediaMessage(m, "buffer", {}, { reuploadRequest: sock?.updateMediaMessage }),
   log: (nivel, evento, dados) => log(nivel, evento, dados),
 });
-const mova = encaminhador ? { aoMensagens: (...a) => encaminhador.aoMensagens(...a), contatoHomologacao } : null;
+const mova = encaminhador ? { aoMensagens: (...a) => encaminhador.aoMensagens(...a), contatoHomologacao, retratarMembros: retratoDeMembros } : null;
 config.movaEnvioSoPeloCanal = Boolean(canal); // com canal isolado, o backend de produção não envia mensagens MOVA
 log("info", "mova.config", { ativo: Boolean(mova), grupos: gruposMova.length, homologacaoPrivada: Boolean(contatoHomologacao), motivoHomologacao: homologacao.ativo ? null : homologacao.motivo, canal: canalMova.ativo ? "ATIVO" : canalMova.motivo });
 
@@ -227,6 +229,15 @@ if (canal) {
       const { grupoJid, texto, idempotencyKey } = req.corpoJson ?? {};
       if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE" });
       res.json(await sessao.enviarGrupoMova({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
+    } catch (e) { next(e); }
+  });
+  // 27/11 — retrato ATUAL dos membros de um grupo do MOVA (aviso diário das 10h/15h). Somente leitura, mesmo canal e segredo,
+  // só grupos de WHATSAPP_MOVA_GRUPOS_JID, só com a sessão conectada. Não envia nada nem muda o grupo.
+  app.post("/internal/mova/membros", express.raw({ type: "*/*", limit: 4 * 1024 }), exigirHmac(canalMova.segredo), async (req, res, next) => {
+    try {
+      const r = await sessao.retratoMembrosMova({ grupoJid: req.corpoJson?.grupoJid });
+      if (!r) return res.status(503).json({ error: "MOVA_RETRATO_INDISPONIVEL" });
+      res.json({ membros: r.membros, verificadoEm: r.verificadoEm });
     } catch (e) { next(e); }
   });
 }

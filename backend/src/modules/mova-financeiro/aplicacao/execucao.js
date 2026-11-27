@@ -504,7 +504,9 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (proposta.tipo !== "CONTA_RELATADA" || proposta.comando?.operacao !== "registrarContaParcelada" || !Array.isArray(e?.parcelas)) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
     const faltas = [...(!e.competencia ? ["COMPETENCIA_PENDENTE"] : []), ...(proposta.categoriaDefinida !== true ? ["CATEGORIA_A_CLASSIFICAR"] : [])];
     if (faltas.length) return { ...base, motivos: faltas };
-    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.CONTA_A_PAGAR_RELATADA, organizacaoId: escopo.organizacaoId,
+    // 27/11: conta ÚNICA ⇒ CONTA_A_PAGAR_RELATADA; 2+ parcelas ⇒ CONTA_PARCELADA_RELATADA. O valor avaliado é o TOTAL da compra.
+    const operacao = e.parcelas.length > 1 ? OPERACAO.CONTA_PARCELADA_RELATADA : OPERACAO.CONTA_A_PAGAR_RELATADA;
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao, organizacaoId: escopo.organizacaoId,
       unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
     await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
     const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
@@ -512,7 +514,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (![NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) || !proposta.esclarecidoPor) return r0;
     if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
     if (!(await operacional.pode("registrarContaParcelada", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
-    const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR_RELATADA, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+    const r = await executarComReserva({ operacao, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
       const ob = await operacional.chamar("registrarContaParcelada", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
       return { obrigacaoId: ob.obrigacoes[0].id, obrigacaoIds: ob.obrigacoes.map((o) => o.id), contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null,
         categoria: e.categoria, competencia: e.competencia, parcelas: e.parcelas.length, confirmadoPor: proposta.esclarecidoPor, situacaoConta: "ABERTA" };

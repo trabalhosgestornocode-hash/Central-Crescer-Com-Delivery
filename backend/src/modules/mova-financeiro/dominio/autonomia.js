@@ -40,6 +40,8 @@ export const OPERACAO = Object.freeze({
   // 26/11: conta a pagar RELATADA POR TEXTO (sem documento), em uma ou mais parcelas, sempre EM ABERTO. Política própria: a da conta
   // por boleto/nota (CONTA_A_PAGAR) e a da despesa já paga não a cobrem. Exige a confirmação da pessoa no WhatsApp antes.
   CONTA_A_PAGAR_RELATADA: "CONTA_A_PAGAR_RELATADA",
+  // 27/11 (revisão do PR #236): conta relatada PARCELADA (2 a 24 parcelas). Política própria; o limite vale para a COMPRA INTEIRA.
+  CONTA_PARCELADA_RELATADA: "CONTA_PARCELADA_RELATADA",
   // 26/11: pagamento feito por OUTRA empresa do grupo (passivo × ativo). Política própria, nas DUAS empresas.
   OPERACAO_ENTRE_EMPRESAS: "OPERACAO_ENTRE_EMPRESAS",
 });

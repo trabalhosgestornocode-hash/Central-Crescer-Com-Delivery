@@ -19,6 +19,8 @@ export const TOLERANCIA_MIN = 120;
 /** Com o Financeiro indisponível, espera este tempo (novas tentativas a cada passo) antes de avisar a indisponibilidade. */
 export const ESPERA_INDISPONIVEL_MIN = 30;
 const MAX_ITENS = 15;
+/** Retrato dos membros mais velho que isto ⇒ o aviso pede um novo ao Gateway (a validade da regra de exibição é de 15 min). */
+export const RETRATO_NOVO_MS = 5 * 60 * 1000;
 const FORNECEDOR_NAO_INFORMADO = "Fornecedor não informado";
 
 const reais = (c) => { const a = Math.abs(c); return `${c < 0 ? "-" : ""}R$ ${Math.floor(a / 100).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${String(a % 100).padStart(2, "0")}`; };
@@ -79,7 +81,22 @@ export function criarAvisosDiarios({ cfg, porta, armazenamento: a, relogio = () 
   /** Para quem o aviso pode mostrar valores? (mesma regra das consultas no grupo) */
   async function nivelDeDetalhe(grupo) {
     if (grupo.politicaResposta !== POLITICA_RESPOSTA.GRUPO_FINANCEIRO) return { valores: false, motivo: "POLITICA_SEM_VALORES_NO_GRUPO" };
-    const retrato = typeof a.membros?.obter === "function" ? await a.membros.obter(grupo.grupoId) : null;
+    let retrato = typeof a.membros?.obter === "function" ? await a.membros.obter(grupo.grupoId) : null;
+    // 27/11: o Gateway só manda o retrato junto de uma mensagem recebida; numa manhã sem conversa o retrato das 10h estaria velho
+    // e o aviso sairia sempre sem valores. Retrato com mais de RETRATO_NOVO_MS ⇒ pede um NOVO ao Gateway (canal isolado, somente
+    // leitura). A regra de exibição NÃO muda: decidirSaidaNoGrupo continua exigindo TODOS os membros FINANCEIRO e o retrato dentro
+    // da janela. Falha ao pedir ⇒ segue com o que havia (no pior caso, sem valores).
+    const velho = !retrato?.verificadoEm || relogio().getTime() - new Date(retrato.verificadoEm).getTime() > RETRATO_NOVO_MS;
+    if (velho && typeof avisos.atualizarMembros === "function" && typeof a.membros?.registrar === "function") {
+      try {
+        const novo = await avisos.atualizarMembros(grupo.grupoId);
+        if (novo && Array.isArray(novo.membros) && novo.membros.length && typeof novo.verificadoEm === "string") {
+          await a.membros.registrar({ grupoId: grupo.grupoId, membros: novo.membros, verificadoEm: novo.verificadoEm, fonte: "GATEWAY" });
+          retrato = { membros: novo.membros, verificadoEm: novo.verificadoEm };
+          registrar({ tipo: "MOVA_AVISO_DIARIO_RETRATO_ATUALIZADO", grupo: mascarar(grupo.grupoId) });
+        } else registrar({ tipo: "MOVA_AVISO_DIARIO_RETRATO_INDISPONIVEL", grupo: mascarar(grupo.grupoId) });
+      } catch (e) { registrar({ tipo: "MOVA_AVISO_DIARIO_RETRATO_INDISPONIVEL", grupo: mascarar(grupo.grupoId), causa: String(e?.codigo ?? "ERRO").slice(0, 40) }); }
+    }
     const d = decidirSaidaNoGrupo({ grupo, consulta: "CONTAS_VENCENDO", unidades: grupo.unidades, retrato, agora: relogio() });
     return d.saida === "GRUPO" && d.detalhe === true ? { valores: true, motivo: d.motivo } : { valores: false, motivo: d.motivo };
   }
