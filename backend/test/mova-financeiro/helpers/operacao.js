@@ -74,9 +74,10 @@ export function clienteSimulado(responder) {
   return { pedidos, beta: { messages: { async create(req) { pedidos.push(req); const r = await responder(req, pedidos.length); return { model: "claude-haiku-5-5", stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(r) }] }; } } } };
 }
 
-export async function cenario({ responder = () => base({}), comandosDeterministicos = true, config = CONFIG, extras = {}, cofre } = {}) {
-  const m = montar({ escopos: ESCOPOS, ...(cofre !== undefined ? { cofre } : {}) }); // 26/11: cofre: null prova que o MOVA não depende do cofre
-  const c = (org, u) => ctx(org, u, TODAS, "eeeeeeee-0000-4000-8000-000000000001");
+export async function cenario({ responder = () => base({}), comandosDeterministicos = true, config = CONFIG, extras = {}, cofre, repositorio = null, humano = "eeeeeeee-0000-4000-8000-000000000001" } = {}) {
+  // 27/11: `repositorio` = Financeiro v2 num PostgreSQL REAL (teste de regressão até o registro persistido no banco)
+  const m = montar({ escopos: ESCOPOS, ...(cofre !== undefined ? { cofre } : {}), ...(repositorio ? { repositorio, concessoesDeTeste: false } : {}) }); // 26/11: cofre: null prova que o MOVA não depende do cofre
+  const c = (org, u) => ctx(org, u, TODAS, humano);
   const forn = await m.nucleo.registrarContraparte(c(ORG, ALFA), { tipo: "FORNECEDOR", nome: "Fornecedor Sintético" });
   const conta = async (vencimento, valor = 12345, u = ALFA, f = forn) => m.nucleo.registrarObrigacao(c(ORG, u), { contraparteId: f.id, valorOriginalCentavos: valor, categoria: "INSUMOS", descricao: "Compra sintética", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento });
   const banco = await criarBancoMova();
