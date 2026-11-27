@@ -304,10 +304,14 @@ export function buscarSemelhantes({ todas, valorCentavos, favorecido, legenda, d
     if (quitada && t.valorOriginalCentavos === valorCentavos && compativel(t) && perto(t, JANELA_PAGAMENTO_IGUAL_DIAS)) achados.push({ situacao: "PAGA", conta: t, motivo: "PAGAMENTO_IGUAL_JA_REGISTRADO" });
     else if (!quitada && !compativel(t) && t.saldoCentavos === valorCentavos) {
       const mesmaDescricao = [...palavrasUteis(t.descricao)].some((w) => uteis.has(w));
-      if (mesmaDescricao || perto(t, JANELA_CONTA_PARECIDA_DIAS)) achados.push({ situacao: "ABERTA", conta: t, motivo: mesmaDescricao ? "DESCRICAO_PARECIDA" : "MESMO_VALOR_E_DATA_PROXIMA" });
+      // 27/11: saldo IDÊNTICO basta para ser CANDIDATA (o favorecido do Pix pode ser a instituição de pagamento, e o vencimento/descrição
+      // nem sempre ajudam). Candidata NUNCA baixa sozinha: o motor pergunta (uma) ou pede a escolha (várias). A evidência só ordena.
+      const proxima = perto(t, JANELA_CONTA_PARECIDA_DIAS);
+      achados.push({ situacao: "ABERTA", conta: t, motivo: mesmaDescricao ? "DESCRICAO_PARECIDA" : proxima ? "MESMO_VALOR_E_DATA_PROXIMA" : "MESMO_VALOR" });
     }
   }
-  return achados.sort((a, b) => (a.situacao === b.situacao ? 0 : a.situacao === "PAGA" ? -1 : 1));
+  const forca = (x) => (x.situacao === "PAGA" ? 0 : x.motivo === "DESCRICAO_PARECIDA" ? 1 : x.motivo === "MESMO_VALOR_E_DATA_PROXIMA" ? 2 : 3);
+  return achados.sort((x, y) => forca(x) - forca(y));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

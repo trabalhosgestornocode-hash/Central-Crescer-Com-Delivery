@@ -213,3 +213,31 @@ t("BR-12 regras puras: finalidade só vale onde faz sentido; juros plausíveis; 
   assert.equal(validarSaidaDaIa({ ...base({}), finalidadePagamento: "PAGAR_AGORA" }).ok, false, "finalidade fora do catálogo invalida a saída");
   assert.equal(validarSaidaDaIa({ ...base({}), finalidadePagamento: "COMPRA_NOVA", descricaoCompra: "Compra de brownies" }).ok, true);
 });
+
+// ============================================================================================== 27/11: favorecido ≠ fornecedor (intermediador)
+// Homologação real: o favorecido do Pix era a instituição de pagamento. Sem fornecedor compatível, conta aberta de saldo IDÊNTICO é
+// CANDIDATA — nunca é baixada nem vira despesa nova sem confirmação; várias ⇒ escolha.
+t("BX-1 favorecido ≠ fornecedor, UMA conta aberta de mesmo valor (vencimento distante, descrição sem relação): apresenta a conta e pede confirmação; nada baixado, nada criado", async () => {
+  const s = await compra({ contaAntiga: 25900, documento: () => PIX({ favorecido: "PIXPAG PAGAMENTOS LTDA", dataPagamento: "2026-12-20" }) });
+  await s.enviar(gw({ texto: "MOVA pagamento, alfa", doc: pdf("BX1") }));
+  assert.equal((await s.ultima()).motivo, "POSSIVEL_COMPRA_JA_REGISTRADA");
+  assert.match(await s.resposta(), /Encontrei a conta de .* de outro fornecedor, com o mesmo valor deste comprovante\. É essa conta que foi paga\?/);
+  assert.deepEqual([(await s.contas()).length, (await s.liquidacoes()).length, await s.saldo(s.antiga.id)], [1, 0, 25900], "sem baixa e sem despesa nova antes do sim");
+  // "outra compra" ainda é possível: a pessoa decide (nunca presumido)
+});
+
+t("BX-2 favorecido ≠ fornecedor e DUAS contas abertas de mesmo valor: pede a escolha (número) ou 'outra compra'; nada baixado nem criado", async () => {
+  const s = await compra({ contaAntiga: 25900, documento: () => PIX({ favorecido: "PIXPAG PAGAMENTOS LTDA", dataPagamento: "2026-12-20" }) });
+  await s.conta("2026-11-05", 25900);
+  await s.enviar(gw({ texto: "MOVA pagamento, alfa", doc: pdf("BX2") }));
+  assert.equal((await s.ultima()).motivo, "VARIAS_OBRIGACOES_COMPATIVEIS");
+  assert.match(await s.resposta(), /Encontrei 2 contas que podem ser esta/);
+  assert.deepEqual([(await s.contas()).length, (await s.liquidacoes()).length], [2, 0]);
+});
+
+t("BX-3 favorecido ≠ fornecedor e NENHUMA conta de mesmo valor: não presume nada — segue como compra nova (comportamento anterior)", async () => {
+  const s = await compra({ contaAntiga: 8100, documento: () => PIX({ favorecido: "PIXPAG PAGAMENTOS LTDA", descricaoCompra: "Compra de brownies" }) });
+  await s.enviar(gw({ texto: "MOVA comprei brownies e já paguei, alfa", doc: pdf("BX3") }));
+  assert.notEqual((await s.ultima()).motivo, "POSSIVEL_COMPRA_JA_REGISTRADA");
+  assert.equal(await s.saldo(s.antiga.id), 8100, "a conta de outro valor não foi tocada");
+});

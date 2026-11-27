@@ -1007,6 +1007,13 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (!esclarecimento?.divergencia && (!forcarNova || novaDeclarada)) {
       const achados = buscarSemelhantes({ todas: (await porta.contasAPagarTodas(escopo)).filter(noPeriodo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
       const semelhantes = novaDeclarada ? achados.filter((x) => x.situacao === "PAGA") : achados;
+      const abertasSemelhantes = semelhantes.filter((x) => x.situacao === "ABERTA");
+      // 27/11: várias contas abertas de OUTRO fornecedor com o mesmo valor (e nenhum pagamento igual já registrado): pede a escolha —
+      // nunca baixa nem cria despesa sozinho.
+      if (semelhantes[0]?.situacao === "ABERTA" && abertasSemelhantes.length > 1) {
+        const proximas = abertasSemelhantes.slice(0, MAX_CANDIDATAS_NA_PERGUNTA).map((x) => x.conta);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id, saldoCentavos: t.saldoCentavos, versao: versaoDaConta(t, escopo.unidadeId) })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
+      }
       if (semelhantes.length) {
         const [primeiro] = semelhantes;
         // Valor, data e favorecido iguais NÃO provam a mesma transação: pergunta; com o identificador recortado, pede o comprovante completo.
