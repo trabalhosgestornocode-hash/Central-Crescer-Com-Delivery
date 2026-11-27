@@ -249,7 +249,7 @@ export function abaInformacoes(c, ctx = {}, r = null) {
     movaOk && d.unidadeAtendida === false ? '<p class="aviso aviso--alerta">Esta unidade ainda não é atendida pelo MOVA: o WhatsApp só pode ser informado depois que a unidade for configurada no MOVA (com autorização do proprietário).</p>' : "",
     movaOk && !tem(ctx.permissoes, "configurar") ? '<p class="nota">Você pode consultar. Alterar o WhatsApp exige a permissão de configurar.</p>' : "",
   ].join("");
-  return `<section class="card ent-cad"><div class="card-topo"><h2>Informações dos entregadores</h2><span class="nota">${pessoas.length} entregador(es) · ${aptos} apto(s) a receber mensagens</span></div>
+  return `${quadroNotificacoes(c.notificacoes, ctx)}<section class="card ent-cad"><div class="card-topo"><h2>Informações dos entregadores</h2><span class="nota">${pessoas.length} entregador(es) · ${aptos} apto(s) a receber mensagens</span></div>
 <p class="nota">Os entregadores vêm do próprio Financeiro (Foody e fechamentos semanais): nada é cadastrado à mão. Aqui você mantém o WhatsApp, o nome de exibição e as observações. Um número alterado vale para o MOVA em até 1 minuto e o antigo deixa de receber. Não pedimos CPF, Pix nem outros dados sensíveis.</p>
 ${avisos}
 <div class="ent-cad__filtros" role="search"><label>Pesquisar <input type="search" data-cad-busca placeholder="Nome do entregador"></label>
@@ -257,6 +257,23 @@ ${avisos}
 <span class="nota">Unidade: use o seletor de unidade no topo.</span></div>
 ${linhas ? `<ul class="ent-info__lista" aria-label="Entregadores da unidade">${linhas}</ul><p class="nota" data-cad-vazio hidden>Nenhum entregador com esse filtro.</p>`
     : nada("Nenhum entregador identificado ainda nesta unidade. Eles aparecem assim que o Foody registrar entregas (antes mesmo do fechamento semanal).")}</section>`;
+}
+
+const ESTADO_NOTIF = { PENDENTE: "Na fila", AGUARDANDO_ENTREGADOR: "Aguardando envio ao entregador", ENFILEIRADO: "Enviando", ENVIADO: "Enviada", FALHOU: "Falhou", SEM_TELEFONE: "Entregador sem WhatsApp", SEM_GRUPO: "Unidade sem grupo financeiro", CANCELADO: "Cancelada" };
+const TIPO_NOTIF = { PAGAMENTO: "Pagamento", PAGAMENTO_PARCIAL: "Pagamento parcial", ESTORNO: "Estorno", AVISO_GRUPO: "Aviso ao grupo" };
+const dataHora = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} ${iso.slice(11, 16)}` : "—");
+/** 27/11 — Notificações automáticas de pagamento: indicadores, histórico e reenvio controlado. Sem telefone nem texto da mensagem. */
+export function quadroNotificacoes(n, ctx = {}) {
+  if (!n) return "";
+  if (n.ligado === false) return '<section class="card"><h2>Notificações de pagamento</h2><p class="nota">As notificações automáticas ainda não estão ativas nesta unidade.</p></section>';
+  const ind = n.indicadores ?? { total: 0, porEstado: {}, falhas: 0, entregadoresNotificados: 0 };
+  const at = n.atendimentoResumo ?? { respostas: 0, deterministicas: 0, ia: 0, bloqueadas: 0, tokens: 0 };
+  const pode = tem(ctx.permissoes, "configurar");
+  const linhas = (n.itens ?? []).slice(0, 60).map((i) => `<tr><td>${esc(dataHora(i.criadoEm))}</td><td>${esc(i.destino === "GRUPO" ? "Grupo financeiro" : i.entregador ?? "—")}</td><td>${esc(TIPO_NOTIF[i.tipo] ?? i.tipo)}</td><td>${i.valorCentavos == null ? "—" : esc(moeda(i.valorCentavos))}</td><td><strong>${esc(ESTADO_NOTIF[i.estado] ?? i.estado)}</strong>${i.erro ? ` <span class="nota">(${esc(i.erro)})</span>` : ""}${i.reenvios ? ` <span class="nota">· ${i.reenvios} reenvio(s)</span>` : ""}</td><td>${esc(dataHora(i.enviadoEm))}</td><td>${i.podeReenviar && pode ? `<form data-acao-mova="/api/fv2/acoes/mova/notificacao-reenviar"><input type="hidden" name="eventoId" value="${esc(i.id)}"><button type="submit" class="botao">Reenviar</button><span class="resultado-acao" role="status"></span></form>` : ""}</td></tr>`).join("");
+  return `<section class="card ent-notif"><div class="card-topo"><h2>Notificações de pagamento</h2><span class="nota">desde ${esc(n.desde ?? "")}</span></div>
+<p class="nota">Enviadas pelo MOVA depois que o pagamento é confirmado no Financeiro, qualquer que seja a origem (sistema, comprovante, conciliação). "Enviada" significa aceita pelo WhatsApp; a confirmação de leitura não é medida.</p>
+<ul class="ent-notif__indicadores"><li><strong>${ind.total}</strong> notificações</li><li><strong>${ind.entregadoresNotificados}</strong> entregadores avisados</li><li><strong>${ind.falhas}</strong> com falha</li><li><strong>${at.respostas}</strong> respostas no privado (${at.deterministicas} sem IA, ${at.ia} com IA, ${at.bloqueadas} recusadas) · ${at.tokens} tokens</li></ul>
+${linhas ? `<div class="tabela-rolavel"><table class="tabela"><thead><tr><th>Quando</th><th>Para</th><th>Tipo</th><th>Valor</th><th>Situação</th><th>Enviada em</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>` : nada("Nenhuma notificação no período.")}</section>`;
 }
 
 /** Tela principal. `f.aba` escolhe a seção; os dados vêm prontos do servidor. */

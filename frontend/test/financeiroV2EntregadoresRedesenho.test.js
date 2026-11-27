@@ -146,6 +146,7 @@ test("23/11 Informações: as DUAS consultas da aba usam consultores DIFERENTES 
   // a correção: um consultor por consulta
   const app = readFileSync(new URL("../financeiro-v2/app.js", import.meta.url), "utf8");
   assert.match(app, /const consultorOficiais = criarConsultor\(\);/);
-  assert.match(app, /Promise\.all\(\[consultorCadastro\.consultar\(urlsDoCadastro\[0\], cabecalhos\(\)\), consultorOficiais\.consultar\(urlsDoCadastro\[1\], cabecalhos\(\)\)\]\)/);
+  assert.match(app, /Promise\.all\(\[consultorCadastro\.consultar\(urlsDoCadastro\[0\], cabecalhos\(\)\), consultorOficiais\.consultar\(urlsDoCadastro\[1\], cabecalhos\(\)\), consultorNotificacoes\.consultar\(urlsDoCadastro\[2\], cabecalhos\(\)\)\]\)/);
+  assert.match(app, /const consultorNotificacoes = criarConsultor\(\);/);
   assert.ok(!/urlsDoCadastro\.map\(\(u\) => consultorCadastro/.test(app));
 });

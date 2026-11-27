@@ -61,6 +61,7 @@ const consultorImportacoes = criarConsultor();
 // quando outra começa, e as duas são feitas ao mesmo tempo (contatos do MOVA + entregadores oficiais).
 const consultorCadastro = criarConsultor();
 const consultorOficiais = criarConsultor();
+const consultorNotificacoes = criarConsultor();
 // Consulta da tela adiantada na plataforma (sai junto com a da sessão): consultor próprio, para uma não abortar a outra.
 const consultorAdiantado = criarConsultor();
 // Fontes de faturamento da unidade (decidem menu e canais): consultor próprio, para sair junto com a sessão sem abortar nada.
@@ -211,7 +212,7 @@ function consultaDoCalendario() {
 /** 23/11 — Informações dos entregadores: só com a aba aberta. Mesma fonte de contatos do MOVA (duas leituras). */
 function consultasDoCadastro() {
   if (estado.rota !== "entregadores-proprios" || estado.filtros["entregadores-proprios"]?.aba !== "informacoes") return null;
-  return [`/api/fv2/mova/entregadores?${qs({ competencia: undefined })}`, `/api/fv2/mova/entregadores-oficiais?${qs({ competencia: undefined })}`];
+  return [`/api/fv2/mova/entregadores?${qs({ competencia: undefined })}`, `/api/fv2/mova/entregadores-oficiais?${qs({ competencia: undefined })}`, `/api/fv2/mova/notificacoes-pagamento?${qs({ competencia: undefined })}`];
 }
 /** Fase 11 — importações do canal da tela, só quando a aba "Importações" está aberta (SAIPOS, iFood ou 99Food). */
 function consultaDasImportacoes() {
@@ -370,7 +371,7 @@ async function carregar() {
   const urlDasImportacoes = consultaDasImportacoes();
   const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
   const urlsDoCadastro = consultasDoCadastro();
-  const doCadastro = urlsDoCadastro ? Promise.all([consultorCadastro.consultar(urlsDoCadastro[0], cabecalhos()), consultorOficiais.consultar(urlsDoCadastro[1], cabecalhos())]) : null;
+  const doCadastro = urlsDoCadastro ? Promise.all([consultorCadastro.consultar(urlsDoCadastro[0], cabecalhos()), consultorOficiais.consultar(urlsDoCadastro[1], cabecalhos()), consultorNotificacoes.consultar(urlsDoCadastro[2], cabecalhos())]) : null;
   const urlDaRota = consultaDaRota();
   const modulosDaTela = garantir(...(MODULOS_DA_ROTA[estado.rota] ?? [])); // em paralelo com a consulta
   let r;
@@ -393,10 +394,10 @@ async function carregar() {
   estado.impCanal = null;
   estado.cadEnt = null;
   if (doCadastro) {
-    const [rc, ro] = await doCadastro;
-    if (rc === null || ro === null) return;
+    const [rc, ro, rn] = await doCadastro;
+    if (rc === null || ro === null || rn === null) return;
     // Sem a lista do servidor, a tela usa os entregadores que já vieram na consulta da semana (nunca some ninguém).
-    estado.cadEnt = rc.ok ? { dados: rc.dados, oficiais: ro.ok ? ro.dados : null }
+    estado.cadEnt = rc.ok ? { dados: rc.dados, oficiais: ro.ok ? ro.dados : null, notificacoes: rn.ok ? rn.dados : null }
       : { erro: rc.status === 503 ? "O MOVA não está ativo agora." : rc.mensagem || "Não foi possível consultar os contatos no MOVA.", oficiais: ro.ok ? ro.dados : null };
   }
   if (dasImportacoes) {
@@ -900,6 +901,7 @@ const CAMPOS_MOVA = Object.freeze({
   "/api/fv2/acoes/mova/entregador-alterar": ["entregador", "telefone", "nome", "observacoes"],
   "/api/fv2/acoes/mova/entregador-revogar": ["entregador"],
   "/api/fv2/acoes/mova/entregador-reativar": ["entregador"],
+  "/api/fv2/acoes/mova/notificacao-reenviar": ["eventoId"],
 });
 const VIGENCIA = { IMEDIATA: "Vale agora para o MOVA.", APOS_REINICIO_DO_MOVA: "Passa a valer quando o MOVA reiniciar.", NO_PROXIMO_MINUTO: "Passa a valer em até 1 minuto." };
 async function executarAcaoMova(url, dados, saida, botao) {

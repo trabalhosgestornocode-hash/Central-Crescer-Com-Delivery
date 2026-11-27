@@ -232,6 +232,30 @@ export const CONSULTAS_MOVA = Object.freeze({
       envios: a.enviosEntregador ? await a.enviosEntregador.listar(escopo(ctx)) : [],
     };
   },
+  // 27/11: HISTÓRICO das notificações automáticas de pagamento (entregador + aviso ao grupo), indicadores e consumo do atendimento privado.
+  // Só desta unidade. Telefone sempre mascarado; o texto enviado não é devolvido (só estado, valores e datas).
+  "/mova/notificacoes-pagamento": async ({ ctx, mova, params = {} }) => {
+    exigirVer(ctx);
+    if (!mova.pagamentos) return { ligado: false, itens: [], indicadores: null, atendimento: [] };
+    const entregador = typeof params.entregador === "string" && params.entregador.length <= 200 ? params.entregador : null;
+    const desde = /^\d{4}-\d{2}-\d{2}$/.test(params.desde ?? "") ? params.desde : new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const lista = (await mova.pagamentos.listar(escopo(ctx), { limite: 200, entregador })).filter((n) => (n.criadoEm ?? "").slice(0, 10) >= desde);
+    const porEstado = {};
+    for (const n of lista) porEstado[n.estado] = (porEstado[n.estado] ?? 0) + 1;
+    const itens = lista.map((n) => ({
+      id: n.id, entregador: n.entregador, destino: n.destino, tipo: n.tipo, estado: n.estado, tentativas: n.tentativasEnvio, reenvios: n.reenvios, erro: n.ultimoErro ?? null,
+      criadoEm: n.criadoEm, enviadoEm: n.enviadoEm ?? null, eventoPaiId: n.eventoPaiId ?? null,
+      valorCentavos: n.dados?.valorCentavos ?? n.dados?.totalCentavos ?? null, dataPagamento: n.dados?.dataPagamento ?? n.dados?.dataEfetiva ?? null, periodos: (n.dados?.periodos ?? []).length || null,
+      podeReenviar: ["FALHOU", "SEM_TELEFONE", "SEM_GRUPO"].includes(n.estado) && n.reenvios < 3,
+    }));
+    const metricas = mova.armazenamento.metricas ? await mova.armazenamento.metricas.resumo({ unidadeId: ctx.unidadeId, desde }) : [];
+    const total = metricas.reduce((t, m) => t + m.respostas, 0);
+    return {
+      ligado: true, desde, itens,
+      indicadores: { total: lista.length, porEstado, entregadoresNotificados: lista.filter((n) => n.destino === "ENTREGADOR" && n.estado === "ENVIADO").length, falhas: (porEstado.FALHOU ?? 0) + (porEstado.SEM_TELEFONE ?? 0) + (porEstado.SEM_GRUPO ?? 0) },
+      atendimento: metricas, atendimentoResumo: { respostas: total, deterministicas: metricas.filter((m) => m.via === "DETERMINISTICA").reduce((t, m) => t + m.respostas, 0), ia: metricas.filter((m) => m.via === "IA").reduce((t, m) => t + m.respostas, 0), bloqueadas: metricas.filter((m) => m.via === "BLOQUEADA").reduce((t, m) => t + m.respostas, 0), tokens: metricas.reduce((t, m) => t + m.tokensEntrada + m.tokensSaida, 0) },
+    };
+  },
   "/mova/entregadores-oficiais": async ({ ctx, nucleo }) => {
     exigirVer(ctx);
     return { itens: await entregadoresConhecidos({ ctx, nucleo }) };
@@ -289,6 +313,18 @@ export const CONSULTAS_MOVA = Object.freeze({
 });
 
 export const ACOES_MOVA = Object.freeze({
+  // 27/11: reenvio MANUAL de uma notificação de pagamento que falhou (Gateway recusou, sem telefone, sem grupo). Máx. 3, auditado, sem
+  // tocar no Financeiro. Quem pode: configurar. O reenvio refaz o texto a partir do que foi gravado no evento.
+  "/mova/notificacao-reenviar": { campos: ["eventoId"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!mova.pagamentos) throw recusa(503, "NOTIFICACOES_INDISPONIVEIS", "Notificações de pagamento indisponíveis.");
+      if (typeof b.eventoId !== "string" || !/^[0-9a-f-]{36}$/i.test(b.eventoId)) throw recusa(400, "PARAMETRO_INVALIDO", "Notificação inválida.");
+      const r = await mova.pagamentos.reenviar({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId, eventoId: b.eventoId, por: ctx.usuarioId ?? null });
+      if (!r.ok) throw recusa(409, r.motivo, r.motivo === "LIMITE_DE_REENVIOS" ? "Limite de reenvios atingido; fale com o entregador por outro meio." : "Esta notificação não pode ser reenviada agora.");
+      return { id: r.evento.id, estado: r.evento.estado, reenvios: r.evento.reenvios };
+    } },
+
   // Conferência humana de um documento recebido sem IA: trilha só de inclusão no banco do MOVA. Revisado ≠ pago ≠ conciliado.
   "/mova/documento-conferir": { campos: ["sha256", "versao", "estado", "tipo", "obrigacaoId", "observacao"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, nucleo, b }) => {
