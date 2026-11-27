@@ -30,7 +30,7 @@ import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquiv
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { classificarContaRelatada, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 /** 26/11: fuso da operação (Açaí e Subway Saci): data da mensagem, competência e ano das parcelas relatadas. */
@@ -316,6 +316,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           const retomada = await retomarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
           if (retomada) return retomada;
         }
+        // 5a''. 27/11 — CONFIRMAÇÃO natural ("Confirmado", "pode lançar", "está correto") citando a resposta do MOVA que apresentou uma
+        // proposta DESPESA_PAGA: é desta proposta, na unidade DELA (nunca a padrão nem a última consultada). Se só o Centro Financeiro
+        // pode aprovar, diz isso; nada é executado por canal não autorizado.
+        if (origemCitada?.eventoId && (pedidoDeRetomar(evento.texto) || confirmacaoDeProposta(evento.texto))) {
+          const propostas = (await a.propostas.porEvento(origemCitada.eventoId)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO");
+          if (propostas.length) {
+            const r = await responderConfirmacaoDeProposta(evento, propostas, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
+            if (r) return r;
+          }
+        }
         // 5a'. 26/11 — a pessoa COMPLETA a proposta citando a resposta do MOVA (classificação/descrição, "outras despesas", o número da opção):
         // não é uma consulta nova. Só vale para proposta DESPESA_PAGA ainda em revisão, nesta conversa, por quem pode complementá-la.
         if (origemCitada?.eventoId && evento.texto) {
@@ -355,6 +365,23 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // "sim"/"não" de quem NÃO pode confirmar a única pendência aberta: recusa explícita (a pendência continua para quem pode).
         if (elegiveis.length === 0 && abertas.length === 1 && respostaSimNao(evento.texto) !== null) {
           return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+        }
+      }
+      // 5b''. 27/11 — confirmação natural SEM citação ("MOVA, pode confirmar"): só com UMA proposta DESPESA_PAGA em revisão, criada na última
+      // hora nesta conversa, em unidade que a pessoa pode tratar; com várias, pergunta qual (citando a mensagem); com nenhuma, segue o fluxo.
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia && confirmacaoDeProposta(evento.texto)) {
+        const limite = Date.now() - 60 * 60 * 1000;
+        const abertas = [];
+        for (const u of cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId))) {
+          for (const p of await a.propostas.listar(escopoDe(u))) {
+            if (p.tipo !== "DESPESA_PAGA" || p.estado !== "AGUARDANDO_REVISAO" || Date.parse(p.criadaEm ?? 0) < limite) continue;
+            const ev = await a.eventos.obter(p.eventoId);
+            if ((ev?.grupoId ?? ev?.grupo_jid ?? null) === evento.grupoId) abertas.push(p);
+          }
+        }
+        if (abertas.length) {
+          const r = await responderConfirmacaoDeProposta(evento, abertas, { grupo, participante, daPessoa, podeConfirmar: () => true, recusarOutro: () => null });
+          if (r) return r;
         }
       }
       // 5c. 24/11 — resposta LIVRE a uma pergunta de divergência ou de descrição ("comprei brownies e já paguei", "brownies"): a
@@ -757,6 +784,36 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CATEGORIA_DEFINIDA", ...base, privado: await privadoDe(),
       resposta: RESPOSTA.categoriaDefinida(nome, descricao, "A proposta segue aguardando a confirmação de quem aprova no Centro Financeiro. Nada foi lançado ainda.") });
+  }
+
+  /**
+   * 27/11 — resposta à CONFIRMAÇÃO natural de uma ou mais propostas DESPESA_PAGA em revisão. A unidade é SEMPRE a da proposta.
+   * Várias ⇒ pergunta qual. Uma que a política autorizou a aplicar sozinha e ficou parada ⇒ a MESMA retomada de sempre (tudo revalidado).
+   * Uma que só o Centro Financeiro aprova ⇒ explica (id, unidade, valor, motivo) sem executar nada.
+   */
+  async function responderConfirmacaoDeProposta(evento, propostas, ctxp) {
+    const { grupo, participante, daPessoa } = ctxp;
+    // Só quem pode COMPLEMENTAR a operação nesta unidade (perfil financeiro da unidade, no mesmo grupo) recebe os dados da proposta.
+    const visiveis = [];
+    for (const p of propostas) {
+      if (!daPessoa.unidades.includes(p.unidadeId) || !cfg.unidades.some((x) => x.unidadeId === p.unidadeId)) continue;
+      const ev = await a.eventos.obter(p.eventoId);
+      const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+      if (podeConfirmarPendencia(cfg, origem, evento, { unidadeId: p.unidadeId, tipo: "COMPETENCIA", unidadesExigidas: null }).pode) visiveis.push(p);
+    }
+    if (!visiveis.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+    const descrever = (p) => ({ idCurto: String(p.id).slice(0, 8), unidade: cfg.unidades.find((x) => x.unidadeId === p.unidadeId)?.nome ?? "unidade", valorCentavos: p.valorCentavos, favorecido: p.leitura?.favorecido ?? null });
+    if (visiveis.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_PROPOSTAS_PENDENTES", resposta: RESPOSTA.qualProposta(visiveis.map(descrever)), extra: { retomou: null, propostas: visiveis.map((p) => String(p.id).slice(0, 8)) } });
+    const p = visiveis[0];
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO") {
+      const r = await retomarProposta(evento, p.eventoId, ctxp);
+      if (r) return r;
+    }
+    const duvida = (p.leitura?.incertezas ?? []).find((x) => typeof x === "string") ?? null;
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "CONFIRMACAO_DE_PROPOSTA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: unidade.organizacaoId, unidadeId: unidade.unidadeId, retomou: p.eventoId });
+    return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", escopo: escopoDe(unidade), propostaId: p.id,
+      resposta: RESPOSTA.propostaExigeAprovacao({ ...descrever(p), motivos: p.autonomiaDocumental?.motivos ?? [], duvida: duvida ? mascararDadosSensiveis(duvida).slice(0, 120) : null }), extra: { retomou: null, nivel: p.autonomiaDocumental?.nivel ?? null } });
   }
 
   /**

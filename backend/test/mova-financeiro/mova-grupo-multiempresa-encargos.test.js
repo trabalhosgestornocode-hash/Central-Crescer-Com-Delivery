@@ -678,3 +678,125 @@ t("PROD-1 caso R$ 260 ponta a ponta: tentativa que falha → proposta preservada
   await s.enviar(doGerente({ texto: "manutenção e limpeza do ar-condicionado, outras despesas", doc: pdf("PROD1") }));
   assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length, (await s.documentos(ORG_X, XIS)).length], [1, 1, 1, 1]);
 });
+
+// ------------------------------------------------------------------ 27/11: CONFIRMAÇÃO natural de proposta — caso real R$ 260 (Subway/Açaí)
+// Legenda "ar condicionado 18.000" (capacidade, não valor): a leitura anota a dúvida ⇒ SOMENTE_PROPOR (proteção legítima, mantida).
+const AR_CONDICIONADO = (x = {}) => COMPRA({ valorCentavos: 26000, favorecido: "Wanderson Goncalves Paes de Lira", competencia: null, categoriaSugerida: "MANUTENCAO",
+  incertezas: ["Mensagem diz R$ 18.000 mas comprovante mostra R$ 260,00"], idTransacao: `E36900256202611272059KADXTE5A${String(++seq).padStart(3, "0")}`, ...x });
+const NATURAIS = ["Sim", "Confirmado", "Confirmo", "Pode registrar", "Pode lançar", "Está correto", "MOVA, pode confirmar"];
+
+/** Envia o comprovante, o MOVA pergunta a competência, a pessoa responde citando a pergunta e a proposta fica em revisão. Devolve o id da mensagem da proposta. */
+async function propostaEmRevisao(s, { marca, texto, quemEnvia = doGerente, quemResponde = doGerente, org = ORG_X, unidade = XIS }) {
+  await s.enviar(quemEnvia({ texto, doc: pdf(marca) }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "COMPETENCIA_AUSENTE"]);
+  await entregar(s, `3EB0PERGUNTA${marca}`);
+  await s.enviar(quemResponde({ texto: "Novembro/2026", respostaA: `3EB0PERGUNTA${marca}` }));
+  const h = await s.ultima();
+  assert.equal(h.decisao, "PROPOSTA", JSON.stringify(h));
+  await entregar(s, `3EB0PROPOSTA${marca}`);
+  const p = (await s.mova.armazenamento.propostas.listar({ organizacaoId: org, unidadeId: unidade })).find((x) => x.estado === "AGUARDANDO_REVISAO");
+  return { citar: `3EB0PROPOSTA${marca}`, proposta: p };
+}
+const semEfeito = async (s) => { for (const [o, u] of [[ORG, ALFA], [ORG_X, XIS]]) assert.deepEqual([(await s.contas(o, u)).length, (await s.liquidacoes(o, u)).length, (await s.despesas(o, u)).length], [0, 0, 0]); assert.equal(s.escritas().length, 0); };
+
+t("CF-1 caso real: comprovante com dúvida na leitura vira proposta SOMENTE_PROPOR; 'Confirmado' (e as demais frases naturais) citando a proposta responde NA UNIDADE DELA, diz que só o Centro Financeiro aprova e não executa nada", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO() });
+  const { citar, proposta } = await propostaEmRevisao(s, { marca: "CF1", texto: "Pagamento de conserto ar condicionado 18.000 da cozinha da loja xis" });
+  assert.equal(proposta.autonomiaDocumental.nivel, "SOMENTE_PROPOR");
+  assert.ok(proposta.autonomiaDocumental.motivos.includes("INCERTEZAS_NA_LEITURA"));
+  for (const frase of NATURAIS) {
+    await s.enviar(doGerente({ texto: frase, respostaA: citar }));
+    const h = await s.ultima();
+    assert.deepEqual([h.decisao, h.motivo], ["ORIENTACAO", "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO"], `${frase}: ${JSON.stringify(h)}`);
+    assert.equal(h.unidadeId, XIS, `${frase}: a unidade é a da proposta`);
+    const msg = (await s.respostas()).at(-1);
+    assert.match(msg, new RegExp(`proposta ${proposta.id.slice(0, 8)} \\(Loja Xis`));
+    assert.match(msg, /Centro Financeiro/);
+    assert.match(msg, /R\$ 260,00/);
+    assert.match(msg, /18\.000/, "mostra a dúvida da leitura");
+    assert.doesNotMatch(msg, /Loja Alfa|nenhuma proposta pendente/);
+  }
+  assert.ok(!(await s.mova.armazenamento.historico.todos()).some((h) => String(h.motivo).startsWith("MOVA_CORE")), "nunca virou consulta genérica");
+  await semEfeito(s);
+  const [depois] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.deepEqual([depois.estado, depois.id], ["AGUARDANDO_REVISAO", proposta.id], "a proposta segue intacta (nada de outra proposta)");
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS })).length, 1);
+});
+
+t("CF-2 duas empresas no MESMO grupo: cada confirmação cai na unidade da proposta citada; sem citação e com duas pendentes, pergunta QUAL; ninguém é executado", async () => {
+  let leitura = AR_CONDICIONADO();
+  const s = await grupo({ responder: () => leitura });
+  const xis = await propostaEmRevisao(s, { marca: "CF2X", texto: "Conserto do ar condicionado da loja xis" });
+  leitura = AR_CONDICIONADO({ pagador: "ALFA PRODUTOS", documentoPagador: null });
+  const alfa = await propostaEmRevisao(s, { marca: "CF2A", texto: "Conserto do ar condicionado da loja alfa", org: ORG, unidade: ALFA });
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: xis.citar }));
+  assert.equal((await s.ultima()).unidadeId, XIS);
+  assert.match((await s.respostas()).at(-1), /\(Loja Xis/);
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: alfa.citar }));
+  assert.equal((await s.ultima()).unidadeId, ALFA);
+  assert.match((await s.respostas()).at(-1), /\(Loja Alfa/);
+  await s.enviar(doGerente({ texto: "MOVA, pode confirmar" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "VARIAS_PROPOSTAS_PENDENTES"]);
+  const msg = (await s.respostas()).at(-1);
+  assert.match(msg, /Loja Xis/);
+  assert.match(msg, /Loja Alfa/);
+  assert.match(msg, new RegExp(xis.proposta.id.slice(0, 8)));
+  assert.match(msg, new RegExp(alfa.proposta.id.slice(0, 8)));
+  await semEfeito(s);
+});
+
+t("CF-3 sem citação e com UMA proposta pendente, 'MOVA, pode confirmar' responde sobre ela (na unidade dela); sem proposta, segue o fluxo normal", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO() });
+  await s.enviar(doGerente({ texto: "pode confirmar" }));
+  assert.notEqual((await s.ultima())?.motivo, "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", "sem proposta pendente nada é inventado");
+  const { proposta } = await propostaEmRevisao(s, { marca: "CF3", texto: "Conserto do ar condicionado da loja xis" });
+  await s.enviar(doGerente({ texto: "MOVA, pode confirmar" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo, h.unidadeId], ["ORIENTACAO", "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", XIS]);
+  assert.match((await s.respostas()).at(-1), new RegExp(proposta.id.slice(0, 8)));
+  await semEfeito(s);
+});
+
+t("CF-4 participantes diferentes: outro FINANCEIRO da empresa confirma pela citação; quem só vê a OUTRA empresa e quem só consulta não; ninguém executa", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO(), membros: [FIN, SO_ALFA, CONS] });
+  const { citar } = await propostaEmRevisao(s, { marca: "CF4", texto: "Conserto do ar condicionado da loja xis" });
+  await s.enviar(gw({ de: FIN, texto: "Confirmado", respostaA: citar }));
+  assert.deepEqual([(await s.ultima()).motivo, (await s.ultima()).unidadeId], ["PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", XIS], "outro financeiro da mesma empresa");
+  await s.enviar(gw({ de: SO_ALFA, texto: "Confirmado", respostaA: citar }));
+  assert.equal((await s.ultima()).decisao, "BLOQUEADO", "financeiro só da outra empresa");
+  assert.doesNotMatch((await s.respostas()).at(-1), /Wanderson|260,00/, "sem vazar dados da outra empresa");
+  await s.enviar(gw({ de: CONS, texto: "Confirmado", respostaA: citar }));
+  assert.equal((await s.ultima()).decisao, "BLOQUEADO", "só consulta");
+  await s.enviar(gw({ de: ESTRANHO, texto: "Confirmado", respostaA: citar }));
+  assert.notEqual((await s.ultima()).motivo, "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", "não autorizado");
+  await semEfeito(s);
+});
+
+t("CF-5 proteção contra duplicidade: repetir a confirmação e reenviar o comprovante não criam outra proposta, conta ou despesa; a mensagem citada é só a reprodução (uma fila, uma tentativa)", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO() });
+  const { citar } = await propostaEmRevisao(s, { marca: "CF5", texto: "Conserto do ar condicionado da loja xis" });
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: citar }));
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: citar }));
+  await s.enviar(doGerente({ texto: "Conserto do ar condicionado da loja xis", doc: pdf("CF5") }));
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS })).length, 1);
+  await semEfeito(s);
+  const textos = await s.respostas();
+  assert.equal(textos.filter((x) => /Qual é o mês de referência/.test(x)).length, 1, "uma pergunta de competência");
+  assert.equal(textos.filter((x) => /criada para revisão/.test(x)).length, 1, "uma apresentação da proposta");
+  const filas = (await s.banco.pool.query("select tentativas, count(*)::int n from mova.resposta group by 1")).rows;
+  assert.ok(filas.every((f) => f.tentativas <= 1), "nenhuma mensagem reenviada");
+});
+
+t("CF-6 despesa AUTOMÁTICA após informar a competência (leitura sem dúvida): executa na primeira resposta, uma vez; 'Confirmado' depois não duplica nem vira consulta", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO({ incertezas: [] }) });
+  await s.enviar(doGerente({ texto: "Conserto do ar condicionado da loja xis", doc: pdf("CF6") }));
+  await entregar(s, "3EB0PERGUNTACF6");
+  await s.enviar(doGerente({ texto: "Novembro/2026", respostaA: "3EB0PERGUNTACF6" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.conciliacao], ["EXECUTADO", "PAGO_POR_COMPROVANTE"], JSON.stringify(h));
+  await entregar(s, "3EB0PROPOSTACF6");
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: "3EB0PROPOSTACF6" }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [1, 1, 1], "nada em dobro");
+  assert.ok(!String((await s.ultima()).motivo).startsWith("MOVA_CORE"));
+});

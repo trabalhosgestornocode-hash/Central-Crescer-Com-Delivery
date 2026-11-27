@@ -18,7 +18,7 @@ export const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[̀-�
 // 26/11: resposta curta a uma pergunta, sem a menção "MOVA" do início (no grupo, citar mensagem humana exige a menção: "MOVA sim").
 const resposta = (s) => normalizar(s).replace(/^mova\b\s*/, "");
 
-const SIM = /^(sim|s|isso|isso mesmo|exato|exatamente|correto|certo|confirmo|isso ai|e sim|sao|sao sim|foi|foi sim|ok)$/;
+const SIM = /^(sim|s|isso|isso mesmo|exato|exatamente|correto|certo|confirmo|confirmado|isso ai|e sim|sao|sao sim|foi|foi sim|ok)$/;
 const NAO = /^(nao|n|negativo|nao e|nao sao|nao foi|nao eh)$/;
 const PALAVRA_JUROS = /\b(juros?|multa|mora|encargos?|acrescimos?)\b/;
 const PALAVRA_PARCIAL = /\b(parcial|parcela|entrada|sinal|adiantamento|restante|resto|metade|primeira)\b/;
@@ -135,6 +135,17 @@ export function pedidoDeRetomar(texto) {
   const t = resposta(texto);
   if (!t || t.length > 60 || t.split(" ").length > 8 || /[?]/.test(String(texto))) return false;
   return SIM.test(t) || /\b(registr|lanc|tent|continu|conclu|finaliz|execut|process|pode|ok|isso|manda|faz|faca)/.test(t);
+}
+
+/**
+ * 27/11 — CONFIRMAÇÃO natural de uma proposta já apresentada ("sim", "confirmado", "confirmo", "pode registrar", "pode lançar", "está
+ * correto", "MOVA, pode confirmar"). Só diz que a frase é uma confirmação; a que proposta se refere (citação ou única pendente), quem
+ * pode, a política e a execução são decididos pelo motor, sempre com a unidade DA PROPOSTA. Frase longa ou com pergunta não é confirmação.
+ */
+export function confirmacaoDeProposta(texto) {
+  const t = resposta(texto);
+  if (!t || t.length > 40 || /[?]/.test(String(texto))) return false;
+  return /^(sim|sim senhor|pode sim|confirmado|confirmo|confirmar|isso|isso mesmo|correto|certo|ok|pode (confirmar|registrar|lancar|seguir|fazer)|(esta|ta|ta tudo|esta tudo) (correto|certo)|tudo certo|tudo correto|registra|registrar|lanca|lancar|pode confirmar sim)$/.test(t);
 }
 
 /** Texto curto que parece resposta a uma pergunta de divergência (para a memória curta, sem citação). */

@@ -78,6 +78,16 @@ export const RESPOSTA = Object.freeze({
   mesmaCompraSemResposta: () => 'Não entendi. Este documento é da mesma compra? Responda "sim" ou "não" citando a pergunta; nada foi registrado.',
   documentoComplementarVinculado: (propostaId) => `Anexei o documento à proposta ${String(propostaId).slice(0, 8)}. Não criei outra despesa e nada novo foi lançado.`,
   propostaJaRegistrada: () => "Essa proposta já foi registrada. Não criei outro lançamento.",
+  // 27/11 — "Confirmado" sobre uma proposta que SÓ o Centro Financeiro pode aprovar: diz qual (id, unidade, valor) e por quê. Nada é executado.
+  propostaExigeAprovacao: ({ idCurto, unidade, valorCentavos, favorecido, motivos = [], duvida = null }) => {
+    const tem = (re) => motivos.some((x) => re.test(x));
+    const m = tem(/INCERTEZAS_NA_LEITURA|DOCUMENTO_INCONSISTENTE/) ? "a leitura do comprovante apontou uma dúvida" + (duvida ? ` (“${duvida}”)` : "") + ", e a política só deixa registrar sozinho quando o comprovante está sem dúvida"
+      : tem(/SEM_IDENTIFICADOR/) ? "o comprovante não traz o identificador da transação"
+      : tem(/NAO_E_COMPROVANTE/) ? "o documento enviado não é um comprovante de pagamento"
+      : "a política desta unidade pede aprovação humana para essa proposta";
+    return `A proposta ${idCurto} (${unidade}${favorecido ? ` · ${favorecido}` : ""} · ${reais(valorCentavos)}) continua aguardando aprovação no Centro Financeiro: ${m}. Por aqui eu não consigo aprovar nem executar essa proposta. Nada foi lançado; a proposta e o comprovante foram preservados.`;
+  },
+  qualProposta: (lista) => `Tenho ${lista.length} propostas aguardando confirmação. Responda citando a mensagem da proposta que você quer confirmar:\n${lista.map((p) => `• ${p.idCurto} — ${p.unidade} — ${reais(p.valorCentavos)}${p.favorecido ? ` — ${p.favorecido}` : ""}`).join("\n")}`,
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
