@@ -317,8 +317,11 @@ export const ACOES_MOVA = Object.freeze({
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarCompetencia(ctx, { propostaId: b.propostaId, versao: b.versao, competencia: b.competencia }) },
   "/mova/classificar": { campos: ["propostaId", "versao", "categoria"], escreveNoFinanceiro: false,
     fazer: ({ ctx, mova, b }) => mova.aprovador.revisarClassificacao(ctx, { propostaId: b.propostaId, versao: b.versao, categoria: b.categoria }) },
-  "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria"], escreveNoFinanceiro: true,
-    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.aplicar(ctx, { propostaId: b.propostaId, contaId: b.contaId ?? null, categoria: b.categoria ?? null }, { nucleo }) },
+  // 26/11: `obrigacaoId` = a conta escolhida na revisão de uma operação entre empresas com várias candidatas. A aplicação de
+  // INTERCOMPANY também exige o contexto VERIFICADO da outra empresa (mesma pessoa) — a sessão atual é de uma unidade só, então
+  // por esta rota ela é recusada com CONTRAPARTE_SEM_SESSAO até o desenho da sessão nas duas unidades ser aprovado.
+  "/mova/aplicar": { campos: ["propostaId", "contaId", "categoria", "obrigacaoId"], escreveNoFinanceiro: true,
+    fazer: ({ ctx, mova, nucleo, b }) => mova.aprovador.aplicar(ctx, { propostaId: b.propostaId, contaId: b.contaId ?? null, categoria: b.categoria ?? null, obrigacaoId: b.obrigacaoId ?? null }, { nucleo }) },
   // Execução 17: a pessoa (vincular_pagamento) liga a saída do extrato ao pagamento JÁ registrado por comprovante. O núcleo
   // confere valor, data (tolerância), saída livre e idempotência; nada de segunda baixa, saída ou despesa.
   "/mova/conciliar-comprovante": { campos: ["liquidacaoId", "movimentacaoId", "versaoMovimentacao"], escreveNoFinanceiro: true,

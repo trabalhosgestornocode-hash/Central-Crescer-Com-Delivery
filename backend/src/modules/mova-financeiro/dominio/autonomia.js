@@ -37,6 +37,11 @@ export const OPERACAO = Object.freeze({
   // MOVA CORE F4: prestação de contas da SANGRIA (despesa paga com a própria retirada + troco). Não liquida contra o extrato
   // (o dinheiro já saiu do caixa na sangria) e não exige comprovante; o limite da política vale igual.
   PRESTACAO_DE_SANGRIA: "PRESTACAO_DE_SANGRIA",
+  // 26/11: conta a pagar RELATADA POR TEXTO (sem documento), em uma ou mais parcelas, sempre EM ABERTO. Política própria: a da conta
+  // por boleto/nota (CONTA_A_PAGAR) e a da despesa já paga não a cobrem. Exige a confirmação da pessoa no WhatsApp antes.
+  CONTA_A_PAGAR_RELATADA: "CONTA_A_PAGAR_RELATADA",
+  // 26/11: pagamento feito por OUTRA empresa do grupo (passivo × ativo). Política própria, nas DUAS empresas.
+  OPERACAO_ENTRE_EMPRESAS: "OPERACAO_ENTRE_EMPRESAS",
 });
 /** Operações decididas pelo COMPROVANTE (sem saída do extrato): mesmas exigências e anti-fracionamento. */
 const DOCUMENTAIS = new Set(["BAIXA_DOCUMENTAL", "DESPESA_DOCUMENTAL", "JUROS_DOCUMENTAL"]);

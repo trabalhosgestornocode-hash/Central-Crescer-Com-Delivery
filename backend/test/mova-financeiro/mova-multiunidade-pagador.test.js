@@ -117,7 +117,9 @@ test("MU-0c resolverUnidade: pagador fora da conversa bloqueia; texto × pagador
   assert.deepEqual([resolverUnidade({ cfg, grupo: soAlfa, textos: [], pagador: "MP" }).resultado, resolverUnidade({ cfg, grupo: soAlfa, textos: [], pagador: "MP" }).evidencia],
     [RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE, "PAGADOR_FORA_DA_CONVERSA"]);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], pagador: "MP" }).unidade.unidadeId, XIS);
-  assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies da alfa"], pagador: "MP" }).resultado, RESULTADO_UNIDADE.CONFLITANTE);
+  // 26/11: texto × pagador com as DUAS unidades na conversa ⇒ possível operação entre empresas (o motor pergunta; nada é presumido)
+  const ic = resolverUnidade({ cfg, grupo: ambas, textos: ["brownies da alfa"], pagador: "MP" });
+  assert.deepEqual([ic.resultado, ic.unidade.unidadeId, ic.pagadora.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, ALFA, XIS]);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], pagador: "MP", sugestaoIa: "alfa" }).resultado, RESULTADO_UNIDADE.CONFLITANTE);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], sugestaoIa: "xis" }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
 });
@@ -171,13 +173,94 @@ t("MU-6b resposta curta 'xis' à pergunta da unidade continua a operação na Xi
   assert.equal((await s.propostas(ORG, ALFA)).length, 0);
 });
 
-t("MU-7 conflito (legenda 'alfa', pagador MP): não grava; pergunta; insistir em 'alfa' continua bloqueado", async () => {
+t("MU-7 legenda 'alfa' com pagador MP (Xis): pergunta se é operação ENTRE EMPRESAS; não grava; resposta que não é sim/não repete a pergunta", async () => {
+  // 26/11: antes era só "conflito de unidade". Agora é o caso da Subway pagando pelo Açaí: pergunta, e nada é gravado sem o "sim".
   const s = await multi({ responder: () => PIX({ pagador: "MP" }) });
   await s.enviar(s.privado({ texto: "MOVA brownies da alfa", doc: pdf("7") }));
-  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "UNIDADE_CONFLITANTE"]);
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO"]);
+  assert.match(await s.resposta(), /realizou um pagamento de R\$ [\d.,]+ referente ao Loja Alfa\. Confirma que devo registrar a despesa no Loja Alfa e o valor como uma dívida do Loja Alfa com a Loja Xis\?/);
   await s.enviar(s.privado({ texto: "alfa" }));
-  assert.equal((await s.ultima()).decisao, "BLOQUEADO");
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_RESPOSTA_NAO_ENTENDIDA");
   assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0]);
+});
+
+// ------------------------------------------------------------------ 26/11: OPERAÇÃO ENTRE EMPRESAS pelo WhatsApp (caso R$ 6.495,60)
+// Xis (pagador "MP") = papel da Subway Saci; Alfa = papel do Açaí no Grau Saci. A Xis pagou a distribuidora pela Alfa.
+const VALOR_IC = 649560;
+const comprovanteIC = (x = {}) => PIX({ pagador: "MP", valorCentavos: VALOR_IC, favorecido: "Fornecedor Sintético", dataPagamento: "2026-10-14", ...x });
+const aprovar = (s, p, ctxC, extra = {}) => s.mova.aprovador.aplicar(s.c(ORG, ALFA), { propostaId: p.id, ...extra }, { nucleo: s.m.nucleo, ...(ctxC === undefined ? {} : { ctxContraparte: ctxC }) });
+const entre = async (s, org, u) => (await s.m.nucleo.consultarContasEntreEmpresas(s.c(org, u))).totais;
+
+t("EC-1 caso real: conta EXISTENTE da Alfa paga pela Xis — pergunta exata; 'sim' cria a proposta (nada lançado); aplicação exige as DUAS empresas e liquida sem despesa na Xis", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const conta = (await s.conta("2026-10-14", VALOR_IC)).obrigacoes[0];
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-1") });
+  await s.enviar(doc);
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO");
+  const pergunta = await s.resposta();
+  assert.match(pergunta, /^Identifiquei que a Loja Xis realizou um pagamento de R\$ 6\.495,60 referente ao Loja Alfa\. Confirma que devo registrar a despesa no Loja Alfa e o valor como uma dívida do Loja Alfa com a Loja Xis\?/);
+  assert.match(pergunta, /Conta encontrada no Loja Alfa: Fornecedor Sintético/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p?.tipo, p?.comando?.entrada?.obrigacaoId, p?.comando?.credora?.unidadeId, s.escritas().length], ["INTERCOMPANY", conta.id, XIS, 0], "só proposta: nada escrito no Financeiro");
+  assert.equal((await s.propostas(ORG_X, XIS)).length, 0, "a proposta fica na devedora (uma só)");
+  // sessão de UMA unidade (rota atual): recusada, nada muda
+  await assert.rejects(aprovar(s, p, null), (e) => e.codigo === "CONTRAPARTE_SEM_SESSAO");
+  // outra pessoa na contraparte, ou sem permissão nela: recusada
+  const { ctx } = await import("../financeiro-v2/helpers/cenario.js");
+  await assert.rejects(aprovar(s, p, ctx(ORG_X, XIS, undefined, "eeeeeeee-0000-4000-8000-000000000099")), (e) => e.codigo === "CONTRAPARTE_INVALIDA");
+  await assert.rejects(aprovar(s, p, ctx(ORG_X, XIS, ["financeiro_v2.ver"], "eeeeeeee-0000-4000-8000-000000000001")), (e) => e.codigo === "PERMISSAO_INSUFICIENTE");
+  assert.equal((await s.propostas(ORG, ALFA))[0].estado, "AGUARDANDO_REVISAO");
+  // com o contexto verificado das DUAS: aplica (atômico no Financeiro)
+  const aplicada = await aprovar(s, p, s.c(ORG_X, XIS));
+  assert.equal(aplicada.estado, "APLICADA");
+  const [c] = (await s.contas(ORG, ALFA)).filter((x) => x.id === conta.id);
+  assert.equal(c.saldoCentavos, 0, "a conta do fornecedor fica paga (pela outra empresa)");
+  assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, (await entre(s, ORG_X, XIS)).aReceberCentavos], [VALOR_IC, VALOR_IC], "passivo na Alfa × ativo na Xis");
+  assert.deepEqual([(await s.despesas(ORG_X, XIS)).length, (await s.contas(ORG_X, XIS)).length, (await s.saidas(ORG, ALFA)).length], [0, 0, 0], "nada de despesa na Xis; nenhuma saída inventada na Alfa");
+  await assert.rejects(aprovar(s, p, s.c(ORG_X, XIS)), (e) => e.codigo === "PROPOSTA_JA_DECIDIDA");
+});
+
+t("EC-2 SEM conta prévia na Alfa: a proposta traz a conta NOVA (já paga pela Xis); despesa reconhecida UMA vez, só na Alfa", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-2") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), /Não encontrei conta em aberto com esse valor no Loja Alfa/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p.comando.entrada.obrigacaoId ?? null, p.comando.entrada.obrigacaoNova?.competencia, p.comando.entrada.obrigacaoNova?.contraparteNova?.nome], [null, "2026-10", "Fornecedor Sintético"]);
+  await aprovar(s, p, s.c(ORG_X, XIS));
+  const contasA = await s.contas(ORG, ALFA);
+  assert.deepEqual([contasA.length, contasA[0].saldoCentavos, (await s.liquidacoes(ORG, ALFA)).length, (await s.saidas(ORG, ALFA)).length], [1, 0, 1, 0]);
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [0, 0]);
+});
+
+t("EC-3 'não' encerra sem registrar nada; boleto (não é pagamento) com o mesmo conflito continua como conflito de unidade", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-3") });
+  await s.enviar(doc);
+  await s.enviar(s.privado({ texto: "não", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_RECUSADA");
+  assert.deepEqual([(await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length, s.escritas().length], [0, 0, 0]);
+  const b = await multi({ responder: () => BOLETO({ pagador: "MP" }) });
+  await b.enviar(b.privado({ texto: "MOVA boleto da alfa", doc: pdf("ic-3b") }));
+  assert.equal((await b.ultima()).motivo, "UNIDADE_CONFLITANTE");
+});
+
+t("EC-4 várias contas compatíveis na Alfa: o MOVA não escolhe — a revisão escolhe UMA (sem ela, a aplicação é recusada)", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const c1 = (await s.conta("2026-10-14", VALOR_IC)).obrigacoes[0];
+  const c2 = (await s.conta("2026-10-20", VALOR_IC)).obrigacoes[0];
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-4") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), /mais de uma conta em aberto com esse valor/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([...p.comando.escolherConta].sort(), [c1.id, c2.id].sort());
+  await assert.rejects(aprovar(s, p, s.c(ORG_X, XIS)), (e) => e.codigo === "CONTA_A_ESCOLHER");
+  await aprovar(s, p, s.c(ORG_X, XIS), { obrigacaoId: c2.id });
+  const contas = await s.contas(ORG, ALFA);
+  assert.deepEqual([contas.find((x) => x.id === c1.id).saldoCentavos, contas.find((x) => x.id === c2.id).saldoCentavos], [VALOR_IC, 0], "só a escolhida");
 });
 
 t("MU-8 identidade operacional SÓ da Alfa: comprovante MP vira proposta na Xis (sem concessão), nada é escrito em nenhuma empresa", async () => {

@@ -1,6 +1,6 @@
 // MOVA — 24/11/2026: QUEM pode responder (confirmar) uma pergunta pendente do MOVA, e se a pergunta ainda vale.
-// Regra: só a MESMA PESSOA autorizada que enviou o documento da pergunta. Uma pessoa não confirma a operação de outra, nem por
-// acidente (resposta citando a pergunta alheia, "sim" solto no grupo).
+// Regra: a MESMA PESSOA autorizada que enviou o documento, ou (26/11) outro integrante do mesmo grupo de lista com perfil
+// FINANCEIRO em todas as unidades que a operação alcança. Sem essa permissão, ninguém confirma a operação de outra pessoa.
 // IDENTIDADE CANÔNICA (revisão 24/11): o identificador do WhatsApp entregue pelo gateway (JID), ou a MESMA ENTRADA da lista de
 // autorizados da configuração do servidor (a entrada reúne os JIDs daquela pessoa: LID no grupo × número no privado). Coincidência
 // de TELEFONE (telefoneE164) ou de celular SOZINHA não basta — só vale quando a própria entrada lista aquele identificador.
@@ -35,7 +35,7 @@ const porIdentificador = (conversa, participanteId, telefoneE164 = null) => {
  * @param {{unidadeId?:string|null, tipo?:string|null}} [pendencia] unidade e tipo da pergunta pendente (null = pergunta de unidade)
  * @returns {{pode:boolean, motivo:string}}
  */
-export function podeConfirmarPendencia(cfg, origem, quem, { unidadeId = null, tipo = null } = {}) {
+export function podeConfirmarPendencia(cfg, origem, quem, { unidadeId = null, tipo = null, unidadesExigidas = null } = {}) {
   if (!origem?.participanteId || !quem?.participanteId) return { pode: false, motivo: "SEM_PARTICIPANTE" };
   // quem responde precisa ser reconhecido na conversa em que responde, e ela alcançar a unidade
   const conversaDeQuem = conversaAutorizada(cfg, quem.grupoId);
@@ -52,12 +52,20 @@ export function podeConfirmarPendencia(cfg, origem, quem, { unidadeId = null, ti
     const conhecidos = idsDa(entrada);
     if (conhecidos.includes(quem.participanteId) || conhecidos.some((j) => mesmoCelularBr(j, quem.participanteId))) return { pode: true, motivo: "MESMA_PESSOA_AUTORIZADA" };
   }
-  // 25/11 — complemento por OUTRO integrante: mesmo grupo de LISTA (nunca a conversa privada de outra pessoa), FINANCEIRO na unidade.
-  const complemento = TIPOS_COMPLEMENTO.includes(tipo ?? "UNIDADE");
+  // 26/11 — COLABORAÇÃO POR PERMISSÃO: outro integrante do MESMO grupo de LISTA (nunca a conversa privada de outra pessoa) responde
+  // QUALQUER pergunta (complemento ou confirmação de efeito) quando tem perfil FINANCEIRO em TODAS as unidades que a operação
+  // alcança — uma unidade comum; as DUAS no intercompany (`unidadesExigidas`). Pergunta de unidade ainda sem unidade: FINANCEIRO em
+  // todas as unidades da conversa (assim a escolha nunca leva a operação para onde a pessoa não tem permissão). Quem confirma fica
+  // na decisão (participanteId), auditado individualmente. A escrita continua conferida pela concessão no Financeiro.
   const mesmoGrupo = quem.grupoId === origem.grupoId && String(quem.grupoId).endsWith("@g.us") && (conversaDeQuem?.acesso ?? "ABERTO") === "LISTA" && !entradaDeQuem.aberto;
-  if (complemento && mesmoGrupo && unidadeId && perfilNa(entradaDeQuem, unidadeId) === PERFIL.FINANCEIRO) return { pode: true, motivo: "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO" };
-  // Sem unidade definida (pergunta de unidade ambígua) não há como conferir a permissão de outra pessoa: só quem enviou responde.
-  return { pode: false, motivo: complemento && mesmoGrupo && unidadeId ? "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE" : "OUTRO_PARTICIPANTE" };
+  const exigidas = [...new Set([...(unidadesExigidas ?? []), ...(unidadeId ? [unidadeId] : [])])];
+  const alvo = exigidas.length ? exigidas : (conversaDeQuem?.unidades ?? []);
+  // a unidade precisa estar no alcance DA PESSOA (entrada.unidades, quando restrita) — não basta o perfil genérico da entrada
+  const alcance = entradaDeQuem.unidades ?? conversaDeQuem?.unidades ?? [];
+  if (mesmoGrupo && alvo.length && alvo.every((u) => alcance.includes(u) && perfilNa(entradaDeQuem, u) === PERFIL.FINANCEIRO)) {
+    return { pode: true, motivo: TIPOS_COMPLEMENTO.includes(tipo ?? "UNIDADE") ? "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO" : "CONFIRMACAO_DE_FINANCEIRO_AUTORIZADO" };
+  }
+  return { pode: false, motivo: mesmoGrupo ? "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE" : "OUTRO_PARTICIPANTE" };
 }
 
 /**

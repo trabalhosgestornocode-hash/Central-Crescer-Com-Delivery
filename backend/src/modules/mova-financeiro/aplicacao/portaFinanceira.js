@@ -21,7 +21,8 @@ export function exigirContratoFinanceiro(f) {
   const ok = f && f.ACAO && typeof f.ACAO.VER === "string" && typeof f.ACAO.ENVIAR_DOCUMENTO === "string" && typeof f.ErroFinanceiro === "function"
     && typeof f.validarObrigacao === "function" && typeof f.categoriaProvisoria === "string";
   if (!ok) throw new TypeError("MOVA exige o contrato do Financeiro v2 injetado (ACAO, ErroFinanceiro, validarObrigacao, categoriaProvisoria)");
-  return Object.freeze({ ACAO: f.ACAO, ErroFinanceiro: f.ErroFinanceiro, validarObrigacao: f.validarObrigacao, categoriaProvisoria: f.categoriaProvisoria });
+  return Object.freeze({ ACAO: f.ACAO, ErroFinanceiro: f.ErroFinanceiro, validarObrigacao: f.validarObrigacao, categoriaProvisoria: f.categoriaProvisoria,
+    validarContaParcelada: typeof f.validarContaParcelada === "function" ? f.validarContaParcelada : null });
 }
 
 export const OPERACOES_PERMITIDAS = Object.freeze([
@@ -45,6 +46,8 @@ export const OPERACOES_PERMITIDAS = Object.freeze([
   "consultarCaixaEBancos", "consultarMovimentosDeCaixa",
   // Execução 17: pagamentos por comprovante ainda sem conciliação e as saídas candidatas do extrato — só leitura.
   "consultarPagamentosPorComprovanteAConciliar",
+  // 26/11: contas entre empresas do grupo (passivo × ativo) para o aviso diário e as consultas — só leitura (b.consultar).
+  "consultarContasEntreEmpresas",
 ]);
 const SITUACOES_ABERTAS = Object.freeze(["EM_ABERTO", "PARCIALMENTE_PAGO", "VENCIDO", "AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA"]);
 const MAX_PAGINAS = 20;
@@ -54,7 +57,7 @@ const MAX_PAGINAS = 20;
  */
 export function criarPortaFinanceira({ nucleo, concessoes, financeiro }) {
   if (!nucleo || !concessoes?.listar) throw new TypeError("porta financeira exige núcleo e concessões");
-  const { ACAO, ErroFinanceiro, validarObrigacao, categoriaProvisoria } = exigirContratoFinanceiro(financeiro);
+  const { ACAO, ErroFinanceiro, validarObrigacao, categoriaProvisoria, validarContaParcelada } = exigirContratoFinanceiro(financeiro);
   /** Erro do Financeiro que NÃO é de regra (rede, banco, indisponibilidade) vira transitório: a fila tenta de novo. */
   const traduzir = (e) => {
     if (e instanceof ErroFinanceiro) throw e;
@@ -104,6 +107,8 @@ export function criarPortaFinanceira({ nucleo, concessoes, financeiro }) {
     ler: (op, escopo, entrada) => chamar(op, escopo, entrada),
     /** Confere o comando da obrigação com o contrato REAL do Financeiro v2 (lança ErroFinanceiro se inválido). */
     validarComandoDeObrigacao: (cmd) => validarObrigacao(cmd),
+    /** 26/11: conta em parcelas explícitas (relatada por texto). Sem o validador injetado, o Financeiro valida na execução. */
+    validarComandoDeContaParcelada: (cmd) => (validarContaParcelada ? validarContaParcelada(cmd) : cmd),
     /** Erro de REGRA do Financeiro (entrada inválida etc.), em oposição a indisponibilidade. */
     ehErroDeRegra: (e) => e instanceof ErroFinanceiro,
     acoes: ACAO,

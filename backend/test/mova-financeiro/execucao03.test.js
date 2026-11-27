@@ -98,7 +98,7 @@ async function cenario({ responder = () => base({}), transcritor = null, pool: p
   };
   mova = montarMova();
   const enviar = async (p, alvo = mova) => { const r = await alvo.receptor.receber(p); await alvo.receptor.trabalhar(); return r; };
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const resposta = async () => (await mova.armazenamento.saida.listar()).at(-1)?.texto ?? "";
   const propostas = (u) => mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: u });
   const obrigacao = async (u, extra = {}) => (await m.nucleo.registrarObrigacao(c(u), { contraparteId: forn[u].id, valorOriginalCentavos: 12345, categoria: "INSUMOS", descricao: "Compra sintética", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-10-16", ...extra })).obrigacoes[0];
@@ -426,12 +426,13 @@ t("27 isolamento: rotas, propostas e evidências só da unidade da sessão; leit
   assert.deepEqual(escritas(s.chamadas), []);
 });
 
-t("28 unidade com cadastro incompleto (North): recebe e propõe; aplicação bloqueada; as outras seguem", async () => {
+t("28 unidade com fontes de faturamento a confirmar (North): o boleto vira proposta e a aplicação pela rota NÃO é bloqueada por isso (26/11)", async () => {
   const s = await cenario({ responder: () => boleto({}) });
   await s.enviar(gw({ doc: bytes("north"), mime: "image/png", texto: "esse boleto é da beta" }));
   const [p] = await s.propostas(BETA);
-  assert.equal(p.bloqueioDeAplicacao, "REQUISITOS_FINANCEIROS_INCOMPLETOS");
-  await assert.rejects(executarAcaoMova(ACOES_MOVA["/mova/aplicar"], { ctx: s.c(BETA, NIVEL2), mova: s.mova, nucleo: s.m.nucleo, b: { propostaId: p.id } }), { codigo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
+  assert.equal(p.bloqueioDeAplicacao, null);
+  const r = await executarAcaoMova(ACOES_MOVA["/mova/aplicar"], { ctx: s.c(BETA, NIVEL2), mova: s.mova, nucleo: s.m.nucleo, b: { propostaId: p.id } });
+  assert.equal(r.estado, "APLICADA");
 });
 
 t("29 instruções maliciosas: vão como dado delimitado; o delimitador não pode ser fechado; saída fora do contrato é recusada", async () => {

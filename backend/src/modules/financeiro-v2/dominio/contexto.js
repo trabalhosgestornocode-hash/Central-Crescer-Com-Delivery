@@ -49,6 +49,12 @@ export const ACAO = Object.freeze({
   // PRÓPRIA saída da sangria), prestação parcial, troco devolvido ao mesmo caixa e o pendente. NÃO é `registrar` (sem saída nova,
   // pagamento, transferência, receita ou conta existente). Nenhuma concessão anterior a recebe (migração 0032).
   PRESTAR_SANGRIA: "financeiro_v2.prestar_sangria",
+  // 26/11 — registrar CONTA A PAGAR RELATADA (sem documento) em 1 a 24 parcelas com vencimentos explícitos; nunca paga, nunca
+  // receita, sem movimentação nem liquidação. Nenhuma concessão anterior a recebe (migração 0033).
+  REGISTRAR_CONTA_PARCELADA: "financeiro_v2.registrar_conta_parcelada",
+  // 26/11 — OPERAÇÃO ENTRE EMPRESAS do grupo (uma empresa paga a conta da outra): passivo na devedora, ativo na credora, ligados
+  // por um vínculo único; liquida a conta da devedora sem saída bancária nela; reembolso parcial/total. Migração 0034.
+  REGISTRAR_INTERCOMPANY: "financeiro_v2.registrar_intercompany",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

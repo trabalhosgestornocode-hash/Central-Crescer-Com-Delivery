@@ -15,7 +15,7 @@
 //      (registrarPagamentoPorComprovante: nenhuma saída bancária criada, conciliação pendente; o extrato concilia depois a
 //      MESMA baixa). Só o relato por texto, sem arquivo, cria a saída na conta escolhida pelo administrador;
 //   8. nunca executa pagamento bancário; falha devolve a proposta para revisão e fica registrada (aprovacao FALHOU + auditoria).
-import { requisitosCompletos, unidadePorId } from "../dominio/configuracao.js";
+import { requisitosParaOperacao, unidadePorId } from "../dominio/configuracao.js";
 import { exigirContratoFinanceiro } from "./portaFinanceira.js";
 import { executorDaPessoa } from "./portaOperacional.js";
 import { NIVEL, validarPolitica } from "../dominio/autonomia.js";
@@ -77,6 +77,12 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       await competenciaAberta(nucleo, ctx, mes(p.comando.pagamento.dataEfetiva));
       return execucao.registrarDespesaPaga({ proposta: p, escopo: escopo(ctx), entrada, dataPagamento: p.comando.pagamento.dataEfetiva, nivel: NIVEL.APLICAR_COM_CONFIRMACAO, executor: executorDaPessoa({ nucleo, ctx }) });
     }
+    // 26/11: conta relatada por texto — parcelas EXPLÍCITAS (valor e vencimento de cada uma), em aberto, pelo serviço oficial.
+    if (p.tipo === "CONTA_RELATADA") {
+      if (p.comando.operacao !== "registrarContaParcelada") throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
+      const op = await nucleo.registrarContaParcelada(ctx, entrada);
+      return { obrigacaoId: op.obrigacoes[0].id, obrigacaoIds: op.obrigacoes.map((o) => o.id), movimentacaoId: null };
+    }
     const ob = await nucleo.registrarObrigacao(ctx, entrada);
     const obrigacaoId = ob.obrigacoes[0].id;
     if (p.tipo === "NOVA_OBRIGACAO") return { obrigacaoId, movimentacaoId: null };
@@ -90,12 +96,50 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
     return { obrigacaoId, movimentacaoId: pg.movimentacao?.id ?? null };
   }
 
+  async function aplicarEntreEmpresas(nucleo, ctx, ctxC, p, { obrigacaoId }) {
+    const cmd = p.comando;
+    if (cmd?.operacao !== "registrarPagamentoPorOutraEmpresa" || !cmd.credora || !cmd.entrada) throw new ErroDeAprovacao("PROPOSTA_SEM_COMANDO");
+    // a sessão da plataforma é de UMA unidade: sem o contexto verificado da credora (mesma pessoa), nada é aplicado
+    if (!ctxC) throw new ErroDeAprovacao("CONTRAPARTE_SEM_SESSAO", { unidadeId: cmd.credora.unidadeId });
+    const esc = escopo(ctx); const escC = escopo(ctxC);
+    if (ctxC.usuarioId !== ctx.usuarioId || escC.organizacaoId !== cmd.credora.organizacaoId || escC.unidadeId !== cmd.credora.unidadeId) throw new ErroDeAprovacao("CONTRAPARTE_INVALIDA");
+    await exigir(ctxC, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR]);
+    // várias contas compatíveis: quem revisa escolhe UMA delas (nunca o MOVA); conta nova exige a competência revisada
+    const entrada = { ...cmd.entrada };
+    if (cmd.escolherConta?.length) {
+      if (!cmd.escolherConta.includes(String(obrigacaoId ?? "").toLowerCase())) throw new ErroDeAprovacao("CONTA_A_ESCOLHER", { candidatas: cmd.escolherConta });
+      entrada.obrigacaoId = obrigacaoId.toLowerCase(); delete entrada.obrigacaoNova;
+    }
+    if (entrada.obrigacaoNova) {
+      const competencia = p.competenciaRevisada ?? entrada.obrigacaoNova.competencia;
+      if (!competencia) throw new ErroDeAprovacao("COMPETENCIA_PENDENTE");
+      entrada.obrigacaoNova = { ...entrada.obrigacaoNova, competencia, ...(p.categoriaRevisada ? { categoria: p.categoriaRevisada } : {}), fonte: { sistema: "MANUAL", idExterno: `MOVA:${p.id}` } };
+      await competenciaAberta(nucleo, ctx, competencia);
+    }
+    await competenciaAberta(nucleo, ctx, mes(entrada.dataPagamento));
+    const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
+    if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
+    try {
+      const r = await nucleo.registrarPagamentoPorOutraEmpresa(ctx, ctxC, entrada);
+      const resultado = { obrigacaoId: r.titulo?.id ?? entrada.obrigacaoId ?? null, vinculoId: r.vinculoId, movimentacaoId: null, repetido: r.repetido === true };
+      const aplicada = await a.propostas.transicionar(esc, p.id, "APLICANDO", "APLICADA", resultado);
+      await a.aprovacoes.registrar({ propostaId: p.id, acao: "APLICADA", usuarioId: ctx.usuarioId, resultado });
+      await a.auditoria.registrar({ acao: "PROPOSTA_APLICADA", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { tipo: p.tipo, ...resultado, credora: escC.unidadeId } });
+      return aplicada;
+    } catch (e) {
+      const codigo = e instanceof ErroDeAprovacao ? e.codigo : e instanceof ErroFinanceiro ? e.codigo : "FALHA_NA_APLICACAO";
+      await a.propostas.transicionar(esc, p.id, "APLICANDO", "AGUARDANDO_REVISAO");
+      await a.aprovacoes.registrar({ propostaId: p.id, acao: "FALHOU", usuarioId: ctx.usuarioId, motivo: codigo });
+      throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao(codigo);
+    }
+  }
+
   return Object.freeze({
     /**
      * @param {object} ctx contexto VERIFICADO do Financeiro v2 (sessão da plataforma)
      * @param {{propostaId:string, contaId?:string, categoria?:string}} e  contaId obrigatório para baixa/despesa paga
      */
-    async aplicar(ctx, { propostaId, contaId = null, categoria = null } = {}, { nucleo = nucleoPadrao } = {}) {
+    async aplicar(ctx, { propostaId, contaId = null, categoria = null, obrigacaoId = null } = {}, { nucleo = nucleoPadrao, ctxContraparte = null } = {}) {
       await exigir(ctx, [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR]);
       const esc = escopo(ctx);
       const p = UUID.test(propostaId ?? "") ? await a.propostas.obter(esc, propostaId) : null;
@@ -106,7 +150,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       // Agente 2 — Frente C: baixa JÁ conferida com uma saída do extrato só por confirmarBaixaPorExtrato (vincula a saída que
       // existe). Aplicar pelo caminho antigo criaria uma SEGUNDA saída (pagarContaAPagar) para o mesmo pagamento.
       if (p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA") throw new ErroDeAprovacao("BAIXA_CONFERIDA_COM_EXTRATO");
-      if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) {
+      if (!requisitosParaOperacao(unidadePorId(cfg, p.unidadeId), p.tipo)) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
       }
@@ -140,7 +184,10 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
           throw e instanceof ErroDeAprovacao ? e : new ErroDeAprovacao(codigo);
         }
       }
-      if (p.tipo !== "NOVA_OBRIGACAO" && !porComprovante && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
+      // 26/11 — operação ENTRE EMPRESAS: a MESMA pessoa, com contexto VERIFICADO nas DUAS unidades (a da proposta = devedora, e a
+      // credora). O Financeiro confere permissão e concessão em cada uma e grava os dois lados numa transação só.
+      if (p.tipo === "INTERCOMPANY") return aplicarEntreEmpresas(nucleo, ctx, ctxContraparte, p, { obrigacaoId });
+      if (!["NOVA_OBRIGACAO", "CONTA_RELATADA"].includes(p.tipo) && !porComprovante && !UUID.test(contaId ?? "")) throw new ErroDeAprovacao("CONTA_OBRIGATORIA");
       const tomada = await a.propostas.transicionar(esc, p.id, "AGUARDANDO_REVISAO", "APLICANDO");
       if (!tomada) throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA");
       try {
@@ -199,7 +246,7 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       if (!p) throw new ErroDeAprovacao("PROPOSTA_NAO_ENCONTRADA");
       if (p.estado !== "AGUARDANDO_REVISAO") throw new ErroDeAprovacao("PROPOSTA_JA_DECIDIDA", { estado: p.estado });
       if (p.conciliacao?.situacao !== "CONFERIDA" || !p.conciliacao.movimentacaoId) throw new ErroDeAprovacao("EXTRATO_NAO_CONFERIDO");
-      if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
+      if (!requisitosParaOperacao(unidadePorId(cfg, p.unidadeId), p.tipo)) throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");
       const r = await execucao.liquidar({ proposta: p, escopo: esc, movimentacaoId: p.conciliacao.movimentacaoId, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
         politicaId: p.autonomia?.politicaId ?? null, executor: executorDaPessoa({ nucleo, ctx }) });
       await a.aprovacoes.registrar({ propostaId: p.id, acao: r.ok ? "APLICADA" : "FALHOU", usuarioId: ctx.usuarioId, motivo: r.ok ? null : r.motivo, resultado: r.resultado ?? null });

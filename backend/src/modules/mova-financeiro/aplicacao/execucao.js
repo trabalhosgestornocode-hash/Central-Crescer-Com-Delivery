@@ -492,6 +492,35 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   }
 
   /**
+   * 26/11 — CONTA A PAGAR RELATADA POR TEXTO (proposta CONTA_RELATADA, já CONFIRMADA pela pessoa no WhatsApp). Com a chave
+   * MOVA_OPERACAO_CRIAR_CONTAS, a política CONTA_A_PAGAR_RELATADA da unidade (própria: nem a de conta por documento nem a de despesa
+   * paga a cobrem) e a identidade operacional com `registrar_conta_parcelada`: registra a conta EM ABERTO, com as parcelas ditas,
+   * pelo serviço oficial (fonte MOVA:<proposta> — idempotente). Nunca registra como paga. Sem algum requisito, fica a PROPOSTA.
+   */
+  async function aposContaRelatada(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    const e = proposta.comando?.entrada;
+    if (proposta.tipo !== "CONTA_RELATADA" || proposta.comando?.operacao !== "registrarContaParcelada" || !Array.isArray(e?.parcelas)) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    const faltas = [...(!e.competencia ? ["COMPETENCIA_PENDENTE"] : []), ...(proposta.categoriaDefinida !== true ? ["CATEGORIA_A_CLASSIFICAR"] : [])];
+    if (faltas.length) return { ...base, motivos: faltas };
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao: OPERACAO.CONTA_A_PAGAR_RELATADA, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    // A confirmação no WhatsApp já é a "confirmação de uma pessoa": APLICAR_COM_CONFIRMACAO e APLICAR_AUTOMATICO executam; sem política, só propõe.
+    if (![NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) || !proposta.esclarecidoPor) return r0;
+    if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode("registrarContaParcelada", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR_RELATADA, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const ob = await operacional.chamar("registrarContaParcelada", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      return { obrigacaoId: ob.obrigacoes[0].id, obrigacaoIds: ob.obrigacoes.map((o) => o.id), contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null,
+        categoria: e.categoria, competencia: e.competencia, parcelas: e.parcelas.length, confirmadoPor: proposta.esclarecidoPor, situacaoConta: "ABERTA" };
+    } });
+    return r.ok ? { ...r0, situacao: "CONTA_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
    * 24/11 — NOTA FISCAL de uma conta JÁ registrada (proposta VINCULO_DE_DOCUMENTO): só ANEXA a nota à conta (nenhum valor muda,
    * nenhuma despesa nova). Automática com a chave MOVA_OPERACAO_CRIAR_CONTAS, a política ANEXAR_DOCUMENTO e `enviar_documento`.
    */
@@ -522,5 +551,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

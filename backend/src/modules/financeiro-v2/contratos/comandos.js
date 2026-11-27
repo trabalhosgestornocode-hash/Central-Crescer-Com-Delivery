@@ -261,6 +261,37 @@ export function validarObrigacao(e) {
   };
 }
 
+/**
+ * 26/11 — conta a pagar RELATADA (sem documento) em parcelas com vencimentos EXPLÍCITOS (ex.: cartão: 19/12 e 19/01). Cada parcela
+ * traz o próprio valor; a soma é o total do lançamento. Vencimentos em ordem estritamente crescente, nunca antes da emissão;
+ * a competência é a da COMPRA (nunca derivada dos vencimentos). Sem documento, sem recorrência, de 1 a 24 parcelas.
+ */
+export function validarContaParcelada(e) {
+  semCamposDesconhecidos(e, ["contraparteNova", "categoria", "descricao", "competencia", "dataEmissao", "parcelas", "moeda", "fonte", "formaPagamento"], "contaParcelada");
+  if (!Array.isArray(e.parcelas) || e.parcelas.length < 1 || e.parcelas.length > 24) falhar(CODIGO.ENTRADA_INVALIDA, "Informe de 1 a 24 parcelas.", { campo: "parcelas" });
+  const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
+  const parcelas = e.parcelas.map((p, i) => {
+    semCamposDesconhecidos(p, ["vencimento", "valorCentavos"], `parcelas[${i}]`);
+    return { vencimento: exigirData(p.vencimento, `parcelas[${i}].vencimento`), valorCentavos: exigirCentavos(p.valorCentavos, `parcelas[${i}].valorCentavos`, { positivo: true }) };
+  });
+  for (const [i, p] of parcelas.entries()) {
+    if (p.vencimento < dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.", { campo: `parcelas[${i}].vencimento` });
+    if (i > 0 && p.vencimento <= parcelas[i - 1].vencimento) falhar(CODIGO.DATA_INVALIDA, "Os vencimentos das parcelas precisam estar em ordem crescente.", { campo: `parcelas[${i}].vencimento` });
+  }
+  return {
+    contraparteNova: validarContraparte(e.contraparteNova),
+    categoria: codigoDeCategoria(e.categoria),
+    descricao: exigirTexto(e.descricao, "descricao"),
+    competencia: exigirCompetencia(e.competencia),
+    dataEmissao,
+    parcelas,
+    valorOriginalCentavos: parcelas.reduce((s, p) => s + p.valorCentavos, 0),
+    moeda: moeda(e.moeda),
+    formaPagamento: e.formaPagamento === undefined || e.formaPagamento === null ? null : exigirUmDe(e.formaPagamento, ["CARTAO", "BOLETO", "PIX", "DINHEIRO", "TRANSFERENCIA"], "formaPagamento"),
+    fonte: fonte(e.fonte),
+  };
+}
+
 /** Identificador externo de um título (NF, ID do repasse, pedido, Stone ID): comparado sem maiúsculas nem espaços. */
 export const identificadorDoTitulo = (v) => exigirTexto(v, "identificador", { max: 80 }).replace(/\s+/g, "").toUpperCase();
 

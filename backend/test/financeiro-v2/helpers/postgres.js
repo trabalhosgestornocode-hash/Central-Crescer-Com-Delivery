@@ -154,6 +154,7 @@ export function repositorioPostgresDeTeste(escopos, { concessoesDeTeste = true }
   })());
   return Object.freeze({
     transacao: async (fn, opcoes) => (await iniciar()).repo.transacao(fn, opcoes),
+    transacaoEntreEscopos: async (fn, opcoes) => (await iniciar()).repo.transacaoEntreEscopos(fn, opcoes),
     leitura: async (fn, opcoes) => (await iniciar()).repo.leitura(fn, opcoes),
     /** Acesso direto para os testes de banco (SQL cru como papel de aplicação ou como dono). */
     interno: iniciar,

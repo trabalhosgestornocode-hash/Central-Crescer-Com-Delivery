@@ -1,8 +1,10 @@
 // 24/11 — bloqueador do PR #203: cada CONFIRMAÇÃO (resposta a uma pergunta do MOVA) fica vinculada à operação certa, ao estado da
 // conta na pergunta (versão), à conversa e à MESMA PESSOA autorizada que enviou o documento. Uma pessoa não confirma a operação de
 // outra por acidente. Delegação formal ainda não existe no sistema (recusada até existir). Dados 100% sintéticos.
+// 26/11 (colaboração no grupo do Açaí/Subway): no MESMO grupo por lista, outra pessoa com perfil FINANCEIRO em TODAS as unidades da
+// operação também confirma (auditoria individual: quem enviou e quem confirmou). Perfil OPERACIONAL/CONSULTA nunca confirma efeito.
 import assert from "node:assert/strict";
-import { ALFA, ESTRANHO, FINANCEIRO, FIN, GRUPO, LID, LID_PRIVADO, ORG, SO_ALFA, base, cenario, gw, t } from "./helpers/operacao.js";
+import { ALFA, ESTRANHO, FINANCEIRO, FIN, GRUPO, LID, LID_PRIVADO, OPER, ORG, SO_ALFA, base, cenario, gw, t } from "./helpers/operacao.js";
 import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.js";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { podeConfirmarPendencia } from "../../src/modules/mova-financeiro/dominio/confirmacao.js";
@@ -33,16 +35,16 @@ async function cena() {
 }
 const motivo = async (s) => (await s.ultima()).motivo;
 
-t("CP-01 DOIS participantes na mesma conversa: outra pessoa citando o documento não confirma; a pendência fica para quem enviou", async () => {
+t("CP-01 DOIS participantes na mesma conversa: OPERACIONAL citando o documento não confirma (a pendência continua); outro FINANCEIRO da unidade confirma e fica na auditoria", async () => {
   const s = await cena();
   const doc = await s.documento(FIN);
   assert.equal(await motivo(s), "VALOR_MAIOR_QUE_SALDO");
   // no grupo, citar uma mensagem humana só aciona o MOVA com a menção ("MOVA ..."): é o caminho que chega à pendência
+  await s.enviar(gw({ texto: "MOVA sim", de: OPER, respostaA: doc }));
+  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["RESPOSTA_RECUSADA:SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", 0, 1]);
   await s.enviar(gw({ texto: "MOVA sim", de: SO_ALFA, respostaA: doc }));
-  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["CONFIRMACAO_DE_OUTRO_PARTICIPANTE", 0, 1]);
-  await s.enviar(gw({ texto: "sim", de: FIN, grupo: FIN, respostaA: doc }));
   const [p] = await s.propostas();
-  assert.deepEqual([p?.comando?.juros?.valorCentavos, await s.abertas()], [2000, 0]);
+  assert.deepEqual([p?.comando?.juros?.valorCentavos, p?.participanteId, p?.esclarecidoPor, await s.abertas()], [2000, FIN, SO_ALFA, 0]);
 });
 
 t("CP-02 participante SEM autorização citando a pergunta: ignorado (nada lido nem respondido) e a pendência continua aberta", async () => {
@@ -61,8 +63,8 @@ t("CP-03 citação da PERGUNTA do MOVA (resposta no grupo) por participante inco
   // política de resposta no GRUPO: a pergunta e a pendência ficam na conversa do grupo
   await s.banco.pool.query("update mova.mensagem_pendente set grupo_jid = $1 where resolvida_em is null", [GRUPO]);
   await s.banco.pool.query("update mova.resposta set grupo_jid = $1, estado = 'ENVIADA', provider_message_id = 'PERGUNTA_NO_GRUPO_01' where seq = (select max(seq) from mova.resposta)", [GRUPO]);
-  await s.enviar(gw({ texto: "sim", de: SO_ALFA, respostaA: "PERGUNTA_NO_GRUPO_01" }));
-  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["CONFIRMACAO_DE_OUTRO_PARTICIPANTE", 0, 1]);
+  await s.enviar(gw({ texto: "sim", de: OPER, respostaA: "PERGUNTA_NO_GRUPO_01" }));
+  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["RESPOSTA_RECUSADA:SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", 0, 1]);
   await s.enviar(gw({ texto: "sim", de: FIN, respostaA: "PERGUNTA_NO_GRUPO_01" }));
   assert.equal((await s.propostas()).length, 1);
 });
@@ -75,15 +77,18 @@ t("CP-04 a MESMA pessoa com outro identificador (LID no grupo × número no priv
   assert.equal((await s.propostas()).length, 1);
 });
 
-t("CP-05 DUAS pendências de pessoas diferentes: cada uma só responde a sua", async () => {
+t("CP-05 DUAS pendências de pessoas diferentes: a citação decide QUAL (nunca a outra); OPERACIONAL não confirma nenhuma", async () => {
   const s = await cena();
   const docFin = await s.documento(FIN);
   const docLid = await s.documento(LID);
   assert.equal(await s.abertas(), 2);
+  await s.enviar(gw({ texto: "MOVA sim", de: OPER, respostaA: docFin })); // citar mensagem humana no grupo exige a menção
+  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["RESPOSTA_RECUSADA:SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", 0, 2]);
   await s.enviar(gw({ texto: "sim", de: FIN, respostaA: docLid }));
-  assert.deepEqual([await motivo(s), (await s.propostas()).length, await s.abertas()], ["CONFIRMACAO_DE_OUTRO_PARTICIPANTE", 0, 2]);
+  const ps = await s.propostas();
+  assert.deepEqual([ps.length, ps[0]?.participanteId, ps[0]?.esclarecidoPor, await s.abertas()], [1, LID, FIN, 1], "só a pendência CITADA (a do LID), confirmada pelo FIN");
   await s.enviar(gw({ texto: "sim", de: FIN, respostaA: docFin }));
-  assert.deepEqual([(await s.propostas()).length, await s.abertas()], [1, 1]);
+  assert.deepEqual([(await s.propostas()).length, await s.abertas()], [2, 0]);
 });
 
 t("CP-06 PROPOSTA ALTERADA: a conta mudou entre a pergunta e o 'sim' → nada é executado (pergunta desatualizada)", async () => {
@@ -96,7 +101,7 @@ t("CP-06 PROPOSTA ALTERADA: a conta mudou entre a pergunta e o 'sim' → nada é
   assert.match((await s.saida()).at(-1).texto, /A conta mudou desde a minha pergunta/);
 });
 
-t("CP-07 CONCORRÊNCIA: a dona e outra pessoa respondem ao mesmo tempo → só a da dona vale, uma proposta", async () => {
+t("CP-07 CONCORRÊNCIA: a dona e outra pessoa respondem ao mesmo tempo → uma única retomada, uma proposta", async () => {
   const s = await cena();
   const doc = await s.documento(FIN);
   await Promise.all([s.enviar(gw({ texto: "sim", de: SO_ALFA, respostaA: doc })), s.enviar(gw({ texto: "sim", de: FIN, respostaA: doc })), s.enviar(gw({ texto: "sim", de: SO_ALFA, respostaA: doc }))]);
@@ -124,8 +129,13 @@ t("CP-09 regra pura: mesma pessoa (id, celular com/sem 9, entrada da lista) pode
   assert.equal(podeConfirmarPendencia(cfgCel, de("5585988887777@s.whatsapp.net"), de("558588887777@s.whatsapp.net")).motivo, "MESMO_CELULAR");
   // revisão 24/11: o MESMO número fora da lista não confirma (coincidência de telefone sozinha não é identidade)
   assert.equal(podeConfirmarPendencia(cfg, de("5585988887777@s.whatsapp.net"), de("558588887777@s.whatsapp.net")).motivo, "NAO_AUTORIZADO_NESTA_CONVERSA");
-  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(SO_ALFA)).pode, false);
-  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(LID)).pode, false);
+  // 26/11: outra pessoa FINANCEIRO no mesmo grupo — pode quando é FINANCEIRO em TODAS as unidades da operação
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(SO_ALFA)).pode, false, "sem unidade definida: precisa alcançar todas as do grupo (Beta não)");
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(SO_ALFA), { unidadeId: ALFA, tipo: "MAIOR" }).motivo, "CONFIRMACAO_DE_FINANCEIRO_AUTORIZADO");
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(LID), { tipo: "MAIOR" }).motivo, "CONFIRMACAO_DE_FINANCEIRO_AUTORIZADO");
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(OPER), { unidadeId: ALFA }).motivo, "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", "operacional nunca confirma efeito");
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(SO_ALFA), { unidadesExigidas: [ALFA, "dddddddd-0000-4000-8000-0000000a2b01"] }).pode, false, "intercompany: precisa ser FINANCEIRO nas DUAS");
+  assert.equal(podeConfirmarPendencia(cfg, de(FIN), de(LID, LID_PRIVADO)).pode, false, "outra pessoa no PRIVADO de outro: não");
   assert.equal(podeConfirmarPendencia(cfg, de(null), de(FIN)).pode, false);
 });
 

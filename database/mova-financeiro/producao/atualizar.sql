@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql
--- Novas: 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql
+-- Novas: 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -31,6 +31,7 @@ do $$ begin
   if exists (select 1 from mova.mova_migracao where nome = '0022_mova_orcamento_uso.sql') then raise exception 'MOVA atualização: 0022_mova_orcamento_uso.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0023_mova_politica_sangria.sql') then raise exception 'MOVA atualização: 0023_mova_politica_sangria.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0024_mova_grupo_multiempresa.sql') then raise exception 'MOVA atualização: 0024_mova_grupo_multiempresa.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0016_mova_avisos_entregadores.sql (arquivo 76b39b7b74f4b4284b87a07c52cc4a3761fe7f5f49b6950a44587f8a93c377dc)
@@ -246,3 +247,43 @@ insert into mova.mova_migracao (nome, sha256) values ('0023_mova_politica_sangri
 alter table mova.grupo_autorizado add column if not exists multiempresa boolean not null default false;
 comment on column mova.grupo_autorizado.multiempresa is 'Grupo compartilhado por unidades de organizações diferentes (autorização explícita do proprietário). Cada mensagem resolve uma única unidade.';
 insert into mova.mova_migracao (nome, sha256) values ('0024_mova_grupo_multiempresa.sql', '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47');
+
+-- ------------------------------------------------------------------------- 0025_mova_contas_relatadas_intercompany_avisos.sql (arquivo 60b6a3a1ee6438c1b9442cdeca69574a47219781ff7bc15629f312774dc26889)
+-- MOVA (26/11/2026): (1) operações CONTA_A_PAGAR_RELATADA (conta a pagar por texto, sem documento, em parcelas; ação estreita
+-- `registrar_conta_parcelada` do Financeiro, migração 0033) e OPERACAO_ENTRE_EMPRESAS (pagamento feito por outra empresa do grupo;
+-- ação `registrar_intercompany`, migração 0034) nas listas fechadas das POLÍTICAS e das EXECUÇÕES. Nenhuma política é semeada: sem
+-- política o MOVA só PROPÕE (as políticas existentes — conta por boleto/nota, despesa paga — NÃO cobrem estas operações).
+-- (2) AVISO DIÁRIO de contas a pagar no grupo (10h/15h, America/Fortaleza): UMA linha por grupo + data + janela (chave única) — a
+-- idempotência sobrevive a reinício e a mais de uma instância. Só metadados (contagens/totais por unidade); nada de texto livre.
+alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
+alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
+                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
+                      'CONTA_A_PAGAR_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+alter table mova.proposta drop constraint proposta_tipo_check;
+alter table mova.proposta add constraint proposta_tipo_check
+  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));
+
+create table mova.aviso_diario (
+  id uuid primary key default gen_random_uuid(),
+  grupo_jid text not null references mova.grupo_autorizado (grupo_jid),
+  data date not null,
+  janela text not null check (janela ~ '^[0-2][0-9]:[0-5][0-9]$'),
+  -- ENVIADO = mensagem na fila de saída (mesma transação); SEM_MENSAGEM = janela conferida sem nada a dizer (ex.: 15h sem contas)
+  situacao text not null default 'RESERVADO' check (situacao in ('RESERVADO', 'ENVIADO', 'SEM_MENSAGEM', 'FALHOU')),
+  check ((situacao = 'ENVIADO') = (resposta_id is not null)),
+  resumo jsonb not null default '{}'::jsonb check (jsonb_typeof(resumo) = 'object'),
+  resposta_id uuid references mova.resposta (id),
+  tentativas integer not null default 1 check (tentativas between 1 and 20),
+  criado_em timestamptz not null default now(),
+  atualizado_em timestamptz not null default now(),
+  unique (grupo_jid, data, janela)
+);
+comment on table mova.aviso_diario is 'Aviso diário de contas a pagar no grupo: uma linha por grupo/data/janela (idempotência). Sem texto livre.';
+grant select, insert on mova.aviso_diario to mova_app;
+grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
+-- sem DELETE para o app (histórico do que foi avisado)
+insert into mova.mova_migracao (nome, sha256) values ('0025_mova_contas_relatadas_intercompany_avisos.sql', '60b6a3a1ee6438c1b9442cdeca69574a47219781ff7bc15629f312774dc26889');

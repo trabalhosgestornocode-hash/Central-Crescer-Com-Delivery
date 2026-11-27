@@ -37,6 +37,9 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   // 25/11: ação ESTREITA `prestar_sangria` (0032) — nunca a ampla `registrar` (que o provedor operacional recusa).
   registrarDespesaDaSangria: "PRESTAR_SANGRIA",
   registrarTrocoDaSangria: "PRESTAR_SANGRIA",
+  // 26/11: conta a pagar RELATADA por texto (parcelas explícitas, em aberto, sem documento) — ação ESTREITA própria (0033); a de
+  // conta por documento (`registrar_obrigacao`) não cobre esta modalidade.
+  registrarContaParcelada: "REGISTRAR_CONTA_PARCELADA",
 });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

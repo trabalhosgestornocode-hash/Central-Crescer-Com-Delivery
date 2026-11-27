@@ -50,7 +50,7 @@ export const CONFIG = {
     { grupoId: GRUPO_X, unidades: [XIS], acesso: "LISTA", participantes: [{ ids: [DUAS_EMPRESAS], perfil: "FINANCEIRO" }] },
   ],
 };
-export const FINANCEIRO = { ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR };
+export const FINANCEIRO = { ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, validarContaParcelada: comandos.validarContaParcelada, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR };
 export const base = (extra) => ({
   legivel: true, tipoDocumento: "OUTRO", intencao: "OUTRA", unidadeSugerida: null, documentoDestinatario: null, valorCentavos: null, dataPagamento: null, dataEmissao: null,
   vencimento: null, competencia: null, favorecido: null, identificadorDocumento: null, categoriaSugerida: null, natureza: null, consulta: null, confianca: "ALTA",
@@ -92,9 +92,9 @@ export async function cenario({ responder = () => base({}), comandosDeterministi
   // 25/11: REINÍCIO do processo — um MOVA novo sobre o MESMO banco (nada em memória sobrevive; só o que está no PostgreSQL).
   const reiniciar = () => { ref.mova = montarMova(); mova = ref.mova; resultado.mova = mova; return mova; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const contar = async (tabela) => Number((await banco.pool.query(`select count(*)::int n from mova.${tabela}`)).rows[0].n);
-  const ultimaDoMova = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultimaDoMova = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const resultado = { m, c, forn, conta, banco, cliente, chamadas, mova, enviar, saida, ultima: ultimaDoMova, contar, cfg, reiniciar };
   return resultado;
 }

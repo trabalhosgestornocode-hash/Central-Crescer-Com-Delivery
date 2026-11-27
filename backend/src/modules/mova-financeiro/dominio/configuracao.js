@@ -205,6 +205,13 @@ export function conversaAutorizada(cfg, jid) {
 export const unidadePorId = (cfg, id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
 /** Requisitos financeiros completos para APLICAR propostas (hoje: fontes de faturamento confirmadas no cadastro). */
 export const requisitosCompletos = (unidade) => unidade?.fontes?.situacao === SITUACAO_FONTES.CONFIRMADA;
+/**
+ * 26/11 — as FONTES DE FATURAMENTO a confirmar só importam para o que toca RECEITA. Despesa, conta a pagar, baixa, vínculo de documento
+ * e intercompany não dependem delas: bloquear essas operações (e dizer "a proposta fica guardada" depois de já executada) era um
+ * falso impedimento. O MOVA nunca lança receita; qualquer tipo fora desta lista continua exigindo os requisitos.
+ */
+export const TIPOS_SEM_DEPENDENCIA_DE_FONTES = Object.freeze(["DESPESA_PAGA", "NOVA_OBRIGACAO", "BAIXA_DE_OBRIGACAO", "VINCULO_DE_DOCUMENTO", "SOLICITACAO_DE_REVISAO", "CONTA_RELATADA", "INTERCOMPANY"]);
+export const requisitosParaOperacao = (unidade, tipo) => TIPOS_SEM_DEPENDENCIA_DE_FONTES.includes(tipo) || requisitosCompletos(unidade);
 
 /** Mascara um JID de grupo/participante para log: só os 4 últimos dígitos. */
 export function mascarar(jid) {

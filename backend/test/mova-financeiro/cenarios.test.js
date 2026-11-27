@@ -196,19 +196,23 @@ t("07 unidade ambígua: pergunta, a resposta relacionada resolve; nunca presume 
 });
 
 // ======================================================================================== 8. documento da North (cadastro incompleto)
-t("08 documento da unidade com cadastro financeiro incompleto: recebe e propõe, mas a aplicação fica bloqueada; as outras seguem", async () => {
+t("08 unidade com FONTES DE FATURAMENTO a confirmar: conta a pagar (boleto) NÃO é bloqueada por isso — fontes só importam para receita (26/11)", async () => {
+  // 26/11 (auditoria): bloquear despesa/conta pela falta de fontes de faturamento era um falso impedimento (e a resposta dizia
+  // "fica guardada" depois de já executado). Só os tipos fora de TIPOS_SEM_DEPENDENCIA_DE_FONTES continuam exigindo as fontes.
   const doc = bytes("beta-boleto"); const doc2 = bytes("alfa-boleto");
   const boleto = leitura({ tipoDocumento: "BOLETO", intencao: "REGISTRAR_CONTA", dataPagamento: null, dataEmissao: "2026-10-01", vencimento: "2026-10-30" });
   const s = await cenario({ roteiro: { [ref(doc)]: boleto, [ref(doc2)]: { ...boleto, valorCentavos: 5000 } } });
   await s.enviar(gw({ doc, texto: "boleto beta" }));
   const [p] = await s.propostas(BETA);
-  assert.equal(p.bloqueioDeAplicacao, "REQUISITOS_FINANCEIROS_INCOMPLETOS");
-  assert.match((await s.respostas()).at(-1).texto, /cadastro financeiro incompleto/);
-  await assert.rejects(s.mova.aprovador.aplicar(s.c(BETA, NIVEL2), { propostaId: p.id }), { codigo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
-  assert.equal((await s.propostas(BETA))[0].estado, "AGUARDANDO_REVISAO");
+  assert.equal(p.bloqueioDeAplicacao, null);
+  assert.doesNotMatch((await s.respostas()).at(-1).texto, /cadastro financeiro incompleto/);
+  assert.equal((await s.mova.aprovador.aplicar(s.c(BETA, NIVEL2), { propostaId: p.id })).estado, "APLICADA");
   await s.enviar(gw({ doc: doc2, texto: "boleto alfa" }));
   const [pa] = await s.propostas(ALFA);
   assert.equal((await s.mova.aprovador.aplicar(s.c(ALFA, NIVEL2), { propostaId: pa.id })).estado, "APLICADA");
+  const { requisitosParaOperacao } = await import("../../src/modules/mova-financeiro/dominio/configuracao.js");
+  const beta = s.mova.cfg.unidades.find((u) => u.unidadeId === BETA);
+  assert.deepEqual([requisitosParaOperacao(beta, "NOVA_OBRIGACAO"), requisitosParaOperacao(beta, "OUTRO_TIPO_QUALQUER")], [true, false], "tipo fora da lista continua exigindo as fontes");
 });
 
 // ======================================================================================== 9. comprovante de obrigação existente

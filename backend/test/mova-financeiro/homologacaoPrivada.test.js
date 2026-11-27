@@ -50,7 +50,7 @@ async function cenario(responder = () => base({})) {
   const montarMova = () => { const ref = {}; ref.mova = criarMova({ configuracao: CONFIG, nucleo: m.nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator: criarExtratorAnthropic({ cliente, obterEvidencia: (x) => ref.mova.evidencias.obter(x), relogio: () => AGORA }), pool, relogio: () => AGORA }); return ref.mova; };
   const mova = montarMova();
   const enviar = async (p, alvo = mova) => { const r = await alvo.receptor.receber(p); await alvo.receptor.trabalhar(); return r; };
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   return { m, c, pool, pedidos, mova, montarMova, enviar, ultima, propostas: (u) => mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: u }) };
 }
 

@@ -493,6 +493,52 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     }
   }
 
+  /**
+   * 26/11 — UMA transação que grava em DOIS escopos (operação entre empresas: passivo numa, ativo na outra). Cada trecho roda com a
+   * sessão de banco do SEU escopo (assumida no banco, com a concessão daquele usuário naquela unidade: o RLS continua decidindo).
+   * Antes de trocar de escopo, as conferências adiadas (histórico, conservação) do trecho anterior rodam AGORA, ainda na sessão
+   * dele (`set constraints all immediate`), e voltam a ficar adiadas para o próximo. Qualquer falha desfaz os dois lados.
+   */
+  async function umaTentativaEntreEscopos(fn, escopos) {
+    for (const e of escopos) await tokenDe(e);
+    const permitidos = new Set(escopos.map(chaveDoToken));
+    return comCliente(async (cliente, descartar) => {
+      await cliente.query("begin");
+      try {
+        const tx = criarTx(cliente, { somenteLeitura: false });
+        let atual = null;
+        const emEscopo = async (e, trecho) => {
+          const k = chaveDoToken(e);
+          if (!permitidos.has(k)) falhar(CODIGO.ESCOPO_NAO_AUTORIZADO, "Trecho fora dos escopos declarados na transação.");
+          if (atual !== k) { await declararSessao(cliente, e, null); atual = k; }
+          const r = await trecho(tx);
+          await cliente.query("set constraints all immediate");
+          await cliente.query("set constraints all deferred");
+          return r;
+        };
+        const resultado = await fn(emEscopo);
+        await cliente.query("commit");
+        return resultado;
+      } catch (e) {
+        try { await cliente.query("rollback"); } catch { descartar(); }
+        throw traduzir(e);
+      }
+    });
+  }
+
+  async function transacaoEntreEscopos(fn, opcoes) {
+    const escopos = (opcoes?.escopos ?? []).map((e) => exigirEscopo({ escopo: e }));
+    if (escopos.length < 2) falhar(CODIGO.REPOSITORIO_INVALIDO, "A transação entre escopos declara ao menos dois escopos.");
+    for (let tentativa = 1; ; tentativa += 1) {
+      try {
+        return await umaTentativaEntreEscopos(fn, escopos);
+      } catch (e) {
+        if (!(e?.repetivel || DISPUTA.has(e?.code)) || tentativa >= tentativas) throw e;
+        await esperar(5 * tentativa);
+      }
+    }
+  }
+
   async function leitura(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
     await tokenDe(escopo); // 25/11: emitido antes de pegar a conexão (ver umaTentativa)
@@ -510,5 +556,5 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     });
   }
 
-  return Object.freeze({ transacao, leitura });
+  return Object.freeze({ transacao, transacaoEntreEscopos, leitura });
 }

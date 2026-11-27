@@ -16,7 +16,7 @@
 import { camposAlterados, podeConfirmarPendencia, versaoDaConta } from "../dominio/confirmacao.js";
 import { chaveDoDocumento } from "../dominio/documentos.js";
 import { SITUACAO_COMPROVANTE, avaliarComprovante } from "../dominio/comprovante.js";
-import { grupoAutorizado, mascarar, normalizar, requisitosCompletos } from "../dominio/configuracao.js";
+import { grupoAutorizado, mascarar, normalizar, requisitosParaOperacao } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
 import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeReceita.js";
 import { ehSaudacaoOuAjuda, mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
@@ -28,10 +28,15 @@ import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RE
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
+import { categoriaDaContaRelatada, interpretarContaRelatada, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
+/** 26/11: fuso da operação (Açaí e Subway Saci): data da mensagem, competência e ano das parcelas relatadas. */
+export const FUSO_DA_OPERACAO = "America/Fortaleza";
+/** 26/11: conta relatada sem fornecedor dito — o nome é este marcador, nunca um fornecedor deduzido. */
+export const FORNECEDOR_NAO_INFORMADO = "Fornecedor não informado";
 export const DECISAO = Object.freeze({
   IGNORADO: "IGNORADO", BLOQUEADO: "BLOQUEADO", PEDIR_INFORMACAO: "PEDIR_INFORMACAO", DUPLICADO: "DUPLICADO",
   CONSULTA: "CONSULTA", ORIENTACAO: "ORIENTACAO", PROPOSTA: "PROPOSTA", FALHA_LEITURA: "FALHA_LEITURA",
@@ -40,7 +45,9 @@ export const DECISAO = Object.freeze({
 });
 export const TIPO_PROPOSTA = Object.freeze({ BAIXA_DE_OBRIGACAO: "BAIXA_DE_OBRIGACAO", DESPESA_PAGA: "DESPESA_PAGA", NOVA_OBRIGACAO: "NOVA_OBRIGACAO", SOLICITACAO_DE_REVISAO: "SOLICITACAO_DE_REVISAO",
   // 24/11 (0015): nota fiscal de uma conta JÁ registrada — só anexa o documento à conta (nenhum valor muda).
-  VINCULO_DE_DOCUMENTO: "VINCULO_DE_DOCUMENTO" });
+  VINCULO_DE_DOCUMENTO: "VINCULO_DE_DOCUMENTO",
+  // 26/11 (0025): conta a pagar relatada por texto (parcelas explícitas, sem documento) e pagamento feito por outra empresa do grupo.
+  CONTA_RELATADA: "CONTA_RELATADA", INTERCOMPANY: "INTERCOMPANY" });
 const PAGAMENTOS = ["COMPROVANTE_PAGAMENTO", "RECIBO"];
 const CONTAS = ["BOLETO", "NOTA_FISCAL"];
 const CONSULTAS_DO_GRUPO = ["COMPARATIVO_UNIDADES", "SITUACAO_PROPOSTAS"];
@@ -207,6 +214,29 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     return resto.split(" ").filter(Boolean).every((p) => PALAVRAS_DE_LIGACAO.has(p));
   }
 
+  /**
+   * 26/11 — RETOMADA SEGURA de uma pendência já tomada (atomicamente) pela resposta `evento`.
+   * Antes a resposta ganhava a decisão RELACIONADA ANTES de a operação rodar: uma falha transitória (Financeiro/IA fora) deixava a
+   * pendência consumida e a resposta "já decidida" — a nova tentativa da fila virava DUPLICADO e a confirmação se perdia.
+   * Agora: (1) a operação roda; (2) falhou com exceção ⇒ a pendência é DEVOLVIDA (aberta de novo) e a exceção sobe para a fila
+   * tentar de novo — a resposta continua sem decisão, então a nova tentativa encontra a pendência e a retoma; (3) só depois do
+   * sucesso a resposta é marcada RELACIONADA (com quem respondeu: auditoria individual). Nunca retoma duas vezes: a tomada é atômica.
+   */
+  async function retomarPendencia(evento, pend, motivo, extra = {}) {
+    let r;
+    try {
+      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, ...extra } });
+    } catch (e) {
+      try {
+        await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
+        registrar({ tipo: "MOVA_PENDENCIA_DEVOLVIDA", grupo: mascarar(evento.grupoId) });
+      } catch { registrar({ tipo: "MOVA_PENDENCIA_NAO_DEVOLVIDA", grupo: mascarar(evento.grupoId) }); }
+      throw e;
+    }
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo, participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
+    return r;
+  }
+
   async function processar(evento, { esclarecimento = null, midiaLocal = null } = {}) {
     // 1. Grupo autorizado. Fora da lista: nada é lido, guardado nem respondido.
     const grupo = grupoAutorizado(cfg, evento.grupoId);
@@ -253,7 +283,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // completar) ou CONFIRMAÇÃO de efeito (só quem enviou). O motivo real da recusa fica na decisão e na resposta.
         let motivoRecusa = null;
         const podeConfirmar = (origem, leitura) => {
-          const r = podeConfirmarPendencia(cfg, origem, evento, { unidadeId: leitura?.divergencia?.unidadeId ?? leitura?.saida?.unidadeId ?? null, tipo: leitura?.divergencia?.tipo ?? null });
+          const r = podeConfirmarPendencia(cfg, origem, evento, { unidadeId: leitura?.divergencia?.unidadeId ?? leitura?.saida?.unidadeId ?? null, tipo: leitura?.divergencia?.tipo ?? null, unidadesExigidas: leitura?.divergencia?.unidadesExigidas ?? null });
           if (!r.pode) motivoRecusa = r.motivo;
           return r.pode;
         };
@@ -277,10 +307,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
             if (pend?.expirada) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PENDENCIA_EXPIRADA", resposta: RESPOSTA.pendenciaExpirada(), extra: { retomou: null, citou: "PERGUNTA_DO_MOVA" } });
           }
         }
-        if (pend?.pendente) {
-          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
-        }
+        if (pend?.pendente) return retomarPendencia(evento, pend, motivoRelacao);
         // 5a. 25/11 — RETOMADA pela citação da resposta do MOVA sobre uma PROPOSTA (sem pergunta pendente): "registrar", "tenta de novo".
         // Nada novo é exigido (nem novo comprovante); a execução automática é refeita com TUDO revalidado (política, chaves, concessão,
         // competência aberta, duplicidade, fracionamento). Só vale para quem pode complementar a operação nesta unidade.
@@ -309,8 +336,24 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           // era a pergunta de unidade e a resposta curta não é uma unidade: devolve a pendência e segue o fluxo normal da mensagem
           await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
         } else if (pend?.pendente) {
-          await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: pend.pendente.divergencia ? "RESPOSTA_DE_DIVERGENCIA_POR_CONTEXTO" : "ESCLARECIMENTO_POR_CONTEXTO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId } });
+          return retomarPendencia(evento, pend, pend.pendente.divergencia ? "RESPOSTA_DE_DIVERGENCIA_POR_CONTEXTO" : "ESCLARECIMENTO_POR_CONTEXTO");
+        }
+      }
+      // 5b'. 26/11 — COLABORAÇÃO sem citação: resposta curta ("sim", "2", "Açaí", "outubro") de OUTRA pessoa, quando a conversa tem
+      // pendência aberta recente de outro participante. Exatamente UMA que esta pessoa pode responder (perfil FINANCEIRO nas unidades da
+      // operação) ⇒ retoma; mais de uma ⇒ pergunta só QUAL (citar a pergunta), sem consumir nenhuma; nenhuma ⇒ segue o fluxo normal.
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia && (ehRespostaCurta || ehUnidade) && typeof a.mensagens.pendentesDoGrupo === "function") {
+        const abertas = (await a.mensagens.pendentesDoGrupo({ grupoId: evento.grupoId, validadeMs: MEMORIA_CURTA_MS }))
+          .filter((x) => x.pendente?.evento?.participanteId !== evento.participanteId);
+        const elegiveis = abertas.filter((x) => podeConfirmarPendencia(cfg, x.pendente.evento, evento, { unidadeId: x.pendente.divergencia?.unidadeId ?? x.pendente.saida?.unidadeId ?? null, tipo: x.pendente.divergencia?.tipo ?? null, unidadesExigidas: x.pendente.divergencia?.unidadesExigidas ?? null }).pode);
+        if (elegiveis.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_PENDENCIAS_ABERTAS", resposta: RESPOSTA.qualPendencia(elegiveis.length), extra: { retomou: null } });
+        if (elegiveis.length === 1) {
+          const pend = await a.mensagens.tomarPendente(elegiveis[0].mensagemId, { validadeMs: MEMORIA_CURTA_MS });
+          if (pend?.pendente) return retomarPendencia(evento, pend, "RESPOSTA_DE_OUTRO_FINANCEIRO_POR_CONTEXTO");
+        }
+        // "sim"/"não" de quem NÃO pode confirmar a única pendência aberta: recusa explícita (a pendência continua para quem pode).
+        if (elegiveis.length === 0 && abertas.length === 1 && respostaSimNao(evento.texto) !== null) {
+          return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
         }
       }
       // 5c. 24/11 — resposta LIVRE a uma pergunta de divergência ou de descrição ("comprei brownies e já paguei", "brownies"): a
@@ -324,10 +367,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           const descricao = visto.pendente.divergencia.tipo === TIPO_DIVERGENCIA.DESCRICAO ? descricaoDireta(evento.texto) : null;
           if (descricao) {
             const pend = await a.mensagens.tomarPendente(visto.mensagemId);
-            if (pend?.pendente) {
-              await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "DESCRICAO_RECEBIDA", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-              return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, porEvento: evento.eventoId, participanteId: evento.participanteId, descricao } });
-            }
+            if (pend?.pendente) return retomarPendencia(evento, pend, "DESCRICAO_RECEBIDA", { descricao });
           } else pendenteSemantico = visto;
         }
       }
@@ -462,6 +502,14 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       const daConversa = cfg.unidades.find((x) => x.unidadeId === conversa.unidadeId);
       if (daConversa) u = { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: daConversa, evidencia: "CONVERSA_EM_ANDAMENTO" };
     }
+    // 26/11 — comprovante pago pela conta de uma unidade da conversa citando OUTRA (ex.: a Subway pagou pelo Açaí): pergunta se é
+    // operação entre empresas. Qualquer outro documento (boleto, nota) com esse conflito segue como conflito de unidade.
+    if (u.resultado === RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE) {
+      if (evento.midia && PAGAMENTOS.includes(saida.tipoDocumento) && saida.intencao !== "TRANSFERENCIA_INTERNA") {
+        return tratarEntreEmpresas({ evento, saida, injecao, esclarecimento, grupo, participante, interpretacao, devedora: u.unidade, credora: u.pagadora });
+      }
+      u = { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: u.evidencia };
+    }
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
       const nomes = cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId)).map((x) => x.nome);
       if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
@@ -508,7 +556,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     }
 
     // 13. Transferência entre contas da própria empresa: nunca despesa (reconhecida pelo extrato, na conciliação).
-    const favorecidoEhDaEmpresa = saida.favorecido && unidadesCitadas(saida.favorecido, cfg.unidades).length > 0;
+    // 26/11: o favorecido só indica transferência interna num COMPROVANTE DE PAGAMENTO e quando ele é a MESMA empresa (mesma
+    // organização) da unidade identificada. Relato por texto ("compra de bebedouro para o açaí") e conta a pagar nunca caem aqui; o
+    // favorecido de OUTRA empresa do grupo é operação entre empresas (intercompany), tratada antes, na identificação da unidade.
+    const favorecidoEhDaEmpresa = Boolean(evento.midia) && PAGAMENTOS.includes(saida.tipoDocumento) && saida.favorecido
+      && unidadesCitadas(saida.favorecido, cfg.unidades).some((x) => x.organizacaoId === unidade.organizacaoId);
     if (saida.intencao === "INFORMAR_TRANSFERENCIA" || favorecidoEhDaEmpresa) {
       await marcarDocumento(evento, escopo, null, saida);
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "TRANSFERENCIA_INTERNA_NAO_E_DESPESA", escopo, resposta: RESPOSTA.transferenciaInterna(), injecao });
@@ -528,6 +580,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const textoPuro = !evento.midia;
     const relatoPagamento = textoPuro && saida.intencao === "INFORMAR_PAGAMENTO";
     const relatoConta = textoPuro && saida.intencao === "REGISTRAR_CONTA";
+    // 26/11: conta relatada por TEXTO com valor e data(s) ⇒ leitura determinística das parcelas, resumo e confirmação (antes das
+    // conferências de valor da IA: "total ou cada parcela?" é pergunta do MOVA, não falha de leitura). Sem valor+data, segue o fluxo comum.
+    if (relatoConta || (textoPuro && String(esclarecimento?.divergencia?.tipo ?? "").startsWith("CONTA_RELATADA"))) {
+      const relatada = await tratarContaRelatada(ctx);
+      if (relatada) return relatada;
+    }
     if (!relatoPagamento && !relatoConta && ![...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "TIPO_DE_DOCUMENTO_NAO_RECONHECIDO", escopo, resposta: RESPOSTA.faltaInformacao(["tipo do documento (comprovante, boleto ou nota)"]), injecao });
     if (!saida.valorCentavos && saida.camposAusentes.includes("valorCentavos") && saida.incertezas.length > 0) {
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VALOR_AMBIGUO", escopo, resposta: RESPOSTA.faltaInformacao(["qual é o valor correto (o documento tem mais de um valor possível)"]), injecao });
@@ -559,13 +617,13 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
 O identificador da transação está cortado na imagem: envie o comprovante completo (ou outra evidência oficial) para a baixa automática.`; }
     // Execução 14: o mesmo relato por TEXTO reenviado em outra mensagem (sem arquivo para comparar por sha256) não cria segunda
     // proposta: mesma unidade, tipo, valor e datas de uma proposta do MOVA ainda aguardando revisão ⇒ DUPLICADO.
-    if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO].includes(dados.tipo)) {
+    if (!evento.midia && [TIPO_PROPOSTA.DESPESA_PAGA, TIPO_PROPOSTA.NOVA_OBRIGACAO, TIPO_PROPOSTA.CONTA_RELATADA].includes(dados.tipo)) {
       const mesma = (await a.propostas.listar(escopo)).find((p) => p.estado === "AGUARDANDO_REVISAO" && p.eventoId !== evento.eventoId && !p.evidencia
         && p.tipo === dados.tipo && p.valorCentavos === dados.valorCentavos
         && (p.datas?.caixa ?? null) === (dados.datas?.caixa ?? null) && (p.datas?.vencimento ?? null) === (dados.datas?.vencimento ?? null));
       if (mesma) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "PROPOSTA_SEMELHANTE_PENDENTE", escopo, propostaId: mesma.id, resposta: RESPOSTA.relatoRepetido(mesma.id), injecao });
     }
-    const incompleta = !requisitosCompletos(unidade);
+    const incompleta = !requisitosParaOperacao(unidade, dados.tipo);
     const { proposta } = await a.propostas.criar(escopo, {
       chaveIdempotencia: `${evento.eventoId}|${dados.tipo}`, origem: "MOVA", eventoId: evento.eventoId, mensagemId: evento.mensagemId,
       participanteId: evento.participanteId, esclarecidoPor: esclarecimento ? esclarecimento.participanteId : null,
@@ -997,6 +1055,134 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
       } : null,
     });
+  }
+
+  /** Data civil da MENSAGEM em America/Fortaleza (competência e ano das parcelas vêm dela, nunca do momento da confirmação). */
+  const dataDaMensagem = (evento) => new Intl.DateTimeFormat("en-CA", { timeZone: FUSO_DA_OPERACAO, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(evento.recebidoEm ?? relogio()));
+
+  /**
+   * 26/11 — CONTA A PAGAR RELATADA POR TEXTO (sem documento): "Compra de bebedouro para o açaí, 2 parcelas no cartão, dia 19/12 e 19/01,
+   * valor de R$ 194,50". Leitura determinística (dominio/contaRelatada.js, sem IA além da leitura da intenção que a mensagem já teve).
+   * Fluxo: (1) valor ambíguo (total × cada parcela) ⇒ pergunta UMA vez; (2) RESUMO completo e pedido de confirmação; (3) "sim" de quem
+   * enviou (ou de outro FINANCEIRO da unidade) ⇒ proposta CONTA_RELATADA — registrada EM ABERTO (nunca como paga) só com a política
+   * CONTA_A_PAGAR_RELATADA e a concessão `registrar_conta_parcelada`; sem elas fica para a aprovação no Centro Financeiro. "não" cancela.
+   * Sem fornecedor dito, a conta vai como "Fornecedor não informado" (nunca inventado). Mensagem que não traz valor + data segue o fluxo antigo.
+   * @returns {Promise<object|null>} null = não é conta relatada (segue o fluxo comum)
+   */
+  async function tratarContaRelatada(ctx) {
+    const { evento, escopo, unidade, esclarecimento, injecao } = ctx;
+    const div = esclarecimento?.divergencia ?? null;
+    if (div && !String(div.tipo ?? "").startsWith("CONTA_RELATADA")) return null;
+    let tipoValor = div?.tipoValor ?? null;
+    if (div?.tipo === "CONTA_RELATADA_VALOR") {
+      tipoValor = interpretarRespostaDoValor(esclarecimento.texto);
+      if (!tipoValor) {
+        const c0 = interpretarContaRelatada({ texto: evento.texto, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades });
+        return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR" }, RESPOSTA.contaRelatadaValorAmbiguo(c0), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+      }
+    }
+    const c = interpretarContaRelatada({ texto: evento.texto, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor });
+    if (!c.ehConta) return null;
+    // conta ÚNICA relatada por texto segue o fluxo de sempre (proposta de conta a pagar); este fluxo é o das PARCELAS (2 ou mais)
+    if (!div && !((c.quantidade ?? 0) > 1)) return null;
+    if (c.faltas.length) {
+      const nomes = { DATA_INVALIDA: "uma data válida (dia/mês)", VALOR: "valor", VALORES_DIFERENTES: "qual é o valor (a mensagem tem mais de um)", DESCRICAO: "o que foi comprado",
+        PARCELAS: "quantidade de parcelas (1 a 24)", VENCIMENTO: "vencimento", VENCIMENTOS_DAS_PARCELAS: "o vencimento de cada parcela", VENCIMENTO_ANTERIOR_A_COMPRA: "vencimentos a partir da data da compra" };
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONTA_RELATADA_INCOMPLETA:${c.faltas.join(",")}`, escopo, resposta: RESPOSTA.faltaInformacao(c.faltas.map((f) => nomes[f] ?? f)), injecao });
+    }
+    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR" }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
+    const bloqueio = await competenciaAberta(ctx, c.competencia);
+    if (bloqueio) return bloqueio;
+    // Duplicidade: mesma parcela (valor + vencimento) já registrada nesta unidade ⇒ nada novo.
+    const todas = (await porta.contasAPagarTodas(escopo)).filter((t) => t.situacao !== "CANCELADO");
+    const igual = todas.find((t) => c.parcelas.some((p) => t.valorOriginalCentavos === p.valorCentavos && t.vencimento === p.vencimento && (!c.fornecedor || fornecedorCompativel(c.fornecedor, t))));
+    if (igual) return concluir(evento, { decisao: DECISAO.DUPLICADO, motivo: "OBRIGACAO_JA_REGISTRADA", escopo, resposta: RESPOSTA.obrigacaoJaExiste(igual), injecao });
+    // Cartão: a compra pode já estar dentro de uma FATURA registrada — avisa no resumo (a pessoa decide; nunca conta duas vezes calado).
+    const fatura = c.forma === "CARTAO" ? todas.find((t) => /\b(fatura|cartao)\b/.test(normalizar(`${t.descricao ?? ""} ${t.fornecedor ?? t.favorecido ?? ""}`)) && c.parcelas.some((p) => String(t.vencimento ?? "").slice(0, 7) === p.vencimento.slice(0, 7))) : null;
+    const plano = await planoDaUnidade(escopo);
+    const categoria = plano.length ? categoriaDaContaRelatada(c.descricao, plano) : null;
+    const bruto = {
+      contraparteNova: { tipo: "FORNECEDOR", nome: c.fornecedor ?? FORNECEDOR_NAO_INFORMADO }, categoria: categoria ?? porta.categoriaProvisoria,
+      descricao: c.descricao.slice(0, 120), competencia: c.competencia, dataEmissao: c.dataEmissao,
+      parcelas: c.parcelas.map((p) => ({ vencimento: p.vencimento, valorCentavos: p.valorCentavos })), ...(c.forma ? { formaPagamento: c.forma } : {}),
+    };
+    try { porta.validarComandoDeContaParcelada(bruto); } catch (e) {
+      if (porta.ehErroDeRegra(e)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${e.detalhes?.campo ?? "conta"}`, escopo, resposta: RESPOSTA.faltaInformacao([e.detalhes?.campo ?? "dados da conta"]), injecao });
+      throw e;
+    }
+    const impressao = JSON.stringify(bruto);
+    if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
+      const categoriaNome = plano.find((x) => x.codigo === categoria)?.nome ?? null;
+      const texto = RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome, avisoFatura: fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null });
+      return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, texto, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
+    }
+    const sim = respostaSimNao(esclarecimento.texto);
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_RELATADA_CANCELADA", escopo, resposta: RESPOSTA.contaRelatadaCancelada(), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    if (sim !== true) return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, `Não entendi. ${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura: null })}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+    // O que foi confirmado é exatamente o que vai para a proposta (plano/dados mudaram no meio ⇒ mostra de novo, nada é criado).
+    if (div.impressao && div.impressao !== impressao) return perguntar(ctx, { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, impressao }, `Os dados mudaram desde o resumo. ${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura: null })}`, "CONTA_RELATADA_CONFIRMACAO_DESATUALIZADA");
+    // Execução automática só quando QUEM CONFIRMOU é FINANCEIRO nesta unidade (operacional/consulta: fica a proposta para a Central).
+    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
+    const confirmadorFinanceiro = perfilNa(confirmador, unidade.unidadeId) === "FINANCEIRO";
+    return criarProposta(ctx, {
+      tipo: TIPO_PROPOSTA.CONTA_RELATADA, valorCentavos: c.totalCentavos, parcial: false,
+      datas: { competencia: c.competencia, caixa: null, vencimento: c.parcelas[0].vencimento }, categoriaDefinida: Boolean(categoria),
+      comando: { operacao: "registrarContaParcelada", entrada: bruto },
+    }, (p) => RESPOSTA.contaRelatadaProposta(p, c), {
+      posCriacao: confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
+        const r = await execucao.aposContaRelatada(p, escopo);
+        return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRelatadaRegistrada(c, r.resultado) } : r;
+      } : null,
+    });
+  }
+
+  /**
+   * 26/11 — OPERAÇÃO ENTRE EMPRESAS: o comprovante saiu da conta da `credora` (pagadora) e a mensagem cita a `devedora`.
+   * Pergunta UMA vez; com o "sim" de quem é FINANCEIRO nas DUAS unidades, cria a proposta INTERCOMPANY na devedora (a conta do
+   * fornecedor é a existente quando há UMA compatível; senão uma nova). Nada é lançado aqui: a execução é atômica no Financeiro
+   * (registrarPagamentoPorOutraEmpresa), com permissão nas duas empresas. Sem política OPERACAO_ENTRE_EMPRESAS, nunca automática.
+   */
+  async function tratarEntreEmpresas({ evento, saida, injecao, esclarecimento, grupo, participante, interpretacao, devedora, credora }) {
+    const escopo = escopoDe(devedora);
+    const ctx = { evento, escopo, unidade: devedora, saida, injecao, esclarecimento, grupo, participante, interpretacao, evidenciaUnidade: "PAGO_POR_OUTRA_UNIDADE" };
+    const div = esclarecimento?.divergencia ?? null;
+    const financeiroNasDuas = (p) => Boolean(p) && !p.aberto && [devedora, credora].every((x) => (p.unidades ?? grupo?.unidades ?? []).includes(x.unidadeId) && perfilNa(p, x.unidadeId) === "FINANCEIRO");
+    if (!financeiroNasDuas(participante)) {
+      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "ENTRE_EMPRESAS_SEM_PERMISSAO_NAS_DUAS", escopo, resposta: RESPOSTA.entreEmpresasSemPermissao(devedora.nome, credora.nome), injecao });
+    }
+    const valor = saida.valorCentavos;
+    const dataPagamento = saida.dataPagamento;
+    if (!(Number.isSafeInteger(valor) && valor > 0) || !dataPagamento) {
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "ENTRE_EMPRESAS_INCOMPLETO", escopo, resposta: RESPOSTA.faltaInformacao([!dataPagamento ? "data do pagamento" : "valor"]), injecao });
+    }
+    // conta do fornecedor na devedora: UMA compatível (mesmo saldo e fornecedor compatível) ⇒ ela; várias ⇒ a revisão escolhe; nenhuma ⇒ nova
+    const candidatas = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.saldoCentavos === valor && (!saida.favorecido || fornecedorCompativel(saida.favorecido, t)));
+    const existente = candidatas.length === 1 ? candidatas[0] : null;
+    const competencia = saida.competencia ?? null; // nunca presumida: sem ela, a proposta nasce com a competência pendente
+    if (competencia) { const bloqueio = await competenciaAberta(ctx, competencia); if (bloqueio) return bloqueio; }
+    const descricao = `${saida.favorecido ? String(saida.favorecido).slice(0, 60) : "Pagamento"} — pago pela ${credora.nome}`.slice(0, 120);
+    const obrigacaoNova = existente || candidatas.length > 1 ? null : {
+      contraparteNova: { tipo: "FORNECEDOR", nome: saida.favorecido ? String(saida.favorecido).slice(0, 120) : FORNECEDOR_NAO_INFORMADO },
+      valorOriginalCentavos: valor, categoria: porta.categoriaProvisoria, descricao, competencia, dataEmissao: dataPagamento, vencimento: dataPagamento,
+    };
+    const entrada = { ...(existente ? { obrigacaoId: existente.id } : {}), ...(obrigacaoNova ? { obrigacaoNova } : {}), valorCentavos: valor, dataPagamento,
+      descricao, nomeDevedora: devedora.nome, nomeCredora: credora.nome, chave: `MOVA:${evento.eventoId}` };
+    const impressao = JSON.stringify({ d: devedora.unidadeId, c: credora.unidadeId, valor, dataPagamento, obrigacaoId: existente?.id ?? null, candidatas: candidatas.length });
+    const pergunta = RESPOSTA.entreEmpresasPergunta({ credora: credora.nome, devedora: devedora.nome, valorCentavos: valor, existente, varias: candidatas.length > 1 });
+    const divergencia = { tipo: "ENTRE_EMPRESAS_CONFIRMACAO", unidadesExigidas: [devedora.unidadeId, credora.unidadeId], impressao };
+    if (div?.tipo !== "ENTRE_EMPRESAS_CONFIRMACAO") return perguntar(ctx, divergencia, pergunta, "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO");
+    const sim = respostaSimNao(esclarecimento.texto);
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "ENTRE_EMPRESAS_RECUSADA", escopo, resposta: RESPOSTA.entreEmpresasRecusada(), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    if (sim !== true) return perguntar(ctx, divergencia, `Não entendi. ${pergunta}`, "ENTRE_EMPRESAS_RESPOSTA_NAO_ENTENDIDA");
+    if (div.impressao && div.impressao !== impressao) return perguntar(ctx, divergencia, `As contas mudaram desde a pergunta. ${pergunta}`, "ENTRE_EMPRESAS_CONFIRMACAO_DESATUALIZADA");
+    return criarProposta(ctx, {
+      tipo: TIPO_PROPOSTA.INTERCOMPANY, valorCentavos: valor, parcial: false,
+      datas: { competencia, caixa: dataPagamento, vencimento: null }, categoriaDefinida: false, competenciaPendente: !competencia && Boolean(obrigacaoNova),
+      comando: { operacao: "registrarPagamentoPorOutraEmpresa", devedora: { organizacaoId: devedora.organizacaoId, unidadeId: devedora.unidadeId },
+        credora: { organizacaoId: credora.organizacaoId, unidadeId: credora.unidadeId }, entrada, escolherConta: candidatas.length > 1 ? candidatas.map((t) => t.id) : null },
+      // quem aplica precisa das permissões nas DUAS empresas (a aplicação confere de novo, com a concessão gravada em cada uma)
+      exigeParaAplicar: [ACAO.APROVAR, ACAO.APLICAR, ACAO.REGISTRAR, ACAO.REGISTRAR_INTERCOMPANY].filter(Boolean),
+    }, (p) => RESPOSTA.entreEmpresasProposta(p, { devedora: devedora.nome, credora: credora.nome }));
   }
 
   async function tratarConta(ctx) {

@@ -19,6 +19,9 @@ export const RESULTADO_UNIDADE = Object.freeze({
   CONFLITANTE: "UNIDADE_CONFLITANTE",
   DOCUMENTO_DE_OUTRA_UNIDADE: "DOCUMENTO_DE_OUTRA_UNIDADE",
   FORA_DO_GRUPO: "UNIDADE_FORA_DO_GRUPO",
+  // 26/11: comprovante pago pela conta de UMA unidade da conversa, citando OUTRA unidade da MESMA conversa (ex.: a Subway pagou
+  // pelo Açaí). Não é identificação: o motor PERGUNTA se é operação entre empresas; sem tratamento, segue bloqueado como conflito.
+  PAGO_POR_OUTRA_UNIDADE: "PAGO_POR_OUTRA_UNIDADE",
 });
 
 /** Unidades citadas no texto (apelido inteiro, por palavra). */
@@ -47,7 +50,11 @@ export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = nu
   if (pg.resultado === RESULTADO_PAGADOR.CONFLITO) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: pg.evidencia };
   const pagadorDe = pg.unidade;
   if (pagadorDe && !doGrupo.includes(pagadorDe)) return { resultado: RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE, unidade: null, evidencia: "PAGADOR_FORA_DA_CONVERSA", unidadeDoDocumento: pagadorDe.nome };
-  if (pagadorDe && citada && citada !== pagadorDe) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_PAGADOR" };
+  if (pagadorDe && citada && citada !== pagadorDe) {
+    // as duas na conversa (a pagadora já foi conferida acima): possível operação entre empresas — `unidade` = a citada (devedora)
+    if (doGrupo.includes(citada) && !(documentoDe && documentoDe !== citada)) return { resultado: RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, unidade: citada, pagadora: pagadorDe, evidencia: "TEXTO_X_PAGADOR" };
+    return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_PAGADOR" };
+  }
   if (pagadorDe && documentoDe && documentoDe !== pagadorDe) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "DOCUMENTO_X_PAGADOR" };
 
   if (citada && !doGrupo.includes(citada)) return { resultado: RESULTADO_UNIDADE.FORA_DO_GRUPO, unidade: null, evidencia: "TEXTO" };

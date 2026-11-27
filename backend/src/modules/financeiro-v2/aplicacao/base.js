@@ -66,6 +66,22 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigi
   }
 
   /**
+   * 26/11 — escrita em DOIS escopos numa única transação (operação entre empresas). Cada contexto é validado e autorizado (ação,
+   * escopo da política) ANTES; cada trecho confere a concessão gravada NO SEU escopo e roda com a sessão desse escopo.
+   * `fn(emEscopo)`; `emEscopo(ctx, (cx, tx) => ...)`. Repositório sem suporte ⇒ recusa (nunca grava um lado só).
+   */
+  function executarEntreEscopos(ctxsBrutos, acao, fn) {
+    const ctxs = ctxsBrutos.map((c) => autorizarContexto(c, acao));
+    if (ctxs.length < 2 || new Set(ctxs.map((c) => `${c.organizacaoId}|${c.unidadeId}`)).size !== ctxs.length) falhar(CODIGO.ENTRADA_INVALIDA, "A operação entre empresas envolve dois escopos diferentes.");
+    if (typeof repositorio.transacaoEntreEscopos !== "function") falhar(CODIGO.REPOSITORIO_INVALIDO, "O repositório não oferece transação entre escopos.");
+    return repositorio.transacaoEntreEscopos((emEscopo) => fn((ctx, trecho) => {
+      const cx = ctxs.find((c) => c.organizacaoId === ctx.organizacaoId && c.unidadeId === ctx.unidadeId);
+      if (!cx) falhar(CODIGO.ESCOPO_NAO_AUTORIZADO, "Trecho fora dos escopos autorizados.");
+      return emEscopo(cx, async (tx) => { await exigirConcessaoVigente(tx, cx, acao); return trecho(cx, tx); });
+    }), { escopos: ctxs });
+  }
+
+  /**
    * 06D — transação do PROVISIONAMENTO do administrador inicial. Usada SOMENTE por provisionarAdministradorInicial, depois
    * que a autoridade externa atestou o ato e o escopo foi conferido. Não aceita contexto vindo do cliente.
    */
@@ -274,7 +290,7 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigi
   }
 
   return {
-    gerarId, agora, hoje, executar, consultar, provisionar, autorizarContexto, exigirConcessaoVigente, historico, criar, criarVarios, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, exigirCompetenciasDoVinculo,
+    gerarId, agora, hoje, executar, executarEntreEscopos, consultar, provisionar, autorizarContexto, exigirConcessaoVigente, historico, criar, criarVarios, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, exigirCompetenciasDoVinculo,
     chaveDe, jaRegistrado, exigirNaoFutura, categoriaPorCodigo, categoriaLancavel, categoriaDoSistema, lancar, cancelarLancamento, exigirDocumentos,
   };
 }

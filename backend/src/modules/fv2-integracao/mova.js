@@ -58,7 +58,7 @@ export async function repositorioDePropostasSeInstalado(pool) {
   } catch { return null; }
 }
 
-export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
+export const CONTRATO_FINANCEIRO = Object.freeze({ ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, validarContaParcelada: comandos.validarContaParcelada, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // Identidades técnicas que NUNCA são a operacional (leitura do MOVA, executor do bootstrap, entregadores).
 const IDENTIDADES_TECNICAS_RESERVADAS = Object.freeze([IDENTIDADE_MOVA, "00000000-0000-4000-8000-0000000b0075", "00000000-0000-4000-8000-00000000e7e9"]);
@@ -181,6 +181,12 @@ export function lerConfiguracaoMova(env) {
     // unidade sem grupo exclusivo. Entrada inválida é ignorada (o aviso fica pendente, como sem grupo).
     avisosNoGrupo: Object.freeze(Object.fromEntries(String(env.MOVA_AVISOS_NO_GRUPO ?? "").split(",").map((x) => x.trim().toLowerCase().split("="))
       .filter(([u, g, ...r]) => !r.length && UUID.test(u ?? "") && /^[0-9]{10,30}@g\.us$/.test(g ?? "")))),
+    // 26/11: aviso diário de contas a pagar (sem IA). MOVA_AVISO_CONTAS_GRUPOS = "<grupo>@g.us[,…]" (vazio = desligado; o grupo
+    // ainda precisa ser de LISTA autorizado); MOVA_AVISO_CONTAS_JANELAS = "10:00,15:00" (padrão; horário de Fortaleza).
+    avisosDiarios: Object.freeze({
+      grupos: String(env.MOVA_AVISO_CONTAS_GRUPOS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter((g) => /^[0-9]{10,30}@g\.us$/.test(g)),
+      janelas: String(env.MOVA_AVISO_CONTAS_JANELAS ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+    }),
   };
 }
 
@@ -300,7 +306,7 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
       cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false };
     }
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
     try {
       // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta
@@ -324,7 +330,9 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
   const enviador = Object.freeze({ ...enviadorBase, async enviarPendentes(o) { await recarregar(); return enviadorBase.enviarPendentes(o); } });
   // Rotina dos entregadores: um passo a cada 5 min (idempotente; automação desligada/pausada por unidade não envia nada).
   const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(async () => { await recarregar(); return mova.entregadores.rotina(); }, { registrar }) : null;
-  return { mova, worker, enviador, configuracao, controle, orcamento, rotina };
+  // 26/11: aviso diário de contas a pagar — a MESMA rotina periódica (um passo a cada 5 min; idempotente por grupo/data/janela).
+  const rotinaAvisos = mova.avisos ? criarRotinaPeriodica(() => mova.avisos.passo(), { registrar }) : null;
+  return { mova, worker, enviador, configuracao, controle, orcamento, rotina, rotinaAvisos };
 }
 
 /** Cliente de envio pelo canal isolado do Gateway (rota /internal/mova/messages, segredo MOVA). */
@@ -548,6 +556,7 @@ export async function pararMovaEmbutido({ env }) {
   if (laco) { clearInterval(laco); laco = null; }
   const m = instanciaAtiva ?? (instancia ? await instancia : null);
   m?.worker?.parar();
+  m?.rotina?.parar(); m?.rotinaAvisos?.parar(); // 26/11: as rotinas periódicas também param (a idempotência no banco cobre o resto)
   instanciaAtiva = null;
   marcar("PARADO", { proximaEm: null });
   void env;

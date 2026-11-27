@@ -22,6 +22,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const auditoria = [];
   const conversas = new Map();
   const retratos = new Map();
+  const avisosDiarios = new Map();
   const politicas = [];
   const operacoes = new Map();
   const notas = new Map();
@@ -136,6 +137,15 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
           .sort((a, b) => b[1].criadaEm - a[1].criadaEm)[0] ?? [];
         return id ? { mensagemId: id, grupoId: p.grupoId, pendente: p.pendente } : null;
       },
+      /** 26/11 — colaboração: pendências ABERTAS da conversa (qualquer participante), só lidas, mais recentes primeiro. */
+      async pendentesDoGrupo({ grupoId, validadeMs, limite = 5 }) {
+        const desde = new Date(relogio().getTime() - validadeMs);
+        return [...pendentes.entries()].filter(([, x]) => x.grupoId === grupoId && x.criadaEm >= desde)
+          .sort((a, b) => b[1].criadaEm - a[1].criadaEm).slice(0, limite)
+          .map(([id, p]) => ({ mensagemId: id, grupoId: p.grupoId, pendente: p.pendente }));
+      },
+      /** 26/11 — existe pendência aberta com este id de mensagem nesta conversa? (citação do documento por outra pessoa) */
+      async temPendenteAberta({ mensagemId, grupoId }) { const p = pendentes.get(mensagemId); return Boolean(p && p.grupoId === grupoId); },
       /** 15A — memória curta (mesma regra do Postgres): mais recente da mesma conversa e participante, depois de `desde`. */
       async tomarPendenteRecente({ grupoId, participanteId, validadeMs }) {
         const desde = new Date(relogio().getTime() - validadeMs);
@@ -255,6 +265,24 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
     membros: Object.freeze({
       async registrar({ grupoId, membros, verificadoEm = null }) { retratos.set(grupoId, { membros: [...membros], verificadoEm: verificadoEm ?? relogio().toISOString() }); },
       async obter(grupoId) { return retratos.get(grupoId) ?? null; },
+    }),
+    /** 26/11 — aviso diário (mesma regra do Postgres: uma linha por grupo + data + janela; reserva e mensagem juntas). */
+    avisos: Object.freeze({
+      async obter({ grupoId, data, janela }) { return avisosDiarios.get(`${grupoId}|${data}|${janela}`) ?? null; },
+      async registrarEEnfileirar({ grupoId, data, janela, resumo, texto }) {
+        const k = `${grupoId}|${data}|${janela}`;
+        if (avisosDiarios.has(k)) return { repetido: true, respostaId: null };
+        const respostaId = `resposta-${saida.length + 1}`;
+        saida.push({ id: respostaId, estado: "PENDENTE", criadaEm: relogio().toISOString(), grupoId, respostaA: null, texto });
+        avisosDiarios.set(k, { situacao: "ENVIADO", resumo: structuredClone(resumo ?? {}), respostaId });
+        return { repetido: false, respostaId };
+      },
+      async registrarSemMensagem({ grupoId, data, janela, resumo }) {
+        const k = `${grupoId}|${data}|${janela}`;
+        if (avisosDiarios.has(k)) return { repetido: true, respostaId: null };
+        avisosDiarios.set(k, { situacao: "SEM_MENSAGEM", resumo: structuredClone(resumo ?? {}), respostaId: null });
+        return { repetido: false, respostaId: null };
+      },
     }),
     saida: Object.freeze({
       /** Caixa de saída SIMULADA: nada é enviado ao WhatsApp nesta execução. */

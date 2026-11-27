@@ -288,9 +288,11 @@ select unidade_id, usuario_id, acoes, situacao, versao from fv2_concessao where 
 // ampla (registrar, corrigir, cancelar, aplicar, conceder…) e só existe onde o proprietário concedeu.
 /** Ações que a identidade operacional pode receber (a lista do provedor fv2-integracao/operacionalMova.js). */
 export const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante",
-  "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros", "financeiro_v2.vincular_pagamento", "financeiro_v2.prestar_sangria"]);
+  "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros", "financeiro_v2.vincular_pagamento", "financeiro_v2.prestar_sangria",
+  "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany"]);
 const IDENTIDADES_RESERVADAS = Object.freeze([IDENTIDADE_DO_MOVA, EXECUTOR_BOOTSTRAP, "00000000-0000-4000-8000-00000000e7e9"]);
-const MIGRACAO_DA_ACAO = Object.freeze({ "financeiro_v2.registrar_obrigacao": "0030_registrar_obrigacao_documental.sql", "financeiro_v2.registrar_juros": "0031_registrar_juros_no_pagamento.sql", "financeiro_v2.prestar_sangria": "0032_prestar_sangria.sql" });
+const MIGRACAO_DA_ACAO = Object.freeze({ "financeiro_v2.registrar_obrigacao": "0030_registrar_obrigacao_documental.sql", "financeiro_v2.registrar_juros": "0031_registrar_juros_no_pagamento.sql", "financeiro_v2.prestar_sangria": "0032_prestar_sangria.sql",
+  "financeiro_v2.registrar_conta_parcelada": "0033_registrar_conta_parcelada.sql", "financeiro_v2.registrar_intercompany": "0034_operacoes_entre_empresas.sql" });
 
 function exigirOperacional({ identidade, organizacaoId, unidadeId, autor, justificativa }) {
   if (![identidade, organizacaoId, unidadeId, autor].every((x) => UUID_MOVA.test(x ?? ""))) throw new Error("Identidade, empresa, unidade e autor precisam ser UUID.");
