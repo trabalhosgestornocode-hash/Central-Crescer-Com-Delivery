@@ -44,6 +44,9 @@ export function operacoesEconomicas(b) {
     return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
   }
 
+  /** 27/11 (0035): a categoria do principal de empréstimo; aceita pelas estreitas só com `registrar_emprestimo` (conferida na transação). */
+  const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
+  const comEmprestimo = (ctx) => Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR_EMPRESTIMO);
   function registrarObrigacaoCom(acao, ctx, c, { soDespesa = false, aceitaImobilizado = false } = {}) {
       const impressao = JSON.stringify(c);
       return b.executar(ctx, acao, async (cx, tx) => {
@@ -73,9 +76,11 @@ export function operacoesEconomicas(b) {
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }
-        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA && !(aceitaImobilizado && categoria.codigo === "IMOBILIZADO")) {
+        const principalDeEmprestimo = soDespesa && categoria.codigo === CATEGORIA_EMPRESTIMO && categoria.natureza === "PATRIMONIAL" && comEmprestimo(ctx);
+        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA && !(aceitaImobilizado && categoria.codigo === "IMOBILIZADO") && !principalDeEmprestimo) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Conta a pagar por documento só em categoria de despesa.", { categoria: categoria.codigo });
         }
+        if (principalDeEmprestimo) await b.exigirConcessaoVigente(tx, cx, ACAO.REGISTRAR_EMPRESTIMO);
         const grupoId = b.gerarId();
         const lancamento = await b.lancar(tx, cx, categoria, {
           valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
@@ -96,6 +101,23 @@ export function operacoesEconomicas(b) {
         }
         return { lancamento, obrigacoes, repetido: false };
       });
+  }
+
+  function contaParcelada(ctx, entrada) {
+    const v = validarContaParcelada(entrada);
+    if (v.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por relato.", { categoria: v.categoria });
+    const c = {
+      contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
+      competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
+      documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
+      // 27/11: forma de pagamento (já validada, antes descartada) e observações ficam em CADA parcela da conta (campos livres da obrigação)
+      extrasDaObrigacao: { ...(v.formaPagamento ? { formaPagamento: v.formaPagamento } : {}), ...(v.observacao ? { observacao: v.observacao } : {}) },
+    };
+    // 27/11: "só despesa (ou imobilizado)" é a regra da permissão ESTREITA (a do MOVA; o banco a impõe na 0033). Quem tem o registro
+    // AMPLO (`registrar`, o mesmo do formulário de conta a pagar, que já aceita patrimonial) aprova a conta relatada de empréstimo/
+    // parcelamento na Central sem virar despesa. Nenhuma permissão é ampliada: receita e títulos anteriores continuam recusados.
+    const amplo = Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR);
+    return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: !amplo, aceitaImobilizado: true });
   }
 
   return {
@@ -147,22 +169,14 @@ export function operacoesEconomicas(b) {
      * `registrar_conta_parcelada` (0033). Um lançamento pelo total; categoria de DESPESA ou IMOBILIZADO (compra de equipamentos,
      * patrimonial); a conta nasce EM ABERTO (nunca paga). Mesma idempotência pela fonte (MOVA:<proposta>) das demais contas.
      */
-    registrarContaParcelada(ctx, entrada) {
-      const v = validarContaParcelada(entrada);
-      if (v.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por relato.", { categoria: v.categoria });
-      const c = {
-        contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
-        competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
-        documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
-        // 27/11: forma de pagamento (já validada, antes descartada) e observações ficam em CADA parcela da conta (campos livres da obrigação)
-        extrasDaObrigacao: { ...(v.formaPagamento ? { formaPagamento: v.formaPagamento } : {}), ...(v.observacao ? { observacao: v.observacao } : {}) },
-      };
-      // 27/11: "só despesa (ou imobilizado)" é a regra da permissão ESTREITA (a do MOVA; o banco a impõe na 0033). Quem tem o registro
-      // AMPLO (`registrar`, o mesmo do formulário de conta a pagar, que já aceita patrimonial) aprova a conta relatada de empréstimo/
-      // parcelamento na Central sem virar despesa. Nenhuma permissão é ampliada: receita e títulos anteriores continuam recusados.
-      const amplo = Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR);
-      return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: !amplo, aceitaImobilizado: true });
+    /** 27/11 (0035) — conta de EMPRÉSTIMO ainda a pagar (1 a 24 parcelas, em aberto): a mesma conta relatada, só na categoria do principal. */
+    registrarContaParceladaDeEmprestimo(ctx, entrada) {
+      if (entrada?.categoria !== CATEGORIA_EMPRESTIMO) falhar(CODIGO.CATEGORIA_INVALIDA, "Esta operação é só para o principal de empréstimos e financiamentos.", { categoria: entrada?.categoria ?? null });
+      b.autorizarContexto(ctx, ACAO.REGISTRAR_EMPRESTIMO);
+      return contaParcelada(ctx, entrada);
     },
+
+    registrarContaParcelada(ctx, entrada) { return contaParcelada(ctx, entrada); },
 
     /**
      * Recebível avulso (ex.: demonstrativo de repasse). NÃO gera receita — a receita nasce da venda.

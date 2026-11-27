@@ -114,6 +114,16 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       });
     },
   };
+  /**
+   * 27/11 (0035) — pagamento de EMPRÉSTIMO comprovadamente realizado: conta + comprovante + pagamento na MESMA transação, quitada,
+   * só na categoria do principal (fora da DRE). Sem encargos: juros desconhecidos nunca viram principal (com juros, só a Central).
+   */
+  ops.registrarPagamentoDeEmprestimoPorComprovante = (ctx, entrada) => {
+    if (entrada?.obrigacao?.categoria !== "EMPRESTIMOS_E_FINANCIAMENTOS") falhar(CODIGO.CATEGORIA_INVALIDA, "Esta operação é só para o principal de empréstimos e financiamentos.", { categoria: entrada?.obrigacao?.categoria ?? null });
+    if (entrada?.encargos) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento de empréstimo com juros/multa vai para a aprovação no Centro Financeiro.", { campo: "encargos" });
+    b.autorizarContexto(ctx, ACAO.REGISTRAR_EMPRESTIMO);
+    return ops.registrarDespesaPagaPorComprovante(ctx, entrada);
+  };
   /** 25/11 — operação ESTREITA da compra nova paga COM juros/multa discriminados (exige também `registrar_juros`). */
   ops.registrarDespesaPagaComEncargo = (ctx, entrada) => {
     if (!entrada?.encargos) falhar(CODIGO.ENTRADA_INVALIDA, "Informe juros ou multa do comprovante.", { campo: "encargos" });

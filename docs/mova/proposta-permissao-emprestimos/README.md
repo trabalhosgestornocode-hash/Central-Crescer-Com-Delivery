@@ -1,8 +1,6 @@
 # Proposta — permissão estreita para EMPRÉSTIMOS E FINANCIAMENTOS (fora da DRE)
 
-**Situação: PROPOSTA. Nada aqui está aplicado.** A migração está em `0035_registrar_emprestimo.sql.rascunho`, fora de
-`database/financeiro-v2/migracoes/` de propósito (o instalador de produção confere a lista exata de migrações). Enquanto ela não for
-aprovada e aplicada, o principal de empréstimo relatado ou pago por boleto vira **proposta para aprovação na Central** (fluxo atual).
+**Situação (27/11): IMPLEMENTADA e testada; aplicada SÓ no banco de teste local. NÃO aplicada em produção; nenhuma concessão feita.** A migração é `database/financeiro-v2/migracoes/0035_registrar_emprestimo.sql` e o kit `database/financeiro-v2/producao/atualizar.sql` (base 0034) a aplica quando autorizado. Até lá, empréstimo vira **proposta para aprovação na Central** (fluxo atual).
 
 ## Por que hoje não dá
 
@@ -27,7 +25,7 @@ parcelamento tributário. Não dá `registrar` amplo, não dá `corrigir`/`cance
 |---|---|
 | Banco (migração 0035) | `registrar_emprestimo` na lista de ações; `fv2_so_registra_emprestimo()` (tem a ação e NÃO tem as amplas); o gatilho documental aceita `PATRIMONIAL` **só** com `categoria_codigo = 'EMPRESTIMOS_E_FINANCIAMENTOS'` e só para quem tem a ação |
 | Financeiro v2 (código) | `ACAO.REGISTRAR_EMPRESTIMO`; `registrarContaParcelada`/`registrarDespesaPagaPorComprovante` aceitam essa categoria só com a ação |
-| MOVA (código) | operações de política `EMPRESTIMO_RELATADO` e `EMPRESTIMO_DOCUMENTAL`, **sempre com confirmação no WhatsApp** (`APLICAR_COM_CONFIRMACAO`), limite por unidade |
+| MOVA (código) | as MESMAS políticas e limites vigentes da unidade (conta relatada: `CONTA_A_PAGAR_RELATADA`/`CONTA_PARCELADA_RELATADA`; pago por comprovante: `DESPESA_DOCUMENTAL`), **sempre com confirmação de um FINANCEIRO no WhatsApp**; pago com juros/multa vai para a Central |
 | Concessão | pelo kit oficial da identidade operacional (por unidade, auditado), nunca à mão no banco |
 
 ## Sequência proposta (cada passo com autorização própria)

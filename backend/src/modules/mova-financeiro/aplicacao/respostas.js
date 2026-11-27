@@ -190,6 +190,16 @@ export const RESPOSTA = Object.freeze({
   },
   // 27/11 (#245) — falta só o vencimento da conta (a data do desconto da remuneração NÃO é vencimento).
   contaRelatadaVencimento: (temObservacao) => `Qual é o vencimento da conta (a data em que ela vence com o banco/fornecedor)?${temObservacao ? " A data do desconto da remuneração fica só nas observações." : ""} Responda citando esta mensagem. Nada foi registrado.`,
+  // 27/11 (0035) — pagamento de EMPRÉSTIMO já feito: confirmação pelo WhatsApp antes de registrar (conta + pagamento juntos, quitada)
+  confirmarEmprestimoPago: (p, x = {}) => [
+    `Pagamento de empréstimo já feito: ${reais(p.valorCentavos)}${x.comDesconto ? ` (${x.comDesconto.replace(/^ — /, "")})` : ""}, em ${dataBr(p.datas?.caixa)}, competência ${p.datas?.competencia ?? "a confirmar"}.`,
+    `Categoria: Empréstimos e financiamentos (principal) — fora da DRE.`,
+    ...(x.observacao ? [`Observações: ${x.observacao}`] : []),
+    `Responda "sim" para eu registrar a conta e o pagamento juntos (quitada), ou "não" para deixar para aprovação no Centro Financeiro. Nada foi lançado ainda.`,
+  ].join("\n"),
+  emprestimoPagoRegistrado: (p, r) => `Pagamento de empréstimo registrado: ${reais(p.valorCentavos)} em ${dataBr(r?.dataPagamento ?? p.datas?.caixa)}, conta quitada, categoria Empréstimos e financiamentos (principal), fora da DRE.${r?.repetidoNoFinanceiro ? " (Já existia: nada novo.)" : ""}`,
+  emprestimoNaoConfirmado: (p) => `Ok, não registrei. A proposta ${curto(p.id)} continua para aprovação no Centro Financeiro. Nada foi lançado.`,
+  emprestimoNaoExecutado: (p, motivos = []) => `Não registrei pela conversa${motivos.length ? ` (${motivos.join(", ")})` : ""}. A proposta ${curto(p.id)} continua para aprovação no Centro Financeiro. Nada foi lançado.`,
   contaRelatadaCancelada: () => "Ok, não registrei essa conta. Nada foi lançado.",
   contaRelatadaRegistrada: (c, r) => `Conta a pagar registrada (em aberto): ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}; primeiro vencimento ${dataBr(c.parcelas[0].vencimento)}. Aparece no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
   contaRelatadaProposta: (p, c, { aClassificar = false, patrimonial = false } = {}) => `Proposta ${curto(p.id)} criada para ${aClassificar ? "classificação e aprovação" : "aprovação"} no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}.${patrimonial ? " Categoria patrimonial (fora da DRE): a aprovação registra a conta em aberto, sem despesa." : ""} Nada foi lançado ainda.`,

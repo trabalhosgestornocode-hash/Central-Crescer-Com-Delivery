@@ -966,12 +966,33 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
   }
 
+  /**
+   * 27/11 (0035) — "sim" ao pagamento de EMPRÉSTIMO já feito: a proposta guardada é executada (conta + pagamento juntos, quitada, fora da
+   * DRE) pela permissão estreita de empréstimo, se quem confirma é FINANCEIRO na unidade e a política/limite da unidade aceita. "não"
+   * deixa a proposta para a Central. Nada é relido: o documento e os dados são os da proposta.
+   */
+  async function confirmarEmprestimoPago(ctx) {
+    const { evento, escopo, esclarecimento, injecao, unidade } = ctx;
+    const div = esclarecimento.divergencia;
+    const p = await a.propostas.obter(escopo, div.propostaId);
+    if (!p || p.estado !== "AGUARDANDO_REVISAO") return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_PROPOSTA_JA_DECIDIDA", escopo, resposta: RESPOSTA.propostaNaoRetomavel(), injecao });
+    const sim = respostaSimNao(esclarecimento.texto);
+    if (sim === null) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.confirmarEmprestimoPago(p, {})}`, "EMPRESTIMO_RESPOSTA_NAO_ENTENDIDA");
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_NAO_CONFIRMADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoConfirmado(p), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
+    if (perfilNa(confirmador, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "EMPRESTIMO_CONFIRMACAO_SEM_PERFIL_FINANCEIRO", escopo, resposta: RESPOSTA.complementoSemPermissao(), injecao });
+    const r = await execucao.aposDespesaNova(p, escopo, { confirmadoPor: esclarecimento.participanteId ?? evento.participanteId });
+    if (r.situacao === "PAGO_POR_COMPROVANTE") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "EMPRESTIMO_PAGO_REGISTRADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoPagoRegistrado(p, r.resultado), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_NAO_EXECUTADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])]), injecao });
+  }
+
   async function tratarPagamento(ctx0) {
     // 25/11: identificador de transação RECORTADO na imagem (E2E incompleto) não serve de chave de duplicidade: é descartado e a
     // conferência segue pelas demais evidências (arquivo, conta, pergunta objetiva) — nunca afirma "mesma transação" por ele.
     const recortado = Boolean(ctx0.saida?.idTransacao) && !idTransacaoConfiavel(ctx0.saida.idTransacao);
     const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } } : ctx0;
     const { evento, escopo, saida, injecao, esclarecimento } = ctx;
+    if (esclarecimento?.divergencia?.tipo === "EMPRESTIMO_PAGO_CONFIRMACAO") return confirmarEmprestimoPago(ctx);
     // 25/11 — resposta NATURAL a uma pergunta do MOVA: as regras curtas (determinísticas, custo zero) vêm primeiro; só se NÃO entenderem a
     // IA lê o texto e devolve campos estruturados, que o backend VALIDA (extracaoDaRespostaIA) antes de qualquer uso. No máximo UMA
     // leitura por mensagem (cache) e nenhuma quando a mensagem já foi lida (resposta sem citação traz `esclarecimento.ia`).
@@ -1221,7 +1242,13 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       ...(novaDeclarada || esclarecimento?.divergencia ? { compraNovaDeclarada: true } : {}),
     }, comAvisoDeCompetencia((p) => RESPOSTA.propostaDespesaPaga(p, resumo), competencia), {
       // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.
-      posCriacao: execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
+      posCriacao: patrimonialDoPagamento === "EMPRESTIMOS_E_FINANCIAMENTOS" && execucao?.criarDespesas && evento.midia && !composicao && typeof execucao?.podeRegistrarEmprestimo === "function"
+        ? async (p) => {
+          if (!(await execucao.podeRegistrarEmprestimo(escopo, "PAGAMENTO"))) return null; // sem a permissão de empréstimo: Central, como hoje
+          await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida, divergencia: { tipo: "EMPRESTIMO_PAGO_CONFIRMACAO", propostaId: p.id, unidadeId: escopo.unidadeId } } });
+          return { situacao: "AGUARDANDO_CONFIRMACAO", nivel: null, texto: RESPOSTA.confirmarEmprestimoPago(p, resumo) };
+        }
+        : execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
         const r = await execucao.aposDespesaNova(p, escopo);
         return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
       } : null,
@@ -1336,7 +1363,10 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao, complemento };
     // 27/11: categoria PATRIMONIAL (ex.: principal de empréstimo, fora da DRE). A permissão ESTREITA do MOVA registra só despesa e
     // imobilizado (regra do banco, 0033): depois do "sim" vira proposta para APROVAÇÃO no Centro Financeiro — nunca vira despesa.
-    const patrimonial = Boolean(categoria) && ehPatrimonialForaDaDre(categoria, plano);
+    // 27/11 (0035): principal de EMPRÉSTIMO com a permissão estreita de empréstimo concedida ⇒ o "sim" registra (fora da DRE); senão, Central.
+    const emprestimoDireto = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" && Boolean(execucao?.criarContas) && typeof execucao?.podeRegistrarEmprestimo === "function"
+      && await execucao.podeRegistrarEmprestimo(escopo, "CONTA");
+    const patrimonial = Boolean(categoria) && ehPatrimonialForaDaDre(categoria, plano) && !emprestimoDireto;
     const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao, patrimonial })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");

@@ -55,6 +55,10 @@ export const ACAO = Object.freeze({
   // 26/11 — OPERAÇÃO ENTRE EMPRESAS do grupo (uma empresa paga a conta da outra): passivo na devedora, ativo na credora, ligados
   // por um vínculo único; liquida a conta da devedora sem saída bancária nela; reembolso parcial/total. Migração 0034.
   REGISTRAR_INTERCOMPANY: "financeiro_v2.registrar_intercompany",
+  // 27/11 — PRINCIPAL DE EMPRÉSTIMO/FINANCIAMENTO (fora da DRE). Não grava nada sozinha: COMPLEMENTA as estreitas de conta
+  // (registrar_conta_parcelada, registrar_obrigacao + baixar_por_comprovante) aceitando só a categoria EMPRESTIMOS_E_FINANCIAMENTOS.
+  // Nunca lucros, aportes/retiradas, entre empresas, terceiros ou outra patrimonial. Migração 0035.
+  REGISTRAR_EMPRESTIMO: "financeiro_v2.registrar_emprestimo",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

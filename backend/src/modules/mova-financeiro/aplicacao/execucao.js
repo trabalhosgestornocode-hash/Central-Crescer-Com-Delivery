@@ -30,6 +30,9 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
+/** 27/11 (0035): categoria do principal de empréstimos e financiamentos (fora da DRE). */
+const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
+
 export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
   /**
    * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
@@ -212,12 +215,12 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * sem saída bancária) numa ÚNICA operação atômica do Financeiro. Se qualquer parte falhar, nada fica gravado (antes, uma falha no
    * pagamento deixava a conta em aberto). Idempotente: mesma fonte (MOVA:<proposta>) e mesmo arquivo devolvem o que já existe.
    */
-  async function registrarDespesaPaga({ proposta, escopo, entrada = proposta.comando.entrada, dataPagamento = proposta.comando.pagamento.dataEfetiva, nivel, executor }) {
+  async function registrarDespesaPaga({ proposta, escopo, entrada = proposta.comando.entrada, dataPagamento = proposta.comando.pagamento.dataEfetiva, nivel, executor, operacaoFinanceira = null }) {
     const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
     if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_COMPROVANTE");
     const mime = proposta.evidencia.mime;
     const encargos = proposta.comando?.encargos ?? null;
-    const r = await executor.chamar(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo, {
+    const r = await executor.chamar(operacaoFinanceira ?? (encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante"), escopo, {
       ...(encargos ? { encargos: { jurosCentavos: encargos.jurosCentavos, multaCentavos: encargos.multaCentavos } } : {}),
       obrigacao: { ...entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } },
       comprovante: { arquivo: { conteudo: bytes, nome: `comprovante-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime },
@@ -307,8 +310,13 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * — idempotente), (2) anexa o comprovante a ela e (3) registra o pagamento POR COMPROVANTE (conciliação pendente). Qualquer
    * falha volta a proposta para revisão; a nova tentativa reaproveita o que já foi gravado (mesma fonte, mesmo arquivo).
    */
-  async function aposDespesaNova(proposta, escopo) {
+  async function aposDespesaNova(proposta, escopo, { confirmadoPor = null } = {}) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    // 27/11 (0035): pagamento de EMPRÉSTIMO (principal, fora da DRE) — só com a confirmação de um FINANCEIRO no WhatsApp, sem encargos,
+    // pela política DESPESA_DOCUMENTAL vigente (limite da unidade) e com `registrar_emprestimo` concedida à identidade operacional.
+    const emprestimo = proposta.comando?.entrada?.categoria === CATEGORIA_EMPRESTIMO;
+    if (emprestimo && !confirmadoPor) return { ...base, motivos: ["EMPRESTIMO_EXIGE_CONFIRMACAO_NO_WHATSAPP"] };
+    if (emprestimo && proposta.comando?.encargos) return { ...base, motivos: ["EMPRESTIMO_COM_ENCARGO_SO_NA_CENTRAL"] };
     const u = await unidadeConfirmada(proposta);
     if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!despesasLigadas) return { ...base, motivos: ["CRIACAO_DE_DESPESAS_DESLIGADA"] };
@@ -326,15 +334,17 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (doEncargo) await a.propostas.anotar(escopo, proposta.id, { autonomiaJuros: doEncargo });
     const motivos0 = [...new Set([...decisao.motivos, ...(doEncargo?.motivos ?? [])])];
     const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: motivos0, motivosDocumentais: motivos0, comprovante: comprovante?.situacao ?? null };
-    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO || (doEncargo && doEncargo.nivel !== NIVEL.APLICAR_AUTOMATICO)) return r0;
+    const nivelAceito = emprestimo ? [NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) : decisao.nivel === NIVEL.APLICAR_AUTOMATICO;
+    if (!nivelAceito || (doEncargo && doEncargo.nivel !== NIVEL.APLICAR_AUTOMATICO)) return r0;
     if (!operacional) return { ...r0, motivosDocumentais: [...motivos0, "SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo))) return { ...r0, motivosDocumentais: [...motivos0, "SEM_CONCESSAO_OPERACIONAL"] };
+    const operacaoFinanceira = emprestimo ? "registrarPagamentoDeEmprestimoPorComprovante" : encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante";
+    if (!(await operacional.pode(operacaoFinanceira, escopo))) return { ...r0, motivosDocumentais: [...motivos0, "SEM_CONCESSAO_OPERACIONAL"] };
     const { reserva, repetida } = await reservar(OPERACAO.DESPESA_DOCUMENTAL, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, decisao.politicaId, operacional);
     if (repetida) return { ...r0, ...(repetida.ok ? { situacao: "PAGO_POR_COMPROVANTE", resultado: repetida.operacao?.resultado } : { motivo: repetida.motivo }) };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ...r0, motivo: "PROPOSTA_JA_DECIDIDA" }; }
     try {
-      const resultado = await registrarDespesaPaga({ proposta, escopo, nivel: NIVEL.APLICAR_AUTOMATICO, executor: operacional });
+      const resultado = { ...(await registrarDespesaPaga({ proposta, escopo, nivel: emprestimo ? NIVEL.APLICAR_COM_CONFIRMACAO : NIVEL.APLICAR_AUTOMATICO, executor: operacional, operacaoFinanceira })), ...(emprestimo ? { confirmadoPor } : {}) };
       const { obrigacaoId } = resultado;
       await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
       await descartarArquivo(proposta, escopo);
@@ -520,6 +530,11 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * paga a cobrem) e a identidade operacional com `registrar_conta_parcelada`: registra a conta EM ABERTO, com as parcelas ditas,
    * pelo serviço oficial (fonte MOVA:<proposta> — idempotente). Nunca registra como paga. Sem algum requisito, fica a PROPOSTA.
    */
+  /** 27/11 (0035): a identidade operacional pode registrar empréstimo (conta a pagar ou pagamento) nesta unidade? */
+  async function podeRegistrarEmprestimo(escopo, tipo) {
+    return Boolean(operacional) && (await operacional.pode(tipo === "PAGAMENTO" ? "registrarPagamentoDeEmprestimoPorComprovante" : "registrarContaParceladaDeEmprestimo", escopo));
+  }
+
   async function aposContaRelatada(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
     const u = await unidadeConfirmada(proposta);
@@ -538,9 +553,11 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     // A confirmação no WhatsApp já é a "confirmação de uma pessoa": APLICAR_COM_CONFIRMACAO e APLICAR_AUTOMATICO executam; sem política, só propõe.
     if (![NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) || !proposta.esclarecidoPor) return r0;
     if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode("registrarContaParcelada", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    // 27/11 (0035): conta de EMPRÉSTIMO ainda a pagar — a mesma operação, só na categoria do principal (+ registrar_emprestimo)
+    const opConta = e.categoria === CATEGORIA_EMPRESTIMO ? "registrarContaParceladaDeEmprestimo" : "registrarContaParcelada";
+    if (!(await operacional.pode(opConta, escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     const r = await executarComReserva({ operacao, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
-      const ob = await operacional.chamar("registrarContaParcelada", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      const ob = await operacional.chamar(opConta, escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
       return { obrigacaoId: ob.obrigacoes[0].id, obrigacaoIds: ob.obrigacoes.map((o) => o.id), contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null,
         categoria: e.categoria, competencia: e.competencia, parcelas: e.parcelas.length, confirmadoPor: proposta.esclarecidoPor, situacaoConta: "ABERTA" };
     } });
@@ -614,5 +631,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ podeRegistrarEmprestimo, descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

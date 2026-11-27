@@ -287,3 +287,56 @@ t("CG-10 legenda do comprovante com composição e desconto em folha: a observa�
   assert.match(p.comando.entrada.observacao, /Um R\$ 395,34 \+ Dois R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
   assert.equal(p.comando.pagamento.dataEfetiva, "2026-10-15", "a data do desconto em folha não muda a data do pagamento");
 });
+
+// ------------------------------------------------------------------ 27/11 (0035): permissão ESTREITA de empréstimo, com confirmação no WhatsApp
+const COM_EMPRESTIMO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_emprestimo"];
+
+t("LW-1 empréstimo AINDA A PAGAR com a permissão de empréstimo: resumo → 'sim' ⇒ registrado em aberto, PATRIMONIAL, pelas regras de limite; acima do limite, Central", async () => {
+  const s = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA" }], concessao: COM_EMPRESTIMO, criarContas: true });
+  await s.enviar(gw({ texto: EMPRESTIMO_INSTRUCAO.replace("Registrar uma única conta de R$ 2.911,08", "Registrar uma única conta de R$ 2.911,08, vence 15/12/2026") }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", JSON.stringify(await s.decisao()));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /Categoria: Empréstimos e financiamentos \(principal\)/);
+  assert.doesNotMatch(resumo, /vai para aprovação no Centro Financeiro/, "com a permissão de empréstimo o 'sim' registra");
+  assert.equal((await s.contas()).length, 0, "nada antes do 'sim'");
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).decisao, "EXECUTADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  const [l] = await s.lancamentos();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos, l.categoria, l.natureza], ["ABERTA", 291108, "EMPRESTIMOS_E_FINANCIAMENTOS", "PATRIMONIAL"]);
+  // limite da unidade menor que o valor ⇒ não executa pela conversa
+  const lim = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 100000 }], concessao: COM_EMPRESTIMO, criarContas: true });
+  await lim.enviar(gw({ texto: EMPRESTIMO_INSTRUCAO.replace("Registrar uma única conta de R$ 2.911,08", "Registrar uma única conta de R$ 2.911,08, vence 15/12/2026") }));
+  await lim.enviar(gw({ texto: "sim" }));
+  assert.equal((await lim.contas()).length, 0, "acima do limite de R$ 1.000,00: nada lançado, fica a proposta");
+});
+
+t("LW-2 empréstimo JÁ PAGO com a permissão: o MOVA pergunta a confirmação; 'sim' de um FINANCEIRO ⇒ conta + pagamento quitados, patrimonial, com as observações; 'não' deixa para a Central", async () => {
+  const montarComPermissao = async () => {
+    const s = await relatada({ criarDespesas: true, criarContas: true, concessao: COM_EMPRESTIMO, responder: (req) => (/document|pdf/i.test(JSON.stringify(req.messages ?? "")) ? BOLETO_PAGO : base({})) });
+    await s.mova.armazenamento.politicas.criar({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 3000000,
+      responsavel: "Administrador Sintético", motivo: "Política sintética de despesa documental", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO });
+    return s;
+  };
+  const s = await montarComPermissao();
+  await s.enviar(gw({ texto: "Empréstimo BNB alfa. Pessoa Um R$ 395,34, Pessoa Dois R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026.", doc: "%PDF-sintetico-boleto-lw2" }));
+  const pergunta = await s.ultimoTexto();
+  for (const re of [/Pagamento de empréstimo já feito: R\$\s?2\.911,08 \(original R\$ 2\.971,69, desconto R\$ 60,61, pago R\$ 2\.911,08\)/, /Empréstimos e financiamentos \(principal\) — fora da DRE/,
+    /Observações: Um R\$ 395,34 \+ Dois R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração/, /Responda "sim"/]) assert.match(pergunta, re);
+  assert.equal((await s.lancamentos()).length, 0, "nada antes do 'sim'");
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).motivo, "EMPRESTIMO_PAGO_REGISTRADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  const [l] = await s.lancamentos();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos, l.categoria, l.natureza, l.valorCentavos], ["QUITADA", 0, "EMPRESTIMOS_E_FINANCIAMENTOS", "PATRIMONIAL", 291108]);
+  assert.match(conta.observacao, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.contas()).length, 1, "outro 'sim' não duplica");
+  // "não": a proposta fica para a Central, nada lançado
+  const n = await montarComPermissao();
+  await n.enviar(gw({ texto: "Empréstimo BNB alfa. Total R$ 2.911,08, competência novembro/2026.", doc: "%PDF-sintetico-boleto-lw2-nao" }));
+  if ((await n.decisao()).motivo === "COMPETENCIA_AUSENTE") await n.enviar(gw({ texto: "novembro/2026" }));
+  await n.enviar(gw({ texto: "não" }));
+  assert.equal((await n.decisao()).motivo, "EMPRESTIMO_NAO_CONFIRMADO");
+  assert.equal((await n.lancamentos()).length, 0);
+});
