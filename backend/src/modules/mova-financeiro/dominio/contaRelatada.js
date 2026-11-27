@@ -19,7 +19,7 @@ export const MAX_PARCELAS = 24;
 const POR_EXTENSO = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12 };
 const EQUIPAMENTO = /\b(bebedouros?|freezers?|geladeiras?|refrigerador(es)?|maquinas?|equipamentos?|fornos?|liquidificador(es)?|batedeiras?|balcao|balcoes|vitrines?|computador(es)?|impressoras?|notebooks?|ar condicionado|televis(ao|or)|tv|micro ondas|microondas|fogao|chapa|fritadeira|seladora|mesas?|cadeiras?)\b/;
 const SERVICO = /\b(conserto|consertar|manutencao|reparo|reparar|limpeza|higienizacao|instalacao|revisao|troca de|recarga)\b/;
-const LIGACAO = new Set(["para", "pro", "pra", "o", "a", "os", "as", "do", "da", "dos", "das", "de", "no", "na", "nos", "nas", "em", "e", "loja", "unidade"]);
+const LIGACAO = new Set(["para", "pro", "pra", "o", "a", "os", "as", "um", "uma", "uns", "umas", "do", "da", "dos", "das", "de", "no", "na", "nos", "nas", "em", "e", "loja", "unidade"]);
 
 const pad = (n) => String(n).padStart(2, "0");
 const iso = (a, m, d) => `${a}-${pad(m)}-${pad(d)}`;
@@ -319,6 +319,15 @@ export function classificarContaRelatada({ descricao, texto = "", categorias, ca
   const todas = [...patrimonialRelevante, ...despesasOrdenadas];
   const opcoesDe = (lista) => lista.slice(0, MAX_OPCOES).map((c) => ({ codigo: c.codigo, nome: c.nome }));
   const dita = categoriaDita(texto);
+  // 27/11: "Categoria: Compra de equipamentos e bens (IMOBILIZADO)" — o NOME exato de uma categoria lançável do plano, ou o CÓDIGO dela
+  // escrito por extenso, é a escolha da pessoa (vale também para IMOBILIZADO; o que nunca acontece é o MOVA escolhê-lo sozinho).
+  if (dita || texto) {
+    const lancaveisTodas = plano.filter((c) => lancavel(c) && c.natureza !== "RECEITA" && c.natureza !== "DEDUCAO" && !PATRIMONIAIS_FORA.has(c.codigo));
+    const porNome = dita ? lancaveisTodas.filter((c) => normalizar(c.nome) === normalizar(dita)) : [];
+    const porCodigo = lancaveisTodas.filter((c) => c.codigo.length >= 5 && new RegExp(`(^|[^A-Z_])${c.codigo}([^A-Z_]|$)`).test(String(texto ?? "")));
+    const escolhida = porNome.length === 1 ? porNome[0] : porCodigo.length === 1 ? porCodigo[0] : null;
+    if (escolhida) return { codigo: escolhida.codigo, perguntar: false, motivo: "CATEGORIA_DITA", opcoes: [], sugestaoDeCriacao: null };
+  }
   if (dita) {
     const r = interpretarCategoria({ texto: dita, categorias: plano });
     // categoria dita PATRIMONIAL ("categoria Empréstimos"): UMA do plano com radical em comum ⇒ ela. Casamento só PARCIAL com uma
@@ -383,7 +392,12 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   // as datas dela (ex.: desconto em 07/12) NUNCA viram vencimento bancário nem "vence dia N". Ela fica na observação.
   const desconto = oracaoDeDesconto(principal);
   const semDesconto = desconto ? String(principal).replace(desconto, " ") : String(principal ?? "");
-  const t = normalizar(semDesconto.replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
+  // 27/11 (homologação real do bebedouro): "1ª parcela: R$ 194,50 — 19/12" virava "1 parcela" na normalização (o "ª" some) ⇒ quantidade 1
+  // contra 2 vencimentos ⇒ "falta o vencimento de cada parcela" para sempre. Número ORDINAL ("1ª", "2º", "1a", "2o") antes de "parcela"
+  // é o NÚMERO da parcela: sai do texto da quantidade e, sem quantidade dita, a quantidade é a MAIOR parcela numerada.
+  const ORDINAL = /\b(\d{1,2})\s*(?:[ªº°]|[ao](?=\s))\s*(?=parcela\b|prestac)/giu;
+  const ordinais = [...semDesconto.matchAll(ORDINAL)].map((m) => Number(m[1])).filter((x) => x >= 1 && x <= MAX_PARCELAS);
+  const t = normalizar(semDesconto.replace(ORDINAL, " ").replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
   // valor: composição rotulada do total (#243: "Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08") ou o total dito (#244)
   const composicao = composicaoDoTotal(principal);
   const lidos = composicao ? { valores: [composicao.totalCentavos], partes: [] } : valorDoRelato(principal);
@@ -396,13 +410,14 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
     && new RegExp(`\\bdia\\s+0?${Number(diaEscrito[1])}\\b`).test(normalizar(semDesconto)) ? [vencimentoLido] : [];
   const datas = Array.isArray(dado.vencimentos) && dado.vencimentos.length ? dado.vencimentos : citadas.datas.length ? citadas.datas : vencimentoPeloDia;
   const invalida = Array.isArray(dado.vencimentos) && dado.vencimentos.length ? null : citadas.invalida;
-  let n = quantidadeDeParcelas(t);
+  let n = quantidadeDeParcelas(t) ?? (ordinais.length ? Math.max(...ordinais) : null);
   const forma = formaDePagamento(t);
   const fornecedor = fornecedorDito(principal, unidades);
   const descricao = dado.descricao ?? descricaoDita(principal) ?? descricaoLimpa(principal, unidades);
   // observação: composição do total + oração do desconto (#243/#245, com ou sem "Obs."), linhas da composição sem total rotulado e a seção
   // "Obs./Observações" (#244). Só o que foi DITO; inteira (o motor guarda o texto completo na proposta).
-  const observacao = [observacaoDaConta(principal, composicao), ...linhasDaComposicao(principal, lidos.partes), ...(obsDita ? [obsDita.replace(/\s*\n\s*/g, "; ")] : [])].filter(Boolean).join("; ") || null;
+  const soParcelas = Boolean(composicao) && composicao.componentes.length > 1 && composicao.componentes.every((c) => c.valorCentavos === composicao.componentes[0].valorCentavos && (!c.rotulo || /^parcela/i.test(c.rotulo)));
+  const observacao = [observacaoDaConta(principal, soParcelas ? null : composicao), ...linhasDaComposicao(principal, lidos.partes), ...(obsDita ? [obsDita.replace(/\s*\n\s*/g, "; ")] : [])].filter(Boolean).join("; ") || null;
   // 27/11 (PR #236): a competência de uma COMPRA é o MÊS DA COMPRA (a mensagem): palavra de compra, parcelas ditas, ou foto do produto.
   // Qualquer OUTRA obrigação declarada (empréstimo, aluguel, conta que chegou) só tem a competência DITA — senão é perguntada.
   const compra = porFoto || (n !== null && n > 1) || COMPRA.test(t);
