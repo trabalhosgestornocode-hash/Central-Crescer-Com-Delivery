@@ -89,9 +89,11 @@ export function mensagemSemanal(fechamento, { unidade = null, empresa = null } =
   if (AGUARDANDO.includes(fechamento.situacaoDocumental)) {
     linhas.push(`Envie a nota fiscal (NFS-e em PDF) de ${reais(fechamento.valorCentavos)} por aqui até ${dataBr(fechamento.prazoDaNota)}.`);
     linhas.push(FRASE_NOTA_FISCAL);
+    if (fechamento.vencimento) linhas.push(`Previsão de pagamento: ${dataBr(fechamento.vencimento)}, depois que a nota for conferida e aprovada.`);
   } else if (["NF_RECEBIDA", "NF_EM_CONFERENCIA", "NF_APROVADA"].includes(fechamento.situacaoDocumental)) {
     linhas.push("Sua nota já foi recebida e está em conferência.");
     linhas.push(FRASE_NOTA_FISCAL);
+    if (fechamento.vencimento) linhas.push(`Previsão de pagamento: ${dataBr(fechamento.vencimento)}, depois da aprovação da nota.`);
   } else if (fechamento.situacaoDocumental === "LIBERADO_PAGAMENTO") {
     linhas.push(`Nota aprovada; pagamento liberado (vencimento ${dataBr(fechamento.vencimento)}).`);
   }

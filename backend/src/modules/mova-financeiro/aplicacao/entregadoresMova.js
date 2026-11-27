@@ -13,6 +13,7 @@
 import { reais, dataBr } from "./respostas.js";
 import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
+import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
@@ -48,20 +49,7 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
 export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
-  const servico = cfg.identidadeServico.usuarioId;
-  const unidadeDe = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
-  const rotuloDe = (id) => { const u = unidadeDe(id); return { unidade: u?.nome ?? null, empresa: u?.empresa ?? null }; };
-  const cnpjDe = (id) => (unidadeDe(id)?.documentos ?? []).map((d) => String(d).replace(/\D/g, "")).find((d) => d.length === 14) ?? null;
-  // Grupo financeiro AUTORIZADO SÓ para esta unidade (nunca publica dados de uma unidade em grupo de outra ou de várias).
-  const grupoDaUnidade = (id) => {
-    const g = cfg.gruposAutorizados.filter((x) => !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO" && x.unidades.length === 1 && x.unidades[0] === id);
-    if (g.length === 1) return g[0];
-    // 23/11: unidade SEM grupo exclusivo cujo proprietário indicou, na configuração (MOVA_AVISOS_NO_GRUPO), o grupo da gerência
-    // que ela COMPARTILHA (ex.: "Contas à Pagar Subway / Açaí"). Só avisos à gerência; o grupo precisa estar autorizado.
-    const jid = Object.hasOwn(avisosNoGrupo, id) ? avisosNoGrupo[id] : null;
-    return (jid && cfg.gruposAutorizados.find((x) => x.grupoId === jid && !x.privada && !x.entregador && x.politicaResposta === "GRUPO_FINANCEIRO")) || null;
-  };
-  const escopoDe = (unidadeId) => { const u = unidadeDe(unidadeId); return { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico }; };
+  const { unidadeDe, rotuloDe, cnpjDe, grupoDaUnidade, escopoDe } = criarAuxiliaresDeUnidade({ cfg, avisosNoGrupo });
   const lerFechamentos = async (ent) => {
     try { return (await porta.ler("consultarEntregador", escopoDe(ent.unidadeId), { entregador: ent.chave })).fechamentos.filter((f) => f.entregador?.chave === ent.chave); }
     catch (e) { if (naoEncontrado(e)) return []; throw e; }
@@ -229,15 +217,20 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     for (const [unidadeId, lista] of porUnidade) {
       const semanal = await a.automacoes.obter(AUTOMACAO.SEMANAL, unidadeId);
       const cobranca = await a.automacoes.obter(AUTOMACAO.COBRANCA, unidadeId);
-      const fazSemanal = semana === 1 && ativa(semanal, hora);
+      // 27/11: RETOMADA. A rotina é da segunda-feira, mas se o serviço ficou fora do ar na segunda (deploy/queda), terça e quarta
+      // completam o que faltou — só se esta automação já rodou nos últimos 14 dias (religar depois NÃO dispara semana antiga) e
+      // sem duplicar: a chave SEMANAL|unidade|entregador|semana é única, e quem já recebeu nem é relido.
+      const retomada = [2, 3].includes(semana) && Boolean(semanal?.ultimaExecucao) && agora.getTime() - Date.parse(semanal.ultimaExecucao) <= 14 * 86400000;
+      const fazSemanal = (semana === 1 || retomada) && ativa(semanal, hora);
       const fazCobranca = semana === 2 && ativa(cobranca, hora); // 23/11: lembrete dos pendentes só na TERÇA
       if (!fazSemanal && !fazCobranca) continue;
       const rotulo = rotuloDe(unidadeId);
       const inicioFechado = somarDias(dia, -7 - ((semana + 6) % 7)); // segunda-feira da semana anterior
+      const jaRecebeu = fazSemanal ? new Set((await a.enviosEntregador.listar(escopoDe(unidadeId))).filter((e) => e.tipo === "SEMANAL" && e.semanaInicio === inicioFechado).map((e) => e.entregador)) : new Set();
       for (const ent of lista) {
         if (!comConversa.has(ent.privado)) { resumo.pulados.push("SEM_CONVERSA"); continue; }
         try {
-          if (fazSemanal) {
+          if (fazSemanal && !jaRecebeu.has(ent.chave)) {
             let f = null;
             try { f = await porta.ler("detalharFechamentoDoEntregador", escopoDe(unidadeId), { inicio: inicioFechado, entregador: ent.chave }); } catch (e) { if (!naoEncontrado(e)) throw e; }
             const texto = f && f.entregador?.chave === ent.chave ? mensagemSemanal(f, rotulo) : null;
