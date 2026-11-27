@@ -383,8 +383,10 @@ function criarTx(cliente, { somenteLeitura }) {
  *        (credencial própria). Sem ela não há transação: a aplicação não escolhe escopo por variável.
  * @param {number} [deps.tentativas] quantas vezes uma transação é refeita ao perder uma disputa de concorrência
  * @param {number} [deps.reusoDoTokenMs] por quanto tempo um token emitido é reaproveitado antes de pedir outro
+ * @param {number} [deps.margemDoTokenMs] 27/11: o token deixa de ser reaproveitado esta margem ANTES do fim do reuso (a sessão
+ *        no banco vale o mesmo tempo; sem margem, o token reaproveitado no último segundo era recusado pelo banco)
  */
-export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoDoTokenMs = 5 * 60 * 1000, relogio = () => Date.now() }) {
+export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoDoTokenMs = 5 * 60 * 1000, margemDoTokenMs = 60 * 1000, relogio = () => Date.now() }) {
   if (!pool || typeof pool.connect !== "function") falhar(CODIGO.REPOSITORIO_INVALIDO, "O adaptador PostgreSQL exige um pool de conexões.");
   if (!sessoes || typeof sessoes.emitir !== "function") falhar(CODIGO.REPOSITORIO_INVALIDO, "O adaptador PostgreSQL exige a autoridade de sessões de banco.");
 
@@ -403,7 +405,7 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     const guardado = tokens.get(k);
     if (!renovar && guardado && guardado.ate > relogio()) return guardado.promessa;
     const promessa = emitir(e);
-    tokens.set(k, { promessa, ate: relogio() + reusoDoTokenMs });
+    tokens.set(k, { promessa, ate: relogio() + Math.max(0, reusoDoTokenMs - margemDoTokenMs) });
     promessa.catch(() => { if (tokens.get(k)?.promessa === promessa) tokens.set(k, { promessa, ate: 0 }); }); // recusa não fica guardada
     return promessa;
   }
@@ -413,18 +415,37 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     const { rows: [v] } = await cliente.query("select usuario_id::text as u, organizacao_id::text as o, unidade_id::text as n from fv2_assumir_sessao($1)", [token]);
     return v?.u === e.usuarioId && v?.o === e.organizacaoId && v?.n === e.unidadeId;
   }
-  async function declararSessao(cliente, e, provisionamento, reiniciar = null) {
+  /**
+   * 27/11: declara na transação o token obtido ANTES de pegar a conexão. Nunca emite token segurando a conexão: emitir usa
+   * outra conexão do pool e, com uma só (leitor do MOVA), a espera travava até o tempo-limite (FINANCEIRO_INDISPONIVEL).
+   * Token recusado (expirou ou foi revogado): sinaliza `sessaoRecusada`; quem chamou DEVOLVE a conexão, renova e tenta uma vez.
+   */
+  async function declararSessao(cliente, e, provisionamento, token) {
     if (provisionamento) {
       if (await assumir(cliente, e, await provisionamento())) return;
       falhar(CODIGO.PROVISIONAMENTO_RECUSADO, "A sessão de provisionamento não foi aceita pelo banco.");
     }
-    if (await assumir(cliente, e, await tokenDe(e))) return;
-    // Token expirado ou revogado (concessão alterada, logout): pede outro uma vez. Sem concessão, a autoridade recusa.
-    const novo = await tokenDe(e, { renovar: true });
-    // Leitura em retrato fixo (repeatable read) não enxergaria a sessão recém-emitida: recomeça a transação.
-    if (reiniciar) await reiniciar();
-    if (await assumir(cliente, e, novo)) return;
-    falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sessão de banco recusada para este usuário nesta unidade.");
+    if (await assumir(cliente, e, token)) return;
+    throw Object.assign(new Error("Financeiro v2: sessão de banco recusada (expirada ou revogada)."), { sessaoRecusada: true });
+  }
+
+  /**
+   * 27/11: token antes da conexão; se o banco recusar, a conexão já foi devolvida quando o token é renovado, e a operação é
+   * refeita UMA vez (transação nova: a leitura em retrato fixo enxerga a sessão nova). Recusa de novo ⇒ permissão insuficiente.
+   */
+  async function comToken(escopo, executar) {
+    try {
+      return await executar(await tokenDe(escopo));
+    } catch (e) {
+      if (!e?.sessaoRecusada) throw e;
+      const novo = await tokenDe(escopo, { renovar: true });
+      try {
+        return await executar(novo);
+      } catch (e2) {
+        if (e2?.sessaoRecusada) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sessão de banco recusada para este usuário nesta unidade.");
+        throw e2;
+      }
+    }
   }
 
   async function comCliente(fn) {
@@ -457,14 +478,15 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     return () => (promessa ??= sessoes.emitirProvisionamento(ato).catch((erro) => { throw traduzir(erro); }));
   }
 
-  async function umaTentativa(fn, escopo, provisionamento) {
+  async function umaTentativa(fn, escopo, provisionamento, token) {
     // 25/11: o token é emitido ANTES de pegar a conexão da transação. Emitir usa outra conexão do pool; com o pool cheio
     // (pool pequeno, leituras em paralelo), segurar a conexão esperando a emissão travava o pool inteiro.
-    if (!provisionamento) await tokenDe(escopo);
+    // 27/11: a sessão de provisionamento também é emitida antes (era emitida segurando a conexão).
+    if (provisionamento) await provisionamento();
     return comCliente(async (cliente, descartar) => {
       await cliente.query("begin");
       try {
-        await declararSessao(cliente, escopo, provisionamento);
+        await declararSessao(cliente, escopo, provisionamento, token);
         const resultado = await fn(criarTx(cliente, { somenteLeitura: false }));
         await cliente.query("commit"); // as conferências adiadas (integridade, conservação, histórico) rodam aqui
         return resultado;
@@ -475,7 +497,7 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
           // a conexão já caiu; o banco desfaz a transação sozinho — e a conexão é descartada (não volta ao pool)
           descartar();
         }
-        throw traduzir(e);
+        throw e?.sessaoRecusada ? e : traduzir(e);
       }
     });
   }
@@ -485,7 +507,7 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     const provisionamento = sessaoDeProvisionamento(opcoes.provisionamento);
     for (let tentativa = 1; ; tentativa += 1) {
       try {
-        return await umaTentativa(fn, escopo, provisionamento);
+        return provisionamento ? await umaTentativa(fn, escopo, provisionamento, null) : await comToken(escopo, (token) => umaTentativa(fn, escopo, null, token));
       } catch (e) {
         if (!(e?.repetivel || DISPUTA.has(e?.code)) || tentativa >= tentativas) throw e;
         await esperar(5 * tentativa);
@@ -495,19 +517,18 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
 
   async function leitura(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
-    await tokenDe(escopo); // 25/11: emitido antes de pegar a conexão (ver umaTentativa)
-    return comCliente(async (cliente) => {
-      const iniciar = () => cliente.query("begin transaction isolation level repeatable read read only");
-      await iniciar();
+    // 25/11: emitido antes de pegar a conexão (ver umaTentativa); 27/11: renovação também fora da conexão (comToken).
+    return comToken(escopo, (token) => comCliente(async (cliente) => {
+      await cliente.query("begin transaction isolation level repeatable read read only");
       try {
-        await declararSessao(cliente, escopo, null, async () => { await cliente.query("rollback"); await iniciar(); });
+        await declararSessao(cliente, escopo, null, token);
         return await fn(criarTx(cliente, { somenteLeitura: true }));
       } catch (e) {
-        throw traduzir(e);
+        throw e?.sessaoRecusada ? e : traduzir(e);
       } finally {
         await cliente.query("rollback");
       }
-    });
+    }));
   }
 
   return Object.freeze({ transacao, leitura });
