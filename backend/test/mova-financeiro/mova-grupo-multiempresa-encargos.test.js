@@ -800,3 +800,96 @@ t("CF-6 despesa AUTOMÁTICA após informar a competência (leitura sem dúvida):
   assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [1, 1, 1], "nada em dobro");
   assert.ok(!String((await s.ultima()).motivo).startsWith("MOVA_CORE"));
 });
+
+// ------------------------------------------------------------------ 27/11: ESCLARECIMENTO da dúvida da leitura + CONTEXTO da mensagem citada
+import { esclarecerIncertezas } from "../../src/modules/mova-financeiro/dominio/esclarecimento.js";
+import { PROMPT_DO_EXTRATOR } from "../../src/modules/mova-financeiro/ia/contratos.js";
+const DUVIDA = ["Mensagem diz R$ 18.000 mas comprovante mostra R$ 260,00"];
+const ESCLARECIMENTO = "O número 18.000 corresponde aos BTUs do ar-condicionado. O pagamento foi de R$ 260,00.";
+
+test("ES-0 regra pura: só esclarece quando o número duvidoso aparece com indício NÃO monetário; valor em reais diferente é divergência real; dúvida sem número nunca", () => {
+  assert.equal(esclarecerIncertezas(ESCLARECIMENTO, DUVIDA, 26000).ok, true);
+  assert.equal(esclarecerIncertezas("os 18.000 são BTUs", DUVIDA, 26000).ok, true, "sem repetir o valor pago");
+  assert.deepEqual(esclarecerIncertezas("O valor certo foi R$ 18.000,00", DUVIDA, 26000), { ok: false, motivo: "VALOR_DIVERGENTE", informadoCentavos: 1800000 });
+  assert.equal(esclarecerIncertezas("é isso mesmo, 18.000", DUVIDA, 26000).ok, false, "sem indício não monetário: continua protegido");
+  assert.equal(esclarecerIncertezas("são 400 litros", DUVIDA, 26000).ok, false, "outro número, não o duvidoso");
+  assert.equal(esclarecerIncertezas("o favorecido é esse mesmo", ["Favorecido ilegível"], 26000).ok, false, "dúvida sem número");
+  assert.equal(esclarecerIncertezas("18.000 BTUs", [...DUVIDA, "Favorecido ilegível"], 26000).restantes.length, 1, "só ESSA dúvida sai; a outra fica");
+});
+
+test("ES-P instruções do extrator: distinguem valor, capacidade, quantidade, parcelas, percentuais, códigos e identificadores; exigem divergência monetária real para incerteza", () => {
+  for (const x of ["BTUs", "litros", "valor em reais", "parcelas", "percentual", "código", "identificador", "divergência monetária real"]) assert.match(PROMPT_DO_EXTRATOR, new RegExp(x));
+  assert.ok(PROMPT_DO_EXTRATOR.length < 14000, "o prompt segue enxuto (limites de tokens atuais)");
+});
+
+t("ES-1 caso real: SOMENTE_PROPOR por dúvida de leitura; a pessoa esclarece (18.000 = BTUs) citando a proposta ⇒ a MESMA proposta é reavaliada pela política e EXECUTADA uma vez; a dúvida original fica na auditoria", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO() });
+  const { citar, proposta } = await propostaEmRevisao(s, { marca: "ES1", texto: "Pagamento de conserto ar condicionado 18.000 da cozinha da loja xis" });
+  assert.equal(proposta.autonomiaDocumental.nivel, "SOMENTE_PROPOR");
+  await s.enviar(doGerente({ texto: ESCLARECIMENTO, respostaA: citar }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "DESPESA_PAGA_RETOMADA"], JSON.stringify(h));
+  assert.match((await s.respostas()).at(-1), /Anotei o esclarecimento/);
+  const props = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(props.length, 1, "nenhuma outra proposta");
+  assert.equal(props[0].id, proposta.id);
+  assert.deepEqual(props[0].leitura.incertezas, []);
+  assert.equal(props[0].leitura.incertezasEsclarecidas[0].texto, DUVIDA[0], "a dúvida original é preservada");
+  assert.equal((await s.mova.armazenamento.auditoria.listar()).filter((x) => x.acao === "INCERTEZA_ESCLARECIDA").length, 1);
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [1, 1, 1]);
+  const [conta] = await s.contas(ORG_X, XIS);
+  assert.deepEqual([conta.valorBaseCentavos, conta.saldoCentavos, conta.situacao], [26000, 0, "QUITADA"], "o valor é o COMPROVADO pelo documento");
+  // repetir o esclarecimento ou reenviar o comprovante não duplica
+  await s.enviar(doGerente({ texto: ESCLARECIMENTO, respostaA: citar }));
+  await s.enviar(doGerente({ texto: "Conserto do ar condicionado da loja xis", doc: pdf("ES1") }));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.liquidacoes(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [1, 1, 1]);
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS })).length, 1);
+});
+
+t("ES-2 divergência monetária REAL ('o valor certo é R$ 18.000'): a proteção fica, pergunta o valor correto e nada é executado; esclarecimento sem indício não monetário também não libera", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO() });
+  const { citar } = await propostaEmRevisao(s, { marca: "ES2", texto: "Conserto do ar condicionado da loja xis" });
+  await s.enviar(doGerente({ texto: "O valor certo foi R$ 18.000,00", respostaA: citar }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "ESCLARECIMENTO_VALOR_DIVERGENTE"]);
+  assert.match((await s.respostas()).at(-1), /R\$ 18\.000,00.*R\$ 260,00/s);
+  await s.enviar(doGerente({ texto: "é 18.000 mesmo", respostaA: citar }));
+  assert.notEqual((await s.ultima()).decisao, "EXECUTADO");
+  await semEfeito(s);
+  const [p] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.deepEqual([p.estado, p.leitura.incertezas.length], ["AGUARDANDO_REVISAO", 1]);
+});
+
+t("ES-3 isolamento entre empresas: esclarecer a proposta da Xis por quem só vê a Alfa (ou só consulta) é recusado e não altera nada; a proposta da Alfa não é tocada pela da Xis", async () => {
+  let leitura = AR_CONDICIONADO();
+  const s = await grupo({ responder: () => leitura, membros: [FIN, SO_ALFA, CONS] });
+  const xis = await propostaEmRevisao(s, { marca: "ES3X", texto: "Conserto do ar condicionado da loja xis" });
+  leitura = AR_CONDICIONADO({ pagador: "ALFA PRODUTOS", documentoPagador: null });
+  const alfa = await propostaEmRevisao(s, { marca: "ES3A", texto: "Conserto do ar condicionado da loja alfa", org: ORG, unidade: ALFA });
+  for (const quem of [SO_ALFA, CONS]) {
+    await s.enviar(gw({ de: quem, texto: ESCLARECIMENTO, respostaA: xis.citar }));
+    assert.notEqual((await s.ultima()).decisao, "EXECUTADO");
+  }
+  const [px] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG_X, unidadeId: XIS });
+  assert.deepEqual([px.estado, px.leitura.incertezas.length], ["AGUARDANDO_REVISAO", 1], "nada mudou na Xis");
+  await s.enviar(doGerente({ texto: ESCLARECIMENTO, respostaA: xis.citar }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  const [pa] = await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA });
+  assert.deepEqual([pa.id, pa.estado, pa.leitura.incertezas.length], [alfa.proposta.id, "AGUARDANDO_REVISAO", 1], "a proposta da Alfa segue intacta");
+  assert.equal((await s.contas(ORG, ALFA)).length, 0);
+});
+
+t("CTX-1 confirmação citando mensagem do MOVA SEM proposta pendente: responde na unidade da mensagem (Xis), sem consulta e sem cair na unidade padrão", async () => {
+  const s = await grupo({ responder: () => AR_CONDICIONADO({ incertezas: [] }) });
+  await s.enviar(doGerente({ texto: "Conserto do ar condicionado da loja xis", doc: pdf("CTX1") }));
+  await entregar(s, "3EB0PERGUNTACTX1");
+  await s.enviar(doGerente({ texto: "Novembro/2026", respostaA: "3EB0PERGUNTACTX1" }));
+  assert.equal((await s.ultima()).decisao, "EXECUTADO");
+  await entregar(s, "3EB0APLICADACTX1");
+  await s.enviar(doGerente({ texto: "Confirmado", respostaA: "3EB0APLICADACTX1" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo, h.unidadeId], ["ORIENTACAO", "CONFIRMACAO_SEM_OPERACAO_PENDENTE", XIS], JSON.stringify(h));
+  assert.match((await s.respostas()).at(-1), /Loja Xis/);
+  assert.doesNotMatch((await s.respostas()).at(-1), /Loja Alfa/);
+  assert.ok(!(await s.mova.armazenamento.historico.todos()).some((x) => String(x.motivo).startsWith("MOVA_CORE")));
+});

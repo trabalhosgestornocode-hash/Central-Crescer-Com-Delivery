@@ -29,8 +29,9 @@ const centavos = (s) => { const t = s.replace(/\./g, "").replace(",", "."); cons
 /** Valores em reais citados ("R$194,50", "R$ 1.779,90", "194,50 reais"), na ordem, sem repetir. */
 export function valoresCitados(texto) {
   const achados = [];
-  const re = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)/gi;
-  for (const m of String(texto ?? "").matchAll(re)) { const v = centavos(m[1] ?? m[2]); if (v && !achados.includes(v)) achados.push(v); }
+  // 27/11: também o valor SEM "R$" quando traz centavos ("total 2.911,08") — número sem vírgula decimal (18.000, 400) nunca é tomado como dinheiro aqui.
+  const re = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)|(?:(?<![\d/.,])(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?![\d/%])(?!\s*%))/gi;
+  for (const m of String(texto ?? "").matchAll(re)) { const v = centavos(m[1] ?? m[2] ?? m[3]); if (v && !achados.includes(v)) achados.push(v); }
   return achados;
 }
 
@@ -51,6 +52,19 @@ export function datasCitadas(texto, dataMensagem) {
     anterior = x;
   }
   return { datas: saida, invalida: null };
+}
+
+/**
+ * 27/11 — OBSERVAÇÃO individual de cada parcela, só quando DITA junto da data: "10/12 (carência)" ou "10/01: reajuste". Nada é inventado.
+ * Devolve uma lista alinhada às datas (null onde não há observação).
+ */
+export function observacoesPorData(texto) {
+  const saida = [];
+  for (const m of String(texto ?? "").matchAll(/\b\d{1,2}\/\d{1,2}(?:\/(?:\d{2}|\d{4}))?\b\s*(?:\(([^)]{1,80})\)|[:-]\s*([^,;\n()]{1,80}?)(?=\s*(?:[,;\n]|$|\d{1,2}\/\d{1,2})))?/g)) {
+    const o = (m[1] ?? m[2] ?? "").trim();
+    saida.push(o || null);
+  }
+  return saida;
 }
 
 function quantidadeDeParcelas(t) {
@@ -93,7 +107,7 @@ export function descricaoLimpa(original, unidades = []) {
   // 27/11: "chegou o boleto de internet" ⇒ "internet" (o aviso de chegada e o TIPO do papel não são o que se compra; "boleto" sozinho ainda corta)
   t = t.replace(/\s(?:chegou|chegaram|veio|vieram|recebi|recebemos)\s(?:(?:o|a|os|as)\s)?/g, " ").replace(/\s(?:boleto|fatura|conta)\s(?:de|do|da|dos|das)\s/g, " ");
   // a descrição termina onde começam valor, data, parcelas, forma de pagamento ou fornecedor
-  const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|no total)(?=\s|$)/);
+  const corte = t.search(/\s(?:r\s?\d+|\d+|vence|vencimento|boleto|pix|cartao|credito|dia|dias|parcelas?|fornecedor|valor|total|no total)(?=\s|$)/);
   if (corte > 0) t = `${t.slice(0, corte)} `;
   // 27/11: o PEDIDO ("registre conta a pagar") não é a descrição do que foi comprado
   t = t.replace(/\s(?:registre|registrar|registra|lance|lancar|lanca|cadastre|cadastrar|anote|anotar|inclua|incluir|coloque|colocar|por favor)(?=\s)/g, " ").replace(/\sa pagar(?=\s)/g, " ");
@@ -207,17 +221,18 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   if (datas.some((d) => d < dataMensagem)) faltas.push("VENCIMENTO_ANTERIOR_A_COMPRA");
   const tipo = n === 1 ? TIPO_VALOR.TOTAL : tipoValor ?? tipoDoValor(t) ?? TIPO_VALOR.AMBIGUO;
   const ambiguo = tipo === TIPO_VALOR.AMBIGUO && valores.length === 1 && (n ?? 0) > 1;
+  const observacoes = observacoesPorData(texto);
   let parcelas = [];
   let total = null;
   if (!faltas.length && !ambiguo) {
     const [v] = valores;
     if (tipo === TIPO_VALOR.PARCELA) {
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v, observacao: observacoes[i] ?? null }));
       total = v * n;
     } else {
       const base = Math.floor(v / n);
       const resto = v - base * n;
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0) }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0), observacao: observacoes[i] ?? null }));
       total = v;
     }
   }
@@ -228,7 +243,7 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   });
 }
 
-const COMPRA = /\b(?:compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
+const COMPRA = /\b(?:emprestimo|financiamento|compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
 
 /** Resposta à pergunta "total ou cada parcela?": PARCELA, TOTAL ou null (não entendeu — pergunta de novo, sem consumir). */
 export function interpretarRespostaDoValor(texto) {

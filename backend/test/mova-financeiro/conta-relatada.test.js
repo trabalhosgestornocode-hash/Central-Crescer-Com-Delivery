@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { ALFA, CONFIG, FIN, FINANCEIRO, GRUPO, OPER, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
 import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.js";
-import { interpretarContaRelatada } from "../../src/modules/mova-financeiro/dominio/contaRelatada.js";
+import { interpretarContaRelatada, observacoesPorData, valoresCitados } from "../../src/modules/mova-financeiro/dominio/contaRelatada.js";
 import { AGORA, TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 
 const HUMANO = "eeeeeeee-0000-4000-8000-000000000001";
@@ -22,7 +22,7 @@ const UNICA = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300
 const FORA_DO_PLANO = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300,00, vence 10/12, categoria brinquedos";
 const LEGENDA_DA_FOTO = "bebedouro para a alfa, 2 parcelas no cartão, dia 19/12 e 19/01, parcelas de R$ 194,50";
 // IA simulada realista: só o relato é conta; "sim", "não", "cada parcela", "1" sozinhos seriam OUTRA (nunca chegam à IA no fluxo certo).
-const LEITURA = (req) => (/bebedouro|Polpa Norte/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
+const LEITURA = (req) => (/bebedouro|Polpa Norte|BNB/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
 
 async function relatada({ politica = null, concessao = null, criarContas = false } = {}) {
   const s = await cenario({
@@ -226,4 +226,34 @@ t("CR-9 FOTO do produto com legenda: a legenda é o relato; a foto fica como evi
   const [p] = await s.propostas();
   assert.deepEqual([p.evidenciaNaoFiscal, p.comando.entrada.parcelas.length, p.valorCentavos], ["FOTO_DO_PRODUTO", 2, 38900]);
   assert.equal((await s.contas()).length, 0, "foto não é comprovante: nunca vira pagamento");
+});
+
+// ------------------------------------------------------------------ 27/11: valor SEM "R$" e observações individuais por parcela (empréstimo BNB)
+const BNB = "MOVA, empréstimo BNB para a alfa, total 2.911,08, 3 parcelas: 10/12 (carência), 10/01 (reajuste IPCA), 10/02";
+
+t("CR-10 empréstimo BNB: 'total 2.911,08' (sem R$) é dinheiro; 18.000/400 sem vírgula decimal não; as observações vêm junto de cada data; nada é inventado", () => {
+  const r = interpretarContaRelatada({ texto: BNB, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.ehConta, r.faltas, r.descricao, r.totalCentavos, r.tipoValor], [true, [], "Empréstimo BNB", 291108, "TOTAL"]);
+  assert.deepEqual(r.parcelas.map((p) => [p.vencimento, p.valorCentavos, p.observacao]), [["2026-12-10", 97036, "carência"], ["2027-01-10", 97036, "reajuste IPCA"], ["2027-02-10", 97036, null]]);
+  assert.equal(r.parcelas.reduce((s, p) => s + p.valorCentavos, 0), 291108, "sem centavo perdido");
+  assert.deepEqual(valoresCitados("ar condicionado 18.000 pago 260,00"), [26000]);
+  assert.deepEqual(valoresCitados("freezer 400 litros, reajuste de 10,50%, vence 10/12"), []);
+  assert.deepEqual(valoresCitados("Pagamento de R$ 500 referente ao aluguel"), [50000]);
+  assert.deepEqual(observacoesPorData("vence 10/12: carência, 10/01"), ["carência", null]);
+});
+
+t("CR-11 empréstimo BNB ponta a ponta: resumo com as observações individuais, 'sim' registra 3 parcelas EM ABERTO (nunca paga) uma só vez; repetir o 'sim' não duplica", async () => {
+  const CONC = ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"];
+  const s = await relatada({ politica: { limiteCentavos: 500000 }, concessao: CONC, criarContas: true });
+  await s.ateOResumo(gw({ texto: BNB }));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /1\/3: vence 10\/12\/2026 — R\$\s?970,36 \(carência\)/);
+  assert.match(resumo, /2\/3: vence 10\/01\/2027 — R\$\s?970,36 \(reajuste IPCA\)/);
+  assert.match(resumo, /Total: R\$\s?2\.911,08/);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).decisao, "EXECUTADO", JSON.stringify(await s.decisao()));
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, cs.reduce((x, c) => x + c.saldoCentavos, 0), cs.every((c) => c.situacao !== "QUITADA")], [3, 291108, true]);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.contas()).length, 3, "repetir o 'sim' não duplica");
 });

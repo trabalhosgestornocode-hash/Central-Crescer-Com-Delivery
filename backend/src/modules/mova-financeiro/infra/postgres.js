@@ -155,6 +155,11 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q(`select 1 from mova.decisao d where d.evento_id = $1 and d.decisao not in ('FALHOU','REPROCESSAR')
                           and d.seq > coalesce((select max(r.seq) from mova.decisao r where r.evento_id = $1 and r.decisao = 'REPROCESSAR'), 0) limit 1`, [eventoId])).rowCount > 0;
       },
+      /** 27/11: decisões de um evento (unidades envolvidas na mensagem que a pessoa citou). */
+      async porEvento(eventoId) {
+        const r = await q("select organizacao_id, unidade_id, evento_id, decisao, motivo, proposta_id from mova.decisao where evento_id = $1 order by seq", [eventoId]);
+        return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id }));
+      },
       async todos() {
         const r = await q("select * from mova.decisao order by seq");
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
