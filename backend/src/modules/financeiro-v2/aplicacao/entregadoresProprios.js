@@ -583,6 +583,58 @@ export function operacoesDeEntregadoresProprios(b, { fonte = null, inicioDaOpera
     },
 
     /** Entrega o arquivo a quem tem a permissão de documentos, conferindo que ele pertence a este fechamento. */
+    /**
+     * 27/11 — BAIXAS (liquidações) das obrigações dos fechamentos semanais, como FATOS PERSISTIDOS, para o MOVA avisar o
+     * entregador. SOMENTE LEITURA (b.consultar). Qualquer caminho de baixa (tela, comprovante no grupo, extrato, agrupada,
+     * integração futura) termina numa liquidação: é ela que vale, nunca a mensagem do WhatsApp. Transação revertida não deixa
+     * liquidação, logo não vira aviso. Devolve TODAS as liquidações da janela (o saldo após cada uma depende das anteriores);
+     * quem decide o que é novo é o MOVA, pelo marco da unidade.
+     * Cada item traz o pagador (unidade da consulta), o período, as entregas e o saldo; nunca dados de outro entregador.
+     */
+    async consultarBaixasDeEntregadores(ctx, e = {}) {
+      semCamposDesconhecidos(e, ["semanasAtras"], "baixas");
+      const semanasAtras = e.semanasAtras === undefined ? 26 : e.semanasAtras;
+      if (!Number.isInteger(semanasAtras) || semanasAtras < 1 || semanasAtras > 104) falhar(CODIGO.ENTRADA_INVALIDA, "Janela inválida.", { campo: "semanasAtras" });
+      return b.consultar(ctx, async (cx, tx) => {
+        const dia = hoje();
+        const corte = somarDias(dia, -7 * semanasAtras);
+        const fechamentos = (await listarFechamentos(tx, cx)).filter((f) => f.obrigacaoId && f.semanaInicio >= corte);
+        const porObrigacao = new Map(fechamentos.map((f) => [f.obrigacaoId, f]));
+        const ids = [...porObrigacao.keys()];
+        const lerPorLotes = async (tipo, campo, valores) => {
+          const saida = [];
+          for (let i = 0; i < valores.length; i += 100) {
+            for (let deslocamento = 0; ; deslocamento += 500) {
+              const pg = await tx.paginar(cx, tipo, { em: { [campo]: valores.slice(i, i + 100) }, limite: 500, deslocamento, contar: false });
+              saida.push(...pg.itens);
+              if (pg.itens.length < 500) break;
+            }
+          }
+          return saida;
+        };
+        const liquidacoes = (await lerPorLotes(TIPO.LIQUIDACAO, "alvoId", ids)).filter((q) => q.alvoTipo === "OBRIGACAO");
+        const movIds = [...new Set(liquidacoes.map((q) => q.movimentacaoId).filter(Boolean))];
+        const movimentacoes = new Map((await lerPorLotes(TIPO.MOVIMENTACAO, "id", movIds)).map((m) => [m.id, m]));
+        const obrigacoes = new Map();
+        for (const id of new Set(liquidacoes.map((q) => q.alvoId))) obrigacoes.set(id, await tx.obter(cx, TIPO.OBRIGACAO, id));
+        const itens = liquidacoes.map((q) => {
+          const f = porObrigacao.get(q.alvoId);
+          const m = q.movimentacaoId ? movimentacoes.get(q.movimentacaoId) : null;
+          const o = obrigacoes.get(q.alvoId);
+          return {
+            liquidacaoId: q.id, movimentacaoId: q.movimentacaoId ?? null, obrigacaoId: q.alvoId, fechamentoId: f.id,
+            entregador: { chave: f.entregadorChave, nome: f.entregadorNome }, semanaInicio: f.semanaInicio, semanaFim: f.semanaFim, entregas: f.entregas,
+            valorFechamentoCentavos: f.valorCentavos, valorCentavos: q.valorCentavos, estornadoCentavos: q.estornadoCentavos ?? 0, situacao: q.situacao,
+            dataEfetiva: q.dataEfetiva, criadoEm: q.criadoEm ?? null, atualizadoEm: q.atualizadoEm ?? null,
+            // origem DERIVADA do que está gravado (nunca do que alguém escreveu): vínculo pelo extrato/comprovante, senão baixa pela tela.
+            origem: q.origemDoVinculo === "EXTRATO" || q.conciliacaoId ? "EXTRATO" : q.origemDoVinculo === "COMPROVANTE" || !m ? "COMPROVANTE" : String(m.fonte?.idExterno ?? "").startsWith("PAGAR:") ? "SISTEMA" : (m.fonte?.sistema ?? "SISTEMA"), conciliada: Boolean(m),
+            totalDevidoCentavos: o ? o.valorBaseCentavos + o.ajustesCentavos : f.valorCentavos, saldoCentavos: o?.saldoCentavos ?? null, pagoCentavos: o?.liquidadoCentavos ?? null, situacaoPagamento: situacaoDoPagamento(o, dia),
+          };
+        }).sort((a, x) => (a.criadoEm ?? "").localeCompare(x.criadoEm ?? "") || a.liquidacaoId.localeCompare(x.liquidacaoId));
+        return { dataBase: dia, itens };
+      });
+    },
+
     async abrirDocumentoDoEntregador(ctx, e = {}) {
       semCamposDesconhecidos(e, ["inicio", "entregador", "documento"], "documento");
       const pertence = await b.consultar(ctx, async (cx, tx) => {

@@ -50,6 +50,9 @@ const linhaProposta = (r) => r && Object.freeze({
 
 const linhaNota = (r) => r && Object.freeze({ id: r.id, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, semanaInicio: dia(r.semana_inicio), sha256: r.sha256,
   eventoId: r.evento_id, estado: r.estado, motivo: r.motivo, documentoId: r.documento_id, situacaoDocumental: r.situacao_documental, conferencia: r.conferencia ?? null, leitura: r.leitura ?? null, criadaEm: r.criada_em.toISOString() });
+const linhaNotificacao = (r) => r && Object.freeze({ id: r.id, chave: r.chave, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, destino: r.destino, tipo: r.tipo,
+  estado: r.estado, eventoPaiId: r.evento_pai_id ?? null, dados: r.dados, respostaId: r.resposta_id ?? null, tentativasEnvio: r.tentativas_envio, reenvios: r.reenvios, ultimoErro: r.ultimo_erro ?? null,
+  enviadoEm: r.enviado_em?.toISOString() ?? null, criadoEm: r.criado_em.toISOString(), atualizadoEm: r.atualizado_em.toISOString() });
 const linhaAutomacao = (r) => r ? Object.freeze({ nome: r.nome, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, ativa: r.ativa, horario: r.horario,
   pausadaEm: r.pausada_em?.toISOString() ?? null, pausadaPor: r.pausada_por, motivo: r.motivo, ultimaExecucao: r.ultima_execucao?.toISOString() ?? null }) : null;
 /**
@@ -438,6 +441,68 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async listar(escopo) {
         return (await q("select * from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 500", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaCadastro);
+      },
+    }),
+    /**
+     * 27/11 - NOTIFICACOES DE PAGAMENTO (caixa de saida persistente). Um evento por fato + destinatario (chave unica); cada
+     * liquidacao/fato entra em UM evento so (itens com chave primaria). Registrar = evento + itens na MESMA transacao: se um item
+     * ja pertence a outro evento (outra instancia, leitura repetida), nada e gravado e o resultado e "duplicado".
+     */
+    pagamentos: Object.freeze({
+      /** Marco da unidade: fixado na 1a passada (nada anterior vira mensagem). */
+      async marco({ organizacaoId, unidadeId, em = null }) {
+        const ins = await q("insert into mova.pagamento_marco (unidade_id, organizacao_id, marco_em) values ($1,$2,coalesce($3::timestamptz, now())) on conflict (unidade_id) do nothing returning marco_em", [unidadeId, organizacaoId, em]);
+        if (ins.rows[0]) return { marcoEm: ins.rows[0].marco_em.toISOString(), novo: true };
+        return { marcoEm: (await q("select marco_em from mova.pagamento_marco where unidade_id = $1 and organizacao_id = $2", [unidadeId, organizacaoId])).rows[0].marco_em.toISOString(), novo: false };
+      },
+      /** Desligada/pausada: o marco acompanha o tempo (religar nao dispara o que foi pago nesse intervalo). */
+      async avancarMarco(unidadeId, em = null) { await q("update mova.pagamento_marco set marco_em = coalesce($2::timestamptz, now()) where unidade_id = $1", [unidadeId, em]); },
+      async itensRegistrados(unidadeId, liquidacaoIds) {
+        if (!liquidacaoIds.length) return new Set();
+        return new Set((await q("select liquidacao_id, fato from mova.notificacao_pagamento_item where unidade_id = $1 and liquidacao_id = any($2::uuid[])", [unidadeId, liquidacaoIds])).rows.map((r) => `${r.liquidacao_id}|${r.fato}`));
+      },
+      async registrar({ chave, organizacaoId, unidadeId, entregador, destino, tipo, estado = "PENDENTE", eventoPaiId = null, dados, itens = [] }) {
+        const r = await emTransacao(pool, async (tx) => {
+          const ins = await tx(`insert into mova.notificacao_pagamento (chave, organizacao_id, unidade_id, entregador, destino, tipo, estado, evento_pai_id, dados)
+                                values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) on conflict (chave) do nothing returning *`, [chave, organizacaoId, unidadeId, entregador, destino, tipo, estado, eventoPaiId, JSON.stringify(dados)]);
+          if (!ins.rows[0]) return null;
+          for (const i of itens) {
+            const it = await tx("insert into mova.notificacao_pagamento_item (liquidacao_id, fato, unidade_id, evento_id) values ($1,$2,$3,$4) on conflict do nothing returning 1", [i.liquidacaoId, i.fato, unidadeId, ins.rows[0].id]);
+            if (!it.rows[0]) throw Object.assign(new Error("ITEM_JA_REGISTRADO"), { desfazer: true });
+          }
+          return ins.rows[0];
+        }).catch((e) => { if (e?.desfazer) return null; throw e; });
+        if (r) return { evento: linhaNotificacao(r), novo: true };
+        const existente = (await q("select * from mova.notificacao_pagamento where chave = $1 and unidade_id = $2", [chave, unidadeId])).rows[0];
+        return { evento: linhaNotificacao(existente ?? null), novo: false };
+      },
+      async obter(id, escopo) { return linhaNotificacao((await q("select * from mova.notificacao_pagamento where id = $1 and organizacao_id = $2 and unidade_id = $3", [id, escopo.organizacaoId, escopo.unidadeId])).rows[0]); },
+      async listar(escopo, { limite = 200, entregador = null } = {}) {
+        return (await q("select * from mova.notificacao_pagamento where organizacao_id = $1 and unidade_id = $2 and ($4::text is null or entregador = $4) order by criado_em desc, id limit $3", [escopo.organizacaoId, escopo.unidadeId, Math.min(limite, 500), entregador])).rows.map(linhaNotificacao);
+      },
+      async emAndamento(unidadeId) {
+        return (await q("select * from mova.notificacao_pagamento where unidade_id = $1 and estado in ('PENDENTE','AGUARDANDO_ENTREGADOR','ENFILEIRADO') order by criado_em, id limit 500", [unidadeId])).rows.map(linhaNotificacao);
+      },
+      /** Transicao CONDICIONAL: so se o estado atual estiver em `de` (duas instancias nunca enfileiram a mesma notificacao). */
+      async atualizar(id, { de, estado, respostaId, ultimoErro, enviadoEm, tentativasEnvio, reenvios }) {
+        const r = await q(`update mova.notificacao_pagamento set estado = coalesce($3, estado), resposta_id = coalesce($4::uuid, resposta_id), ultimo_erro = $5,
+                             enviado_em = case when $3::text is not null and $3::text <> 'ENVIADO' then null else coalesce($6::timestamptz, enviado_em) end, tentativas_envio = coalesce($7, tentativas_envio), reenvios = coalesce($8, reenvios), atualizado_em = now()
+                           where id = $1 and estado = any($2::text[]) returning *`, [id, de, estado ?? null, respostaId ?? null, ultimoErro ?? null, enviadoEm ?? null, tentativasEnvio ?? null, reenvios ?? null]);
+        return linhaNotificacao(r.rows[0] ?? null);
+      },
+      async filhos(paiId) { return (await q("select * from mova.notificacao_pagamento where evento_pai_id = $1 order by criado_em", [paiId])).rows.map(linhaNotificacao); },
+    }),
+    /** 27/11 - metricas de atendimento (contagens; sem texto de conversa nem dado financeiro). */
+    metricas: Object.freeze({
+      async registrar({ dia: d, unidadeId, via, intencao, chamadasIa = 0, tokensEntrada = 0, tokensSaida = 0 }) {
+        await q(`insert into mova.atendimento_metrica (dia, unidade_id, via, intencao, respostas, chamadas_ia, tokens_entrada, tokens_saida) values ($1,$2,$3,$4,1,$5,$6,$7)
+                 on conflict (dia, unidade_id, via, intencao) do update set respostas = mova.atendimento_metrica.respostas + 1, chamadas_ia = mova.atendimento_metrica.chamadas_ia + excluded.chamadas_ia,
+                   tokens_entrada = mova.atendimento_metrica.tokens_entrada + excluded.tokens_entrada, tokens_saida = mova.atendimento_metrica.tokens_saida + excluded.tokens_saida, atualizado_em = now()`,
+          [d, unidadeId, via, intencao, chamadasIa, tokensEntrada, tokensSaida]);
+      },
+      async resumo({ unidadeId, desde }) {
+        return (await q("select via, intencao, sum(respostas)::int as respostas, sum(chamadas_ia)::int as chamadas_ia, sum(tokens_entrada)::bigint as tokens_entrada, sum(tokens_saida)::bigint as tokens_saida from mova.atendimento_metrica where unidade_id = $1 and dia >= $2::date group by via, intencao order by via, intencao", [unidadeId, desde]))
+          .rows.map((r) => ({ via: r.via, intencao: r.intencao, respostas: r.respostas, chamadasIa: r.chamadas_ia, tokensEntrada: Number(r.tokens_entrada), tokensSaida: Number(r.tokens_saida) }));
       },
     }),
     enviosEntregador: Object.freeze({

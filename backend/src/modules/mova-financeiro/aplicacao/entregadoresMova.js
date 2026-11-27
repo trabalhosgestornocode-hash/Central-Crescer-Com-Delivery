@@ -15,6 +15,7 @@ import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoD
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
+import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
 // AVISO_GRUPO = aviso de cada obrigação LIBERADA no grupo da unidade (a 1ª passada só registra o que já estava liberado).
