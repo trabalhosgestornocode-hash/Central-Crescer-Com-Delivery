@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql
--- Novas: 0025_mova_contas_relatadas_intercompany_avisos.sql, 0026_mova_entregador_notificacoes_pagamento.sql
+-- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
+-- Novas: 0026_mova_entregador_notificacoes_pagamento.sql, 0027_mova_fila_prioridade_limites.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -30,50 +30,10 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0022_mova_orcamento_uso.sql' and sha256 = '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9') then raise exception 'MOVA atualização: 0022_mova_orcamento_uso.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0023_mova_politica_sangria.sql' and sha256 = '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631') then raise exception 'MOVA atualização: 0023_mova_politica_sangria.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0024_mova_grupo_multiempresa.sql' and sha256 = '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47') then raise exception 'MOVA atualização: 0024_mova_grupo_multiempresa.sql ausente ou com outro conteúdo — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql já aplicada — nada foi feito'; end if;
+  if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql' and sha256 = '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0026_mova_entregador_notificacoes_pagamento.sql') then raise exception 'MOVA atualização: 0026_mova_entregador_notificacoes_pagamento.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0027_mova_fila_prioridade_limites.sql') then raise exception 'MOVA atualização: 0027_mova_fila_prioridade_limites.sql já aplicada — nada foi feito'; end if;
 end $$;
-
--- ------------------------------------------------------------------------- 0025_mova_contas_relatadas_intercompany_avisos.sql (arquivo 3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a)
--- MOVA (26/11/2026; revisada 27/11): (1) operações CONTA_A_PAGAR_RELATADA (conta ÚNICA relatada, sem documento), CONTA_PARCELADA_RELATADA
--- (2 a 24 parcelas; limite sobre a compra inteira) — ambas pela ação estreita
--- `registrar_conta_parcelada` do Financeiro, migração 0033) e OPERACAO_ENTRE_EMPRESAS (pagamento feito por outra empresa do grupo;
--- ação `registrar_intercompany`, migração 0034) nas listas fechadas das POLÍTICAS e das EXECUÇÕES. Nenhuma política é semeada: sem
--- política o MOVA só PROPÕE (as políticas existentes — conta por boleto/nota, despesa paga — NÃO cobrem estas operações).
--- (2) AVISO DIÁRIO de contas a pagar no grupo (10h/15h, America/Fortaleza): UMA linha por grupo + data + janela (chave única) — a
--- idempotência sobrevive a reinício e a mais de uma instância. Só metadados (contagens/totais por unidade); nada de texto livre.
-alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
-alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
-  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
-alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
-alter table mova.operacao_executada add constraint operacao_executada_operacao_check
-  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
-alter table mova.proposta drop constraint proposta_tipo_check;
-alter table mova.proposta add constraint proposta_tipo_check
-  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));
-
-create table mova.aviso_diario (
-  id uuid primary key default gen_random_uuid(),
-  grupo_jid text not null references mova.grupo_autorizado (grupo_jid),
-  data date not null,
-  janela text not null check (janela ~ '^[0-2][0-9]:[0-5][0-9]$'),
-  -- ENVIADO = mensagem na fila de saída (mesma transação); SEM_MENSAGEM = janela conferida sem nada a dizer (ex.: 15h sem contas)
-  situacao text not null default 'RESERVADO' check (situacao in ('RESERVADO', 'ENVIADO', 'SEM_MENSAGEM', 'FALHOU')),
-  check ((situacao = 'ENVIADO') = (resposta_id is not null)),
-  resumo jsonb not null default '{}'::jsonb check (jsonb_typeof(resumo) = 'object'),
-  resposta_id uuid references mova.resposta (id),
-  tentativas integer not null default 1 check (tentativas between 1 and 20),
-  criado_em timestamptz not null default now(),
-  atualizado_em timestamptz not null default now(),
-  unique (grupo_jid, data, janela)
-);
-comment on table mova.aviso_diario is 'Aviso diário de contas a pagar no grupo: uma linha por grupo/data/janela (idempotência). Sem texto livre.';
-grant select, insert on mova.aviso_diario to mova_app;
-grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
--- sem DELETE para o app (histórico do que foi avisado)
-insert into mova.mova_migracao (nome, sha256) values ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a');
 
 -- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351)
 -- MOVA (27/11/2026): NOTIFICAÇÃO AUTOMÁTICA DE PAGAMENTO ao entregador + aviso consolidado no grupo financeiro + métricas de atendimento.
@@ -157,3 +117,74 @@ grant select, insert on mova.notificacao_pagamento, mova.notificacao_pagamento_i
 grant update (estado, resposta_id, tentativas_envio, reenvios, ultimo_erro, enviado_em, atualizado_em) on mova.notificacao_pagamento to mova_app;
 grant update (respostas, chamadas_ia, tokens_entrada, tokens_saida, atualizado_em) on mova.atendimento_metrica to mova_app;
 insert into mova.mova_migracao (nome, sha256) values ('0026_mova_entregador_notificacoes_pagamento.sql', '20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351');
+
+-- ------------------------------------------------------------------------- 0027_mova_fila_prioridade_limites.sql (arquivo a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0)
+-- MOVA (28/11/2026): FILA DE SAÍDA COM PRIORIDADE, CATEGORIAS, VALIDADE, ADIAMENTO E LIMITES CONFIGURÁVEIS (sem deploy).
+--
+-- Reaproveita a fila persistente que já existe (mova.resposta é a caixa de saída: estado, tentativas, lease, id do provedor).
+-- Não cria uma segunda fila. Acrescenta, por mensagem: categoria, prioridade, validade, liberação (adiamento) e escopo (empresa/unidade).
+-- Atingir um limite NÃO descarta: a mensagem continua PENDENTE com `liberar_em` no futuro; só expira (EXPIRADA, visível e auditável)
+-- depois da validade da sua prioridade. Os limites ficam em tabela (por empresa, unidade, grupo e finalidade) e cada mudança é auditada.
+-- Nada é semeado: sem regras na tabela valem os limites padrão do código (2.000 / 100 / 500, reserva para a prioridade crítica).
+-- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0027.sql).
+
+-- 1) Colunas da fila (defaults compatíveis com o que já existia).
+alter table mova.resposta add column categoria text not null default 'PROATIVA'
+  check (categoria in ('RESPOSTA', 'ERRO', 'TRANSACIONAL', 'PROATIVA', 'ADMINISTRATIVA', 'ACOMPANHAMENTO', 'REENVIO'));
+alter table mova.resposta add column prioridade smallint not null default 1 check (prioridade between 0 and 2);   -- 0 crítica · 1 alta · 2 normal
+alter table mova.resposta add column valida_ate timestamptz;                                                      -- após isto: EXPIRADA (nunca some em silêncio)
+alter table mova.resposta add column liberar_em timestamptz;                                                      -- adiada até este instante (limite, ritmo, circuito, backoff)
+alter table mova.resposta add column motivo_adiamento text check (motivo_adiamento is null or length(motivo_adiamento) <= 60);
+alter table mova.resposta add column adiamentos integer not null default 0 check (adiamentos >= 0);
+alter table mova.resposta add column organizacao_id uuid;
+alter table mova.resposta add column unidade_id uuid;
+
+alter table mova.resposta drop constraint resposta_estado_check;
+alter table mova.resposta add constraint resposta_estado_check check (estado in ('PENDENTE', 'ENVIANDO', 'ENVIADA', 'FALHOU', 'SUPRIMIDA', 'EXPIRADA'));
+
+-- A fila é lida por prioridade e depois por ordem de criação, só do que já pode sair.
+create index resposta_fila_prioridade on mova.resposta (prioridade, seq) where estado = 'PENDENTE';
+create index resposta_envio_dia on mova.resposta (criada_em, categoria) where estado in ('ENVIADA', 'ENVIANDO');
+
+grant update (categoria, prioridade, valida_ate, liberar_em, motivo_adiamento, adiamentos, organizacao_id, unidade_id) on mova.resposta to mova_app;
+
+-- 2) Limites configuráveis. Escopos: GLOBAL ('*'), EMPRESA (organizacao_id), UNIDADE (unidade_id), GRUPO (jid do destino), FINALIDADE (categoria).
+create table mova.limite_envio (
+  id             uuid primary key default gen_random_uuid(),
+  escopo         text not null check (escopo in ('GLOBAL', 'EMPRESA', 'UNIDADE', 'GRUPO', 'FINALIDADE')),
+  chave          text not null check (length(chave) between 1 and 120 and (escopo <> 'GLOBAL' or chave = '*')),
+  campo          text not null check (campo ~ '^[A-Za-z]{3,40}$'),
+  valor          text not null check (length(valor) between 1 and 40),
+  ativo          boolean not null default true,
+  atualizado_por text not null check (length(atualizado_por) between 1 and 80),
+  atualizado_em  timestamptz not null default now(),
+  unique (escopo, chave, campo)
+);
+create table mova.limite_envio_historico (
+  seq            bigint generated always as identity primary key,
+  escopo         text not null,
+  chave          text not null,
+  campo          text not null,
+  valor_antes    text,
+  valor_depois   text,
+  ativo_depois   boolean not null,
+  ator           text not null,
+  justificativa  text not null check (length(btrim(justificativa)) >= 10),
+  em             timestamptz not null default now()
+);
+-- 3) Alertas de uso (70/85/95%) e de represamento: um por faixa/escopo/dia.
+create table mova.alerta_envio (
+  dia            date not null,
+  tipo           text not null check (tipo in ('USO_DIARIO', 'USO_CONVERSA', 'REPRESAMENTO', 'CIRCUITO', 'EXPIRADA')),
+  chave          text not null check (length(chave) between 1 and 160),
+  faixa          integer not null default 0,
+  detalhe        jsonb not null default '{}'::jsonb,
+  criado_em      timestamptz not null default now(),
+  primary key (dia, tipo, chave, faixa)
+);
+
+grant select, insert on mova.limite_envio, mova.limite_envio_historico, mova.alerta_envio to mova_app;
+grant update (valor, ativo, atualizado_por, atualizado_em) on mova.limite_envio to mova_app;
+grant usage on all sequences in schema mova to mova_app;
+comment on table mova.limite_envio is 'Limites de envio do WhatsApp por escopo. Sem linhas valem os padrões do código. Cada alteração grava mova.limite_envio_historico.';
+insert into mova.mova_migracao (nome, sha256) values ('0027_mova_fila_prioridade_limites.sql', 'a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0');
