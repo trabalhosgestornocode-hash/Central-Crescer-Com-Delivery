@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { after } from "node:test";
 import { ACAO, criarRepositorioPostgres } from "../../../src/modules/financeiro-v2/index.js";
-import { abrirPoolSeguro, fixarSearchPathDoBanco, lerAmbiente, listarMigracoes, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
+import { abrirPoolSeguro, anotarBancoDaExecucao, fixarSearchPathDoBanco, lerAmbiente, listarMigracoes, retirarBancosDaExecucao, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
 
 export const EM_POSTGRES = process.env.FV2_REPOSITORIO === "postgres";
 const EXIGIR = process.env.FV2_EXIGIR_BANCO === "1" || EM_POSTGRES;
@@ -56,6 +56,58 @@ export async function abrirPool(url, opcoes) {
 let admin;
 const poolAdmin = async () => (admin ??= await abrirPool(ambiente().urlAdmin, { max: 2 }));
 
+// 27/11 (PR #236): cada teste clonava um banco (~10 MB) e NENHUM era apagado — 7.235 bancos lotaram o disco.
+// Agora todo banco descartável criado POR ESTE PROCESSO é registrado aqui e apagado no fim do arquivo de teste, inclusive
+// quando o teste falha (o `after` roda mesmo assim). Só nomes do padrão de teste, nunca o modelo nem o banco de controle.
+const NOME_DESCARTAVEL = /^fv2_teste_(?!modelo_|controle$)[0-9a-z_]+$/;
+/** nome → exige o marcador do ambiente para apagar (só o teste que cria banco SEM marcador de propósito passa false) */
+const descartaveis = new Map();
+/**
+ * Registra, ANTES do `create database`, um banco que este processo vai criar: entra na lista do processo
+ * (<pasta>/execucoes/<pid>.lista — o `limpar` nunca apaga banco de processo vivo) e é apagado no fim do arquivo.
+ */
+export function registrarBancoDescartavel(nome, { semMarcador = false } = {}) {
+  if (!NOME_DESCARTAVEL.test(nome ?? "")) throw new Error(`registrarBancoDescartavel: nome fora do padrão de teste (${nome})`);
+  anotarBancoDaExecucao(nome);
+  descartaveis.set(nome, !semMarcador);
+}
+/** Já apagado por quem criou (ex.: descartarBancoMova): sai do registro e da lista do processo. */
+export function esquecerBancoDescartavel(nome) {
+  descartaveis.delete(nome);
+  retirarBancosDaExecucao([nome]);
+}
+
+/**
+ * Apaga os bancos registrados. SEM `with (force)`: banco que ainda tenha conexão (de qualquer processo) NÃO é apagado —
+ * fica com aviso, para o `limpar` do script (que também só apaga banco sem conexão). Chamado depois de fechar os pools.
+ */
+async function apagarDescartaveis() {
+  if (!descartaveis.size || !carregado?.disponivel) return;
+  const a = carregado;
+  const adm = await abrirPoolSeguro(a.urlAdmin, a.marcador, { max: 1 });
+  try {
+    for (const [nome, exigirMarcador] of [...descartaveis]) {
+      for (let tentativa = 1; ; tentativa++) {
+        try {
+          // confere o marcador do ambiente antes de apagar (banco sem marcador só se quem criou declarou)
+          const { rows } = await adm.query("select shobj_description(oid, 'pg_database') as c from pg_database where datname = $1", [nome]);
+          if (exigirMarcador && rows.length && rows[0].c !== `FV2_ISOLADO_TESTE:${a.marcador}`) { descartaveis.delete(nome); break; }
+          await adm.query(`drop database if exists ${nome}`);
+          esquecerBancoDescartavel(nome);
+          break;
+        } catch (e) {
+          // 55006: ainda há sessão no banco (o pool acabou de fechar e o servidor demora a soltar) → espera um pouco
+          if (e?.code === "55006" && tentativa < 5) { await new Promise((r) => setTimeout(r, 200 * tentativa)); continue; }
+          process.stderr.write(`[fv2-teste] banco ${nome} não apagado (${e?.code ?? e?.message}); rode: node scripts/fv2-banco-teste.mjs limpar\n`);
+          break;
+        }
+      }
+    }
+  } finally {
+    await adm.end().catch(() => {});
+  }
+}
+
 /**
  * Cria um banco NOVO, só deste teste, a partir do modelo já migrado (ou vazio, com `vazio: true`), com o marcador do
  * ambiente e os escopos sintéticos. Devolve as URLs de aplicação (papel sem privilégio de dono) e de administração.
@@ -64,6 +116,7 @@ export async function criarBancoDeTeste(escopos = [], { vazio = false } = {}) {
   const a = ambiente();
   const banco = `fv2_teste_${randomBytes(6).toString("hex")}`;
   const adm = await poolAdmin();
+  registrarBancoDescartavel(banco);
   await adm.query(`create database ${banco} template ${vazio ? "template0" : a.bancoModelo}`);
   await adm.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   await fixarSearchPathDoBanco(adm, banco); // o módulo vive no schema dedicado (financeiro_v2)
@@ -182,9 +235,11 @@ export async function comoAplicacao(interno, escopo, fn, { token } = {}) {
   }
 }
 
-// Fecha todas as conexões ao fim de cada arquivo de teste (senão o processo não termina).
+// Fecha todas as conexões ao fim de cada arquivo de teste (senão o processo não termina) e, em seguida, apaga os bancos
+// descartáveis que este arquivo criou (também quando algum teste falhou).
 after(async () => {
   for (const p of pools) await p.end().catch(() => {});
   pools.clear();
   admin = undefined;
+  await apagarDescartaveis().catch((e) => process.stderr.write(`[fv2-teste] limpeza dos bancos falhou: ${e?.message}\n`));
 });

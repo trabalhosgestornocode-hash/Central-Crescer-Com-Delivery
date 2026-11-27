@@ -123,5 +123,48 @@ existe, mas **recusa** reverter se já houver proposta ou política das modalida
 
 ## 11. Testes (PostgreSQL 17 local isolado, IA simulada, nada enviado ao WhatsApp)
 
-Ver a descrição do PR para os números da última execução. A contagem de "838 testes FV2 em PostgreSQL" é a **mesma** suíte
-`test/financeiro-v2` (em memória) executada de novo com `FV2_REPOSITORIO=postgres`; não é uma suíte separada.
+A contagem de "838 testes FV2 em PostgreSQL" (hoje 849, com os testes da limpeza) é a **mesma** suíte `test/financeiro-v2`
+executada de novo com `FV2_REPOSITORIO=postgres`; não é uma suíte separada.
+
+Última execução (27/11), em lotes, concorrência 2, margem de 10 GB:
+
+| Suíte | Testes | Passaram | Falharam | Pulados |
+|---|---|---|---|---|
+| Limpeza dos bancos descartáveis (`limpeza-bancos`) | 4 | 4 | 0 | 0 |
+| Financeiro v2 em memória | 849 | 724 | 0 | 125 (só PostgreSQL) |
+| Financeiro v2 em PostgreSQL | 849 | 846 | 2 | 1 |
+| MOVA com o Financeiro v2 em PostgreSQL | 665 | 662 | 3 | 0 |
+
+As 5 falhas **já existem na branch principal** (`69490b8a`, conferido no mesmo servidor isolado):
+- `entregadores-proprios` (2): o banco recusa a gravação, só que com outra mensagem que a esperada pelo teste.
+- `agente2-baixa-documental` A2-D1, `agente2-despesa-documental` A2-H9/A2-H10 (3): no modo PostgreSQL, a fixture de teste grava a
+  concessão da identidade operacional com as ações da **primeira** chamada (baixa por comprovante); a conciliação, depois, precisa
+  de `vincular_pagamento` e a RLS recusa. Em memória passam. Não é efeito deste PR (os arquivos são os mesmos da principal).
+
+Três testes de inventário/ensaio estavam desatualizados por este PR e foram corrigidos: tabela `fv2_autorizacao_vinculada` e as
+funções `fv2__chave_vinculada` / `fv2_abrir_sessao_vinculada` (revisadas: dono guardião, `search_path` fixo, sem PUBLIC; abrir a
+sessão vinculada só a autoridade) e o ensaio do `atualizar.sql`, que agora parte da mesma base do gerador (`BASE_INSTALADA` 0032)
+e confere 0033/0034 (ações novas sem concessão, RLS forçada, sem PUBLIC).
+
+### Bancos descartáveis dos testes (incidente de 27/11)
+
+Cada teste em PostgreSQL clona um banco (~10 MB) e **nenhum era apagado**: o servidor local acumulou 7.235 bancos (~70 GB)
+e o disco lotou no meio da execução. O servidor era o local isolado (127.0.0.1:54329, marcador `FV2_AMBIENTE_ISOLADO`), sem
+ligação com produção; foi apagado com `node scripts/fv2-banco-teste.mjs destruir` e recriado com `iniciar`.
+
+Correção (só no código de teste e no script do ambiente local):
+- **Dono anotado antes de criar:** todo banco descartável é anotado em `<pasta do ambiente>/execucoes/<pid>.lista` **antes**
+  do `create database` (`test/financeiro-v2/helpers/postgres.js`, `scripts/fv2/ambiente.mjs`).
+- **Apagado no fim do arquivo, também quando o teste falha** (`after` do helper). `DROP` **sem** `force`: banco que ainda
+  tenha conexão de qualquer processo fica (com aviso). Confere o marcador do ambiente; nunca o modelo nem o controle.
+- O banco do MOVA (`criarBancoMova`) e os criados à mão em `homologacao-recuperacao`, `postgres-destino` e
+  `atualizacao-producao` entram no mesmo registro.
+- `node scripts/fv2-banco-teste.mjs limpar` apaga as sobras **só** de processo que **já terminou**: banco anotado por
+  processo vivo **nunca** (mesmo sem conexão no momento), banco que ninguém anotou **nunca**, banco com conexão **nunca**.
+  PID reaproveitado pelo Windows só faz o banco ser mantido. Mostra o que apagou e o que manteve, e por quê.
+- `node scripts/testes-em-lotes.mjs --lote N --concorrencia 2 --minimo-gb 10 <arquivos>`: confere o espaço antes de cada
+  lote (abaixo de 10 GB para), vigia a cada 10 s durante o lote (abaixo de 5 GB interrompe a árvore de processos) e roda o
+  `limpar` entre os lotes.
+- Testes: `test/financeiro-v2/limpeza-bancos.test.js` (LB1 banco de execução ativa sem conexão fica; LB2 processo morto:
+  com conexão fica, sem conexão é apagado e a lista some; LB3 sem dono fica; LB4 arquivo que falha apaga os seus bancos do
+  FV2 e do MOVA).

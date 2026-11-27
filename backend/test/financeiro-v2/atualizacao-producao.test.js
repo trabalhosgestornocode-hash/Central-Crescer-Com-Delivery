@@ -10,17 +10,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { aplicarMigracoes, listarMigracoes, urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
-import { abrirPool, ambiente, motivoParaPular } from "./helpers/postgres.js";
+import { abrirPool, ambiente, motivoParaPular, registrarBancoDescartavel } from "./helpers/postgres.js";
+import { BASE_INSTALADA } from "../../scripts/fv2/pacoteProducao.mjs";
 
 const PULAR = motivoParaPular();
 const raiz = resolve(fileURLToPath(new URL(".", import.meta.url)), "..", "..", "..");
-const BASE = "0031"; // última migração já aplicada em produção (conferida por nome e hash contra o Git em 25/11: 31 migrações)
+// 27/11 (PR #236): a base é a MESMA do gerador do pacote (produção conferida, somente leitura, em 27/11: 0001–0032).
+const BASE = BASE_INSTALADA;
 const N_BASE = Number(BASE);
 
-test("atualizar.sql: da base de produção (0031) para 0032 sem mexer em dado, sem perder restrição e sem repetir", { skip: PULAR, timeout: 180000 }, async () => {
+test(`atualizar.sql: da base de produção (${BASE}) para a última sem mexer em dado, sem perder restrição e sem repetir`, { skip: PULAR, timeout: 180000 }, async () => {
   const a = ambiente();
   const controle = await abrirPool(a.urlAdmin, { max: 1 });
   const banco = `fv2_teste_ensaio_${randomBytes(4).toString("hex")}`;
+  registrarBancoDescartavel(banco); // apagado também se o teste falhar antes do finally
   await controle.query(`create database ${banco} owner fv2_teste_migrador template template0`);
   await controle.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   const pool = await abrirPool(urlDoBanco(a.urlAdmin, banco), { max: 2 });
@@ -118,6 +121,20 @@ test("atualizar.sql: da base de produção (0031) para 0032 sem mexer em dado, s
     assert.match(pc.acoes, /prestar_sangria/);
     for (const a of ["baixar_por_comprovante", "registrar_obrigacao", "registrar_juros"]) assert.match(pc.acoes, new RegExp(a), `a ação ${a} continua no catálogo`);
     assert.equal(pc.concedidas, 0, "migração restritiva: nenhuma concessão recebe a ação nova");
+
+    // 0033/0034 (PR #236): ações estreitas novas no catálogo SEM concessão; tabelas novas com RLS forçada e sem PUBLIC;
+    // sessão vinculada só para a autoridade (nunca a aplicação nem PUBLIC).
+    const nova = (await pool.query(`select
+        (select pg_get_constraintdef(oid) from pg_constraint where conname = 'fv2_concessao_acoes_lista') acoes,
+        (select count(*) from financeiro_v2.fv2_concessao where acoes ?| array['financeiro_v2.registrar_conta_parcelada', 'financeiro_v2.registrar_intercompany'])::int concedidas,
+        (select count(*) from pg_class where oid in ('financeiro_v2.fv2_intercompany'::regclass, 'financeiro_v2.fv2_autorizacao_vinculada'::regclass) and relrowsecurity and relforcerowsecurity)::int rls,
+        (select count(*) from pg_class c, lateral aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) x
+          where c.oid in ('financeiro_v2.fv2_intercompany'::regclass, 'financeiro_v2.fv2_autorizacao_vinculada'::regclass) and x.grantee = 0)::int publico,
+        (select count(*) from financeiro_v2.fv2_autorizacao_vinculada)::int vinculadas,
+        has_function_privilege('fv2_app', p.oid, 'execute') app_vincula, has_function_privilege('public', p.oid, 'execute') publico_vincula
+        from pg_proc p where p.proname = 'fv2_abrir_sessao_vinculada'`)).rows[0];
+    for (const a of ["registrar_conta_parcelada", "registrar_intercompany"]) assert.match(nova.acoes, new RegExp(a), `a ação ${a} entra no catálogo`);
+    assert.deepEqual([nova.concedidas, nova.rls, nova.publico, nova.vinculadas, nova.app_vincula, nova.publico_vincula], [0, 2, 0, 0, false, false]);
 
     // 6) Repetir o pacote é recusado antes de mudar qualquer coisa.
     const antesDeRepetir = await fotografia();
