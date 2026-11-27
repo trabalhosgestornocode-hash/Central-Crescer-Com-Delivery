@@ -24,8 +24,10 @@ const dia = (inicio, i) => new Date(Date.parse(`${inicio}T12:00:00Z`) + i * 8640
 const entrega = (id, chave, nome, data, centavos) => ({ id: `pedido:${id}`, tipo: "ENTREGA", entregadorChave: chave, entregadorNome: nome, data, numeroPedido: String(id), situacao: "Entregue", valorCentavos: centavos, elegivel: true, emRevisao: false });
 const ENTREGAS = {
   [ALFA]: [entrega(1, "mauricio", "Mauricio Sintetico", "2026-11-02", 700), entrega(2, "mauricio", "Mauricio Sintetico", "2026-11-08", 800), entrega(3, "mauricio", "Mauricio Sintetico", "2026-11-10", 600),
-    entrega(4, "rafael", "Rafael Sintetico", "2026-11-05", 900), entrega(5, "zeca", "Zeca Sintetico", "2026-11-05", 400)],
-  [BETA]: [entrega(6, "mauricio", "Mauricio Sintetico", "2026-11-03", 500)],
+    entrega(4, "rafael", "Rafael Sintetico", "2026-11-05", 900), entrega(5, "zeca", "Zeca Sintetico", "2026-11-05", 400),
+    // semana de 23/11 a 29/11 (auditoria da rotina de 30/11): só entra em testes que a fecham (`semanas`)
+    entrega(7, "mauricio", "Mauricio Sintetico", "2026-11-24", 650), entrega(8, "mauricio", "Mauricio Sintetico", "2026-11-29", 750), entrega(9, "rafael", "Rafael Sintetico", "2026-11-25", 1000)],
+  [BETA]: [entrega(6, "mauricio", "Mauricio Sintetico", "2026-11-03", 500), entrega(10, "mauricio", "Mauricio Sintetico", "2026-11-27", 1200)],
 };
 const apurar = async ({ unidadeId, inicio, fim }) => ({ disponivel: true, dias: Array.from({ length: 7 }, (_, i) => ({ data: dia(inicio, i), fonte: "foody", provisorio: false, aberto: false, triagem: 0 })),
   entregas: (ENTREGAS[unidadeId] ?? []).filter((e) => e.data >= inicio && e.data <= fim) });
@@ -33,8 +35,8 @@ const apurar = async ({ unidadeId, inicio, fim }) => ({ disponivel: true, dias: 
 const criados = [];
 after(async () => { for (const b of criados.splice(0)) await descartarBancoMova(b).catch(() => {}); });
 
-export async function cenario({ entregadores = ENTREGADORES, interpretador = null } = {}) {
-  const estado = { agora: AGORA };
+export async function cenario({ entregadores = ENTREGADORES, interpretador = null, semanas = [SEG, S2], agora = AGORA } = {}) {
+  const estado = { agora };
   const relogio = () => new Date(estado.agora);
   const cofre = criarCofreMemoria();
   const real = criarNucleoFinanceiro({ repositorio: criarRepositorioMemoria(), escoposAutorizados: ESCOPOS, relogio, cofre, entregadores: { fonte: { apurar }, inicioDaOperacao: SEG, cofreDeNotas: cofre } });
@@ -42,7 +44,7 @@ export async function cenario({ entregadores = ENTREGADORES, interpretador = nul
   const contas = {};
   for (const u of [ALFA, BETA]) {
     await real.implantarPlanoDeContas(adm(u), { modelo: "ACAITERIA" });
-    for (const s of [SEG, S2]) await real.fecharSemanaDeEntregadores(adm(u), { inicio: s });
+    for (const s of semanas) await real.fecharSemanaDeEntregadores(adm(u), { inicio: s });
     contas[u] = (await real.configurarContaFinanceira(adm(u), { tipo: "BANCARIA", nome: "Banco Sintetico", instituicao: "Teste" })).id;
   }
   const banco = await criarBancoMova();

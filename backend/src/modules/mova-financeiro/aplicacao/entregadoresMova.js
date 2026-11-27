@@ -15,7 +15,6 @@ import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoD
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
-import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { INTENCAO, INTENCOES_PARA_IA, TEXTO_FIXO, interpretarPergunta, nomesDeOutros, redigirConsulta, validarInterpretacao } from "../dominio/consultaEntregador.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
