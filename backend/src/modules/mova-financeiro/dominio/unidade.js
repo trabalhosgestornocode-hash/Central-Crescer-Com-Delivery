@@ -19,6 +19,9 @@ export const RESULTADO_UNIDADE = Object.freeze({
   CONFLITANTE: "UNIDADE_CONFLITANTE",
   DOCUMENTO_DE_OUTRA_UNIDADE: "DOCUMENTO_DE_OUTRA_UNIDADE",
   FORA_DO_GRUPO: "UNIDADE_FORA_DO_GRUPO",
+  // 26/11: comprovante pago pela conta de UMA unidade da conversa, citando OUTRA unidade da MESMA conversa (ex.: a Subway pagou
+  // pelo Açaí). Não é identificação: o motor PERGUNTA se é operação entre empresas; sem tratamento, segue bloqueado como conflito.
+  PAGO_POR_OUTRA_UNIDADE: "PAGO_POR_OUTRA_UNIDADE",
   // 27/11: o texto (ou a leitura do documento) cita EXPRESSAMENTE uma loja da mesma empresa que existe no cadastro da plataforma
   // mas NÃO está habilitada no MOVA. Bloqueia: nada é criado em nenhuma outra unidade.
   NAO_HABILITADA: "UNIDADE_NAO_HABILITADA",
@@ -189,7 +192,17 @@ export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = nu
   if (pg.resultado === RESULTADO_PAGADOR.CONFLITO) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: pg.evidencia };
   const pagadorDe = pg.unidade;
   if (pagadorDe && !doGrupo.includes(pagadorDe)) return { resultado: RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE, unidade: null, evidencia: "PAGADOR_FORA_DA_CONVERSA", unidadeDoDocumento: pagadorDe.nome };
-  if (pagadorDe && citada && citada !== pagadorDe) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_PAGADOR" };
+  if (pagadorDe && citada && citada !== pagadorDe) {
+    // as duas na conversa (a pagadora já foi conferida acima): possível operação entre empresas — `unidade` = a citada (devedora)
+    // 27/11 (#238): a DEVEDORA tem de ser precisa — nome específico da loja, ou marca sem outra loja conhecida com ela;
+    // marca ambígua (ou cadastro indisponível) nunca vira operação entre empresas: pergunta.
+    const devedoraPrecisa = fortes.size > 0 || marcaInequivoca(citada);
+    if (doGrupo.includes(citada) && !(documentoDe && documentoDe !== citada)) {
+      return devedoraPrecisa ? { resultado: RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, unidade: citada, pagadora: pagadorDe, evidencia: "TEXTO_X_PAGADOR" }
+        : { resultado: RESULTADO_UNIDADE.NAO_IDENTIFICADA, unidade: null, evidencia: "DEVEDORA_NAO_PRECISA" };
+    }
+    return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_PAGADOR" };
+  }
   if (pagadorDe && documentoDe && documentoDe !== pagadorDe) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "DOCUMENTO_X_PAGADOR" };
 
   if (citada && !doGrupo.includes(citada)) return { resultado: RESULTADO_UNIDADE.FORA_DO_GRUPO, unidade: null, evidencia: "TEXTO" };
@@ -234,6 +247,13 @@ export function revalidarUnidadeDaProposta({ cfg, proposta, evento = null }) {
   const r = resolverUnidade({ cfg, grupo, textos, documentoDestinatario: l.documentoDestinatario ?? null, sugestaoIa: l.unidadeSugerida ?? null,
     pagador: l.pagador ?? null, documentoPagador: l.documentoPagador ?? null });
   if (r.resultado === RESULTADO_UNIDADE.IDENTIFICADA) return r.unidade.unidadeId === proposta.unidadeId ? { ok: true, motivo: null, contradiz: false } : { ok: false, motivo: "UNIDADE_DIVERGENTE", contradiz: true };
+  // Operação entre empresas (PR #236): a proposta é da DEVEDORA e o comando guarda a CREDORA (pagadora). Vale se as duas continuam
+  // as mesmas; qualquer troca é contradição.
+  if (r.resultado === RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE) {
+    const credora = proposta.comando?.credora?.unidadeId ?? null;
+    const mesma = r.unidade.unidadeId === proposta.unidadeId && (!credora || credora === r.pagadora.unidadeId);
+    return mesma ? { ok: true, motivo: null, contradiz: false } : { ok: false, motivo: "ENTRE_EMPRESAS_DIVERGENTE", contradiz: true };
+  }
   if (r.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA) {
     // A unidade foi ESCOLHIDA por uma pessoa (resposta a "de qual unidade?"): vale, desde que nada a contradiga.
     if (proposta.esclarecidoPor) return { ok: true, motivo: null, contradiz: false };

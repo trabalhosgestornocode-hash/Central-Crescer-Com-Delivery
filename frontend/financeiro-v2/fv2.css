@@ -780,7 +780,7 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .legenda--cal li { color: var(--suave); }
 .cal-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--texto); }
 .cal-chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: 0 0 auto; }
-.cal-chip--info { --c: var(--info); } .cal-chip--erro { --c: var(--erro); } .cal-chip--ok { --c: var(--ok); } .cal-chip--alerta { --c: var(--alerta); } .cal-chip--breve { --c: var(--breve); } .cal-chip--neutro { --c: var(--neutro); }
+.cal-chip--info { --c: var(--info); } .cal-chip--erro { --c: var(--erro); } .cal-chip--ok { --c: var(--ok); } .cal-chip--alerta { --c: var(--alerta); } .cal-chip--breve { --c: var(--breve); } .cal-chip--neutro { --c: var(--neutro); } .cal-chip--entre { --c: var(--alerta); } /* 26/11: contas entre empresas (reembolso) */
 .legenda--cal .cal-chip i { width: 10px; height: 10px; }
 
 .cal-bloco .calendario { gap: 6px; margin-bottom: 0; }

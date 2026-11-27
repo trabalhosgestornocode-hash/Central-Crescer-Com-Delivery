@@ -268,6 +268,16 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
                           returning leitura, grupo_jid`, [grupoId, participanteId, validadeMs]);
         return r.rows[0] ? { grupoId: r.rows[0].grupo_jid, pendente: r.rows[0].leitura } : null;
       },
+      /** 26/11 — colaboração: pendências ABERTAS da conversa (de qualquer participante), só lidas. Quem pode retomar é decidido pelo motor. */
+      async pendentesDoGrupo({ grupoId, validadeMs, limite = 5 }) {
+        const r = await q(`select mensagem_id, leitura, grupo_jid from mova.mensagem_pendente
+                            where grupo_jid = $1 and resolvida_em is null and criada_em >= now() - make_interval(secs => $2::double precision / 1000)
+                            order by criada_em desc limit $3`, [grupoId, validadeMs, limite]);
+        return r.rows.map((x) => ({ mensagemId: x.mensagem_id, grupoId: x.grupo_jid, pendente: x.leitura }));
+      },
+      async temPendenteAberta({ mensagemId, grupoId }) {
+        return (await q("select 1 from mova.mensagem_pendente where mensagem_id = $1 and grupo_jid = $2 and resolvida_em is null", [mensagemId, grupoId])).rowCount > 0;
+      },
       /**
        * 24/11 — a MESMA pendência da memória curta, só LIDA (não resolve): a resposta livre ("comprei brownies e já paguei") é lida
        * pela IA com a pergunta como contexto e só então retomada, atomicamente, por `tomarPendente(mensagemId)`.
@@ -480,6 +490,31 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async obter(grupoId) {
         const r = await q("select membros, verificado_em from mova.grupo_membros where grupo_jid = $1", [grupoId]);
         return r.rows[0] ? { membros: r.rows[0].membros, verificadoEm: r.rows[0].verificado_em } : null;
+      },
+    }),
+    /**
+     * 26/11 (0025) — AVISO DIÁRIO de contas a pagar: uma linha por grupo + data + janela. A reserva e a mensagem na fila de saída
+     * entram na MESMA transação: ou as duas, ou nenhuma (reinício/duas instâncias nunca duplicam, e nada fica "reservado sem envio").
+     */
+    avisos: Object.freeze({
+      async obter({ grupoId, data, janela }) {
+        const r = await q("select situacao, resumo, resposta_id from mova.aviso_diario where grupo_jid = $1 and data = $2::date and janela = $3", [grupoId, data, janela]);
+        return r.rows[0] ? { situacao: r.rows[0].situacao, resumo: r.rows[0].resumo, respostaId: r.rows[0].resposta_id } : null;
+      },
+      async registrarEEnfileirar({ grupoId, data, janela, resumo, texto }) {
+        return emTransacao(pool, async (tq) => {
+          const ins = await tq(`insert into mova.aviso_diario (grupo_jid, data, janela, situacao, resumo) values ($1, $2::date, $3, 'RESERVADO', $4)
+                                on conflict (grupo_jid, data, janela) do nothing returning id`, [grupoId, data, janela, JSON.stringify(resumo ?? {})]);
+          if (!ins.rows[0]) return { repetido: true, respostaId: null };
+          const respostaId = (await tq("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1, null, null, $2) returning id", [grupoId, texto])).rows[0].id;
+          await tq("update mova.aviso_diario set situacao = 'ENVIADO', resposta_id = $2, atualizado_em = now() where id = $1", [ins.rows[0].id, respostaId]);
+          return { repetido: false, respostaId };
+        });
+      },
+      async registrarSemMensagem({ grupoId, data, janela, resumo }) {
+        const r = await q(`insert into mova.aviso_diario (grupo_jid, data, janela, situacao, resumo) values ($1, $2::date, $3, 'SEM_MENSAGEM', $4)
+                           on conflict (grupo_jid, data, janela) do nothing returning id`, [grupoId, data, janela, JSON.stringify(resumo ?? {})]);
+        return { repetido: !r.rows[0], respostaId: null };
       },
     }),
     saida: Object.freeze({

@@ -245,3 +245,23 @@ test("loja habilitada de OUTRA conversa citada pela marca: fora do grupo (como a
   const soGelato = resolverUnidade({ cfg, grupo: { unidades: [GELATO] }, textos: ["compra sanduba"] });
   assert.equal(soGelato.resultado, RESULTADO_UNIDADE.FORA_DO_GRUPO);
 });
+
+test("ENTRE EMPRESAS (PR #236) com a trava: devedora precisa — nome específico vira operação entre empresas; marca ambígua pergunta", async () => {
+  const { revalidarUnidadeDaProposta } = await import("../../src/modules/mova-financeiro/dominio/unidade.js");
+  const c = comCadastro("CONSULTADO");
+  // a Gelato pagou pela Sanduba Centro (nome específico): operação entre empresas, devedora = Sanduba, pagadora = Gelato
+  const ok = rc(c, "manutenção sanduba centro", { pagador: "GELATO COMERCIO" });
+  assert.deepEqual([ok.resultado, ok.unidade?.unidadeId, ok.pagadora?.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, SANDUBA, GELATO]);
+  // só a marca "sanduba" (há outras lojas Sanduba no cadastro): nunca vira operação entre empresas — pergunta
+  const amb = rc(c, "manutenção sanduba", { pagador: "GELATO COMERCIO" });
+  assert.deepEqual([amb.resultado, amb.evidencia], [RESULTADO_UNIDADE.NAO_IDENTIFICADA, "DEVEDORA_NAO_PRECISA"]);
+  // o inverso: a Sanduba pagou pela Gelato (marca sem outra loja Gelato): operação entre empresas nos dois sentidos
+  const inv = rc(c, "freezer gelato", { pagador: "SANDUBA ALIMENTOS" });
+  assert.deepEqual([inv.resultado, inv.unidade?.unidadeId, inv.pagadora?.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, GELATO, SANDUBA]);
+  // loja não habilitada citada: bloqueia antes de qualquer operação entre empresas
+  assert.equal(rc(c, "manutenção sanduba norte shopping", { pagador: "GELATO COMERCIO" }).resultado, RESULTADO_UNIDADE.NAO_HABILITADA);
+  // revalidação da proposta INTERCOMPANY: mesmas devedora e credora passam; credora trocada é contradição
+  const prop = (credora) => ({ id: "p", unidadeId: SANDUBA, leitura: { pagador: "GELATO COMERCIO" }, comando: { credora: { unidadeId: credora } } });
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop(GELATO), evento: { texto: "manutenção sanduba centro", grupoId: GRUPO } }).ok, true);
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop(SANDUBA), evento: { texto: "manutenção sanduba centro", grupoId: GRUPO } }).contradiz, true);
+});

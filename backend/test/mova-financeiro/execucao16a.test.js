@@ -64,7 +64,7 @@ async function cenario({ responder = () => base({}), falharFinanceiro = false, c
   ref.mova = criarMova({ configuracao: CONFIG, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator, pool: banco.pool, relogio: () => AGORA, controle, somenteConsultas: true });
   const mova = ref.mova;
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const respostas = async () => (await mova.armazenamento.saida.listar()).map((r) => r.texto);
   return { m, venda, banco, cliente, chamadas, mova, enviar, ultima, respostas, controle };
 }

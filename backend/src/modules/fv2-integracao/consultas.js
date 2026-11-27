@@ -95,6 +95,8 @@ export const CONSULTAS = Object.freeze({
     const fornecedores = (await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => ({ id: x.id, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
     return { ...r, opcoesDeRegistro: { categorias: cats, fornecedores } };
   },
+  // 26/11: contas ENTRE EMPRESAS do grupo (passivo × ativo) da unidade da sessão — fora das despesas e dos totais por fornecedor.
+  "/contas-entre-empresas": (n, c, p) => n.consultarContasEntreEmpresas(c, { incluirLiquidadas: p.incluirLiquidadas !== "0" }),
   "/conta-a-pagar": async (n, c, p) => ({
     ...(await n.detalharContaAPagar(c, { id: id(p) })),
     entregadorProprio: await n.resumoDoEntregadorDaConta(c, { obrigacaoId: id(p) }),
@@ -112,7 +114,16 @@ export const CONSULTAS = Object.freeze({
   "/conta-a-receber": (n, c, p) => n.detalharContaAReceber(c, { id: id(p) }),
   "/caixa-e-bancos": (n, c, p) => n.consultarCaixaEBancos(c, filtro(p, ["inicio", "fim", "contaId", ...PAGINA], PAGINA)),
   "/fluxo-de-caixa": (n, c, p) => n.consultarFluxoDeCaixa(c, filtro(p, ["inicio", "fim", "granularidade"])),
-  "/calendario": (n, c, p) => n.consultarCalendarioFinanceiro(c, filtro(p, ["mes"])),
+  "/calendario": async (n, c, p) => {
+    const cal = await n.consultarCalendarioFinanceiro(c, filtro(p, ["mes"]));
+    // 26/11: marcador das contas entre empresas em aberto (pelo vencimento REGISTRADO do reembolso; sem vencimento, não marca).
+    // Separado das contas a pagar: não muda os totais do mês. Falha aqui não derruba o calendário.
+    const ic = typeof n.consultarContasEntreEmpresas === "function" ? await n.consultarContasEntreEmpresas(c, { incluirLiquidadas: false }).catch(() => null) : null;
+    if (!ic?.itens?.length) return cal;
+    const porDia = new Map();
+    for (const i of ic.itens) if (i.vencimento && i.saldoCentavos > 0) { const x = porDia.get(i.vencimento) ?? { quantidade: 0, saldoCentavos: 0 }; porDia.set(i.vencimento, { quantidade: x.quantidade + 1, saldoCentavos: x.saldoCentavos + i.saldoCentavos }); }
+    return { ...cal, dias: cal.dias.map((d) => (porDia.has(d.data) ? { ...d, entreEmpresas: porDia.get(d.data) } : d)) };
+  },
   "/vendas": (n, c, p) => n.consultarVendas(c, filtro(p, VENDAS, VENDAS_N)),
   "/vendas/pagamentos": (n, c, p) => n.consultarPagamentosDeVendas(c, filtro(p, VENDAS, VENDAS_N)),
   "/vendas/taxas": (n, c, p) => n.consultarTaxasEDescontos(c, filtro(p, [...VENDAS, "tipoComponente"], VENDAS_N)),

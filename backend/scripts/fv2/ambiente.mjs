@@ -7,7 +7,7 @@
 //     endereço declarado (antes de conectar) e destino efetivo (primeira consulta de cada conexão).
 //   - Não existe caminho para banco remoto, nem "plano B": dúvida = erro.
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,36 @@ export const PASTA_DE_MIGRACOES = resolve(aqui, "..", "..", "..", "database", "f
 /** Pasta do ambiente isolado: fora do repositório e fora de pastas sincronizadas com nuvem. */
 export const pastaDoAmbiente = () => process.env.FV2_PG_DIR || join(process.env.LOCALAPPDATA || join(homedir(), ".local", "share"), "fv2-pg-teste");
 export const arquivoDoAmbiente = () => join(pastaDoAmbiente(), "ambiente.json");
+
+// 27/11 (PR #236) — DONO de cada banco descartável. Antes de criar um banco, o processo de teste anota o nome em
+// <pasta>/execucoes/<pid>.lista. O `limpar` só apaga banco anotado por processo que JÁ TERMINOU (e sem conexão); banco de
+// execução ativa (mesmo sem conexão no momento) e banco que ninguém anotou nunca são apagados por ele.
+// PID reaproveitado pelo sistema só faz o banco ser MANTIDO (nunca apagado por engano).
+export const pastaDasExecucoes = () => join(pastaDoAmbiente(), "execucoes");
+const listaDoProcesso = (pid = process.pid) => join(pastaDasExecucoes(), `${pid}.lista`);
+export function anotarBancoDaExecucao(nome) {
+  mkdirSync(pastaDasExecucoes(), { recursive: true });
+  appendFileSync(listaDoProcesso(), `${nome}\n`);
+}
+/** Tira os bancos já apagados da lista deste processo (e a lista, quando fica vazia). */
+export function retirarBancosDaExecucao(nomes, pid = process.pid) {
+  const arq = listaDoProcesso(pid);
+  if (!existsSync(arq)) return;
+  const fora = new Set(nomes);
+  const restam = readFileSync(arq, "utf8").split("\n").filter((l) => l && !fora.has(l));
+  if (restam.length) writeFileSync(arq, `${restam.join("\n")}\n`); else rmSync(arq, { force: true });
+}
+export function processoVivo(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e?.code === "EPERM"; }
+}
+/** [{ pid, vivo, bancos }] de todas as execuções anotadas. */
+export function lerExecucoes() {
+  if (!existsSync(pastaDasExecucoes())) return [];
+  return readdirSync(pastaDasExecucoes()).filter((f) => /^\d+\.lista$/.test(f)).map((f) => {
+    const pid = Number(f.slice(0, -6));
+    return { pid, vivo: processoVivo(pid), bancos: readFileSync(join(pastaDasExecucoes(), f), "utf8").split("\n").filter(Boolean) };
+  });
+}
 
 /** Lê o ambiente e já aplica a barreira 1 nos dois endereços. null quando o ambiente ainda não foi criado. */
 export function lerAmbiente() {

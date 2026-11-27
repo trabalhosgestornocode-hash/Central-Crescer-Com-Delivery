@@ -181,6 +181,13 @@ export const ESQUEMA = Object.freeze({
     entregadorChave: c("entregador_chave"), entregadorNome: c("entregador_nome"), dataServico: c("data_servico", "data"), semanaInicio: c("semana_inicio", "data"), descricao: c("descricao"),
     valorCentavos: c("valor_centavos", "centavos"), situacao: c("situacao"), obrigacaoId: c("obrigacao_id", "uuid"), movimentacaoId: c("movimentacao_id", "uuid"), dados: c("dados", "json"),
   }),
+  // 0034: operação entre empresas — um registro por lado (DEVEDORA/CREDORA), ligados pelo vínculo.
+  [TIPO.INTERCOMPANY]: tabela("fv2_intercompany", {
+    vinculoId: c("vinculo_id", "uuid"), papel: c("papel"), contraparteOrganizacaoId: c("contraparte_organizacao_id", "uuid"), contraparteUnidadeId: c("contraparte_unidade_id", "uuid"),
+    contraparteNome: c("contraparte_nome"), descricao: c("descricao"), dataPagamento: c("data_pagamento", "data"), valorCentavos: c("valor_centavos", "centavos"),
+    reembolsadoCentavos: c("reembolsado_centavos", "centavos"), saldoCentavos: c("saldo_centavos", "centavos"), vencimento: c("vencimento", "data"), situacao: c("situacao"),
+    obrigacaoId: c("obrigacao_id", "uuid"), movimentacaoId: c("movimentacao_id", "uuid"), documentoIds: c("documento_ids", "uuids"), liquidacoes: c("liquidacoes", "json"),
+  }),
   [TIPO.ABERTURA]: tabela("fv2_abertura", {
     competenciaInicio: c("competencia_inicio"), dataDeCorte: c("data_de_corte", "data"), situacao: c("situacao"), observacao: c("observacao"),
   }),

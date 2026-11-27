@@ -50,7 +50,7 @@ async function cenario(responder = () => base({})) {
   const montarMova = () => { const ref = {}; ref.mova = criarMova({ configuracao: CONFIG, nucleo: m.nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, extrator: criarExtratorAnthropic({ cliente, obterEvidencia: (x) => ref.mova.evidencias.obter(x), relogio: () => AGORA }), pool, relogio: () => AGORA }); return ref.mova; };
   const mova = montarMova();
   const enviar = async (p, alvo = mova) => { const r = await alvo.receptor.receber(p); await alvo.receptor.trabalhar(); return r; };
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   return { m, c, pool, pedidos, mova, montarMova, enviar, ultima, propostas: (u) => mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: u }) };
 }
 
@@ -268,7 +268,8 @@ t("13C resposta truncada em TEXTO: FALHA_LEITURA com pedido de reenvio curto, um
   const s = await cenario(() => ({ stop_reason: "max_tokens", content: [] }));
   await s.enviar(msg({ texto: "MOVA, paguei 150 de luz da alfa" }));
   const h = await s.ultima();
-  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA");
+  // 27/11 (#239): sem `usage` na resposta cortada não há como somar o custo das duas chamadas ⇒ nenhuma nova tentativa (motivo registrado)
+  assert.equal(h.motivo, "EXTRATOR_FALHOU:IA_RESPOSTA_TRUNCADA:SEM_NOVA_TENTATIVA_CUSTO");
   const [r] = await s.mova.armazenamento.saida.listar();
   assert.match(r.texto, /Não consegui interpretar a mensagem/);
   assert.equal(s.pedidos.length, 1);

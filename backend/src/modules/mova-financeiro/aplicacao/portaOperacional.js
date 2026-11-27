@@ -37,7 +37,15 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   // 25/11: ação ESTREITA `prestar_sangria` (0032) — nunca a ampla `registrar` (que o provedor operacional recusa).
   registrarDespesaDaSangria: "PRESTAR_SANGRIA",
   registrarTrocoDaSangria: "PRESTAR_SANGRIA",
+  // 26/11: conta a pagar RELATADA por texto (parcelas explícitas, em aberto, sem documento) — ação ESTREITA própria (0033); a de
+  // conta por documento (`registrar_obrigacao`) não cobre esta modalidade.
+  registrarContaParcelada: "REGISTRAR_CONTA_PARCELADA",
 });
+/**
+ * 27/11 — operações que gravam em DUAS empresas numa transação (passivo numa, ativo na outra). Ação ESTREITA nas duas; nunca a
+ * ampla `registrar`. Conta NOVA na devedora não passa por aqui (exigiria registrar conta): fica para a aprovação humana.
+ */
+export const OPERACOES_ENTRE_EMPRESAS = Object.freeze({ registrarPagamentoPorOutraEmpresa: "REGISTRAR_INTERCOMPANY" });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -78,6 +86,26 @@ export function criarPortaOperacional({ nucleo, concessoes, financeiro, identida
       if (!acoes.includes(ACAO.VER) || !exigidas.every((a) => acoes.includes(a))) throw new ErroDeExecucao("SEM_CONCESSAO_OPERACIONAL", { op });
       const ctx = { organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, usuarioId: identidade, permissoes: [ACAO.VER, ...exigidas] };
       try { return await nucleo[op](ctx, entrada); } catch (e) {
+        if (e instanceof ErroFinanceiro) throw e;
+        throw new ErroTransitorio("FINANCEIRO_INDISPONIVEL");
+      }
+    },
+    /**
+     * 27/11 (PR #236) — operação entre empresas pela identidade operacional: a ação ESTREITA `registrar_intercompany` tem de estar
+     * na concessão gravada da identidade nas DUAS unidades (lida agora); cada lado recebe só [ver, registrar_intercompany].
+     */
+    async podeEntreEmpresas(op, escopos) {
+      const acao = OPERACOES_ENTRE_EMPRESAS[op] && ACAO[OPERACOES_ENTRE_EMPRESAS[op]];
+      if (!acao || !Array.isArray(escopos) || escopos.length !== 2) return false;
+      for (const e of escopos) { const acoes = await acoesNaUnidade(e); if (!acoes.includes(ACAO.VER) || !acoes.includes(acao)) return false; }
+      return true;
+    },
+    async chamarEntreEmpresas(op, [devedora, credora] = [], entrada) {
+      const acao = OPERACOES_ENTRE_EMPRESAS[op] && ACAO[OPERACOES_ENTRE_EMPRESAS[op]];
+      if (!acao || typeof nucleo[op] !== "function" || !devedora || !credora) throw new ErroDeExecucao("OPERACAO_NAO_PERMITIDA", { op });
+      for (const e of [devedora, credora]) { const acoes = await acoesNaUnidade(e); if (!acoes.includes(ACAO.VER) || !acoes.includes(acao)) throw new ErroDeExecucao("SEM_CONCESSAO_OPERACIONAL", { op, unidadeId: e.unidadeId }); }
+      const ctx = (e) => ({ organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: identidade, permissoes: [ACAO.VER, acao] });
+      try { return await nucleo[op](ctx(devedora), ctx(credora), entrada); } catch (e) {
         if (e instanceof ErroFinanceiro) throw e;
         throw new ErroTransitorio("FINANCEIRO_INDISPONIVEL");
       }

@@ -392,7 +392,16 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
 
   /** Tokens já emitidos, por usuário + unidade (só em memória do processo; o banco guarda apenas o hash). */
   const tokens = new Map();
-  const chaveDoToken = (e) => `${e.usuarioId}|${e.organizacaoId}|${e.unidadeId}`;
+  // 27/11: token VINCULADO a uma operação entre empresas (autorização vinculada) tem marca própria: nunca é reaproveitado por
+  // outra operação nem por operações comuns na mesma unidade, e um token comum guardado nunca substitui o vinculado.
+  const vinculoDe = (e) => { try { return typeof sessoes.vinculoPara === "function" ? sessoes.vinculoPara(e) ?? null : null; } catch { return null; } };
+  // e o token é da SESSÃO DA PLATAFORMA que o pediu: um token emitido para a sessão de outra unidade nunca serve a esta.
+  const sessaoDe = () => { try { return typeof sessoes.marcaDaSessao === "function" ? sessoes.marcaDaSessao() ?? null : null; } catch { return null; } };
+  const chaveDoToken = (e) => {
+    const v = vinculoDe(e); const s = sessaoDe();
+    return `${e.usuarioId}|${e.organizacaoId}|${e.unidadeId}${s ? `|sessao:${s}` : ""}${v ? `|vinculo:${v}` : ""}`;
+  };
+  const REUSO_VINCULADO_MS = 60 * 1000; // a sessão vinculada vale ≤ 120 s no banco
   async function emitir(e) {
     try {
       return await sessoes.emitir({ organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, permissoes: e.permissoes ?? [] });
@@ -405,7 +414,9 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     const guardado = tokens.get(k);
     if (!renovar && guardado && guardado.ate > relogio()) return guardado.promessa;
     const promessa = emitir(e);
-    tokens.set(k, { promessa, ate: relogio() + Math.max(0, reusoDoTokenMs - margemDoTokenMs) });
+    // 27/11 (#240): reaproveitamento com MARGEM antes da validade no banco; o vinculado (≤ 120 s no banco) fica em até 60 s.
+    const reuso = Math.max(0, reusoDoTokenMs - margemDoTokenMs);
+    tokens.set(k, { promessa, ate: relogio() + (vinculoDe(e) ? Math.min(REUSO_VINCULADO_MS, reuso) : reuso) });
     promessa.catch(() => { if (tokens.get(k)?.promessa === promessa) tokens.set(k, { promessa, ate: 0 }); }); // recusa não fica guardada
     return promessa;
   }
@@ -515,6 +526,64 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     }
   }
 
+  /**
+   * 26/11 — UMA transação que grava em DOIS escopos (operação entre empresas: passivo numa, ativo na outra). Cada trecho roda com a
+   * sessão de banco do SEU escopo (assumida no banco, com a concessão daquele usuário naquela unidade: o RLS continua decidindo).
+   * Antes de trocar de escopo, as conferências adiadas (histórico, conservação) do trecho anterior rodam AGORA, ainda na sessão
+   * dele (`set constraints all immediate`), e voltam a ficar adiadas para o próximo. Qualquer falha desfaz os dois lados.
+   */
+  async function umaTentativaEntreEscopos(fn, escopos, { renovar = false } = {}) {
+    // 27/11 (#240): os tokens de TODOS os escopos são obtidos ANTES de pegar a conexão e passados à transação (nunca emitidos
+    // segurando a conexão).
+    const tokensDosEscopos = new Map();
+    for (const e of escopos) tokensDosEscopos.set(chaveDoToken(e), await tokenDe(e, { renovar }));
+    const permitidos = new Set(tokensDosEscopos.keys());
+    return comCliente(async (cliente, descartar) => {
+      await cliente.query("begin");
+      try {
+        const tx = criarTx(cliente, { somenteLeitura: false });
+        let atual = null;
+        const emEscopo = async (e, trecho) => {
+          const k = chaveDoToken(e);
+          if (!permitidos.has(k)) falhar(CODIGO.ESCOPO_NAO_AUTORIZADO, "Trecho fora dos escopos declarados na transação.");
+          if (atual !== k) { await declararSessao(cliente, e, null, tokensDosEscopos.get(k)); atual = k; }
+          const r = await trecho(tx);
+          await cliente.query("set constraints all immediate");
+          await cliente.query("set constraints all deferred");
+          return r;
+        };
+        const resultado = await fn(emEscopo);
+        await cliente.query("commit");
+        return resultado;
+      } catch (e) {
+        try { await cliente.query("rollback"); } catch { descartar(); }
+        throw e?.sessaoRecusada ? e : traduzir(e);
+      }
+    });
+  }
+
+  async function transacaoEntreEscopos(fn, opcoes) {
+    const escopos = (opcoes?.escopos ?? []).map((e) => exigirEscopo({ escopo: e }));
+    if (escopos.length < 2) falhar(CODIGO.REPOSITORIO_INVALIDO, "A transação entre escopos declara ao menos dois escopos.");
+    // 27/11 (#240): token recusado ⇒ a conexão já foi devolvida; renova e refaz UMA vez. Com autorização VINCULADA não renova
+    // (o vínculo é da operação autorizada; uma sessão nova exigiria nova autorização): recusa ⇒ permissão insuficiente.
+    const comVinculo = escopos.some((e) => vinculoDe(e));
+    let renovado = false;
+    for (let tentativa = 1; ; tentativa += 1) {
+      try {
+        return await umaTentativaEntreEscopos(fn, escopos, { renovar: renovado });
+      } catch (e) {
+        if (e?.sessaoRecusada) {
+          if (renovado || comVinculo) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sessão de banco recusada para este usuário nesta unidade.");
+          renovado = true;
+          continue;
+        }
+        if (!(e?.repetivel || DISPUTA.has(e?.code)) || tentativa >= tentativas) throw e;
+        await esperar(5 * tentativa);
+      }
+    }
+  }
+
   async function leitura(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
     // 25/11: emitido antes de pegar a conexão (ver umaTentativa); 27/11: renovação também fora da conexão (comToken).
@@ -531,5 +600,5 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
     }));
   }
 
-  return Object.freeze({ transacao, leitura });
+  return Object.freeze({ transacao, transacaoEntreEscopos, leitura });
 }

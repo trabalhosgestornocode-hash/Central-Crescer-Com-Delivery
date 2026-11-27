@@ -5,6 +5,7 @@
 //   node scripts/fv2-banco-teste.mjs estado     mostra se está ligado e onde
 //   node scripts/fv2-banco-teste.mjs parar      desliga o servidor (os dados ficam)
 //   node scripts/fv2-banco-teste.mjs derrubar   desliga ABRUPTAMENTE (modo imediato, como uma queda); os dados ficam
+//   node scripts/fv2-banco-teste.mjs limpar     apaga os bancos descartáveis que sobraram (só os sem conexão)
 //   node scripts/fv2-banco-teste.mjs destruir   desliga e APAGA a pasta do ambiente (só ela)
 //
 // O que este script faz e NÃO faz:
@@ -21,7 +22,7 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { basename, join } from "node:path";
-import { ESQUEMA_FINANCEIRO, abrirPoolSeguro, aplicarMigracoes, arquivoDoAmbiente, lerAmbiente, listarMigracoes, pastaDoAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
+import { ESQUEMA_FINANCEIRO, abrirPoolSeguro, aplicarMigracoes, arquivoDoAmbiente, lerAmbiente, lerExecucoes, listarMigracoes, pastaDoAmbiente, retirarBancosDaExecucao, urlDoBanco } from "./fv2/ambiente.mjs";
 
 const ENDERECO = "127.0.0.1";
 const PORTA = process.env.FV2_PG_PORTA || "54329";
@@ -165,6 +166,39 @@ async function principal() {
     if (ligado()) rodar("pg_ctl", ["stop", "-D", DADOS, "-m", "immediate", "-w"]);
     return dizer("Servidor derrubado (modo imediato); os dados ficam na pasta:", PASTA);
   }
+  // 27/11 (PR #236): apaga os bancos DESCARTÁVEIS que sobraram (teste morto no meio, processo encerrado à força).
+  // Só apaga banco que (1) foi ANOTADO por um processo de teste que JÁ TERMINOU (<pasta>/execucoes/<pid>.lista) — banco de
+  // execução ATIVA nunca, mesmo sem conexão no momento; banco que ninguém anotou nunca —, (2) tem nome fv2_teste_* (nunca o
+  // modelo nem o controle), (3) tem o marcador DESTE ambiente, (4) não é template e (5) não tem NENHUMA conexão.
+  // DROP sem `force`. Saída: o que foi apagado, mantido e por quê.
+  if (comando === "limpar") {
+    const a = lerAmbiente();
+    if (!a || !ligado()) parar("ambiente desligado ou não criado; nada a limpar.");
+    const execucoes = lerExecucoes();
+    const ativos = new Set(execucoes.filter((e) => e.vivo).flatMap((e) => e.bancos));
+    const adm = await abrirPoolSeguro(a.urlAdmin, a.marcador, { max: 1 });
+    const contagem = { apagados: 0, deExecucaoAtiva: 0, semDono: 0, emUso: 0 };
+    try {
+      const { rows } = await adm.query(
+        `select d.datname, exists (select 1 from pg_stat_activity s where s.datid = d.oid) as em_uso from pg_database d
+          where d.datname ~ '^fv2_teste_' and d.datname !~ '^fv2_teste_modelo_' and d.datname <> 'fv2_teste_controle'
+            and d.datname <> coalesce($2, '') and not d.datistemplate
+            and shobj_description(d.oid, 'pg_database') = $1
+          order by 1`, [`FV2_ISOLADO_TESTE:${a.marcador}`, a.bancoModelo ?? null]);
+      const existentes = new Set(rows.map((r) => r.datname));
+      const deMortos = new Map(); // banco → pid do processo que terminou
+      for (const e of execucoes) if (!e.vivo) for (const b of e.bancos) if (!ativos.has(b)) deMortos.set(b, e.pid);
+      for (const { datname, em_uso: emUso } of rows) {
+        if (ativos.has(datname)) { contagem.deExecucaoAtiva++; continue; }
+        if (!deMortos.has(datname)) { contagem.semDono++; continue; }
+        if (emUso || !/^fv2_teste_[0-9a-z_]+$/.test(datname)) { contagem.emUso++; continue; }
+        try { await adm.query(`drop database if exists ${datname}`); existentes.delete(datname); contagem.apagados++; } catch (e) { contagem.emUso++; dizer(`mantido ${datname} (${e?.code ?? e?.message})`); }
+      }
+      // listas de processos que terminaram: tira só o que já não existe (apagado agora ou antes); lista vazia some
+      for (const e of execucoes) if (!e.vivo) retirarBancosDaExecucao(e.bancos.filter((b) => !existentes.has(b)), e.pid);
+      return dizer(`Bancos descartáveis — apagados: ${contagem.apagados}; mantidos: ${contagem.deExecucaoAtiva} de execução ativa, ${contagem.emUso} com conexão, ${contagem.semDono} sem dono anotado.`);
+    } finally { await adm.end().catch(() => {}); }
+  }
   if (comando === "destruir") {
     if (!existsSync(PASTA)) return dizer("Nada a destruir.");
     exigirPastaPropria();
@@ -172,7 +206,7 @@ async function principal() {
     rmSync(PASTA, { recursive: true, force: true });
     return dizer("Ambiente isolado apagado:", PASTA);
   }
-  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | derrubar | destruir");
+  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | derrubar | limpar | destruir");
 }
 
 principal().catch((e) => parar(e?.message ?? String(e)));

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { CODIGO, criarCofreDisco, criarNucleoFinanceiro, criarRepositorioPostgres } from "../../src/modules/financeiro-v2/index.js";
 import { fixarSearchPathDoBanco, urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
 import { AGORA, ESCOPOS_PADRAO, ctx, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
-import { abrirPool, ambiente, criarAutoridadeDeTeste, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { abrirPool, ambiente, criarAutoridadeDeTeste, motivoParaPular, registrarBancoDescartavel, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular(), timeout: 300000 };
 function binario(nome) {
@@ -55,6 +55,7 @@ test("08 — backup e restauração do banco sintético: tudo volta, inclusive a
   const a = ambiente();
   const destino = `fv2_teste_restaurado_${randomBytes(4).toString("hex")}`;
   const adm = await abrirPool(a.urlAdmin, { max: 1 });
+  registrarBancoDescartavel(destino);
   await adm.query(`create database ${destino} template template0`);
   await adm.query(`comment on database ${destino} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   // 10: o módulo vive no schema dedicado; o banco restaurado precisa do mesmo search_path (em produção ele está nos

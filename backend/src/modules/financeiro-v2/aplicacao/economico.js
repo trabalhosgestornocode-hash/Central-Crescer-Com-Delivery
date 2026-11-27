@@ -10,7 +10,7 @@ import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
   validarAjuste, validarCancelamentoObrigacao, validarCancelamentoRecebivel, validarConta, validarContraparte, validarCorrecaoLancamento,
-  validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
+  validarContaParcelada, validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
 } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
@@ -44,7 +44,7 @@ export function operacoesEconomicas(b) {
     return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
   }
 
-  function registrarObrigacaoCom(acao, ctx, c, { soDespesa = false } = {}) {
+  function registrarObrigacaoCom(acao, ctx, c, { soDespesa = false, aceitaImobilizado = false } = {}) {
       const impressao = JSON.stringify(c);
       return b.executar(ctx, acao, async (cx, tx) => {
         const chave = b.chaveDe(c.fonte);
@@ -73,7 +73,7 @@ export function operacoesEconomicas(b) {
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }
-        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA) {
+        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA && !(aceitaImobilizado && categoria.codigo === "IMOBILIZADO")) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Conta a pagar por documento só em categoria de despesa.", { categoria: categoria.codigo });
         }
         const grupoId = b.gerarId();
@@ -81,12 +81,14 @@ export function operacoesEconomicas(b) {
           valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
           competencia: c.competencia, fonte: c.fonte, origem: { tipo: TIPO.OBRIGACAO, id: grupoId },
         }, { documentado: c.documentoIds.length > 0 });
-        const valores = ratear(c.valorOriginalCentavos, Array(c.parcelas).fill(1));
+        // 26/11: parcelas EXPLÍCITAS (conta relatada: valor e vencimento de cada uma, ditos pela pessoa) ou rateio mensal.
+        const explicitas = Array.isArray(c.parcelasExplicitas) ? c.parcelasExplicitas : null;
+        const valores = explicitas ? explicitas.map((p) => p.valorCentavos) : ratear(c.valorOriginalCentavos, Array(c.parcelas).fill(1));
         const obrigacoes = [];
         for (const [i, valor] of valores.entries()) {
           obrigacoes.push(await b.criar(tx, cx, TIPO.OBRIGACAO, {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
-            competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
+            competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: explicitas ? explicitas[i].vencimento : somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
             ...(c.identificador ? { identificador: c.identificador } : {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
@@ -138,6 +140,22 @@ export function operacoesEconomicas(b) {
       if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Conta a pagar por documento entra em uma parcela, sem repetição.", { campo: "parcelas" });
       if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por documento.", { categoria: c.categoria });
       return registrarObrigacaoCom(ACAO.REGISTRAR_OBRIGACAO, ctx, c, { soDespesa: true });
+    },
+
+    /**
+     * 26/11 — conta a pagar RELATADA (sem documento) em parcelas com vencimentos explícitos, pela ação ESTREITA
+     * `registrar_conta_parcelada` (0033). Um lançamento pelo total; categoria de DESPESA ou IMOBILIZADO (compra de equipamentos,
+     * patrimonial); a conta nasce EM ABERTO (nunca paga). Mesma idempotência pela fonte (MOVA:<proposta>) das demais contas.
+     */
+    registrarContaParcelada(ctx, entrada) {
+      const v = validarContaParcelada(entrada);
+      if (v.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por relato.", { categoria: v.categoria });
+      const c = {
+        contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
+        competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
+        documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
+      };
+      return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: true, aceitaImobilizado: true });
     },
 
     /**

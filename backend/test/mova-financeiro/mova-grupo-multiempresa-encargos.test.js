@@ -308,7 +308,9 @@ test("CO-0 regra pura: complemento (competência/descrição/unidade) por outro 
   assert.equal(p({ participanteId: FIN }, { tipo: "COMPETENCIA" }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO");
   assert.equal(p({ participanteId: FIN }, { tipo: "DESCRICAO" }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO");
   assert.equal(p({ participanteId: FIN }, { tipo: null }), "COMPLEMENTO_DE_FINANCEIRO_AUTORIZADO", "pergunta de unidade");
-  for (const tipo of ["MAIOR", "MENOR", "VARIAS", "SEMELHANTE", "NOVA_OU_CONTA"]) assert.equal(p({ participanteId: FIN }, { tipo }), "OUTRO_PARTICIPANTE", `confirmação de efeito ${tipo}`);
+  // 26/11 (colaboração por permissão): outro FINANCEIRO da unidade, no MESMO grupo, também confirma o efeito (auditado individualmente)
+  for (const tipo of ["MAIOR", "MENOR", "VARIAS", "SEMELHANTE", "NOVA_OU_CONTA"]) assert.equal(p({ participanteId: FIN }, { tipo }), "CONFIRMACAO_DE_FINANCEIRO_AUTORIZADO", `confirmação de efeito ${tipo}`);
+  assert.equal(p({ participanteId: CONS }, { tipo: "MAIOR" }), "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", "consulta nunca confirma efeito");
   assert.equal(p({ participanteId: CONS }, { tipo: "COMPETENCIA" }), "SEM_PERMISSAO_FINANCEIRA_NA_UNIDADE", "perfil só de consulta");
   assert.equal(p({ participanteId: SO_ALFA }, { tipo: "COMPETENCIA" }), "UNIDADE_FORA_DA_CONVERSA", "financeiro só de outra empresa");
   assert.equal(p({ participanteId: ESTRANHO }, { tipo: "COMPETENCIA" }), "NAO_AUTORIZADO_NESTA_CONVERSA");

@@ -17,7 +17,7 @@ const MIGRACOES = join(RAIZ, "migracoes");
 const DESTINO = join(RAIZ, "producao");
 
 export const TABELAS_ESPERADAS = Object.freeze([
-  "aprovacao", "auditoria", "core_conhecimento", "core_conhecimento_evento", "core_desafio_vinculo", "core_memoria_conversa", "core_proposta", "core_tentativa_vinculo", "core_vinculo", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
+  "aprovacao", "auditoria", "aviso_diario", "core_conhecimento", "core_conhecimento_evento", "core_desafio_vinculo", "core_memoria_conversa", "core_proposta", "core_tentativa_vinculo", "core_vinculo", "automacao", "consumo_ia", "controle", "conversa_ativa", "decisao", "documento", "entregador_autorizado",
   "entregador_envio", "evento", "evidencia", "fila", "grupo_autorizado", "grupo_membros", "grupo_unidade", "instancia_gateway",
   "mensagem_pendente", "nota_entregador", "operacao_executada", "orcamento_ia", "orcamento_ia_alerta", "orcamento_ia_politica", "participante", "participante_autorizado",
   "politica_autonomia", "proposta", "resposta", "unidade_sem_grupo", "mova_migracao",
@@ -80,16 +80,21 @@ end $$;
 
 /** Migrações JÁ instaladas em produção (instalar.sql de 22/11/2026). As seguintes entram por atualizar.sql. */
 export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"]); // conferido em produção 24/11 (nome + sha256); 0015 entra pelo atualizar.sql
+// ^ base HISTÓRICA dos aplicar-<NNNN>.sql já usados (0017, orçamento, propostas, sangria, multiempresa): não mudar, eles provam a ordem daquela época.
+// 27/11 (PR #236) — base do atualizar.sql: produção conferida SOMENTE LEITURA em 27/11 (nome + sha256 iguais ao Git): 0001–0018, 0020, 0022–0024.
+export const INSTALADAS_PARA_ATUALIZAR = Object.freeze([...INSTALADAS_EM_PRODUCAO, "0016", "0017", "0018", "0020", "0022", "0023", "0024"]);
 /** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 autorizada em 23/11 com a 0012 (PR #188). */
-export const ADIADAS_EM_PRODUCAO = Object.freeze(["0019"]); // 0019 (MOVA CORE: vínculo e memória): só no banco ISOLADO de homologação até autorização específica
+// 0019 (MOVA CORE: vínculo e memória) e 0021 (conhecimento corporativo F5): só no banco ISOLADO de homologação até autorização
+// específica — nenhuma das duas está em produção (27/11) e a 0025 não depende delas.
+export const ADIADAS_EM_PRODUCAO = Object.freeze(["0019", "0021"]);
 
 /**
  * atualizar.sql: UMA transação; exige o schema mova com as migrações instaladas registradas com o MESMO sha256, aplica só as
  * novas e as registra. Aborta (sem mudar nada) se alguma nova já estiver registrada ou se o banco for o de homologação.
  */
 export function gerarAtualizar(migracoes = listarMigracoes()) {
-  const ja = migracoes.filter((m) => INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
-  const novas = migracoes.filter((m) => !INSTALADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)) && !ADIADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
+  const ja = migracoes.filter((m) => INSTALADAS_PARA_ATUALIZAR.includes(m.nome.slice(0, 4)));
+  const novas = migracoes.filter((m) => !INSTALADAS_PARA_ATUALIZAR.includes(m.nome.slice(0, 4)) && !ADIADAS_EM_PRODUCAO.includes(m.nome.slice(0, 4)));
   const conferir = ja.map((m) => `  if not exists (select 1 from mova.mova_migracao where nome = '${m.nome}' and sha256 = '${m.sha256}') then raise exception 'MOVA atualização: ${m.nome} ausente ou com outro conteúdo — nada foi feito'; end if;`);
   const inedita = novas.map((m) => `  if exists (select 1 from mova.mova_migracao where nome = '${m.nome}') then raise exception 'MOVA atualização: ${m.nome} já aplicada — nada foi feito'; end if;`);
   const partes = [`-- MOVA — ATUALIZAÇÃO do schema \`mova\` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).

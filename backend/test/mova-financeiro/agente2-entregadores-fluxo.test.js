@@ -52,7 +52,7 @@ async function cenario({ concessao = [ACAO.VER, ACAO.ENVIAR_DOCUMENTO] } = {}) {
   const mova = ref.mova;
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const fechamento = async (chave) => real.detalharFechamentoDoEntregador(adm, { inicio: SEG, entregador: chave });
   const escritas = () => chamadas.filter((c) => c.nome === "anexarDocumentoDoEntregador");
   const ligar = (nome, extra = {}) => mova.armazenamento.automacoes.definir({ nome, organizacaoId: ORG, unidadeId: ALFA, ativa: true, horario: "09:00", ...extra });

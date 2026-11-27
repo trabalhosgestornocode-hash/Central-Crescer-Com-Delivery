@@ -50,7 +50,7 @@ export const CONFIG = {
     { grupoId: GRUPO_X, unidades: [XIS], acesso: "LISTA", participantes: [{ ids: [DUAS_EMPRESAS], perfil: "FINANCEIRO" }] },
   ],
 };
-export const FINANCEIRO = { ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR };
+export const FINANCEIRO = { ACAO, ErroFinanceiro, validarObrigacao: comandos.validarObrigacao, validarContaParcelada: comandos.validarContaParcelada, categoriaProvisoria: planoDeContas.CATEGORIA_DESPESA_A_CLASSIFICAR };
 export const base = (extra) => ({
   legivel: true, tipoDocumento: "OUTRO", intencao: "OUTRA", unidadeSugerida: null, documentoDestinatario: null, valorCentavos: null, dataPagamento: null, dataEmissao: null,
   vencimento: null, competencia: null, favorecido: null, identificadorDocumento: null, categoriaSugerida: null, natureza: null, consulta: null, confianca: "ALTA",
@@ -58,11 +58,14 @@ export const base = (extra) => ({
 });
 
 let seq = 0;
-export const gw = ({ texto = null, de = FIN, grupo = GRUPO, respostaA = null, doc = null, telefone = null } = {}) => {
+export const gw = ({ texto = null, de = FIN, grupo = GRUPO, respostaA = null, doc = null, imagem = null, telefone = null } = {}) => {
   const id = `EA2${String(++seq).padStart(6, "0")}`;
   return {
     contratoMova: 1, eventoId: `bly:${id}`, mensagemId: id, grupoId: grupo, participanteId: de, telefoneE164: telefone, nomeExibicao: "Pessoa Sintética", fromMe: false,
-    tipo: doc ? "DOCUMENTO" : "TEXTO", texto, respostaA, midia: doc ? { mime: "application/pdf", nomeArquivo: null, tamanhoBytes: doc.length, base64: Buffer.from(doc).toString("base64") } : null,
+    // 27/11: `imagem` = foto (JPEG) com legenda em `texto` — ex.: foto do produto comprado
+    tipo: doc ? "DOCUMENTO" : imagem ? "IMAGEM" : "TEXTO", texto, respostaA,
+    midia: doc ? { mime: "application/pdf", nomeArquivo: null, tamanhoBytes: doc.length, base64: Buffer.from(doc).toString("base64") }
+      : imagem ? { mime: "image/jpeg", nomeArquivo: null, tamanhoBytes: imagem.length, base64: Buffer.from(imagem).toString("base64") } : null,
     recebidoEm: AGORA.toISOString(), origemTipo: "LIVE",
   };
 };
@@ -92,9 +95,9 @@ export async function cenario({ responder = () => base({}), comandosDeterministi
   // 25/11: REINÍCIO do processo — um MOVA novo sobre o MESMO banco (nada em memória sobrevive; só o que está no PostgreSQL).
   const reiniciar = () => { ref.mova = montarMova(); mova = ref.mova; resultado.mova = mova; return mova; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const contar = async (tabela) => Number((await banco.pool.query(`select count(*)::int n from mova.${tabela}`)).rows[0].n);
-  const ultimaDoMova = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultimaDoMova = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const resultado = { m, c, forn, conta, banco, cliente, chamadas, mova, enviar, saida, ultima: ultimaDoMova, contar, cfg, reiniciar };
   return resultado;
 }

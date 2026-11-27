@@ -108,8 +108,9 @@ export const RESPOSTA = Object.freeze({
   perguntaValorMenor: (t, valor) => `Encontrei a conta de ${nomeDaConta(t)} com ${reais(t.saldoCentavos)} pendentes. O comprovante é de ${reais(valor)}, menor que o saldo. É pagamento parcial (restam ${reais(t.saldoCentavos - valor)} em aberto)? (Responda "sim", ou "outra compra" se não é dessa conta.) Nada foi registrado.`,
   perguntaVariasContas: (cands) => `Encontrei ${cands.length} contas que podem ser esta:\n${cands.map((t, i) => `${i + 1}) ${nomeDaConta(t)} — ${reais(t.saldoCentavos)} pendentes${t.vencimento ? `, vence ${dataBr(t.vencimento)}` : ""}`).join("\n")}\nResponda o número da conta, ou "outra compra" se for uma compra nova. Nada foi registrado.`,
   /** 24/11: a pessoa citou uma pergunta do MOVA que já passou da validade — nada é executado sem conferir de novo. */
+  qualPendencia: (n) => `Há ${n} perguntas minhas aguardando resposta nesta conversa. Responda citando a pergunta certa, para eu não continuar a operação errada. Nada foi registrado.`,
   complementoSemPermissao: () => "Essa informação precisa vir de quem enviou o documento ou de alguém com perfil financeiro nessa empresa. Nada foi registrado.",
-  confirmacaoDeOutroParticipante: () => "Essa pergunta é sobre um documento enviado por outra pessoa; só quem enviou pode responder. Nada foi registrado.",
+  confirmacaoDeOutroParticipante: () => "Essa pergunta é sobre um documento enviado por outra pessoa; só quem enviou ou alguém com perfil financeiro na(s) empresa(s) envolvida(s) pode responder. Nada foi registrado.",
   perguntaDesatualizada: (antes, agora, mudou = ["saldo"]) => `A conta mudou desde a minha pergunta (${mudou.length === 1 && mudou[0] === "saldo" && Number.isInteger(antes) ? `o saldo era ${reais(antes)} e agora é ${reais(agora)}` : `mudou: ${mudou.join(", ")}`}). Não continuo com uma resposta dada para outra situação: reenvie o comprovante que eu confiro de novo. Nada foi registrado.`,
   pendenciaExpirada: () => "Essa pergunta ficou sem resposta por muito tempo e eu não continuo operações antigas sem conferir de novo. Reenvie o documento (ou a informação) que eu refaço a conferência. Nada foi registrado.",
   // 24/11: diferença grande demais para ser juros da única conta do favorecido ⇒ a pergunta é se é uma COMPRA NOVA ("sim" = nova).
@@ -135,6 +136,42 @@ export const RESPOSTA = Object.freeze({
   notaParaVincular: (p, t) => `Esta nota é da conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Proposta ${curto(p.id)}: anexar a nota a essa conta, sem lançar nada novo.`,
   notaVinculada: (t) => `Nota anexada à conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Nenhuma despesa nova.`,
   notaComVariasContas: (p) => `Esta nota combina com mais de uma conta a pagar. Encaminhei para conferência (proposta ${curto(p.id)}); nada foi lançado.`,
+  // 26/11 — CONTA RELATADA POR TEXTO (sem documento)
+  contaRelatadaValorAmbiguo: (c) => `O valor de ${reais(c.valorCitadoCentavos)} é de CADA parcela (total ${reais(c.valorCitadoCentavos * c.quantidade)}) ou é o TOTAL da compra (${c.quantidade} parcelas somando ${reais(c.valorCitadoCentavos)})? Responda "cada parcela" ou "total". Nada foi registrado.`,
+  // 27/11: classificação pelo plano de contas — nunca imobilizado automático; "0" deixa para o Centro Financeiro.
+  contaRelatadaCategoria: ({ opcoes = [], motivo, sugestaoDeCriacao = null, descricao = null }) => [
+    motivo === "CATEGORIA_DITA_FORA_DO_PLANO" && sugestaoDeCriacao ? `A categoria "${sugestaoDeCriacao}" não existe no plano de contas desta unidade.`
+      : motivo === "EQUIPAMENTO_EXIGE_CLASSIFICACAO" ? `${descricao ? `"${descricao}" parece` : "Parece"} compra de equipamento: a classificação (despesa ou imobilizado) precisa ser escolhida por vocês.`
+        : "Não encontrei uma categoria segura no plano de contas para esta conta.",
+    "Em qual categoria registro?",
+    ...opcoes.map((o, i) => `${i + 1} — ${o.nome}`),
+    `0 — deixar para classificar no Centro Financeiro${sugestaoDeCriacao ? ` (com a sugestão de criar "${sugestaoDeCriacao}")` : ""}`,
+    "Responda com o número. Nada foi registrado ainda.",
+  ].join("\n"),
+  contaRelatadaResumo: (c, { unidade, categoriaNome, avisoFatura, sugestaoDeCriacao = null }) => [
+    `Confere antes de eu registrar (${unidade}):`,
+    `• ${c.descricao}${c.fornecedor ? ` — fornecedor ${c.fornecedor}` : " — fornecedor não informado"}`,
+    `• Categoria: ${categoriaNome ?? `a classificar no Centro Financeiro${sugestaoDeCriacao ? ` (sugestão: criar "${sugestaoDeCriacao}")` : ""}`}`,
+    `• Competência: ${c.competencia.slice(5)}/${c.competencia.slice(0, 4)}${c.forma ? ` • Forma: ${{ CARTAO: "cartão", BOLETO: "boleto", PIX: "Pix", DINHEIRO: "dinheiro", TRANSFERENCIA: "transferência" }[c.forma]}` : ""}`,
+    ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}`),
+    `• Total: ${reais(c.totalCentavos)} — situação: A PAGAR`,
+    ...(avisoFatura ? [avisoFatura] : []),
+    `Responda "sim" para registrar ou "não" para cancelar. Nada foi registrado ainda.`,
+  ].join("\n"),
+  contaRelatadaCancelada: () => "Ok, não registrei essa conta. Nada foi lançado.",
+  contaRelatadaRegistrada: (c, r) => `Conta a pagar registrada (em aberto): ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}; primeiro vencimento ${dataBr(c.parcelas[0].vencimento)}. Aparece no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
+  contaRelatadaProposta: (p, c, { aClassificar = false } = {}) => `Proposta ${curto(p.id)} criada para ${aClassificar ? "classificação e aprovação" : "aprovação"} no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}. Nada foi lançado ainda.`,
+  contaRelatadaFaturaDoCartao: (f) => `⚠ Já existe fatura do cartão em aberto com vencimento ${dataBr(f.vencimento)} (${reais(f.saldoCentavos ?? f.valorOriginalCentavos)}). Se esta compra já está nessa fatura, responda "não" para não contar duas vezes.`,
+  // 26/11 — operação entre empresas (uma empresa do grupo pagou pela outra). Texto da pergunta conforme o pedido do proprietário.
+  entreEmpresasPergunta: ({ credora, devedora, valorCentavos, existente, varias }) => `Identifiquei que a ${credora} realizou um pagamento de ${reais(valorCentavos)} referente ao ${devedora}. Confirma que devo registrar a despesa no ${devedora} e o valor como uma dívida do ${devedora} com a ${credora}?`
+    + (existente ? `\nConta encontrada no ${devedora}: ${existente.fornecedor?.nome ?? "fornecedor não informado"} — ${existente.descricao ?? "sem descrição"} (vencimento ${dataBr(existente.vencimento)}); ela ficará paga pela ${credora}.`
+      : varias ? `\nHá mais de uma conta em aberto com esse valor no ${devedora}: a escolha fica para a revisão no Centro Financeiro.`
+        : `\nNão encontrei conta em aberto com esse valor no ${devedora}: será proposta uma conta nova, já paga pela ${credora}.`)
+    + "\nResponda sim ou não. Nada foi registrado ainda.",
+  entreEmpresasRecusada: () => "Entendido: não registrei nada como operação entre empresas.",
+  entreEmpresasSemPermissao: (devedora, credora) => `Para registrar um pagamento entre empresas é preciso permissão financeira nas duas: ${devedora} e ${credora}. Nada foi registrado.`,
+  entreEmpresasRegistrada: ({ devedora, credora, valorCentavos }) => `Registrado: a conta do ${devedora} (${reais(valorCentavos)}) ficou paga pela ${credora}, e o ${devedora} passa a dever esse valor à ${credora} (Contas entre Empresas). Nenhuma saída nova foi lançada; o reembolso é registrado quando acontecer.`,
+  entreEmpresasProposta: (p, { devedora, credora }) => `Proposta ${curto(p.id)} criada para aprovação no Centro Financeiro: despesa de ${reais(p.valorCentavos)} no ${devedora}, paga pela ${credora}, e o mesmo valor como dívida do ${devedora} com a ${credora}. Nada foi lançado ainda (a aplicação exige permissão nas duas empresas).`,
   propostaObrigacao: (p) => `Proposta ${curto(p.id)} criada para revisão: conta a pagar de ${reais(p.valorCentavos)} com vencimento ${dataBr(p.datas.vencimento)} (competência ${p.datas.competencia}). Nada foi lançado ainda.`,
   financeiroIndisponivel: () => "O Financeiro não respondeu agora. Tente novamente mais tarde; nada foi registrado.",
   bancoIndisponivel: () => "Estou com instabilidade para registrar agora. Reenvie a mensagem em alguns minutos; nada foi registrado.",

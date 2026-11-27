@@ -46,7 +46,7 @@ export function paginacao(p, alvo) {
   <button type="button" class="botao" data-pagina="${p.pagina + 1}" data-alvo="${esc(alvo)}"${p.pagina >= p.paginas ? " disabled" : ""}>Próxima</button></nav>`;
 }
 
-const abas = (atual) => `<nav class="abas" aria-label="Contas a pagar">${[["contas-a-pagar", "Lista"], ["calendario", "Calendário"]].map(([r, t]) => `<a href="#/${r}"${r === atual ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
+const abas = (atual) => `<nav class="abas" aria-label="Contas a pagar">${[["contas-a-pagar", "Lista"], ["calendario", "Calendário"], ["contas-entre-empresas", "Entre empresas"]].map(([r, t]) => `<a href="#/${r}"${r === atual ? ' aria-current="page"' : ""}>${t}</a>`).join("")}</nav>`;
 const historico = (lista = []) => (lista.length ? `<ol class="historico">${lista.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? h.evento)}</strong> · ${esc(dataBR(h.em))}${h.saldoAntesCentavos !== null && h.saldoDepoisCentavos !== null && h.saldoAntesCentavos !== h.saldoDepoisCentavos ? ` · saldo ${esc(moeda(h.saldoAntesCentavos))} → ${esc(moeda(h.saldoDepoisCentavos))}` : ""}${h.situacaoDepois && h.situacaoAntes !== h.situacaoDepois && h.situacaoAntes ? ` · ${esc(h.situacaoAntes.toLowerCase())} → ${esc(h.situacaoDepois.toLowerCase())}` : ""}${h.vencimentoDepois ? ` · vencimento ${esc(dataBR(h.vencimentoAntes))} → ${esc(dataBR(h.vencimentoDepois))}` : ""}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico."));
 const fechar = (titulo) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(titulo)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar detalhe">×</button></div>`;
 
@@ -545,8 +545,39 @@ ${paginacao(r.paginacao, "caixa-e-bancos")}
 <p class="nota">Abertura, operações e fechamento de caixa exigem a permissão "registrar", confirmação e ficam no histórico.</p>`;
 }
 
+// --------------------------------------------------------------------------------------------- contas entre empresas
+const SITUACAO_ENTRE = { ABERTO: ["Em aberto", "alerta"], PARCIAL: ["Reembolso parcial", "breve"], LIQUIDADO: ["Reembolsado", "ok"] };
+/**
+ * 26/11 — contas ENTRE EMPRESAS do grupo (uma pagou pela outra): passivo da devedora × ativo da credora. Não são despesa
+ * operacional nem entram nos totais por fornecedor; reembolso (parcial ou total) não é receita nem despesa. Nada é compensado
+ * automaticamente: o líquido é só indicativo. Vencimento só o registrado (sem vencimento ⇒ "não informado").
+ */
+export function contasEntreEmpresas(r, { unidadeNome = "Esta unidade" } = {}) {
+  const itens = r?.itens ?? [];
+  const nome = (lado) => esc(lado?.nome ?? unidadeNome);
+  const liquido = (r?.totais?.aReceberCentavos ?? 0) - (r?.totais?.aPagarCentavos ?? 0);
+  const linha = (i) => {
+    const [rotulo, classe] = SITUACAO_ENTRE[i.situacao] ?? [i.situacao, "neutro"];
+    const hist = (i.liquidacoes ?? []).length ? `<ul class="mini">${i.liquidacoes.map((l) => `<li>${esc(dataBR(l.data))}: ${esc(moeda(l.valorCentavos))} reembolsado${l.observacao ? ` — ${esc(l.observacao)}` : ""}</li>`).join("")}</ul>` : '<span class="nota">Sem reembolso</span>';
+    return `<tr>${td("Devedora", nome(i.devedora))}${td("Credora", nome(i.credora))}${td("Descrição", esc(i.descricao ?? "—"), "esquerda")}${td("Data", esc(dataBR(i.dataPagamento)))}${td("Valor", valor(i.valorCentavos))}${td("Reembolsado", valor(i.reembolsadoCentavos))}${td("Saldo", valor(i.saldoCentavos))}${td("Vencimento", i.vencimento ? etiquetaDeData(i.vencimento) : '<span class="nota">não informado</span>')}${td("Histórico", hist, "esquerda")}${td("Situação", `<span class="selo selo--${classe}">${esc(rotulo)}</span>`)}</tr>`;
+  };
+  return `${cabecalho("Contas entre empresas", `${esc(unidadeNome)} · pagamentos feitos por uma empresa do grupo pela outra`)}
+${abas("contas-entre-empresas")}
+<p class="aviso">Não é despesa operacional nem entra nos totais por fornecedor: a despesa fica uma vez só, na empresa devedora. O reembolso (parcial ou total) não é receita nem despesa. Nada é compensado automaticamente.</p>
+<section class="resumo resumo--status" aria-label="Totais entre empresas">
+  <div class="resumo-item resumo-item--erro">${card("A pagar a outras empresas", valor(r?.totais?.aPagarCentavos ?? 0), "Saldo do que esta unidade deve a outras empresas do grupo (passivo).")}</div>
+  <div class="resumo-item resumo-item--info">${card("A receber de outras empresas", valor(r?.totais?.aReceberCentavos ?? 0), "Saldo do que outras empresas do grupo devem a esta unidade (ativo).")}</div>
+  <div class="resumo-item resumo-item--neutro">${card("Líquido indicativo", valor(liquido), "A receber menos a pagar. Só informativo: nenhuma compensação é feita sem um reembolso registrado.")}</div>
+</section>
+<section class="card" aria-labelledby="t-entre"><h2 id="t-entre">Operações</h2>
+${itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Contas entre empresas</caption><thead><tr><th scope="col">Devedora</th><th scope="col">Credora</th><th scope="col">Descrição</th><th scope="col">Data</th><th scope="col">Valor</th><th scope="col">Reembolsado</th><th scope="col">Saldo</th><th scope="col">Vencimento</th><th scope="col">Histórico</th><th scope="col">Situação</th></tr></thead><tbody>
+${itens.map(linha).join("")}
+</tbody></table></div>` : nenhum("Nenhuma conta entre empresas registrada nesta unidade.")}
+</section>`;
+}
+
 // ----------------------------------------------------------------------------------------------------- calendário
-const SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+const SEMANA =["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 /** Vencendo (amarelo, piscando): vence de hoje até 2 dias à frente. Mais longe que isso: azul (a vencer). Vencida: vermelho, piscando. */
 export const JANELA_VENCENDO_DIAS = 2;
 const diasEntre = (de, ate) => Math.round((Date.parse(`${ate}T00:00:00Z`) - Date.parse(`${de}T00:00:00Z`)) / 86400000);
@@ -565,7 +596,7 @@ ${abas("calendario")}
 </section>
 <div class="cal-layout">
 <div class="cal-bloco">
-<ul class="legenda legenda--cal">${rotuloLegenda("breve", `vencendo (até ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("erro", "vencidas")}${rotuloLegenda("info", `a vencer (mais de ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("ok", "pagamentos")}${rotuloLegenda("neutro", "recorrentes previstas")}</ul>
+<ul class="legenda legenda--cal">${rotuloLegenda("breve", `vencendo (até ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("erro", "vencidas")}${rotuloLegenda("info", `a vencer (mais de ${JANELA_VENCENDO_DIAS} dias)`)}${rotuloLegenda("ok", "pagamentos")}${rotuloLegenda("neutro", "recorrentes previstas")}${cal.dias.some((d) => d.entreEmpresas?.quantidade) ? rotuloLegenda("entre", "entre empresas (reembolso)") : ""}</ul>
 <div class="calendario" role="grid" aria-label="Dias de ${esc(competencia(cal.mes))}">
   ${SEMANA.map((s, i) => `<div class="cal-cab${i > 4 ? " cal-cab--fim" : ""}" role="columnheader">${s}</div>`).join("")}
   ${'<div class="cal-vazio" aria-hidden="true"></div>'.repeat(deslocamento)}
@@ -579,7 +610,7 @@ ${abas("calendario")}
     return `<button type="button" role="gridcell" class="cal-dia${d.hoje ? " cal-dia--hoje" : ""}${algo ? ` cal-dia--${situacaoDoDia(d, vencendo)}` : " cal-dia--livre"}${fimDeSemana ? " cal-dia--fim" : ""}${d.data === selecionado ? " cal-dia--sel" : ""}" data-dia="${esc(d.data)}" aria-pressed="${d.data === selecionado}" aria-label="${esc(dataBR(d.data))}${d.hoje ? " (hoje)" : ""}: ${d.aVencer.quantidade} vencendo, ${d.vencidas.quantidade} vencida(s), ${d.pagas.quantidade} pagamento(s), ${d.recorrentesPrevistas.quantidade} recorrente(s)${d.emAbertoCentavos ? `, em aberto ${moeda(d.emAbertoCentavos)}` : ""}${vencendo ? `; atenção: ${rotuloVencendo}` : ""}">
       <span class="cal-num">${Number(d.data.slice(8))}</span>
       ${d.emAbertoCentavos ? `<span class="cal-valor">${esc(moeda(d.emAbertoCentavos))}</span>` : ""}
-      <span class="cal-marcas">${marca(d.vencidas.quantidade, "erro", "vencida(s)")}${marca(vencendo, "breve", `vencendo · ${rotuloVencendo}`)}${marca(longe, "info", "a vencer")}${marca(d.pagas.quantidade, "ok", "pagamento(s)")}${marca(d.recorrentesPrevistas.quantidade, "neutro", "recorrente(s) prevista(s)")}</span>
+      <span class="cal-marcas">${marca(d.vencidas.quantidade, "erro", "vencida(s)")}${marca(vencendo, "breve", `vencendo · ${rotuloVencendo}`)}${marca(longe, "info", "a vencer")}${marca(d.pagas.quantidade, "ok", "pagamento(s)")}${marca(d.recorrentesPrevistas.quantidade, "neutro", "recorrente(s) prevista(s)")}${marca(d.entreEmpresas?.quantidade ?? 0, "entre", "conta(s) entre empresas (reembolso)")}</span>
     </button>`;
   }).join("")}
 </div>

@@ -12,7 +12,7 @@
 // Desligado (padrão): nada responde além de /status ("não liberado"); a plataforma segue com o financeiro atual.
 import { Router, json } from "express";
 import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, PERFIS_DE_ACESSO, alterarLiberacaoPostgres, criarAutoridadeDaPlataforma, criarNucleoFinanceiro, identificarSessao, tempo } from "../financeiro-v2/index.js";
-import { comIdentidadeDaRequisicao, resumoDaSessao } from "./clienteGateway.js";
+import { comIdentidadeDaRequisicao, identidadeDaRequisicao, resumoDaSessao } from "./clienteGateway.js";
 import { CONSULTAS, pessoasDaUnidade } from "./consultas.js";
 import { ESCRITAS } from "./escritas.js";
 import { criarCofreTemporario } from "./cofreTemporario.js";
@@ -100,6 +100,28 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
       escoposAutorizados: [{ organizacaoId: c.contexto.organizacaoId, unidadeId: c.contexto.unidadeId }],
     });
     return { c, nucleo };
+  }
+
+  /**
+   * 27/11 (PR #236) — AUTORIZAÇÃO VINCULADA à operação entre empresas, montada só quando a operação a pede (proposta INTERCOMPANY):
+   * contexto VERIFICADO da contraparte (mesma pessoa, acesso + liberação + concessão lá, 2º fator recente) e um núcleo com os DOIS
+   * escopos. A gravação roda com o vínculo na identidade da requisição: a sessão de banco da contraparte sai pela autoridade
+   * (emitirSessaoVinculada), presa à chave da operação, com ações restritas e auditoria no banco. A sessão da unidade ativa não muda.
+   */
+  function autorizacaoVinculada(sessao, token, c) {
+    return async ({ organizacaoId, unidadeId, chave, propostaId }) => {
+      const { adaptador, repositorio, relogio, entregadores } = obter();
+      if (typeof adaptador.contextoDaContraparte !== "function") throw Object.assign(new Error("Sem autorização vinculada neste ambiente."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: "SEM_AUTORIZACAO_VINCULADA" } });
+      const cC = await adaptador.contextoDaContraparte(sessao, { organizacaoId, unidadeId, tokenDeAcesso: token });
+      const nucleo = criarNucleoFinanceiro({
+        repositorio, ...(relogio ? { relogio } : {}), exigirConcessaoPersistida: true, cofre: cofreTemporario, entregadores,
+        escoposAutorizados: [{ organizacaoId: c.contexto.organizacaoId, unidadeId: c.contexto.unidadeId }, { organizacaoId: cC.contexto.organizacaoId, unidadeId: cC.contexto.unidadeId }],
+      });
+      const identidade = identidadeDaRequisicao();
+      const vinculo = Object.freeze({ organizacaoId: cC.contexto.organizacaoId, unidadeId: cC.contexto.unidadeId, chave: String(chave ?? ""), propostaId: propostaId ?? null });
+      registrar({ tipo: "AUTORIZACAO_VINCULADA_PEDIDA", unidadeId: c.contexto.unidadeId, contraparte: cC.contexto.unidadeId, pessoa: c.contexto.usuarioId, proposta: propostaId ?? null });
+      return { ctx: cC.contexto, nucleo, executar: (fn) => comIdentidadeDaRequisicao({ ...identidade, vinculo }, fn) };
+    };
   }
 
   r.get("/status", async (req, res) => {
@@ -215,10 +237,11 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const b = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
         if (Object.keys(b).some((k) => !acao.campos.includes(k))) throw recusa(400, "CAMPO_DESCONHECIDO", "A ação recebeu campos que não aceita.");
         const m = await exigirMova();
-        const corpo = await comIdentidade(req, async (sessao) => {
+        const corpo = await comIdentidade(req, async (sessao, token) => {
           const { c, nucleo } = await preparar(sessao);
           if (acao.escreveNoFinanceiro && c.escritaDaUnidade !== true) throw recusa(403, "ESCRITA_DA_UNIDADE_DESLIGADA", "Esta unidade ainda não foi liberada para lançamentos.");
-          const resultado = await executarAcaoMova(acao, { ctx: c.contexto, mova: m.mova, nucleo, b, controle: m.controle ?? null });
+          const entreEmpresas = acao.entreEmpresas ? autorizacaoVinculada(sessao, token, c) : null;
+          const resultado = await executarAcaoMova(acao, { ctx: c.contexto, mova: m.mova, nucleo, b, controle: m.controle ?? null, entreEmpresas });
           registrar({ tipo: "ACAO_MOVA", acao: caminho, unidadeId: c.contexto.unidadeId, pessoa: c.contexto.usuarioId });
           return resultado ?? { ok: true };
         });

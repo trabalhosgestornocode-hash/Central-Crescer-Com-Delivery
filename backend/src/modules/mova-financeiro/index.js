@@ -50,7 +50,7 @@ export { carregarConfiguracao, criarArmazenamentoPostgres, criarConsultasPostgre
  * @param {{configuracao:object, nucleo:object, concessoes:{listar:Function}, financeiro:object, extrator:{extrair:Function}, pool?:object,
  *          obterMidia?:Function, relogio?:() => Date, registrar?:Function, fila?:object}} deps
  */
-export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, conversaNova = null, titularDaFila = null }) {
+export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrator, pool = null, obterMidia = null, relogio = () => new Date(), registrar = () => {}, fila, controle = null, redator = null, somenteConsultas = false, comandosDeterministicos = false, autonomia = false, operacional = null, entregadores = false, recebimentoDocumental = false, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, avisosNoGrupo = {}, avisosDiarios = null, conversaNova = null, titularDaFila = null }) {
   // 23/11: configuração VIVA (lista de entregadores recarregável) já vem validada: é usada como está, senão a recarga não chegaria aqui.
   const cfg = typeof configuracao?.recarregarEntregadores === "function" ? configuracao : validarConfiguracao(configuracao);
   const armazenamento = pool ? criarArmazenamentoPostgres({ pool }) : criarArmazenamentoMemoria({ relogio });
@@ -66,11 +66,15 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   const receptor = criarReceptor({ cfg, motor, fila: filaUsada, evidencias, armazenamento, obterMidia, relogio, registrar, controle, recebimentoDocumental });
   const aprovador = criarAprovador({ cfg, armazenamento, nucleo, financeiro, fila: filaUsada, execucao });
   const consultas = pool ? criarConsultasPostgres({ pool }) : null;
-  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores, recebimentoDocumental, pagamentoPorComprovante: Boolean(pagamentoPorComprovante) });
+  // 26/11: aviso diário de contas a pagar no grupo (determinístico, sem IA). Só com grupos indicados na configuração.
+  const avisos = avisosDiarios?.grupos?.length ? criarAvisosDiarios({ cfg, porta, armazenamento, relogio, registrar, avisos: avisosDiarios }) : null;
+  return Object.freeze({ cfg, receptor, motor, aprovador, consultas, armazenamento, evidencias, fila: filaUsada, porta, execucao, entregadores: fluxoEntregadores, avisos, recebimentoDocumental, pagamentoPorComprovante: Boolean(pagamentoPorComprovante) });
 }
 /** Nome mantido da Execução 01. */
 export const criarMovaSimulado = criarMova;
 import { criarExecucao } from "./aplicacao/execucao.js";
+import { criarAvisosDiarios } from "./aplicacao/avisosDiarios.js";
+export { JANELAS_PADRAO, criarAvisosDiarios, normalizarJanelas } from "./aplicacao/avisosDiarios.js";
 // Agente 2 — Central de pendências e documentos recebidos sem IA (só leitura do Financeiro; conferência humana no banco do MOVA).
 export { MOTIVO as MOTIVO_PENDENCIA, MOTIVO_SAIDA, ROTULO_MOTIVO, ROTULO_SAIDA, classificarSaidas, contasRelacionadas, linhaDoTempo, montarConferencia, pendenciaDaConta } from "./aplicacao/centralConferencia.js";
 export { ESTADO_CONFERENCIA, MIMES_SEM_LEITURA, RESPOSTA_DOCUMENTO, TIPOS_INFORMADOS, conferirArquivo } from "./aplicacao/recebimentoDocumental.js";

@@ -138,5 +138,15 @@ export function criarRepositorioMemoria() {
     return fn(criarTx(structuredClone(estado), { somenteLeitura: true }));
   }
 
-  return Object.freeze({ transacao, leitura });
+  /** 26/11 — mesma semântica do PostgreSQL: dois escopos, uma transação (tudo ou nada); cada trecho só no escopo declarado. */
+  function transacaoEntreEscopos(fn, opcoes) {
+    const declarados = (opcoes?.escopos ?? []).map((e) => `${e.organizacaoId}|${e.unidadeId}`);
+    if (declarados.length < 2) falhar(CODIGO.REPOSITORIO_INVALIDO, "A transação entre escopos declara ao menos dois escopos.");
+    return transacao((tx) => fn(async (e, trecho) => {
+      if (!declarados.includes(`${e.organizacaoId}|${e.unidadeId}`)) falhar(CODIGO.ESCOPO_NAO_AUTORIZADO, "Trecho fora dos escopos declarados na transação.");
+      return trecho(tx);
+    }));
+  }
+
+  return Object.freeze({ transacao, transacaoEntreEscopos, leitura });
 }

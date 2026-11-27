@@ -515,6 +515,73 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   }
 
   /**
+   * 26/11 — CONTA A PAGAR RELATADA POR TEXTO (proposta CONTA_RELATADA, já CONFIRMADA pela pessoa no WhatsApp). Com a chave
+   * MOVA_OPERACAO_CRIAR_CONTAS, a política CONTA_A_PAGAR_RELATADA da unidade (própria: nem a de conta por documento nem a de despesa
+   * paga a cobrem) e a identidade operacional com `registrar_conta_parcelada`: registra a conta EM ABERTO, com as parcelas ditas,
+   * pelo serviço oficial (fonte MOVA:<proposta> — idempotente). Nunca registra como paga. Sem algum requisito, fica a PROPOSTA.
+   */
+  async function aposContaRelatada(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    const e = proposta.comando?.entrada;
+    if (proposta.tipo !== "CONTA_RELATADA" || proposta.comando?.operacao !== "registrarContaParcelada" || !Array.isArray(e?.parcelas)) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    const faltas = [...(!e.competencia ? ["COMPETENCIA_PENDENTE"] : []), ...(proposta.categoriaDefinida !== true ? ["CATEGORIA_A_CLASSIFICAR"] : [])];
+    if (faltas.length) return { ...base, motivos: faltas };
+    // 27/11: conta ÚNICA ⇒ CONTA_A_PAGAR_RELATADA; 2+ parcelas ⇒ CONTA_PARCELADA_RELATADA. O valor avaliado é o TOTAL da compra.
+    const operacao = e.parcelas.length > 1 ? OPERACAO.CONTA_PARCELADA_RELATADA : OPERACAO.CONTA_A_PAGAR_RELATADA;
+    const decisao = decidirAutonomia({ politicas: await politicasDe(escopo.organizacaoId), operacao, organizacaoId: escopo.organizacaoId,
+      unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    // A confirmação no WhatsApp já é a "confirmação de uma pessoa": APLICAR_COM_CONFIRMACAO e APLICAR_AUTOMATICO executam; sem política, só propõe.
+    if (![NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) || !proposta.esclarecidoPor) return r0;
+    if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode("registrarContaParcelada", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const ob = await operacional.chamar("registrarContaParcelada", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      return { obrigacaoId: ob.obrigacoes[0].id, obrigacaoIds: ob.obrigacoes.map((o) => o.id), contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null,
+        categoria: e.categoria, competencia: e.competencia, parcelas: e.parcelas.length, confirmadoPor: proposta.esclarecidoPor, situacaoConta: "ABERTA" };
+    } });
+    return r.ok ? { ...r0, situacao: "CONTA_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
+   * 27/11 (PR #236) — OPERAÇÃO ENTRE EMPRESAS confirmada no WhatsApp por quem é FINANCEIRO nas DUAS unidades. Executa sozinha só:
+   *   - conta EXISTENTE da devedora (uma só candidata) — conta nova fica para a aprovação humana (exigiria registrar conta);
+   *   - política OPERACAO_ENTRE_EMPRESAS em vigor nas DUAS unidades, ambas aceitando o valor (vale o MENOR limite das duas);
+   *   - identidade operacional com `registrar_intercompany` nas duas (concessão gravada). Tudo numa transação; idempotente pela chave.
+   */
+  async function aposIntercompany(proposta, escopo) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
+    if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
+    const cmd = proposta.comando;
+    if (proposta.tipo !== "INTERCOMPANY" || cmd?.operacao !== "registrarPagamentoPorOutraEmpresa" || !cmd.devedora || !cmd.credora || !cmd.entrada) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    if (!cmd.entrada.obrigacaoId || cmd.entrada.obrigacaoNova || cmd.escolherConta?.length) return { ...base, motivos: ["CONTA_NOVA_OU_A_ESCOLHER_EXIGE_APROVACAO_HUMANA"] };
+    if (cmd.devedora.unidadeId !== escopo.unidadeId || cmd.devedora.organizacaoId !== escopo.organizacaoId) return { ...base, motivos: ["ESCOPO_DIVERGENTE"] };
+    const decidir = async (e) => decidirAutonomia({ politicas: await politicasDe(e.organizacaoId), operacao: OPERACAO.OPERACAO_ENTRE_EMPRESAS, organizacaoId: e.organizacaoId,
+      unidadeId: e.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
+    const [dD, dC] = [await decidir(cmd.devedora), await decidir(cmd.credora)];
+    const executa = (d) => [NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(d.nivel);
+    const decisao = { nivel: executa(dD) && executa(dC) ? dD.nivel : NIVEL.SOMENTE_PROPOR, motivos: [...new Set([...dD.motivos, ...dC.motivos.map((m) => `CREDORA:${m}`)])],
+      politicaId: dD.politicaId ?? null, politicaCredoraId: dC.politicaId ?? null };
+    await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
+    const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
+    if (!executa(dD) || !executa(dC) || !proposta.esclarecidoPor) return r0;
+    if (!operacional || typeof operacional.chamarEntreEmpresas !== "function") return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.podeEntreEmpresas("registrarPagamentoPorOutraEmpresa", [cmd.devedora, cmd.credora]))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    const r = await executarComReserva({ operacao: OPERACAO.OPERACAO_ENTRE_EMPRESAS, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+      const x = await operacional.chamarEntreEmpresas("registrarPagamentoPorOutraEmpresa", [cmd.devedora, cmd.credora], cmd.entrada);
+      return { obrigacaoId: x.titulo?.id ?? cmd.entrada.obrigacaoId, vinculoId: x.vinculoId, repetido: x.repetido === true, credora: cmd.credora.unidadeId,
+        politicaCredoraId: decisao.politicaCredoraId, confirmadoPor: proposta.esclarecidoPor, movimentacaoId: null };
+    } });
+    return r.ok ? { ...r0, situacao: "ENTRE_EMPRESAS_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
+  }
+
+  /**
    * 24/11 — NOTA FISCAL de uma conta JÁ registrada (proposta VINCULO_DE_DOCUMENTO): só ANEXA a nota à conta (nenhum valor muda,
    * nenhuma despesa nova). Automática com a chave MOVA_OPERACAO_CRIAR_CONTAS, a política ANEXAR_DOCUMENTO e `enviar_documento`.
    */
@@ -547,5 +614,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

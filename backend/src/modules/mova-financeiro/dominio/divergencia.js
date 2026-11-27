@@ -15,6 +15,8 @@ export const DESFECHO = Object.freeze({ JUROS: "JUROS", PARCIAL: "PARCIAL", NOVA
 export const MAX_CANDIDATAS_NA_PERGUNTA = 5;
 
 export const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+// 26/11: resposta curta a uma pergunta, sem a menção "MOVA" do início (no grupo, citar mensagem humana exige a menção: "MOVA sim").
+const resposta = (s) => normalizar(s).replace(/^mova\b\s*/, "");
 
 const SIM = /^(sim|s|isso|isso mesmo|exato|exatamente|correto|certo|confirmo|isso ai|e sim|sao|sao sim|foi|foi sim|ok)$/;
 const NAO = /^(nao|n|negativo|nao e|nao sao|nao foi|nao eh)$/;
@@ -130,16 +132,20 @@ export function extracaoDaRespostaIA(saidaIa, { texto = "", dataPagamento = null
  * duplicidade são conferidos de novo na execução. Frase longa ou com pergunta não é pedido de retomada.
  */
 export function pedidoDeRetomar(texto) {
-  const t = normalizar(texto);
+  const t = resposta(texto);
   if (!t || t.length > 60 || t.split(" ").length > 8 || /[?]/.test(String(texto))) return false;
   return SIM.test(t) || /\b(registr|lanc|tent|continu|conclu|finaliz|execut|process|pode|ok|isso|manda|faz|faca)/.test(t);
 }
 
 /** Texto curto que parece resposta a uma pergunta de divergência (para a memória curta, sem citação). */
 export function parecerRespostaDeDivergencia(texto) {
-  const t = normalizar(texto);
+  const t = resposta(texto);
   if (!t || t.length > 60) return false;
-  return SIM.test(t) || NAO.test(t) || /^[1-9]$/.test(t) || PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t);
+  // 27/11 (PR #236): "0" / "deixa para o financeiro" respondem à pergunta de CATEGORIA da conta relatada ("0 — deixar para classificar")
+  // palavra solta ("outra", "parcial", "juros", mês) só é RESPOSTA em frase curta: "mostre o faturamento de outra empresa" é PEDIDO
+  // novo (e passa pelas próprias travas), nunca a resposta de uma pergunta pendente.
+  const curta = t.split(" ").length <= 5;
+  return SIM.test(t) || NAO.test(t) || /^[0-9]$/.test(t) || /^(nao sei|deixa para o financeiro|deixa pro financeiro|classificar depois|deixa para depois)$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || (curta && (PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t)));
 }
 
 /**
@@ -149,7 +155,7 @@ export function parecerRespostaDeDivergencia(texto) {
  * @returns {{desfecho:string, indice?:number}}
  */
 export function interpretarResposta(texto, pendencia) {
-  const t = normalizar(texto);
+  const t = resposta(texto);
   if (!t) return { desfecho: DESFECHO.NAO_ENTENDI };
   const numero = /^([1-9])\b/.exec(t);
   if (pendencia.tipo === TIPO_DIVERGENCIA.VARIAS) {
@@ -358,7 +364,7 @@ export function interpretarCategoria({ texto, categorias }) {
 
 /** "sim"/"não" curtos (e variações naturais). null = não é resposta sim/não. */
 export function respostaSimNao(texto) {
-  const t = normalizar(texto);
+  const t = resposta(texto);
   if (!t || t.length > 40) return null;
   if (SIM.test(t) || /^(sim|e sim|e a mesma|mesma compra|e da mesma|do mesmo|pertence)\b/.test(t)) return true;
   if (NAO.test(t) || /^(nao|outra compra|e outra|compra diferente)\b/.test(t)) return false;

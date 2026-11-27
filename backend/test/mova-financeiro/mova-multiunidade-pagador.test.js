@@ -49,7 +49,7 @@ const ESCRITAS = ["enviarEvidencia", "registrarObrigacaoDocumental", "registrarP
 /**
  * @param {{responder:Function, concessoes?:{org:string, unidade:string}[], config?:object, politicas?:boolean, falharEnvioUmaVez?:boolean}} o
  */
-async function multi({ responder, concessoes = [{ org: ORG, unidade: ALFA }, { org: ORG_X, unidade: XIS }], config = CONFIG(), politicas = true, falharEnvioUmaVez = false } = {}) {
+async function multi({ responder, concessoes = [{ org: ORG, unidade: ALFA }, { org: ORG_X, unidade: XIS }], config = CONFIG(), politicas = true, falharEnvioUmaVez = false, acoes = TODAS_ACOES } = {}) {
   let falhou = false;
   const s = await cenario({
     responder, config,
@@ -58,11 +58,11 @@ async function multi({ responder, concessoes = [{ org: ORG, unidade: ALFA }, { o
       return {
         autonomia: true, pagamentoPorComprovante: true, criarDespesas: true, criarContas: true,
         operacional: criarPortaOperacional({ nucleo: comFalha, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: SERVICO,
-          concessoes: criarConcessoesMemoria(concessoes.map((c) => ({ organizacaoId: c.org, usuarioId: OPERADOR, unidadeId: c.unidade, acoes: TODAS_ACOES }))) }),
+          concessoes: criarConcessoesMemoria(concessoes.map((c) => ({ organizacaoId: c.org, usuarioId: OPERADOR, unidadeId: c.unidade, acoes: c.acoes ?? acoes }))) }),
       };
     },
   });
-  if (process.env.FV2_REPOSITORIO === "postgres") for (const c of concessoes) await s.m.nucleo.concederAcesso(s.c(c.org, c.unidade), { usuarioId: OPERADOR, acoes: TODAS_ACOES, justificativa: "Identidade operacional do MOVA (sintético)." });
+  if (process.env.FV2_REPOSITORIO === "postgres") for (const c of concessoes) await s.m.nucleo.concederAcesso(s.c(c.org, c.unidade), { usuarioId: OPERADOR, acoes: c.acoes ?? acoes, justificativa: "Identidade operacional do MOVA (sintético)." });
   if (politicas) {
     for (const [org, u] of [[ORG, ALFA], [ORG_X, XIS]]) {
       for (const op of ["DESPESA_DOCUMENTAL", "BAIXA_DOCUMENTAL", "CONTA_A_PAGAR", "ANEXAR_DOCUMENTO"]) await s.mova.armazenamento.politicas.criar(POL(op, org, u), { criadaPor: HUMANO });
@@ -117,7 +117,9 @@ test("MU-0c resolverUnidade: pagador fora da conversa bloqueia; texto × pagador
   assert.deepEqual([resolverUnidade({ cfg, grupo: soAlfa, textos: [], pagador: "MP" }).resultado, resolverUnidade({ cfg, grupo: soAlfa, textos: [], pagador: "MP" }).evidencia],
     [RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE, "PAGADOR_FORA_DA_CONVERSA"]);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], pagador: "MP" }).unidade.unidadeId, XIS);
-  assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies da alfa"], pagador: "MP" }).resultado, RESULTADO_UNIDADE.CONFLITANTE);
+  // 26/11: texto × pagador com as DUAS unidades na conversa ⇒ possível operação entre empresas (o motor pergunta; nada é presumido)
+  const ic = resolverUnidade({ cfg, grupo: ambas, textos: ["brownies da alfa"], pagador: "MP" });
+  assert.deepEqual([ic.resultado, ic.unidade.unidadeId, ic.pagadora.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, ALFA, XIS]);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], pagador: "MP", sugestaoIa: "alfa" }).resultado, RESULTADO_UNIDADE.CONFLITANTE);
   assert.equal(resolverUnidade({ cfg, grupo: ambas, textos: ["brownies"], sugestaoIa: "xis" }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
 });
@@ -171,13 +173,94 @@ t("MU-6b resposta curta 'xis' à pergunta da unidade continua a operação na Xi
   assert.equal((await s.propostas(ORG, ALFA)).length, 0);
 });
 
-t("MU-7 conflito (legenda 'alfa', pagador MP): não grava; pergunta; insistir em 'alfa' continua bloqueado", async () => {
+t("MU-7 legenda 'alfa' com pagador MP (Xis): pergunta se é operação ENTRE EMPRESAS; não grava; resposta que não é sim/não repete a pergunta", async () => {
+  // 26/11: antes era só "conflito de unidade". Agora é o caso da Subway pagando pelo Açaí: pergunta, e nada é gravado sem o "sim".
   const s = await multi({ responder: () => PIX({ pagador: "MP" }) });
   await s.enviar(s.privado({ texto: "MOVA brownies da alfa", doc: pdf("7") }));
-  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "UNIDADE_CONFLITANTE"]);
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO"]);
+  assert.match(await s.resposta(), /realizou um pagamento de R\$ [\d.,]+ referente ao Loja Alfa\. Confirma que devo registrar a despesa no Loja Alfa e o valor como uma dívida do Loja Alfa com a Loja Xis\?/);
   await s.enviar(s.privado({ texto: "alfa" }));
-  assert.equal((await s.ultima()).decisao, "BLOQUEADO");
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_RESPOSTA_NAO_ENTENDIDA");
   assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0]);
+});
+
+// ------------------------------------------------------------------ 26/11: OPERAÇÃO ENTRE EMPRESAS pelo WhatsApp (caso R$ 6.495,60)
+// Xis (pagador "MP") = papel da Subway Saci; Alfa = papel do Açaí no Grau Saci. A Xis pagou a distribuidora pela Alfa.
+const VALOR_IC = 649560;
+const comprovanteIC = (x = {}) => PIX({ pagador: "MP", valorCentavos: VALOR_IC, favorecido: "Fornecedor Sintético", dataPagamento: "2026-10-14", ...x });
+const aprovar = (s, p, ctxC, extra = {}) => s.mova.aprovador.aplicar(s.c(ORG, ALFA), { propostaId: p.id, ...extra }, { nucleo: s.m.nucleo, ...(ctxC === undefined ? {} : { ctxContraparte: ctxC }) });
+const entre = async (s, org, u) => (await s.m.nucleo.consultarContasEntreEmpresas(s.c(org, u))).totais;
+
+t("EC-1 caso real: conta EXISTENTE da Alfa paga pela Xis — pergunta exata; 'sim' cria a proposta (nada lançado); aplicação exige as DUAS empresas e liquida sem despesa na Xis", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const conta = (await s.conta("2026-10-14", VALOR_IC)).obrigacoes[0];
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-1") });
+  await s.enviar(doc);
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO");
+  const pergunta = await s.resposta();
+  assert.match(pergunta, /^Identifiquei que a Loja Xis realizou um pagamento de R\$ 6\.495,60 referente ao Loja Alfa\. Confirma que devo registrar a despesa no Loja Alfa e o valor como uma dívida do Loja Alfa com a Loja Xis\?/);
+  assert.match(pergunta, /Conta encontrada no Loja Alfa: Fornecedor Sintético/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p?.tipo, p?.comando?.entrada?.obrigacaoId, p?.comando?.credora?.unidadeId, s.escritas().length], ["INTERCOMPANY", conta.id, XIS, 0], "só proposta: nada escrito no Financeiro");
+  assert.equal((await s.propostas(ORG_X, XIS)).length, 0, "a proposta fica na devedora (uma só)");
+  // sessão de UMA unidade (rota atual): recusada, nada muda
+  await assert.rejects(aprovar(s, p, null), (e) => e.codigo === "CONTRAPARTE_SEM_SESSAO");
+  // outra pessoa na contraparte, ou sem permissão nela: recusada
+  const { ctx } = await import("../financeiro-v2/helpers/cenario.js");
+  await assert.rejects(aprovar(s, p, ctx(ORG_X, XIS, undefined, "eeeeeeee-0000-4000-8000-000000000099")), (e) => e.codigo === "CONTRAPARTE_INVALIDA");
+  await assert.rejects(aprovar(s, p, ctx(ORG_X, XIS, ["financeiro_v2.ver"], "eeeeeeee-0000-4000-8000-000000000001")), (e) => e.codigo === "PERMISSAO_INSUFICIENTE");
+  assert.equal((await s.propostas(ORG, ALFA))[0].estado, "AGUARDANDO_REVISAO");
+  // com o contexto verificado das DUAS: aplica (atômico no Financeiro)
+  const aplicada = await aprovar(s, p, s.c(ORG_X, XIS));
+  assert.equal(aplicada.estado, "APLICADA");
+  const [c] = (await s.contas(ORG, ALFA)).filter((x) => x.id === conta.id);
+  assert.equal(c.saldoCentavos, 0, "a conta do fornecedor fica paga (pela outra empresa)");
+  assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, (await entre(s, ORG_X, XIS)).aReceberCentavos], [VALOR_IC, VALOR_IC], "passivo na Alfa × ativo na Xis");
+  assert.deepEqual([(await s.despesas(ORG_X, XIS)).length, (await s.contas(ORG_X, XIS)).length, (await s.saidas(ORG, ALFA)).length], [0, 0, 0], "nada de despesa na Xis; nenhuma saída inventada na Alfa");
+  await assert.rejects(aprovar(s, p, s.c(ORG_X, XIS)), (e) => e.codigo === "PROPOSTA_JA_DECIDIDA");
+});
+
+t("EC-2 SEM conta prévia na Alfa: a proposta traz a conta NOVA (já paga pela Xis); despesa reconhecida UMA vez, só na Alfa", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-2") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), /Não encontrei conta em aberto com esse valor no Loja Alfa/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p.comando.entrada.obrigacaoId ?? null, p.comando.entrada.obrigacaoNova?.competencia, p.comando.entrada.obrigacaoNova?.contraparteNova?.nome], [null, "2026-10", "Fornecedor Sintético"]);
+  await aprovar(s, p, s.c(ORG_X, XIS));
+  const contasA = await s.contas(ORG, ALFA);
+  assert.deepEqual([contasA.length, contasA[0].saldoCentavos, (await s.liquidacoes(ORG, ALFA)).length, (await s.saidas(ORG, ALFA)).length], [1, 0, 1, 0]);
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.despesas(ORG_X, XIS)).length], [0, 0]);
+});
+
+t("EC-3 'não' encerra sem registrar nada; boleto (não é pagamento) com o mesmo conflito continua como conflito de unidade", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-3") });
+  await s.enviar(doc);
+  await s.enviar(s.privado({ texto: "não", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_RECUSADA");
+  assert.deepEqual([(await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length, s.escritas().length], [0, 0, 0]);
+  const b = await multi({ responder: () => BOLETO({ pagador: "MP" }) });
+  await b.enviar(b.privado({ texto: "MOVA boleto da alfa", doc: pdf("ic-3b") }));
+  assert.equal((await b.ultima()).motivo, "UNIDADE_CONFLITANTE");
+});
+
+t("EC-4 várias contas compatíveis na Alfa: o MOVA não escolhe — a revisão escolhe UMA (sem ela, a aplicação é recusada)", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  const c1 = (await s.conta("2026-10-14", VALOR_IC)).obrigacoes[0];
+  const c2 = (await s.conta("2026-10-20", VALOR_IC)).obrigacoes[0];
+  const doc = s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-4") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), /mais de uma conta em aberto com esse valor/);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([...p.comando.escolherConta].sort(), [c1.id, c2.id].sort());
+  await assert.rejects(aprovar(s, p, s.c(ORG_X, XIS)), (e) => e.codigo === "CONTA_A_ESCOLHER");
+  await aprovar(s, p, s.c(ORG_X, XIS), { obrigacaoId: c2.id });
+  const contas = await s.contas(ORG, ALFA);
+  assert.deepEqual([contas.find((x) => x.id === c1.id).saldoCentavos, contas.find((x) => x.id === c2.id).saldoCentavos], [VALOR_IC, 0], "só a escolhida");
 });
 
 t("MU-8 identidade operacional SÓ da Alfa: comprovante MP vira proposta na Xis (sem concessão), nada é escrito em nenhuma empresa", async () => {
@@ -395,4 +478,115 @@ t("POL-1 kit aplicado no banco do MOVA: seis políticas (com a sangria, 0023) po
     assert.equal(Number((await banco.pool.query("select count(*) n from mova.politica_autonomia where revogada_em is null")).rows[0].n), 0);
     assert.equal(Number((await banco.pool.query("select count(*) n from mova.auditoria where acao in ('POLITICAS_DA_UNIDADE','POLITICAS_REVOGADAS')")).rows[0].n), 3);
   } finally { await descartarBancoMova(banco); }
+});
+
+// ------------------------------------------------------------------ 27/11 (PR #236): operação entre empresas EXECUTADA pelo WhatsApp
+// Só com: conta EXISTENTE na devedora, "sim" de quem é FINANCEIRO nas duas, política OPERACAO_ENTRE_EMPRESAS nas DUAS unidades
+// (vale o MENOR limite) e a ação estreita `registrar_intercompany` da identidade operacional nas DUAS. Senão: proposta.
+const ACOES_IC = [...TODAS_ACOES, "financeiro_v2.registrar_intercompany"];
+const POL_IC = (s, org, u, limiteCentavos) => s.mova.armazenamento.politicas.criar(POL("OPERACAO_ENTRE_EMPRESAS", org, u, { limiteCentavos, nivel: "APLICAR_COM_CONFIRMACAO" }), { criadaPor: HUMANO });
+/** comprovante da credora citando a devedora, e o "sim" de quem é FINANCEIRO nas duas */
+async function confirmarIC(s, { marca, legenda = "MOVA comprovante, distribuidora alfa" }) {
+  const doc = s.privado({ texto: legenda, doc: pdf(marca) });
+  await s.enviar(doc);
+  assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO");
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  return doc;
+}
+
+t("EC-5 conta EXISTENTE + política nas DUAS + concessão estreita nas DUAS: o 'sim' REGISTRA (atômico) — passivo na Alfa, ativo na Xis, nenhuma saída nem despesa nova", async () => {
+  const s = await multi({ responder: () => comprovanteIC(), acoes: ACOES_IC });
+  await POL_IC(s, ORG, ALFA, 1_000_000); await POL_IC(s, ORG_X, XIS, 3_000_000);
+  const conta = (await s.conta("2026-10-14", VALOR_IC)).obrigacoes[0];
+  await confirmarIC(s, { marca: "ic-5" });
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.equal(p.estado, "APLICADA", "executada pela identidade operacional");
+  assert.equal(p.autonomia?.nivel, "APLICAR_COM_CONFIRMACAO");
+  assert.match(await s.resposta(), /Registrado: a conta do Loja Alfa \(R\$\s?6\.495,60\) ficou paga pela Loja Xis/);
+  assert.equal((await s.contas(ORG, ALFA)).find((x) => x.id === conta.id).saldoCentavos, 0);
+  assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, (await entre(s, ORG_X, XIS)).aReceberCentavos], [VALOR_IC, VALOR_IC]);
+  assert.deepEqual([(await s.despesas(ORG_X, XIS)).length, (await s.saidas(ORG, ALFA)).length, (await s.saidas(ORG_X, XIS)).length], [0, 0, 0]);
+  // a identidade operacional usou SÓ [ver, registrar_intercompany] — nos dois lados, nunca a ampla `registrar`
+  const ic = s.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa");
+  assert.equal(ic.length, 1);
+  assert.deepEqual(ic[0].permissoes, ["financeiro_v2.ver", "financeiro_v2.registrar_intercompany"]);
+  // o mesmo comprovante de novo não registra duas vezes
+  await s.enviar(s.privado({ texto: "MOVA comprovante, distribuidora alfa", doc: pdf("ic-5") }));
+  assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, s.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa").length], [VALOR_IC, 1], "idempotente");
+});
+
+t("EC-6 vale o MENOR limite das duas unidades: acima do limite da credora (ou sem política nela) fica a PROPOSTA; nada escrito em nenhuma empresa", async () => {
+  for (const [limA, limX, motivo] of [[1_000_000, 600_000, /CREDORA:/], [600_000, 3_000_000, /ACIMA|LIMITE/], [1_000_000, null, /CREDORA:/]]) {
+    const s = await multi({ responder: () => comprovanteIC(), acoes: ACOES_IC });
+    await POL_IC(s, ORG, ALFA, limA); if (limX) await POL_IC(s, ORG_X, XIS, limX);
+    await s.conta("2026-10-14", VALOR_IC);
+    await confirmarIC(s, { marca: `ic-6-${limA}-${limX}` });
+    const [p] = await s.propostas(ORG, ALFA);
+    assert.equal(p.estado, "AGUARDANDO_REVISAO", `limites ${limA}/${limX}: fica para a Central`);
+    assert.match(p.autonomia.motivos.join(","), motivo);
+    assert.deepEqual([s.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa").length, (await entre(s, ORG, ALFA)).aPagarCentavos ?? 0], [0, 0]);
+    assert.match(await s.resposta(), /Nada foi lançado ainda/);
+  }
+});
+
+t("EC-7 sem `registrar_intercompany` numa das duas (ou só com a ampla), conta NOVA ou várias contas: nunca executa sozinho", async () => {
+  // concessão estreita só na Alfa
+  const s = await multi({ responder: () => comprovanteIC(), concessoes: [{ org: ORG, unidade: ALFA, acoes: ACOES_IC }, { org: ORG_X, unidade: XIS, acoes: TODAS_ACOES }] });
+  await POL_IC(s, ORG, ALFA, 1_000_000); await POL_IC(s, ORG_X, XIS, 3_000_000);
+  await s.conta("2026-10-14", VALOR_IC);
+  await confirmarIC(s, { marca: "ic-7a" });
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p.estado, p.autonomia.nivel], ["AGUARDANDO_REVISAO", "APLICAR_COM_CONFIRMACAO"]);
+  assert.equal(s.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa").length, 0, "SEM_CONCESSAO_OPERACIONAL na Xis: nada escrito");
+  // conta NOVA (nenhuma conta prévia na Alfa): exige a aprovação humana, mesmo com tudo concedido
+  const n = await multi({ responder: () => comprovanteIC(), acoes: ACOES_IC });
+  await POL_IC(n, ORG, ALFA, 1_000_000); await POL_IC(n, ORG_X, XIS, 3_000_000);
+  await confirmarIC(n, { marca: "ic-7b" });
+  const [pn] = await n.propostas(ORG, ALFA);
+  assert.equal(pn.estado, "AGUARDANDO_REVISAO");
+  assert.deepEqual([(await n.contas(ORG, ALFA)).length, n.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa").length], [0, 0]);
+  // várias contas compatíveis: quem revisa escolhe (nunca o MOVA)
+  const v = await multi({ responder: () => comprovanteIC(), acoes: ACOES_IC });
+  await POL_IC(v, ORG, ALFA, 1_000_000); await POL_IC(v, ORG_X, XIS, 3_000_000);
+  await v.conta("2026-10-14", VALOR_IC); await v.conta("2026-10-20", VALOR_IC);
+  await confirmarIC(v, { marca: "ic-7c" });
+  assert.equal((await v.propostas(ORG, ALFA))[0].estado, "AGUARDANDO_REVISAO");
+  assert.equal(v.chamadas.filter((x) => x.nome === "registrarPagamentoPorOutraEmpresa").length, 0);
+});
+
+t("EC-8 sentido INVERSO: conta da Xis paga pela Alfa — mesmo fluxo e mesmas travas (passivo na Xis, ativo na Alfa)", async () => {
+  const s = await multi({ responder: () => comprovanteIC({ pagador: "ALFA PRODUTOS" }), acoes: ACOES_IC });
+  await POL_IC(s, ORG, ALFA, 3_000_000); await POL_IC(s, ORG_X, XIS, 1_000_000);
+  const conta = (await s.contaXis("2026-10-14", VALOR_IC)).obrigacoes[0];
+  await confirmarIC(s, { marca: "ic-8", legenda: "MOVA comprovante, loja xis" });
+  const [p] = await s.propostas(ORG_X, XIS);
+  assert.deepEqual([p?.tipo, p?.estado, p?.comando?.credora?.unidadeId], ["INTERCOMPANY", "APLICADA", ALFA]);
+  assert.equal((await s.propostas(ORG, ALFA)).length, 0, "a proposta fica na devedora (Xis)");
+  assert.equal((await s.contas(ORG_X, XIS)).find((x) => x.id === conta.id).saldoCentavos, 0);
+  assert.deepEqual([(await entre(s, ORG_X, XIS)).aPagarCentavos, (await entre(s, ORG, ALFA)).aReceberCentavos], [VALOR_IC, VALOR_IC]);
+  assert.deepEqual([(await s.despesas(ORG, ALFA)).length, (await s.saidas(ORG, ALFA)).length], [0, 0], "nada de despesa nem saída nova na pagadora");
+});
+
+t("EC-9 Central com AUTORIZAÇÃO VINCULADA (fábrica da rota): aplica com o contexto da credora; fábrica que recusa ⇒ CONTRAPARTE_NAO_AUTORIZADA, auditado, nada muda", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  await s.conta("2026-10-14", VALOR_IC);
+  await confirmarIC(s, { marca: "ic-9" });
+  const [p] = await s.propostas(ORG, ALFA);
+  const pedidos = [];
+  const recusa = async (pedido) => { pedidos.push(pedido); throw Object.assign(new Error("MFA_AUSENTE"), { codigo: "MFA_AUSENTE" }); };
+  await assert.rejects(s.mova.aprovador.aplicar(s.c(ORG, ALFA), { propostaId: p.id }, { nucleo: s.m.nucleo, entreEmpresas: recusa }), (e) => e.codigo === "CONTRAPARTE_NAO_AUTORIZADA" && e.detalhes?.motivo === "MFA_AUSENTE");
+  assert.deepEqual([pedidos[0].organizacaoId, pedidos[0].unidadeId, pedidos[0].propostaId, typeof pedidos[0].chave], [ORG_X, XIS, p.id, "string"], "a autorização pedida é a da credora, presa à operação");
+  const aud = (await s.mova.armazenamento.auditoria.listar()).find((x) => x.acao === "AUTORIZACAO_VINCULADA_RECUSADA");
+  assert.deepEqual([aud?.alvo, aud?.dados?.motivo, aud?.dados?.credora], [p.id, "MFA_AUSENTE", XIS], "a recusa fica auditada");
+  assert.deepEqual([(await s.propostas(ORG, ALFA))[0].estado, (await entre(s, ORG, ALFA)).aPagarCentavos ?? 0], ["AGUARDANDO_REVISAO", 0]);
+  // fábrica que devolve o contexto de OUTRA pessoa na credora: recusada antes de qualquer escrita
+  const { ctx } = await import("../financeiro-v2/helpers/cenario.js");
+  const outra = async () => ({ ctx: ctx(ORG_X, XIS, undefined, "eeeeeeee-0000-4000-8000-000000000099"), nucleo: s.m.nucleo, executar: (fn) => fn() });
+  await assert.rejects(s.mova.aprovador.aplicar(s.c(ORG, ALFA), { propostaId: p.id }, { nucleo: s.m.nucleo, entreEmpresas: outra }), (e) => e.codigo === "CONTRAPARTE_INVALIDA");
+  // fábrica válida: o núcleo roda DENTRO do `executar` da autorização (a sessão vinculada só vale ali)
+  let dentro = 0;
+  const valida = async () => ({ ctx: s.c(ORG_X, XIS), nucleo: s.m.nucleo, executar: async (fn) => { dentro++; return fn(); } });
+  const aplicada = await s.mova.aprovador.aplicar(s.c(ORG, ALFA), { propostaId: p.id }, { nucleo: s.m.nucleo, entreEmpresas: valida });
+  assert.deepEqual([aplicada.estado, dentro], ["APLICADA", 1]);
+  assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, (await entre(s, ORG_X, XIS)).aReceberCentavos], [VALOR_IC, VALOR_IC]);
 });

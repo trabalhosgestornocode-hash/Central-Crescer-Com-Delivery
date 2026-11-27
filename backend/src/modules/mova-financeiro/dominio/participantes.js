@@ -10,6 +10,7 @@
 //     valores vai para a conversa PRIVADA do participante; no grupo fica só o aviso. Sem conversa privada cadastrada: o MOVA não
 //     mostra o valor no grupo e diz como resolver.
 //   - Nome exibido no WhatsApp nunca identifica ninguém: a identidade é o JID (ou o telefone verificado entregue pelo Gateway).
+import { parecerRespostaDeDivergencia } from "./divergencia.js";
 
 export const ACESSO = Object.freeze({ ABERTO: "ABERTO", LISTA: "LISTA" });
 export const PERFIL = Object.freeze({ FINANCEIRO: "FINANCEIRO", CONSULTA: "CONSULTA", OPERACIONAL: "OPERACIONAL" });
@@ -23,6 +24,12 @@ export const CAPACIDADES = Object.freeze({
 export const CONSULTAS_SEM_VALORES = Object.freeze(["SITUACAO_PROPOSTAS", "PENDENCIAS", "CATEGORIAS", "DOCUMENTOS"]);
 /** Janela de continuidade: depois de responder ao participante, o MOVA escuta a PRÓXIMA mensagem dele sem exigir o nome. */
 export const JANELA_CONTINUIDADE_MS = 10 * 60 * 1000; // a mesma validade da memória curta (MEMORIA_CURTA_MS)
+export const JANELA_PENDENCIA_DO_GRUPO_MS = JANELA_CONTINUIDADE_MS;
+/** 26/11 — resposta curta a uma pergunta aberta (sim/não, número, mês, juros/parcial/outra compra), sem pergunta. Conversa comum não aciona. */
+export function respostaCurta(texto) {
+  const t = String(texto ?? "").trim();
+  return t.length > 0 && t.length <= 40 && !t.includes("?") && parecerRespostaDeDivergencia(t);
+}
 
 const JID_PRIVADO = /^[1-9][0-9]{7,14}@s\.whatsapp\.net$/;
 const JID_PARTICIPANTE = /^[A-Za-z0-9_.:@-]{1,160}$/;
@@ -183,5 +190,10 @@ export async function foiAcionado({ grupo, bruto, armazenamento }) {
   if (ehDocumentoFinanceiro(bruto)) return { acionado: true, por: "DOCUMENTO" };
   if (bruto.respostaA && await armazenamento.saida.ehRespostaPropria(bruto.respostaA)) return { acionado: true, por: "CITACAO" };
   if (typeof armazenamento.conversas?.obter === "function" && await armazenamento.conversas.obter({ grupoId: grupo.grupoId, participanteId: bruto.participanteId })) return { acionado: true, por: "CONTINUIDADE" };
+  // 26/11 — colaboração: citar o DOCUMENTO que tem pergunta aberta (de qualquer integrante), ou responder curto ("sim", "2",
+  // "outubro") quando a conversa tem pergunta aberta recente. Só aciona: quem pode responder é decidido no motor, por permissão.
+  if (bruto.respostaA && typeof armazenamento.mensagens?.temPendenteAberta === "function" && await armazenamento.mensagens.temPendenteAberta({ mensagemId: bruto.respostaA, grupoId: grupo.grupoId })) return { acionado: true, por: "PENDENCIA_CITADA" };
+  if (!bruto.respostaA && !bruto.midia && respostaCurta(bruto.texto) && typeof armazenamento.mensagens?.pendentesDoGrupo === "function"
+    && (await armazenamento.mensagens.pendentesDoGrupo({ grupoId: grupo.grupoId, validadeMs: JANELA_PENDENCIA_DO_GRUPO_MS, limite: 1 })).length > 0) return { acionado: true, por: "PENDENCIA_DO_GRUPO" };
   return { acionado: false, por: null };
 }

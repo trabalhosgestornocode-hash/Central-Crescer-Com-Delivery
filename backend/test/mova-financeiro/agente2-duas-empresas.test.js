@@ -77,7 +77,7 @@ async function cenario({ avisosNoGrupo = {}, semGrupoSubway = false, leitura = (
   const mova = criarMova({ configuracao: config, nucleo, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true, extrator, entregadores: true, operacional: porta, avisosNoGrupo });
   const enviar = async (p) => { const r = await mova.receptor.receber(p); await mova.receptor.trabalhar(); return r; };
   const saida = async () => (await banco.pool.query("select grupo_jid as destino, texto from mova.resposta order by seq")).rows;
-  const ultima = async () => (await mova.armazenamento.historico.todos()).at(-1);
+  const ultima = async () => (await mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1); // 26/11: a decisão da operação (a resposta que a retomou vem depois, como RELACIONADA)
   const fechamento = (u, chave, inicio = SEG) => real.detalharFechamentoDoEntregador(adm[u], { inicio, entregador: chave });
   const contas = async (u) => (await real.consultarContasAPagar(adm[u], { pagina: 1, tamanho: 100 })).itens;
   const anexos = () => chamadas.filter((c) => c.nome === "anexarDocumentoDoEntregador");

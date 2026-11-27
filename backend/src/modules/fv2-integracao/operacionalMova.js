@@ -25,6 +25,10 @@ export const PERFIS_OPERACIONAIS = Object.freeze({
   CRIAR_OBRIGACOES: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_obrigacao"]),
   PAGAR_COM_ENCARGO: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_juros"]),
   PRESTAR_SANGRIA: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.prestar_sangria"]),
+  // 26/11 (0033/0034) — NÃO concedidos em produção sem autorização: conta relatada por texto (parcelas, em aberto) e o registro do
+  // pagamento feito por outra empresa do grupo (precisa da concessão NAS DUAS empresas; só muda a posição da conta).
+  REGISTRAR_CONTA_RELATADA: Object.freeze(["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"]),
+  REGISTRAR_ENTRE_EMPRESAS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.registrar_intercompany"]),
 });
 export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(PERFIS_OPERACIONAIS).flat())]);
 
