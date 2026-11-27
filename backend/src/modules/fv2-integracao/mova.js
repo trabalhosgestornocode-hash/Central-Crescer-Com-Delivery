@@ -173,6 +173,9 @@ export function lerConfiguracaoMova(env) {
     // Vazio = sem teto diário; inválido = 0 (nada sai). Só a configuração amplia; o código nunca.
     envioMaximoDia: env.MOVA_ENVIO_MAXIMO_DIA ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_DIA) : 0) : null,
     envioMaximoPorConversaDia: env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA ? (/^[0-9]{1,3}$/.test(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) : 0) : (env.MOVA_ENVIO_MAXIMO_DIA ? 10 : null),
+    // 28/11: fila de saída priorizada (limites configuráveis em mova.limite_envio, sem deploy). Exige a migração 0027; sem ela o código segue
+    // com o enviador legado (a detecção é automática) e os tetos MOVA_ENVIO_MAXIMO_* abaixo continuam valendo. Com a flag, eles são ignorados.
+    filaPrioridade: sim(env.MOVA_FILA_PRIORIDADE),
     respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
     // MOVA CORE: conversa natural (SOMBRA | RESPOSTA) só com a IA do MOVA ligada e só nas unidades de MOVA_CORE_CONVERSA_UNIDADES.
     conversaCore: ia ? configuracaoDaConversa(env) : Object.freeze({ modo: "DESLIGADO", motivo: "SEM_IA", unidades: [] }),
@@ -365,7 +368,15 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
   const enviadorBase = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
     habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
-    maximoPorDia: cfg.envioMaximoDia ?? null, maximoPorConversaDia: cfg.envioMaximoPorConversaDia ?? null,
+    maximoPorDia: cfg.filaPrioridade ? null : cfg.envioMaximoDia ?? null, maximoPorConversaDia: cfg.filaPrioridade ? null : cfg.envioMaximoPorConversaDia ?? null,
+    politica: cfg.filaPrioridade ? {
+      regras: () => mova.armazenamento.limitesDeEnvio.regrasAtivas(),
+      // Alerta de uso/represamento: vai ao grupo financeiro da unidade (ou ao primeiro grupo financeiro autorizado), como aviso administrativo crítico.
+      avisarAdministracao: async ({ texto, unidadeId }) => {
+        const gs = configuracao.gruposAutorizados.filter((g) => !g.privada && !g.entregador && g.politicaResposta === "GRUPO_FINANCEIRO");
+        const g = gs.find((x) => unidadeId && x.unidades?.includes(unidadeId)) ?? gs[0];
+        if (g) await mova.armazenamento.saida.enfileirar({ grupoId: g.grupoId, respostaA: null, eventoId: null, texto, categoria: "ADMINISTRATIVA", prioridade: 0 });
+      } } : null,
     // Homologação/piloto: só conversas PRIVADAS autorizadas. OPERACAO: os grupos por LISTA e as privadas DERIVADAS da lista.
     destinosPermitidos: () => configuracao.gruposAutorizados.map((g) => g.grupoId).filter((j) => cfg.modo === "OPERACAO" || ehConversaPrivada(j)) });
   const recarregar = async () => {

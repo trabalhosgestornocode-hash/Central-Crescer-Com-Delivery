@@ -146,3 +146,28 @@ export function criarCircuito({ falhasSeguidas, pausaSegundos }) {
     get abertoAte() { return abertoAte; },
   };
 }
+
+/**
+ * Classe (categoria + prioridade) de cada tipo de mensagem AUTOMÁTICA já existente no MOVA. Pedido do proprietário (28/11):
+ * crítica = pagamento efetivado, nota conferida, divergência, estorno e respostas diretas; alta = demonstrativo semanal, solicitação
+ * de nota, avisos de fechamento e avisos financeiros administrativos; normal = lembretes, acompanhamentos e resumos consolidados.
+ */
+export const CLASSE_POR_TIPO = Object.freeze({
+  PAGAMENTO: { categoria: CATEGORIA.TRANSACIONAL, prioridade: PRIORIDADE.CRITICA },
+  PAGAMENTO_PARCIAL: { categoria: CATEGORIA.TRANSACIONAL, prioridade: PRIORIDADE.CRITICA },
+  ESTORNO: { categoria: CATEGORIA.TRANSACIONAL, prioridade: PRIORIDADE.CRITICA },
+  AVISO_GRUPO: { categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.ALTA },
+  SEMANAL: { categoria: CATEGORIA.PROATIVA, prioridade: PRIORIDADE.ALTA },
+  AVISO_DEMONSTRATIVO: { categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.ALTA },
+  AVISO_LIBERACAO: { categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.ALTA },
+  AVISO_NOTA_RECEBIDA: { categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.ALTA },
+  COBRANCA_NOTA: { categoria: CATEGORIA.ACOMPANHAMENTO, prioridade: PRIORIDADE.NORMAL },
+  RELATORIO_QUARTA: { categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.NORMAL },
+});
+
+/** Campos de enfileiramento de uma mensagem automática: classe do tipo, validade pela prioridade e escopo (empresa/unidade). */
+export function enfileiramentoDoTipo(tipo, { agora = new Date(), organizacaoId = null, unidadeId = null, reenvio = false, limites = LIMITES_PADRAO } = {}) {
+  const base = CLASSE_POR_TIPO[tipo] ?? { categoria: CATEGORIA.PROATIVA, prioridade: PRIORIDADE.ALTA };
+  const categoria = reenvio ? CATEGORIA.REENVIO : base.categoria;
+  return { categoria, prioridade: base.prioridade, validaAte: new Date(agora.getTime() + validadeEmMs(base.prioridade, limites)).toISOString(), organizacaoId, unidadeId };
+}

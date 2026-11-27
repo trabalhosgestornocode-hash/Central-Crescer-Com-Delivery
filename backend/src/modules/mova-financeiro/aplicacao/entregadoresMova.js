@@ -14,6 +14,7 @@ import { reais, dataBr } from "./respostas.js";
 import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
+import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
 import { INTENCAO, INTENCOES_PARA_IA, TEXTO_FIXO, interpretarPergunta, nomesDeOutros, redigirConsulta, validarInterpretacao } from "../dominio/consultaEntregador.js";
 
@@ -252,7 +253,9 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const u = unidadeDe(unidadeId ?? ent.unidadeId);
     if (!(await a.enviosEntregador.registrar({ chave, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, entregador: entregador ?? ent?.chave ?? "-", tipo, semanaInicio }))) return false;
     if (texto !== null) {
-      const respostaId = await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
+      // 28/11: cada tipo tem categoria, prioridade e validade próprias (fila priorizada do enviador; ver dominio/politicaEnvio.js).
+      const respostaId = await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true,
+        ...enfileiramentoDoTipo(tipo, { agora: relogio(), organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }) });
       // 23/11: o aviso à gerência espera o retorno do WhatsApp desta mensagem (ENVIADA ou FALHOU) — ver confirmarEnvios.
       if (tipo === "SEMANAL" && respostaId && typeof a.enviosEntregador.vincularResposta === "function") await a.enviosEntregador.vincularResposta(chave, respostaId);
     }

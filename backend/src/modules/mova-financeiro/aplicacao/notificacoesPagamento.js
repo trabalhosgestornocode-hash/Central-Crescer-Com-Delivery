@@ -15,6 +15,7 @@ import {
   chaveDoEvento, fatosDeBaixa, gruposDeEstorno, mensagemDePagamento,
 } from "../dominio/notificacaoPagamento.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
+import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
 
 export const AUTOMACAO_PAGAMENTO = "ENTREGADORES_PAGAMENTO";
 const FUSO_MS = -3 * 3600 * 1000; // America/Fortaleza
@@ -67,14 +68,16 @@ export function criarNotificacoesPagamento({ cfg, porta, armazenamento: a, relog
     for (const g of gruposDeEstorno(novosEstornos)) await criarEvento(u, g, resumo);
   }
 
-  const enfileirar = (destino, texto) => a.saida.enfileirar({ grupoId: destino, respostaA: null, eventoId: null, texto, simulada: true });
+  // 28/11: pagamento/estorno ao entregador = TRANSACIONAL crítica; aviso consolidado ao grupo = administrativa alta; reenvio = categoria REENVIO.
+  const enfileirar = (destino, texto, e = null, { reenvio = false } = {}) => a.saida.enfileirar({ grupoId: destino, respostaA: null, eventoId: null, texto, simulada: true,
+    ...(e ? enfileiramentoDoTipo(e.destino === "GRUPO" ? "AVISO_GRUPO" : e.tipo, { agora: relogio(), organizacaoId: e.organizacaoId ?? null, unidadeId: e.unidadeId ?? null, reenvio }) : {}) });
 
   /** Reserva (condicional) → enfileira → liga a mensagem. Falha ao enfileirar devolve o evento a PENDENTE. */
   async function reservarEEnviar(e, { de, destino, texto, extra = {} }) {
     const reservado = await a.pagamentos.atualizar(e.id, { de, estado: E.ENFILEIRADO, ...extra });
     if (!reservado) return false; // outra instância/passada já pegou
     let respostaId;
-    try { respostaId = await enfileirar(destino, texto); } catch (erro) {
+    try { respostaId = await enfileirar(destino, texto, e); } catch (erro) {
       await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: E.PENDENTE, ultimoErro: "ENFILEIRAR_FALHOU" });
       throw erro;
     }
@@ -177,7 +180,7 @@ export function criarNotificacoesPagamento({ cfg, porta, armazenamento: a, relog
     }
     const reservado = await a.pagamentos.atualizar(e.id, { de: [e.estado], estado: E.ENFILEIRADO, reenvios: e.reenvios + 1 });
     if (!reservado) return { ok: false, motivo: "CONCORRENCIA" };
-    try { const respostaId = await enfileirar(destino, texto); await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: E.ENFILEIRADO, respostaId }); }
+    try { const respostaId = await enfileirar(destino, texto, e, { reenvio: true }); await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: E.ENFILEIRADO, respostaId }); }
     catch (erro) { await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: e.estado, ultimoErro: "ENFILEIRAR_FALHOU" }); throw erro; }
     await a.auditoria.registrar({ acao: "NOTIFICACAO_PAGAMENTO_REENVIADA", atorTipo: "USUARIO", atorRef: por ?? null, alvo: e.id, dados: { de: e.estado, reenvio: e.reenvios + 1, forcado: Boolean(forcar) } });
     return { ok: true, evento: await a.pagamentos.obter(e.id, { organizacaoId, unidadeId }) };
