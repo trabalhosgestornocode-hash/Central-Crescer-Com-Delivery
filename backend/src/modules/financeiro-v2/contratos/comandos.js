@@ -267,7 +267,7 @@ export function validarObrigacao(e) {
  * a competência é a da COMPRA (nunca derivada dos vencimentos). Sem documento, sem recorrência, de 1 a 24 parcelas.
  */
 export function validarContaParcelada(e) {
-  semCamposDesconhecidos(e, ["contraparteNova", "categoria", "descricao", "competencia", "dataEmissao", "parcelas", "moeda", "fonte", "formaPagamento"], "contaParcelada");
+  semCamposDesconhecidos(e, ["contraparteNova", "categoria", "descricao", "competencia", "dataEmissao", "parcelas", "moeda", "fonte", "formaPagamento", "observacao"], "contaParcelada");
   if (!Array.isArray(e.parcelas) || e.parcelas.length < 1 || e.parcelas.length > 24) falhar(CODIGO.ENTRADA_INVALIDA, "Informe de 1 a 24 parcelas.", { campo: "parcelas" });
   const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
   const parcelas = e.parcelas.map((p, i) => {
@@ -288,6 +288,8 @@ export function validarContaParcelada(e) {
     valorOriginalCentavos: parcelas.reduce((s, p) => s + p.valorCentavos, 0),
     moeda: moeda(e.moeda),
     formaPagamento: e.formaPagamento === undefined || e.formaPagamento === null ? null : exigirUmDe(e.formaPagamento, ["CARTAO", "BOLETO", "PIX", "DINHEIRO", "TRANSFERENCIA"], "formaPagamento"),
+    // 27/11: observações ditas pela pessoa (ex.: composição "Jailton R$ 395,34; Vanessa R$ 2.515,74"), preservadas na conta (texto livre)
+    observacao: e.observacao === undefined || e.observacao === null || e.observacao === "" ? null : exigirTexto(e.observacao, "observacao", { max: 500 }),
     fonte: fonte(e.fonte),
   };
 }

@@ -156,7 +156,7 @@ export function parecerRespostaDeDivergencia(texto) {
   // palavra solta ("outra", "parcial", "juros", mês) só é RESPOSTA em frase curta: "mostre o faturamento de outra empresa" é PEDIDO
   // novo (e passa pelas próprias travas), nunca a resposta de uma pergunta pendente.
   const curta = t.split(" ").length <= 5;
-  // 27/11: resposta com o VENCIMENTO da conta relatada ("15/12/2026", "vencimento 15/12", "dia 15/12")
+  // 27/11 (#245): resposta com o VENCIMENTO da conta relatada ("15/12/2026", "vencimento 15/12", "dia 15/12")
   if (/^(vencimento |vence |venc |dia |vencimento dia )?\d{1,2}[ /]\d{1,2}([ /](\d{2}|\d{4}))?$/.test(t)) return true;
   return SIM.test(t) || NAO.test(t) || /^[0-9]$/.test(t) || /^(nao sei|deixa para o financeiro|deixa pro financeiro|classificar depois|deixa para depois)$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || (curta && (PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t)));
 }

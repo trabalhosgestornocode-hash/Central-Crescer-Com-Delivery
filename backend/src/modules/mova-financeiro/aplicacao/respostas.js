@@ -94,8 +94,6 @@ export const RESPOSTA = Object.freeze({
   // 27/11 — a pessoa disse um VALOR em reais diferente do comprovante: divergência real, a proposta segue protegida.
   valorDivergenteNoEsclarecimento: (informado, comprovado) => `O valor que você informou (${reais(informado)}) é diferente do que o comprovante mostra (${reais(comprovado)}). Mantive a proposta em revisão, sem registrar nada. Confirme qual é o valor correto.`,
   esclarecimentoRecebido: (qtd) => `Anotei o esclarecimento (${qtd === 1 ? "a dúvida da leitura foi resolvida" : "as dúvidas da leitura foram resolvidas"}); a leitura original continua guardada na auditoria. Reavaliei a proposta pela política vigente.`,
-  // 27/11 — falta só o vencimento da conta (a data do desconto da remuneração NÃO é vencimento).
-  contaRelatadaVencimento: (temObservacao) => `Qual é o vencimento da conta (a data em que ela vence com o banco/fornecedor)?${temObservacao ? " A data do desconto da remuneração fica só nas observações." : ""} Responda citando esta mensagem. Nada foi registrado.`,
   propostaNaoRetomavel: () => "Essa proposta não pode ser retomada por aqui (já decidida ou de outro tipo). Nada foi alterado.",
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
@@ -148,7 +146,8 @@ export const RESPOSTA = Object.freeze({
   fonteOficial: (canais) => `Receita não é lançada pelo MOVA: cada canal tem fonte oficial (${canais}). Este documento fica só como evidência.`,
   fonteNaoConfirmada: () => "As fontes de faturamento desta unidade ainda não estão confirmadas no Financeiro. Nada foi registrado.",
   propostaBaixa: (p) => `Proposta ${curto(p.id)} criada para revisão: baixa ${p.parcial ? "PARCIAL " : ""}de ${reais(p.valorCentavos)} na conta a pagar existente (pagamento em ${dataBr(p.datas.caixa)}). Nada foi lançado ainda.`,
-  propostaDespesaPaga: (p, x = {}) => `Proposta ${curto(p.id)} criada para revisão: compra nova já paga de ${reais(p.valorCentavos)} (competência ${p.datas.competencia ?? "a confirmar"}, caixa em ${dataBr(p.datas.caixa)}).${p.comando?.entrada ? `\n${linhasDaCompra(p, x)}\n` : " "}Ao confirmar no Centro Financeiro, a conta e o pagamento entram juntos (uma despesa, uma baixa). Nada foi lançado ainda.`,
+  propostaDespesaPaga: (p, x = {}) => x.patrimonial ? `Proposta ${curto(p.id)} criada para aprovação no Centro Financeiro: pagamento já feito de ${reais(p.valorCentavos)}${x.comDesconto ? ` (${x.comDesconto.replace(/^ — /, "")})` : ""}, em ${dataBr(p.datas.caixa)}, competência ${p.datas.competencia ?? "a confirmar"}.\nCategoria patrimonial (principal de empréstimo/financiamento, fora da DRE): ao aprovar, a conta e o pagamento entram juntos, já QUITADOS — nada fica em aberto e nada vira despesa. Nada foi lançado ainda.`
+    : `Proposta ${curto(p.id)} criada para revisão: compra nova já paga de ${reais(p.valorCentavos)} (competência ${p.datas.competencia ?? "a confirmar"}, caixa em ${dataBr(p.datas.caixa)}).${p.comando?.entrada ? `\n${linhasDaCompra(p, x)}\n` : " "}Ao confirmar no Centro Financeiro, a conta e o pagamento entram juntos (uma despesa, uma baixa). Nada foi lançado ainda.`,
   // 24/11: boleto/nota → Contas a Pagar e nota vinculada à conta existente.
   contaRegistrada: (p, r) => `Conta a pagar registrada: ${reais(p.valorCentavos)}${r?.favorecido ? ` para ${r.favorecido}` : ""}, vencimento ${dataBr(r?.vencimento ?? p.datas?.vencimento)} (competência ${r?.competencia ?? p.datas?.competencia}). Documento anexado; a conta está em aberto no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
   notaParaVincular: (p, t) => `Esta nota é da conta a pagar já registrada (${reais(t.valorOriginalCentavos)}, vencimento ${dataBr(t.vencimento)}). Proposta ${curto(p.id)}: anexar a nota a essa conta, sem lançar nada novo.`,
@@ -166,20 +165,34 @@ export const RESPOSTA = Object.freeze({
     `0 — deixar para classificar no Centro Financeiro${sugestaoDeCriacao ? ` (com a sugestão de criar "${sugestaoDeCriacao}")` : ""}`,
     "Responda com o número. Nada foi registrado ainda.",
   ].join("\n"),
-  contaRelatadaResumo: (c, { unidade, categoriaNome, avisoFatura, sugestaoDeCriacao = null }) => [
+  contaRelatadaResumo: (c, { unidade, categoriaNome, avisoFatura, sugestaoDeCriacao = null, patrimonial = false }) => [
     `Confere antes de eu registrar (${unidade}):`,
     `• ${c.descricao}${c.fornecedor ? ` — fornecedor ${c.fornecedor}` : " — fornecedor não informado"}`,
-    `• Categoria: ${categoriaNome ?? `a classificar no Centro Financeiro${sugestaoDeCriacao ? ` (sugestão: criar "${sugestaoDeCriacao}")` : ""}`}`,
+    `• Categoria: ${categoriaNome ?? `a classificar no Centro Financeiro${sugestaoDeCriacao ? ` (sugestão: criar "${sugestaoDeCriacao}")` : ""}`}${patrimonial ? " (patrimonial: fora do resultado/DRE)" : ""}`,
     `• Competência: ${c.competencia.slice(5)}/${c.competencia.slice(0, 4)}${c.forma ? ` • Forma: ${{ CARTAO: "cartão", BOLETO: "boleto", PIX: "Pix", DINHEIRO: "dinheiro", TRANSFERENCIA: "transferência" }[c.forma]}` : ""}`,
     ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}${p.observacao ? ` (${p.observacao})` : ""}`),
     `• Total: ${reais(c.totalCentavos)} — situação: A PAGAR`,
     ...(c.observacaoCompleta?.observacao ? [`• Observações: ${c.observacaoCompleta.observacao}`, ...(c.observacaoCompleta.cabe ? [] : ["• A descrição da conta tem limite de 200 caracteres: ela aponta para esta proposta, que guarda a observação completa."])] : []),
     ...(avisoFatura ? [avisoFatura] : []),
-    `Responda "sim" para registrar ou "não" para cancelar. Nada foi registrado ainda.`,
+    ...(patrimonial ? ["Categoria patrimonial: com o \"sim\", a conta vai para aprovação no Centro Financeiro (o registro direto pela conversa cobre só despesas)."] : []),
+    `Responda "sim" para registrar ou "não" para cancelar (se já foi paga, responda "não" e envie o comprovante). Nada foi registrado ainda.`,
   ].join("\n"),
+  // 27/11 — o que falta numa conta relatada (perguntado de uma vez; o que já foi dito fica guardado)
+  contaRelatadaFaltas: (c, faltas, unidade) => {
+    const nomes = { VENCIMENTO: "o vencimento (a data em que a conta vence)", VENCIMENTOS_DAS_PARCELAS: "o vencimento de cada parcela", DATA_INVALIDA: "uma data de vencimento válida (dia/mês)",
+      VENCIMENTO_ANTERIOR_A_COMPRA: "vencimentos a partir da data da compra", COMPETENCIA: "o mês de referência (competência)", VALOR: "o valor", VALORES_DIFERENTES: "qual é o valor total (a mensagem tem mais de um)", DESCRICAO: "o que é a conta (descrição)" };
+    const ja = [c.descricao, c.valorCitadoCentavos ? reais(c.valorCitadoCentavos) : null, c.fornecedor ? `credor/fornecedor ${c.fornecedor}` : null].filter(Boolean).join(", ");
+    return [
+      `Para registrar ${ja ? `a conta (${ja}) ` : "a conta "}na ${unidade}, falta:`,
+      ...[...new Set(faltas)].map((f) => `• ${nomes[f] ?? f}`),
+      `Responda a esta mensagem (ex.: "vence 10/12, referente a novembro/2026"). Nada foi registrado ainda.`,
+    ].join("\n");
+  },
+  // 27/11 (#245) — falta só o vencimento da conta (a data do desconto da remuneração NÃO é vencimento).
+  contaRelatadaVencimento: (temObservacao) => `Qual é o vencimento da conta (a data em que ela vence com o banco/fornecedor)?${temObservacao ? " A data do desconto da remuneração fica só nas observações." : ""} Responda citando esta mensagem. Nada foi registrado.`,
   contaRelatadaCancelada: () => "Ok, não registrei essa conta. Nada foi lançado.",
   contaRelatadaRegistrada: (c, r) => `Conta a pagar registrada (em aberto): ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}; primeiro vencimento ${dataBr(c.parcelas[0].vencimento)}. Aparece no Contas a Pagar e no calendário.${r?.contaCriada === false ? " (Já existia: reaproveitada.)" : ""}`,
-  contaRelatadaProposta: (p, c, { aClassificar = false } = {}) => `Proposta ${curto(p.id)} criada para ${aClassificar ? "classificação e aprovação" : "aprovação"} no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}. Nada foi lançado ainda.`,
+  contaRelatadaProposta: (p, c, { aClassificar = false, patrimonial = false } = {}) => `Proposta ${curto(p.id)} criada para ${aClassificar ? "classificação e aprovação" : "aprovação"} no Centro Financeiro: ${c.descricao}, ${c.parcelas.length} parcela${c.parcelas.length > 1 ? "s" : ""}, total ${reais(c.totalCentavos)}.${patrimonial ? " Categoria patrimonial (fora da DRE): a aprovação registra a conta em aberto, sem despesa." : ""} Nada foi lançado ainda.`,
   contaRelatadaFaturaDoCartao: (f) => `⚠ Já existe fatura do cartão em aberto com vencimento ${dataBr(f.vencimento)} (${reais(f.saldoCentavos ?? f.valorOriginalCentavos)}). Se esta compra já está nessa fatura, responda "não" para não contar duas vezes.`,
   // 26/11 — operação entre empresas (uma empresa do grupo pagou pela outra). Texto da pergunta conforme o pedido do proprietário.
   entreEmpresasPergunta: ({ credora, devedora, valorCentavos, existente, varias, porValor = false, favorecido = null }) => `Identifiquei que a ${credora} realizou um pagamento de ${reais(valorCentavos)} referente ao ${devedora}. Confirma que devo registrar a despesa no ${devedora} e o valor como uma dívida do ${devedora} com a ${credora}?`

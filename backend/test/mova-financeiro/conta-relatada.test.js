@@ -251,12 +251,28 @@ t("CR-11 empréstimo BNB ponta a ponta: resumo com as observações individuais,
   assert.match(resumo, /2\/3: vence 10\/01\/2027 — R\$\s?970,36 \(reajuste IPCA\)/);
   assert.match(resumo, /Total: R\$\s?2\.911,08/);
   await s.enviar(gw({ texto: "sim" }));
-  assert.equal((await s.decisao()).decisao, "EXECUTADO", JSON.stringify(await s.decisao()));
+  assert.equal((await s.decisao()).decisao, "PROPOSTA", JSON.stringify(await s.decisao()));
+  await aprovarEmprestimoNaCentral(s);
   const cs = await s.contas();
   assert.deepEqual([cs.length, cs.reduce((x, c) => x + c.saldoCentavos, 0), cs.every((c) => c.situacao !== "QUITADA")], [3, 291108, true]);
   await s.enviar(gw({ texto: "sim" }));
   assert.equal((await s.contas()).length, 3, "repetir o 'sim' não duplica");
 });
+
+/**
+ * 27/11 (consolidação #244/#245): o principal do empréstimo é PATRIMONIAL ("Empréstimos e financiamentos (principal)", fora da DRE) e
+ * nunca vira despesa. A permissão ESTREITA do MOVA (0033) registra só despesa/imobilizado ⇒ o "sim" cria a PROPOSTA (nada lançado) e a
+ * Central (registro amplo) aprova. Esta função confere isso e aprova, para os testes seguirem conferindo a conta registrada.
+ */
+async function aprovarEmprestimoNaCentral(s) {
+  const [p] = await s.propostas();
+  assert.equal(p?.comando?.entrada?.categoria, "EMPRESTIMOS_E_FINANCIAMENTOS", "principal do empréstimo: categoria patrimonial");
+  assert.equal((await s.contas()).length, 0, "patrimonial: a permissão estreita não registra sozinha");
+  assert.equal((await s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id })).estado, "APLICADA");
+  const ls = await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" });
+  assert.ok(ls.length > 0 && ls.every((l) => l.natureza === "PATRIMONIAL"), "fora da DRE");
+  return p;
+}
 
 // ------------------------------------------------------------------ 27/11: PLANO DE CONTAS em árvore + observação completa (BNB)
 import { CATALOGO } from "../../src/modules/mova-core/catalogo.js";
@@ -299,6 +315,7 @@ t("OB-1 empréstimo BNB: composição do total (Jailton + Vanessa = total) e o d
   assert.match(resumo, /1\/1: vence 15\/12\/2026/, "o vencimento é o dito; a data do desconto (07/12) é outra informação");
   assert.doesNotMatch(resumo, /vence 07\/12/);
   await s.enviar(gw({ texto: "sim" }));
+  await aprovarEmprestimoNaCentral(s);
   const cs = await s.contas();
   assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"]);
   const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
@@ -314,6 +331,7 @@ t("OB-2 observação MAIOR que o limite de 200 caracteres da descrição: a cont
   await s.ateOResumo(gw({ texto: longo }));
   assert.match(await s.ultimoTexto(), /guarda a observação completa/);
   await s.enviar(gw({ texto: "sim" }));
+  await aprovarEmprestimoNaCentral(s);
   const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
   assert.match(String(lanc.descricao), /obs\. completa na proposta MOVA/);
   const [p] = await s.propostas();
@@ -358,6 +376,7 @@ t("OB-5 vencimento em RESPOSTA posterior: o MOVA pergunta só o vencimento, guar
     assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
     assert.doesNotMatch(resumo, /vence 07\/12/);
     await s.enviar(gw({ texto: "sim" }));
+    await aprovarEmprestimoNaCentral(s);
     const cs = await s.contas();
     assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"], resposta);
   }

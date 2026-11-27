@@ -1,0 +1,37 @@
+-- RASCUNHO — NÃO APLICAR. Financeiro v2 0035: ação ESTREITA `registrar_emprestimo` (principal de empréstimo/financiamento, fora da DRE).
+-- Proposta: docs/mova/proposta-permissao-emprestimos/README.md. Antes de virar migração: revisão, testes no PostgreSQL real e autorização.
+-- Escopo: SÓ a categoria EMPRESTIMOS_E_FINANCIAMENTOS. Lucros, aportes/retiradas, entre empresas, terceiros, títulos anteriores e
+-- parcelamento tributário continuam recusados para qualquer ação estreita.
+begin;
+set local search_path = financeiro_v2, public;
+
+-- 1) a ação nova entra na lista fechada de ações concedíveis
+alter table fv2_concessao drop constraint fv2_concessao_acoes_lista;
+alter table fv2_concessao add constraint fv2_concessao_acoes_lista check (acoes <@ '["financeiro_v2.ver", "financeiro_v2.registrar", "financeiro_v2.corrigir", "financeiro_v2.cancelar", "financeiro_v2.conciliar", "financeiro_v2.fechar", "financeiro_v2.homologar", "financeiro_v2.revisar", "financeiro_v2.configurar", "financeiro_v2.importar", "financeiro_v2.conceder", "financeiro_v2.documentos", "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.revogar", "financeiro_v2.confirmar_importacao", "financeiro_v2.reabrir", "financeiro_v2.reclassificar", "financeiro_v2.enviar_documento", "financeiro_v2.vincular_pagamento", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros", "financeiro_v2.prestar_sangria", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany", "financeiro_v2.registrar_emprestimo"]'::jsonb);
+
+-- 2) quem opera SÓ com a ação estreita de empréstimo (mesmo padrão das demais: tem a ação e NÃO tem as amplas)
+create or replace function fv2_so_registra_emprestimo() returns boolean language sql stable as $$
+  select not (select rolsuper from pg_roles where rolname = current_user)
+     and fv2_tem_acao(array['financeiro_v2.registrar_emprestimo'])
+     and not fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.aplicar', 'financeiro_v2.corrigir', 'financeiro_v2.cancelar', 'financeiro_v2.conciliar'])
+$$;
+
+-- 3) o gatilho das contas a pagar estreitas (0030/0033) passa a aceitar, ALÉM do que já aceita, o lançamento PATRIMONIAL da
+--    categoria EMPRESTIMOS_E_FINANCIAMENTOS — e só para quem tem `registrar_emprestimo`. Nada mais muda (mesma forma de conta,
+--    mesma exigência de lançamento criado na mesma transação, mesma soma das parcelas).
+--    Trecho a alterar em fv2_obrigacao_documental():
+--      if new.natureza = 'DESPESA' or (parcelada and new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'IMOBILIZADO') then return new; end if;
+--    passa a ser:
+--      if new.natureza = 'DESPESA' or (parcelada and new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'IMOBILIZADO')
+--         or (fv2_so_registra_emprestimo() and new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'EMPRESTIMOS_E_FINANCIAMENTOS') then return new; end if;
+--    e, na forma da 0030 (conta documental de UMA parcela), `l.natureza = 'DESPESA'` passa a aceitar também
+--      (fv2_so_registra_emprestimo() and l.natureza = 'PATRIMONIAL' and l.categoria_codigo = 'EMPRESTIMOS_E_FINANCIAMENTOS').
+--    (A função completa é recriada a partir da versão instalada da 0034 na hora de transformar este rascunho em migração.)
+
+-- 4) conferência dentro da transação: a lista tem a ação nova e a função existe
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'fv2_concessao_acoes_lista' and pg_get_constraintdef(oid) like '%registrar_emprestimo%') then
+    raise exception 'lista de ações sem registrar_emprestimo';
+  end if;
+end $$;
+rollback; -- RASCUNHO: troca para commit só na versão aprovada
