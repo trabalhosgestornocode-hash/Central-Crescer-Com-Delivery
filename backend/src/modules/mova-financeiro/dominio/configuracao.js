@@ -148,8 +148,16 @@ export function validarConfiguracao(c) {
   entregadores = Object.freeze(entregadores.map((e) => Object.freeze({ ...e, organizacaoId: orgDe.get(e.unidadeId) })));
   const ocupados = new Set([...grupos, ...derivadas].map((g) => g.grupoId));
   const dosEntregadores = conversasDosEntregadores(entregadores, { ocupados });
+  // 27/11: lojas das MESMAS empresas que estão no cadastro da plataforma e não no MOVA (só para reconhecer e BLOQUEAR um
+  // documento delas; nunca dão acesso, conversa ou escopo). Entrada inválida é descartada; habilitada nunca entra aqui.
+  const orgs = new Set(unidades.map((u) => u.organizacaoId));
+  const unidadesNaoHabilitadas = Object.freeze((Array.isArray(c.unidadesNaoHabilitadas) ? c.unidadesNaoHabilitadas : [])
+    .filter((u) => UUID.test(u?.unidadeId ?? "") && UUID.test(u?.organizacaoId ?? "") && typeof u.nome === "string" && u.nome.trim())
+    .map((u) => ({ unidadeId: u.unidadeId.toLowerCase(), organizacaoId: u.organizacaoId.toLowerCase(), nome: u.nome.trim().slice(0, 120) }))
+    .filter((u) => orgs.has(u.organizacaoId) && !ids.has(u.unidadeId))
+    .map((u) => Object.freeze(u)));
   return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
-    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores });
+    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores, unidadesNaoHabilitadas });
 }
 
 /**

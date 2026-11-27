@@ -82,6 +82,10 @@ export const RESPOSTA = Object.freeze({
   pendenteUnidadeIncompleta: () => "Atenção: esta unidade ainda tem o cadastro financeiro incompleto; a proposta fica guardada e só poderá ser aplicada depois de completar o cadastro.",
   unidadeConflitante: () => "Encontrei indicações de unidades diferentes neste documento. Confirme a unidade respondendo a esta mensagem. Nada foi registrado.",
   documentoDeOutraUnidade: () => "O documento parece ser de outra unidade (ou de uma unidade que este grupo não atende). Confira e reenvie no lugar certo. Nada foi registrado.",
+  // 27/11: loja da mesma empresa que existe no cadastro e não está habilitada no MOVA (texto aprovado pelo proprietário).
+  unidadeNaoHabilitada: (nome, { documento = true } = {}) => documento
+    ? `Identifiquei que este documento pertence à ${nome}. Essa unidade ainda não está habilitada no Financeiro do MOVA. Nenhum lançamento foi realizado.`
+    : `A ${nome} ainda não está habilitada no Financeiro do MOVA. Nenhuma informação dela é consultada ou registrada por aqui.`,
   // 24/11: comprovante pago pela conta de uma unidade que esta conversa não atende (identificada pelo titular da conta pagadora).
   pagadorDeOutraUnidade: (nome) => `Este comprovante foi pago pela conta da ${nome}, que esta conversa não atende. Envie pelo canal autorizado da ${nome} ou peça ao administrador para liberar o acesso. Nada foi registrado.`,
   operacaoBloqueada: () => "Não executo pagamentos bancários nem exclusões. Essas ações são feitas por uma pessoa autorizada, no Financeiro. Nada foi alterado.",

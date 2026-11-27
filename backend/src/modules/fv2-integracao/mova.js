@@ -243,7 +243,7 @@ export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } 
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null }) {
+export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null, unidadesDaPlataforma = null }) {
   let cfg = cfgRecebida;
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
     // HOMOLOGACAO/PILOTO: estado no banco de homologação marcado. OPERACAO: schema próprio de produção marcado (nunca o de teste).
@@ -253,7 +253,19 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
     // HOMOLOGACAO: o Financeiro também é o de homologação. PILOTO: a credencial do Financeiro é de leitura pura (0028).
     await verificarBancoFinanceiro();
   }
-  const lerConfiguracao = async () => validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
+  // 27/11: lojas das mesmas empresas no CADASTRO da plataforma (para reconhecer e bloquear documento de loja não habilitada).
+  // Lido uma vez (cache); falha não derruba o MOVA: fica registrada e é tentada de novo na próxima leitura da configuração.
+  let naoHabilitadas = null;
+  const lerConfiguracao = async () => {
+    const bruta = await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" });
+    if (unidadesDaPlataforma && naoHabilitadas === null) {
+      try {
+        naoHabilitadas = await unidadesDaPlataforma([...new Set(bruta.unidades.map((u) => u.organizacaoId))]);
+        registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES", total: naoHabilitadas.length });
+      } catch (e) { registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES_INDISPONIVEL", codigo: String(e?.codigo ?? e?.code ?? "ERRO").slice(0, 40) }); }
+    }
+    return validarConfiguracao({ ...bruta, unidadesNaoHabilitadas: naoHabilitadas ?? [] });
+  };
   // 23/11: só a lista de entregadores é recarregada em funcionamento (a cada envio/rotina, no máximo 1×/min, ou na hora pelo cadastro).
   const configuracao = configuracaoViva(await lerConfiguracao(), { recarregar: lerConfiguracao, relogio: () => relogio().getTime() });
   if (cfg.modo === "PILOTO") exigirEscopoDoPiloto(configuracao, cfg.pilotoUnidadeId);
@@ -400,6 +412,13 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       await c.connect();
       try { await exigirBancoDeHomologacao(c, cfg.marcador); } finally { await c.end(); }
     };
+    // 27/11: cadastro de lojas da plataforma (só id, empresa e nome), lido pelo cliente de serviço; import tardio (testes sem .env).
+    const unidadesDaPlataforma = async (organizacoes) => {
+      const { supabase } = await import("../../config/supabase.js");
+      const { data, error } = await supabase.from("unidades").select("id, organizacao_id, nome").in("organizacao_id", organizacoes);
+      if (error) throw Object.assign(new Error("cadastro de unidades indisponível"), { codigo: error.code ?? "SUPABASE" });
+      return (data ?? []).map((u) => ({ unidadeId: u.id, organizacaoId: u.organizacao_id, nome: u.nome }));
+    };
     let criarClienteIa = null;
     if (cfg.ia && !env.ANTHROPIC_API_KEY) registrar({ evento: "MOVA_IA_SEM_CHAVE", aviso: "MOVA_IA_HABILITADA=1 sem ANTHROPIC_API_KEY: leitura por IA fica desligada" }); // falha segura: o resto segue
     if (cfg.ia && env.ANTHROPIC_API_KEY) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 0, timeout: 60_000 }); } // sem nova tentativa oculta: cada tentativa passa pela reserva
@@ -416,10 +435,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });
       // Escrita (Frente C/D): só se a plataforma registrar o provedor da identidade operacional (implantação do Agente 1).
       const operacionalDaPlataforma = cfg.escrita ? (obterDependenciasFv2?.()?.operacionalMova ?? null) : null;
-      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma, titularDaFila: criarTitularPorGeracao({ pool, geracao: GERACAO_DA_INSTANCIA, registrar }) });
+      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma, titularDaFila: criarTitularPorGeracao({ pool, geracao: GERACAO_DA_INSTANCIA, registrar }), unidadesDaPlataforma });
     }
     const dep = obterDependenciasFv2();
-    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });
+    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar, unidadesDaPlataforma });
   })().catch(async (e) => {
     instancia = null;
     await Promise.allSettled(abertos.map((x) => x.end()));

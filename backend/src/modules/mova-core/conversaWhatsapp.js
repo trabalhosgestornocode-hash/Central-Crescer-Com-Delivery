@@ -75,8 +75,9 @@ export function criarConversaWhatsapp({ core, cfg, modo, unidadesDoPiloto, ident
 
   function escolherUnidade(evento, permitidas, chave) {
     const grupoDaPessoa = { unidades: permitidas.map((x) => x.u) };
-    const r = resolverUnidade({ cfg, grupo: grupoDaPessoa, textos: [evento.texto] });
-    if (r.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO) return null; // unidade citada não é desta conversa: o motor atual responde
+    const r = resolverUnidade({ cfg, grupo: grupoDaPessoa, textos: [evento.texto], marcaBasta: true }); // consulta: a marca basta
+    // unidade citada não é desta conversa (ou é loja não habilitada no MOVA, 27/11): o motor atual responde
+    if (r.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO || r.resultado === RESULTADO_UNIDADE.NAO_HABILITADA) return null;
     if (r.resultado === RESULTADO_UNIDADE.IDENTIFICADA && r.unidade && grupoDaPessoa.unidades.includes(r.unidade.unidadeId)) return r.unidade.unidadeId;
     const anterior = ultimaUnidade.get(chave);
     if (anterior && grupoDaPessoa.unidades.includes(anterior)) return anterior;
