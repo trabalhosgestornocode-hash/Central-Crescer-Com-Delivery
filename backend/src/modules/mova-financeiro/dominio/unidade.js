@@ -177,7 +177,14 @@ export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = nu
   if (!fortes.size && daMarca.length && !marcaNaConversa.length) return { resultado: RESULTADO_UNIDADE.FORA_DO_GRUPO, unidade: null, evidencia: "MARCA" };
   // Duas MARCAS diferentes da conversa ("a <marca A> pagou a <marca B>") = cita várias; a mesma marca em duas lojas = sem referência.
   const marcasDistintas = new Set(marcaNaConversa.flatMap((u) => marcasDe(u).filter((m) => marcasCitadas.has(m))));
-  const citadas = fortes.size ? [...fortes.values()] : marcaNaConversa.length === 1 || marcasDistintas.size > 1 ? marcaNaConversa : [];
+  const citadasBrutas = fortes.size ? [...fortes.values()] : marcaNaConversa.length === 1 || marcasDistintas.size > 1 ? marcaNaConversa : [];
+  // 24/11: pagador (procura em TODAS as unidades, para detectar comprovante pago pela conta de outra unidade).
+  const pg = (pagador || documentoPagador) ? unidadePeloPagador({ unidades: todas, pagador, documentoPagador }) : { resultado: RESULTADO_PAGADOR.SEM_EVIDENCIA, unidade: null };
+  // 27/11 (homologação real): "<devedora>, pago pela <credora>" cita as DUAS lojas. Se o comprovante identifica como pagadora UMA
+  // das duas citadas, a outra é a devedora — é a operação entre empresas, não um conflito de unidade. Com mais de duas citadas, ou
+  // sem a pagadora entre elas, continua sendo conflito (pergunta).
+  const entreAsCitadas = citadasBrutas.length === 2 && pg.resultado !== RESULTADO_PAGADOR.CONFLITO && Boolean(pg.unidade) && citadasBrutas.includes(pg.unidade);
+  const citadas = entreAsCitadas ? citadasBrutas.filter((u) => u !== pg.unidade) : citadasBrutas;
   if (citadas.length > 1) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_CITA_VARIAS" };
   const citada = citadas[0] ?? null;
   // A marca só resolve "de qual unidade?" quando o cadastro foi lido e nenhuma OUTRA loja conhecida tem a mesma marca.
@@ -187,8 +194,6 @@ export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = nu
   // Pagador/CNPJ/conversa de uma loja identificam a EMPRESA; a LOJA só quando o cadastro foi consultado e a empresa só tem ela.
   const lojaUnicaDaEmpresa = (u) => cadastro === null || (cadastro === CADASTRO.CONSULTADO && !naoHabilitadas.some((x) => x.organizacaoId === u.organizacaoId));
   const documentoDe = peloDocumento.length === 1 ? peloDocumento[0] : null;
-  // 24/11: pagador (procura em TODAS as unidades, para detectar comprovante pago pela conta de outra unidade).
-  const pg = (pagador || documentoPagador) ? unidadePeloPagador({ unidades: todas, pagador, documentoPagador }) : { resultado: RESULTADO_PAGADOR.SEM_EVIDENCIA, unidade: null };
   if (pg.resultado === RESULTADO_PAGADOR.CONFLITO) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: pg.evidencia };
   const pagadorDe = pg.unidade;
   if (pagadorDe && !doGrupo.includes(pagadorDe)) return { resultado: RESULTADO_UNIDADE.DOCUMENTO_DE_OUTRA_UNIDADE, unidade: null, evidencia: "PAGADOR_FORA_DA_CONVERSA", unidadeDoDocumento: pagadorDe.nome };

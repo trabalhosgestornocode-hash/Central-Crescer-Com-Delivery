@@ -590,3 +590,67 @@ t("EC-9 Central com AUTORIZAÇÃO VINCULADA (fábrica da rota): aplica com o con
   assert.deepEqual([aplicada.estado, dentro], ["APLICADA", 1]);
   assert.deepEqual([(await entre(s, ORG, ALFA)).aPagarCentavos, (await entre(s, ORG_X, XIS)).aReceberCentavos], [VALOR_IC, VALOR_IC]);
 });
+
+// ------------------------------------------------------------------ 27/11 — homologação REAL (R$ 6.495,60): regressão
+// Defeito 1: "<devedora>, pago pela <credora>" cita as DUAS lojas e virava "de qual unidade?" (TEXTO_CITA_VARIAS).
+// Defeito 2: o favorecido do Pix era a instituição de pagamento (não o fornecedor) ⇒ a conta aberta de mesmo valor não era achada
+//            e o MOVA propunha uma conta NOVA (duplicidade). Nos dois sentidos (Xis→Alfa e Alfa→Xis).
+t("EC-R0 regra pura: as duas lojas citadas + pagadora entre elas ⇒ a outra é a devedora; sem pagadora, ou a pagadora fora das citadas, continua perguntando", () => {
+  const cfg = validarConfiguracao(CONFIG());
+  const ambas = { unidades: [ALFA, XIS] };
+  const a = resolverUnidade({ cfg, grupo: ambas, textos: ["Loja Alfa, pago pela Loja Xis (MP)"], pagador: "MP" });
+  assert.deepEqual([a.resultado, a.unidade.unidadeId, a.pagadora.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, ALFA, XIS]);
+  const b = resolverUnidade({ cfg, grupo: ambas, textos: ["Loja Xis, pago pela Loja Alfa"], pagador: "ALFA PRODUTOS" });
+  assert.deepEqual([b.resultado, b.unidade.unidadeId, b.pagadora.unidadeId], [RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE, XIS, ALFA]);
+  const c = resolverUnidade({ cfg, grupo: ambas, textos: ["Loja Alfa e Loja Xis"] });
+  assert.deepEqual([c.resultado, c.evidencia], [RESULTADO_UNIDADE.CONFLITANTE, "TEXTO_CITA_VARIAS"], "sem pagadora: pergunta");
+  const d = resolverUnidade({ cfg, grupo: ambas, textos: ["Loja Alfa e Loja Xis"], pagador: "Fulano de Tal" });
+  assert.equal(d.resultado, RESULTADO_UNIDADE.CONFLITANTE, "pagador desconhecido: pergunta");
+});
+
+for (const [rotulo, pagador, legenda, org, unidade, nomeDev, nomeCred, abrirConta] of [
+  ["Xis pagou pela Alfa", "MP", "Loja Alfa, pago pela Loja Xis (MP)", ORG, ALFA, "Loja Alfa", "Loja Xis", (s) => s.conta("2026-10-14", VALOR_IC)],
+  ["Alfa pagou pela Xis", "ALFA PRODUTOS", "Loja Xis, pago pela Loja Alfa (ALFA PRODUTOS)", ORG_X, XIS, "Loja Xis", "Loja Alfa", (s) => s.contaXis("2026-10-14", VALOR_IC)],
+]) {
+  t(`EC-R1 ${rotulo}: favorecido = instituição de pagamento ⇒ NÃO pergunta a unidade, reconhece a conta EXISTENTE (única por valor), nada duplicado; o 'sim' leva à proposta sobre ela`, async () => {
+    const s = await multi({ responder: () => comprovanteIC({ pagador, favorecido: "PIXPAG PAGAMENTOS LTDA" }) });
+    const conta = (await abrirConta(s)).obrigacoes[0];
+    const doc = s.privado({ texto: legenda, doc: pdf(`ic-r1-${pagador}`) });
+    await s.enviar(doc);
+    const h = await s.ultima();
+    assert.deepEqual([h.decisao, h.motivo], ["PEDIR_INFORMACAO", "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO"], "uma só pergunta, a de confirmação");
+    const texto = await s.resposta();
+    assert.doesNotMatch(texto, /ou Loja \w+\?/, "não pergunta a unidade");
+    assert.match(texto, new RegExp(`Conta encontrada no ${nomeDev}: Fornecedor Sintético`));
+    assert.match(texto, new RegExp(`paga pela ${nomeCred}, sem criar conta nova`));
+    assert.match(texto, /PIXPAG PAGAMENTOS LTDA.*ÚNICA em aberto/s);
+    assert.doesNotMatch(texto, /será proposta uma conta nova/);
+    assert.deepEqual([s.escritas().length, (await s.propostas(org, unidade)).length], [0, 0], "nada gravado antes do sim");
+    await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+    const [p] = await s.propostas(org, unidade);
+    assert.equal(p.tipo, "INTERCOMPANY");
+    assert.equal(p.comando.entrada.obrigacaoId, conta.id, "a proposta é sobre a conta existente");
+    assert.equal(p.comando.entrada.obrigacaoNova, undefined, "nenhuma obrigação nova");
+    assert.equal((await s.contas(org, unidade)).length, 1, "nenhuma conta duplicada");
+  });
+}
+
+t("EC-R2 duas contas abertas com o mesmo valor ⇒ não escolhe: a revisão escolhe; nenhuma ⇒ conta nova (como antes); valor diferente não é candidata", async () => {
+  const dois = await multi({ responder: () => comprovanteIC({ favorecido: "PIXPAG PAGAMENTOS LTDA" }) });
+  await dois.conta("2026-10-14", VALOR_IC); await dois.conta("2026-10-20", VALOR_IC);
+  await dois.enviar(dois.privado({ texto: "Loja Alfa, pago pela Loja Xis (MP)", doc: pdf("ic-r2a") }));
+  assert.match(await dois.resposta(), /mais de uma conta em aberto com esse valor/);
+  const nenhuma = await multi({ responder: () => comprovanteIC({ favorecido: "PIXPAG PAGAMENTOS LTDA" }) });
+  await nenhuma.conta("2026-10-14", VALOR_IC + 1);
+  await nenhuma.enviar(nenhuma.privado({ texto: "Loja Alfa, pago pela Loja Xis (MP)", doc: pdf("ic-r2b") }));
+  assert.match(await nenhuma.resposta(), /será proposta uma conta nova/);
+});
+
+t("EC-R3 favorecido que BATE com o fornecedor continua sendo o critério forte (sem a ressalva 'por valor')", async () => {
+  const s = await multi({ responder: () => comprovanteIC() });
+  await s.conta("2026-10-14", VALOR_IC);
+  await s.enviar(s.privado({ texto: "Loja Alfa, pago pela Loja Xis (MP)", doc: pdf("ic-r3") }));
+  const texto = await s.resposta();
+  assert.match(texto, /Conta encontrada no Loja Alfa: Fornecedor Sintético/);
+  assert.doesNotMatch(texto, /ÚNICA em aberto/);
+});

@@ -1007,6 +1007,13 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (!esclarecimento?.divergencia && (!forcarNova || novaDeclarada)) {
       const achados = buscarSemelhantes({ todas: (await porta.contasAPagarTodas(escopo)).filter(noPeriodo), valorCentavos: valor, favorecido: saida.favorecido, legenda, dataPagamento: saida.dataPagamento, compativel: (t) => fornecedorCompativel(saida.favorecido, t) });
       const semelhantes = novaDeclarada ? achados.filter((x) => x.situacao === "PAGA") : achados;
+      const abertasSemelhantes = semelhantes.filter((x) => x.situacao === "ABERTA");
+      // 27/11: várias contas abertas de OUTRO fornecedor com o mesmo valor (e nenhum pagamento igual já registrado): pede a escolha —
+      // nunca baixa nem cria despesa sozinho.
+      if (semelhantes[0]?.situacao === "ABERTA" && abertasSemelhantes.length > 1) {
+        const proximas = abertasSemelhantes.slice(0, MAX_CANDIDATAS_NA_PERGUNTA).map((x) => x.conta);
+        return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.VARIAS, valorCentavos: valor, candidatas: proximas.map((t) => ({ id: t.id, saldoCentavos: t.saldoCentavos, versao: versaoDaConta(t, escopo.unidadeId) })) }, RESPOSTA.perguntaVariasContas(proximas), "VARIAS_OBRIGACOES_COMPATIVEIS", proximas);
+      }
       if (semelhantes.length) {
         const [primeiro] = semelhantes;
         // Valor, data e favorecido iguais NÃO provam a mesma transação: pergunta; com o identificador recortado, pede o comprovante completo.
@@ -1185,7 +1192,14 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "ENTRE_EMPRESAS_INCOMPLETO", escopo, resposta: RESPOSTA.faltaInformacao([!dataPagamento ? "data do pagamento" : "valor"]), injecao });
     }
     // conta do fornecedor na devedora: UMA compatível (mesmo saldo e fornecedor compatível) ⇒ ela; várias ⇒ a revisão escolhe; nenhuma ⇒ nova
-    const candidatas = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.saldoCentavos === valor && (!saida.favorecido || fornecedorCompativel(saida.favorecido, t)));
+    // 27/11 (homologação real): o favorecido lido do comprovante Pix pode ser a INSTITUIÇÃO DE PAGAMENTO (ex.: "PIXPAG PAGAMENTOS LTDA"),
+    // não o fornecedor — exigir o nome fazia a conta aberta de mesmo valor passar despercebida e propor uma conta NOVA (duplicidade).
+    // Sem fornecedor compatível, UMA conta aberta com exatamente o mesmo saldo é a candidata (marcada "por valor": a pergunta mostra
+    // fornecedor/vencimento e pede a confirmação; nunca escolhe entre várias). Várias por valor ⇒ a revisão escolhe.
+    const abertasDoValor = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.saldoCentavos === valor);
+    const comFornecedor = saida.favorecido ? abertasDoValor.filter((t) => fornecedorCompativel(saida.favorecido, t)) : abertasDoValor;
+    const porValor = comFornecedor.length === 0 && abertasDoValor.length > 0;
+    const candidatas = porValor ? abertasDoValor : comFornecedor;
     const existente = candidatas.length === 1 ? candidatas[0] : null;
     const competencia = saida.competencia ?? null; // nunca presumida: sem ela, a proposta nasce com a competência pendente
     if (competencia) { const bloqueio = await competenciaAberta(ctx, competencia); if (bloqueio) return bloqueio; }
@@ -1197,7 +1211,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const entrada = { ...(existente ? { obrigacaoId: existente.id } : {}), ...(obrigacaoNova ? { obrigacaoNova } : {}), valorCentavos: valor, dataPagamento,
       descricao, nomeDevedora: devedora.nome, nomeCredora: credora.nome, chave: `MOVA:${evento.eventoId}` };
     const impressao = JSON.stringify({ d: devedora.unidadeId, c: credora.unidadeId, valor, dataPagamento, obrigacaoId: existente?.id ?? null, candidatas: candidatas.length });
-    const pergunta = RESPOSTA.entreEmpresasPergunta({ credora: credora.nome, devedora: devedora.nome, valorCentavos: valor, existente, varias: candidatas.length > 1 });
+    const pergunta = RESPOSTA.entreEmpresasPergunta({ credora: credora.nome, devedora: devedora.nome, valorCentavos: valor, existente, varias: candidatas.length > 1, porValor, favorecido: saida.favorecido ?? null });
     const divergencia = { tipo: "ENTRE_EMPRESAS_CONFIRMACAO", unidadesExigidas: [devedora.unidadeId, credora.unidadeId], impressao };
     if (div?.tipo !== "ENTRE_EMPRESAS_CONFIRMACAO") return perguntar(ctx, divergencia, pergunta, "ENTRE_EMPRESAS_AGUARDANDO_CONFIRMACAO");
     const sim = respostaSimNao(esclarecimento.texto);
