@@ -18,8 +18,10 @@ export const MODELO_PADRAO = "claude-haiku-5-5";
 export const MODELOS_PERMITIDOS = Object.freeze(["claude-haiku-5-5"]);
 /** Modelos em que `thinking: {type: "disabled"}` é aceito (até esforço high). */
 export const MODELOS_SEM_RACIOCINIO = Object.freeze(["claude-haiku-5-5"]);
-/** Teto padrão de saída: o JSON do contrato ocupa ~240 tokens; sem raciocínio, 600 dá folga sem expor custo. */
-export const SAIDA_MAXIMA_PADRAO = 600;
+/** Teto padrão de saída. 27/11 (produção): o JSON do contrato (40 campos obrigatórios + justificativa/incertezas) chegou a
+ *  559–594 tokens em leituras normais e passou de 600 em duas imagens reais (stop_reason "max_tokens" → IA_RESPOSTA_TRUNCADA).
+ *  1200 dá ~2x de folga; custo extra só existe quando o modelo usa os tokens (≈ US$ 0,003 por chamada no pior caso). */
+export const SAIDA_MAXIMA_PADRAO = 1200;
 const ehModeloPermitido = (m) => MODELOS_PERMITIDOS.includes(String(m ?? "").replace(/-\d{8}$/, ""));
 const MIDIA_IMAGEM = new Set(["image/jpeg", "image/png", "image/webp"]);
 

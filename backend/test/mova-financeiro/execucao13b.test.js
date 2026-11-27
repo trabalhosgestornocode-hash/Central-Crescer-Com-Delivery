@@ -80,7 +80,7 @@ test("Haiku exclusivo: pedido sem fallback, sem raciocínio, saída limitada; ou
   const [r] = pedidos;
   assert.equal(r.model, "claude-haiku-5-5");
   assert.deepEqual(r.thinking, { type: "disabled" });
-  assert.equal(r.max_tokens, 600);
+  assert.equal(r.max_tokens, 1200);
   assert.equal(r.fallbacks, undefined); assert.equal(r.betas, undefined);
   assert.match(r.system, /NO MÁXIMO 12 palavras/);
   for (const modelo of ["claude-opus-5-5", "claude-sonnet-5-5"]) assert.throws(() => criarExtratorAnthropic({ cliente, obterEvidencia: async () => null, modelo }), /não permitido/);
