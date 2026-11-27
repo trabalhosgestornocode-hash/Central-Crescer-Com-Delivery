@@ -1266,7 +1266,9 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     let tipoValor = div?.tipoValor ?? null;
     let escolha = div?.categoriaEscolhida ?? null; // código do plano | "REVISAO" (a classificar no Centro Financeiro)
     const sugestaoDeCriacao = div?.sugestaoDeCriacao ?? null;
-    if (div?.tipo === "CONTA_RELATADA_COMPLEMENTO") {
+    // 27/11: com o que JÁ foi respondido a conta fica completa (ex.: retomada depois de uma correção) ⇒ segue sem pedir de novo
+    if (div?.tipo === "CONTA_RELATADA_COMPLEMENTO" && !ler(tipoValor).faltas.length) complemento = complemento ?? {};
+    else if (div?.tipo === "CONTA_RELATADA_COMPLEMENTO") {
       const novo = complementoDaResposta(esclarecimento.texto, { faltas: div.faltas ?? [], complemento: complemento ?? {}, dataMensagem: dataDaMensagem(evento), hoje: hoje(), competenciaDe: competenciaDoRelato });
       if (!novo) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.contaRelatadaFaltas(ler(tipoValor), div.faltas ?? [], unidade.nome)}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
       complemento = novo;
