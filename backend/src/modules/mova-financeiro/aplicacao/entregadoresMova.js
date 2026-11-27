@@ -11,7 +11,7 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
+import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
@@ -124,7 +124,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const situacao = r.situacaoDocumental ?? r.fechamento?.situacaoDocumental ?? null;
       await a.notasEntregador.concluir(nota.id, { estado: "ANEXADA", documentoId: r.documento?.id ?? null, situacaoDocumental: situacao });
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_ANEXADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: nota.id, dados: { semana: alvo.semanaInicio, situacao } });
-      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
+      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "CONFERE" ? mensagemNotaConferida({ ...alvo, vencimento: alvo.vencimento ?? null }, { empresa: rotuloDe(ent.unidadeId).empresa ?? rotuloDe(ent.unidadeId).unidade }) : conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
     } catch (e) {
       if (e instanceof ErroTransitorio) throw e; // fica PENDENTE_ANEXO; a nova tentativa da fila anexa
       await a.notasEntregador.concluir(nota.id, { estado: "RECUSADA", motivo: String(e?.detalhes?.motivo ?? e?.codigo ?? "RECUSADA").slice(0, 120) });

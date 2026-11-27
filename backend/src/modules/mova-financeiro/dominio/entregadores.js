@@ -203,6 +203,18 @@ export function respostaDaConferencia(f, conferencia) {
   return `Recebi sua ${base}. Ela ficou em análise pelo financeiro; aviso quando o pagamento for liberado. ${FRASE_NOTA_FISCAL}`;
 }
 
+/**
+ * 28/11: confirmação ao entregador quando a nota foi RECEBIDA, CONFERIDA (dados compatíveis) e ANEXADA ao Financeiro. Modelo do proprietário.
+ * Não afirma validação fiscal oficial: só que os dados conferem com o fechamento (a situação fiscal não é consultada).
+ */
+export function mensagemNotaConferida(f, { empresa, nome = null } = {}) {
+  const n = primeiroNome(nome ?? f.entregador?.nome);
+  return [`Olá${n ? `, ${n}` : ""}! 👋`, "✅ Sua nota fiscal foi recebida e conferida com sucesso!", `🏢 Empresa: ${empresa}`,
+    `📅 Período: ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`, `🛵 Quantidade de entregas: ${f.entregas}`, `💰 Valor: ${reais(f.valorCentavos)}`,
+    "📄 Nota fiscal: Conferida e anexada", ...(f.vencimento ? [`🗓️ Previsão de pagamento: ${dataBr(f.vencimento)}`] : []),
+    "As informações estão de acordo com o fechamento. Agora, basta aguardar o pagamento.", "Assim que ele for registrado, você receberá uma notificação por aqui.", "MOVA | Crescer com Delivery"].join(String.fromCharCode(10));
+}
+
 /** Aviso no GRUPO financeiro da unidade quando a obrigação é LIBERADA (liberação documental não é pagamento bancário). */
 export function avisoDeLiberacao(f, { unidade = null } = {}) {
   return [

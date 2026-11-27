@@ -136,7 +136,7 @@ export function mensagemDePagamento(dados, { empresa, nome = null }) {
   }
   return [abre, "✅ Seu pagamento foi realizado com sucesso!", `🏢 Empresa: ${empresa}`, ...linhaDePeriodos(dados),
     `🛵 Quantidade de entregas: ${dados.entregas}`, `💰 Valor pago: ${reais(dados.totalCentavos)}`, `🗓️ Data do pagamento: ${dataBr(dados.dataEfetiva)}`,
-    "Agradecemos pela parceria e pelo trabalho realizado durante a semana!", ASSINATURA].join("\n");
+    "Agradecemos pela parceria, dedicação e pelo trabalho realizado durante a semana!", ASSINATURA].join("\n");
 }
 
 const DESFECHO = Object.freeze({

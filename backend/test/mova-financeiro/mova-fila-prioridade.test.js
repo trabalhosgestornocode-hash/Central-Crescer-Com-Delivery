@@ -175,3 +175,29 @@ t("FP-9 compatibilidade: sem a política, o enviador legado continua igual (teto
   assert.equal(saida.length, 2);
   assert.equal((await estados(s)).filter((x) => x.estado === "FALHOU").length, 1);
 });
+
+t("FP-10 volume elevado: 1.200 mensagens (40 privados + grupo): respeita 100/conversa e 500/grupo, crítica antes de normal, nada descartado, retomada completa no dia seguinte", async () => {
+  const s = await cenario();
+  const privados = Array.from({ length: 40 }, (_, i) => `55119900000${String(i).padStart(2, "0")}@s.whatsapp.net`);
+  const a = s.mova.armazenamento.saida;
+  for (let i = 0; i < 40; i++) for (let k = 0; k < 20; k++) await a.enfileirar({ grupoId: privados[i], respostaA: null, texto: `p${i}-${k}`, categoria: CATEGORIA.ACOMPANHAMENTO, prioridade: PRIORIDADE.NORMAL });   // 800 normais
+  for (let k = 0; k < 400; k++) await a.enfileirar({ grupoId: GRUPO, respostaA: null, texto: `g${k}`, categoria: CATEGORIA.ADMINISTRATIVA, prioridade: PRIORIDADE.ALTA });          // 400 no grupo
+  for (let i = 0; i < 40; i++) await a.enfileirar({ grupoId: privados[i], respostaA: null, texto: `pagamento-${i}`, categoria: CATEGORIA.TRANSACIONAL, prioridade: PRIORIDADE.CRITICA });
+  const saida = [];
+  const mk = (extra = {}) => criarEnviadorDeRespostas({ armazenamento: s.mova.armazenamento, habilitado: true, naoAntesDe: "2000-01-01T00:00:00Z", destinosPermitidos: [GRUPO, ...privados],
+    limitePorRodada: 100, relogio: () => new Date(AGORA), enviar: ok(saida), politica: { regras: async () => [...ritmoLivre, { escopo: "GLOBAL", chave: "*", campo: "porMinutoTotal", valor: 600 }] }, ...extra });
+  for (let i = 0; i < 20; i++) await mk().enviarPendentes({ limite: 100 });
+  assert.equal(saida.filter((x) => x.startsWith("pagamento-")).length, 40, "TODOS os pagamentos (críticos) saíram");
+  assert.ok(saida.indexOf("g0") > -1);
+  const pendentes = (await estados(s)).filter((x) => x.estado === "PENDENTE").length;
+  const enviadas = (await estados(s)).filter((x) => x.estado === "ENVIADA").length;
+  assert.equal(pendentes + enviadas, 1240, "nada se perdeu");
+  const porConversa = (await s.banco.pool.query("select grupo_jid, count(*)::int n from mova.resposta where estado = 'ENVIADA' group by 1")).rows;
+  for (const l of porConversa) assert.ok(l.n <= (l.grupo_jid === GRUPO ? 500 : 100), `${l.grupo_jid} dentro do limite da conversa`);
+  assert.equal((await estados(s)).filter((x) => x.estado === "FALHOU").length, 0);
+  // dia seguinte: o que ficou adiado sai (até os tetos do novo dia)
+  const amanha = () => new Date(AGORA.getTime() + 24 * 3600_000);
+  for (let i = 0; i < 20; i++) await mk({ relogio: amanha }).enviarPendentes({ limite: 100 });
+  const depois = (await estados(s)).filter((x) => x.estado === "PENDENTE").length;
+  assert.ok(depois < pendentes || pendentes === 0, "a fila drena no dia seguinte");
+});

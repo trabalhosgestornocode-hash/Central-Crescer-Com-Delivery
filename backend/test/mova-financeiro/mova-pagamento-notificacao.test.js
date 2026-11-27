@@ -36,7 +36,7 @@ t("PG2 pagamento registrado no sistema: mensagem individual no modelo, sem IA; o
   assert.equal(privado.length, 1, "só a empresa Açaí: o entregador também é da Beta, que não pagou nada");
   assert.equal(privado[0].texto, [
     "Olá, Mauricio! 👋", "✅ Seu pagamento foi realizado com sucesso!", "🏢 Empresa: Acai Alfa Sintetico", "📅 Período: 02/11/2026 a 08/11/2026", "🛵 Quantidade de entregas: 2",
-    "💰 Valor pago: R$ 15,00", "🗓️ Data do pagamento: 18/11/2026", "Agradecemos pela parceria e pelo trabalho realizado durante a semana!", "MOVA | Crescer com Delivery"].join("\n"));
+    "💰 Valor pago: R$ 15,00", "🗓️ Data do pagamento: 18/11/2026", "Agradecemos pela parceria, dedicação e pelo trabalho realizado durante a semana!", "MOVA | Crescer com Delivery"].join("\n"));
   assert.deepEqual(await s.saida(GRUPO_ALFA), [], "o grupo só é avisado depois do retorno do WhatsApp");
   // ainda na fila: passadas seguintes não duplicam nem avisam o grupo
   assert.equal((await s.passada()).enfileiradas, 0);
