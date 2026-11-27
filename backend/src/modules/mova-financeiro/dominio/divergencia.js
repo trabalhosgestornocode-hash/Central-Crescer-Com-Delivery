@@ -18,7 +18,7 @@ export const normalizar = (s) => String(s ?? "").normalize("NFD").replace(/[̀-�
 // 26/11: resposta curta a uma pergunta, sem a menção "MOVA" do início (no grupo, citar mensagem humana exige a menção: "MOVA sim").
 const resposta = (s) => normalizar(s).replace(/^mova\b\s*/, "");
 
-const SIM = /^(sim|s|isso|isso mesmo|exato|exatamente|correto|certo|confirmo|isso ai|e sim|sao|sao sim|foi|foi sim|ok)$/;
+const SIM = /^(sim|s|isso|isso mesmo|exato|exatamente|correto|certo|confirmo|confirmado|isso ai|e sim|sao|sao sim|foi|foi sim|ok)$/;
 const NAO = /^(nao|n|negativo|nao e|nao sao|nao foi|nao eh)$/;
 const PALAVRA_JUROS = /\b(juros?|multa|mora|encargos?|acrescimos?)\b/;
 const PALAVRA_PARCIAL = /\b(parcial|parcela|entrada|sinal|adiantamento|restante|resto|metade|primeira)\b/;
@@ -137,6 +137,17 @@ export function pedidoDeRetomar(texto) {
   return SIM.test(t) || /\b(registr|lanc|tent|continu|conclu|finaliz|execut|process|pode|ok|isso|manda|faz|faca)/.test(t);
 }
 
+/**
+ * 27/11 — CONFIRMAÇÃO natural de uma proposta já apresentada ("sim", "confirmado", "confirmo", "pode registrar", "pode lançar", "está
+ * correto", "MOVA, pode confirmar"). Só diz que a frase é uma confirmação; a que proposta se refere (citação ou única pendente), quem
+ * pode, a política e a execução são decididos pelo motor, sempre com a unidade DA PROPOSTA. Frase longa ou com pergunta não é confirmação.
+ */
+export function confirmacaoDeProposta(texto) {
+  const t = resposta(texto);
+  if (!t || t.length > 40 || /[?]/.test(String(texto))) return false;
+  return /^(sim|sim senhor|pode sim|confirmado|confirmo|confirmar|isso|isso mesmo|correto|certo|ok|pode (confirmar|registrar|lancar|seguir|fazer)|(esta|ta|ta tudo|esta tudo) (correto|certo)|tudo certo|tudo correto|registra|registrar|lanca|lancar|pode confirmar sim)$/.test(t);
+}
+
 /** Texto curto que parece resposta a uma pergunta de divergência (para a memória curta, sem citação). */
 export function parecerRespostaDeDivergencia(texto) {
   const t = resposta(texto);
@@ -145,6 +156,8 @@ export function parecerRespostaDeDivergencia(texto) {
   // palavra solta ("outra", "parcial", "juros", mês) só é RESPOSTA em frase curta: "mostre o faturamento de outra empresa" é PEDIDO
   // novo (e passa pelas próprias travas), nunca a resposta de uma pergunta pendente.
   const curta = t.split(" ").length <= 5;
+  // 27/11 (#245): resposta com o VENCIMENTO da conta relatada ("15/12/2026", "vencimento 15/12", "dia 15/12")
+  if (/^(vencimento |vence |venc |dia |vencimento dia )?\d{1,2}[ /]\d{1,2}([ /](\d{2}|\d{4}))?$/.test(t)) return true;
   return SIM.test(t) || NAO.test(t) || /^[0-9]$/.test(t) || /^(nao sei|deixa para o financeiro|deixa pro financeiro|classificar depois|deixa para depois)$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || (curta && (PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t)));
 }
 

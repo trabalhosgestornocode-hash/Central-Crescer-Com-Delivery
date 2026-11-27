@@ -368,10 +368,10 @@ t("15A descarte auditável: SUPRIMIDA (sem DELETE), só PENDENTE até o corte, a
 });
 
 // 27/11: com "R$" escrito, o relato vira CONTA RELATADA (o MOVA pergunta o mês pelo WhatsApp — teste 15A-bis). Sem o valor escrito em
-// reais no texto (só a leitura o trouxe), segue o fluxo comum: proposta com a competência PENDENTE para a revisão (este teste).
+// reais escrito no texto (só a leitura o trouxe), segue o fluxo comum: proposta com a competência PENDENTE para a revisão (este teste).
 t("15A competência NUNCA presumida: conta sem competência nasce pendente; aplicar recusa; revisão informa (auditada) e aí aplica", async () => {
   const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }));
-  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, 289,90, vence 25/10/2026" }));
+  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, vence 25/10/2026 (valor no boleto)" }));
   const [p] = await s.propostas(ALFA);
   assert.equal(p.tipo, "NOVA_OBRIGACAO");
   assert.equal(p.competenciaPendente, true);

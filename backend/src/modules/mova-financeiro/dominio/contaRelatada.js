@@ -26,12 +26,62 @@ const iso = (a, m, d) => `${a}-${pad(m)}-${pad(d)}`;
 const valida = (a, m, d) => { const x = new Date(Date.UTC(a, m - 1, d)); return x.getUTCFullYear() === a && x.getUTCMonth() === m - 1 && x.getUTCDate() === d; };
 const centavos = (s) => { const t = s.replace(/\./g, "").replace(",", "."); const v = Math.round(Number(t) * 100); return Number.isSafeInteger(v) && v > 0 ? v : null; };
 
+// 27/11: também o valor SEM "R$" quando traz centavos ("total 2.911,08") — número sem vírgula decimal (18.000, 400) nunca é tomado como dinheiro aqui.
+const RE_VALOR = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)|(?:(?<![\d/.,])(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})(?![\d/%])(?!\s*%))/gi;
+
 /** Valores em reais citados ("R$194,50", "R$ 1.779,90", "194,50 reais"), na ordem, sem repetir. */
 export function valoresCitados(texto) {
   const achados = [];
-  const re = /(?:r\$\s*(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:,\d{1,2})?))|(?:\b(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})\s*(?:reais|rs)\b)/gi;
-  for (const m of String(texto ?? "").matchAll(re)) { const v = centavos(m[1] ?? m[2]); if (v && !achados.includes(v)) achados.push(v); }
+  for (const m of String(texto ?? "").matchAll(RE_VALOR)) { const v = centavos(m[1] ?? m[2] ?? m[3]); if (v && !achados.includes(v)) achados.push(v); }
   return achados;
+}
+
+/**
+ * 27/11 — TOTAL com COMPOSIÇÃO dita no texto ("Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08"): um valor que é a SOMA exata
+ * dos demais (2 ou mais) é o total; os demais viram componentes rotulados pela palavra que os antecede. Sem soma exata ⇒ null
+ * (continua "valores diferentes": nada é presumido).
+ */
+export function composicaoDoTotal(texto) {
+  const s = String(texto ?? "");
+  const itens = [];
+  for (const m of s.matchAll(RE_VALOR)) {
+    const v = centavos(m[1] ?? m[2] ?? m[3]);
+    if (!v) continue;
+    const antes = s.slice(0, m.index).replace(/(?:r\$)?\s*[:=-]?\s*$/i, "").match(/([\p{L}][\p{L}.']*)\s*$/u);
+    itens.push({ valorCentavos: v, rotulo: antes ? antes[1] : null });
+  }
+  if (itens.length < 3) return null;
+  const total = itens.find((x, i) => itens.reduce((acc, y, j) => (j === i ? acc : acc + y.valorCentavos), 0) === x.valorCentavos);
+  if (!total) return null;
+  const componentes = itens.filter((x) => x !== total);
+  return { totalCentavos: total.valorCentavos, componentes };
+}
+
+const brl = (c) => `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+
+/**
+ * 27/11 — OBSERVAÇÃO da conta: composição do total (quem pagou quanto) e a oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA, com as
+ * observações individuais das parcelas. Só o que foi DITO. Nunca é cortada em silêncio: o motor guarda o texto inteiro na proposta.
+ */
+/** 27/11 (#245) — oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA. A data dela (ex.: desconto em 07/12) NÃO é vencimento da conta. */
+export function oracaoDeDesconto(texto) {
+  // #245: termina no fim da frase OU antes de um vencimento dito na mesma frase ("…desconto em 07/12, vencimento do empréstimo 15/12")
+  // 27/11 (consolidação): frase NEGADA/instrução ("Não criar contas nem realizar descontos salariais automaticamente") não é a informação
+  // do desconto — só a primeira oração afirmativa vale.
+  const s = String(texto ?? "");
+  for (const m of s.matchAll(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\s*[,;]?\s*(?:e\s+)?(?:o\s+|a\s+)?(?:primeiro\s+|1[ºo°]\s+)?(?:vencimento|vence|vencendo)\b|\.(?:\s|$)|;|\n|$)/gi)) {
+    const inicioDaFrase = Math.max(s.lastIndexOf(".", m.index), s.lastIndexOf("\n", m.index), s.lastIndexOf(";", m.index)) + 1;
+    if (!/\b(?:n[aã]o|nem|sem|nunca)\b/i.test(s.slice(inicioDaFrase, m.index))) return m[0];
+  }
+  return null;
+}
+
+export function observacaoDaConta(texto, comp = null) {
+  const partes = [];
+  if (comp) partes.push(`${comp.componentes.map((c) => `${c.rotulo ? `${c.rotulo} ` : ""}${brl(c.valorCentavos)}`).join(" + ")} = ${brl(comp.totalCentavos)}`);
+  const oracao = oracaoDeDesconto(texto);
+  if (oracao) partes.push(oracao.trim().replace(/[,\s]+$/, ""));
+  return partes.length ? partes.join("; ") : null;
 }
 
 /** Datas dd/mm[/aaaa] citadas, resolvendo o ano sem inventar: a primeira a partir da mensagem; cada seguinte depois da anterior. */
@@ -51,6 +101,19 @@ export function datasCitadas(texto, dataMensagem) {
     anterior = x;
   }
   return { datas: saida, invalida: null };
+}
+
+/**
+ * 27/11 — OBSERVAÇÃO individual de cada parcela, só quando DITA junto da data: "10/12 (carência)" ou "10/01: reajuste". Nada é inventado.
+ * Devolve uma lista alinhada às datas (null onde não há observação).
+ */
+export function observacoesPorData(texto) {
+  const saida = [];
+  for (const m of String(texto ?? "").matchAll(/\b\d{1,2}\/\d{1,2}(?:\/(?:\d{2}|\d{4}))?\b\s*(?:\(([^)]{1,80})\)|[:-]\s*([^,;\n()]{1,80}?)(?=\s*(?:[,;\n]|$|\d{1,2}\/\d{1,2})))?/g)) {
+    const o = (m[1] ?? m[2] ?? "").trim();
+    saida.push(o || null);
+  }
+  return saida;
 }
 
 function quantidadeDeParcelas(t) {
@@ -164,7 +227,7 @@ export function descricaoLimpa(original, unidades = []) {
   // o chamado ("MOVA, ...", "Oi MOVA: ...") não é parte da descrição
   const semChamado = String(original ?? "").replace(/^\s*(?:(?:oi|ola|olá|bom dia|boa tarde|boa noite)[,!]?\s+)?mova\b\s*[,:!.-]?\s*/i, "");
   // 27/11: a oração que é SÓ a unidade ("Subway Saci.") ou só o pedido não é a descrição: vale a primeira que sobrar
-  for (const trecho of semChamado.split(/[,;\n]|\s+-\s+/).slice(0, 4)) {
+  for (const trecho of semChamado.split(/[,;\n]|\s+-\s+|\.\s/).slice(0, 4)) {
     const d = descricaoDoTrecho(trecho, unidades);
     if (d) return d;
   }
@@ -216,6 +279,16 @@ export const ehPatrimonialForaDaDre = (codigo, categorias) => { const c = (categ
 const GENERICAS = new Set(["sobre", "outras", "outros", "despesas", "despesa", "pagar", "conta", "contas", "registrar", "unica"]);
 const radicais = (s) => new Set(normalizar(s).split(" ").filter((w) => w.length >= 5 && !GENERICAS.has(w)).map((w) => w.slice(0, 6)));
 const relevancia = (c, alvo) => [...radicais(c.nome)].filter((r) => alvo.has(r)).length;
+
+/**
+ * 27/11 — categoria PATRIMONIAL do plano para a qual o relato/comprovante aponta (ex.: "Empréstimo BNB" ⇒ "Empréstimos e financiamentos
+ * (principal)"). Só quando UMA patrimonial casa pelos radicais; nunca imobilizado, títulos anteriores ou operações entre empresas.
+ */
+export function categoriaPatrimonialDoRelato(texto, categorias) {
+  const alvo = radicais(texto ?? "");
+  const casadas = patrimoniaisDoPlano(categorias).filter((c) => relevancia(c, alvo) > 0);
+  return casadas.length === 1 ? casadas[0].codigo : null;
+}
 
 /** Para equipamento: imobilizado e despesas de equipamento/manutenção/utensílios primeiro (só a ORDEM das opções; nada é escolhido). */
 function ordenarParaEquipamento(lista, equipamento) {
@@ -302,30 +375,38 @@ export function categoriaDaContaRelatada(descricao, categorias) {
  *           parcelas:Array<{numero,total,vencimento,valorCentavos}>, totalCentavos, valorCitadoCentavos, tipoValor, compra:boolean, jaPaga:boolean}}
  */
 export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], tipoValor = null, porFoto = false, declarada = false, competenciaInformada = null, complemento = null, vencimentoLido = null }) {
-  const comp = complemento ?? {};
+  const dado = complemento ?? {}; // o que a pessoa já respondeu às perguntas do MOVA
   // 27/11: observações (texto livre preservado) saem ANTES de ler valor, data, parcelas e competência
   const { principal, observacao: obsDita } = separarObservacoes(texto);
   // datas e valores fora antes de procurar parcelas: normalizado, "vence em 25/10" vira "em 25 10" (não são 25 parcelas)
-  const t = normalizar(String(principal ?? "").replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
-  const lidos = valorDoRelato(principal);
-  const valores = Number.isSafeInteger(comp.valorCentavos) && comp.valorCentavos > 0 ? [comp.valorCentavos] : lidos.valores;
-  const citadas = datasCitadas(principal, dataMensagem);
+  // 27/11 (#245, generalizado): a oração do DESCONTO da remuneração/folha — com ou sem o marcador "Obs." — é informação distinta:
+  // as datas dela (ex.: desconto em 07/12) NUNCA viram vencimento bancário nem "vence dia N". Ela fica na observação.
+  const desconto = oracaoDeDesconto(principal);
+  const semDesconto = desconto ? String(principal).replace(desconto, " ") : String(principal ?? "");
+  const t = normalizar(semDesconto.replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
+  // valor: composição rotulada do total (#243: "Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08") ou o total dito (#244)
+  const composicao = composicaoDoTotal(principal);
+  const lidos = composicao ? { valores: [composicao.totalCentavos], partes: [] } : valorDoRelato(principal);
+  const valores = Number.isSafeInteger(dado.valorCentavos) && dado.valorCentavos > 0 ? [dado.valorCentavos] : lidos.valores;
+  const citadas = datasCitadas(semDesconto, dataMensagem);
   // 27/11: "vence dia 10" (sem mês/ano escritos): vale a data LIDA da mensagem só quando o DIA dela está escrito no texto ("dia 10");
   // nunca uma data que a pessoa não disse. Datas dd/mm escritas e respostas às perguntas prevalecem.
   const diaEscrito = /^\d{4}-\d{2}-(\d{2})$/.exec(String(vencimentoLido ?? ""));
   const vencimentoPeloDia = diaEscrito && !citadas.datas.length && vencimentoLido >= dataMensagem
-    && new RegExp(`\\bdia\\s+0?${Number(diaEscrito[1])}\\b`).test(normalizar(principal)) ? [vencimentoLido] : [];
-  const datas = Array.isArray(comp.vencimentos) && comp.vencimentos.length ? comp.vencimentos : citadas.datas.length ? citadas.datas : vencimentoPeloDia;
-  const invalida = Array.isArray(comp.vencimentos) && comp.vencimentos.length ? null : citadas.invalida;
+    && new RegExp(`\\bdia\\s+0?${Number(diaEscrito[1])}\\b`).test(normalizar(semDesconto)) ? [vencimentoLido] : [];
+  const datas = Array.isArray(dado.vencimentos) && dado.vencimentos.length ? dado.vencimentos : citadas.datas.length ? citadas.datas : vencimentoPeloDia;
+  const invalida = Array.isArray(dado.vencimentos) && dado.vencimentos.length ? null : citadas.invalida;
   let n = quantidadeDeParcelas(t);
   const forma = formaDePagamento(t);
   const fornecedor = fornecedorDito(principal, unidades);
-  const descricao = comp.descricao ?? descricaoDita(principal) ?? descricaoLimpa(principal, unidades);
-  const observacao = [...linhasDaComposicao(principal, lidos.partes), ...(obsDita ? [obsDita] : [])].join("\n").slice(0, 500) || null;
+  const descricao = dado.descricao ?? descricaoDita(principal) ?? descricaoLimpa(principal, unidades);
+  // observação: composição do total + oração do desconto (#243/#245, com ou sem "Obs."), linhas da composição sem total rotulado e a seção
+  // "Obs./Observações" (#244). Só o que foi DITO; inteira (o motor guarda o texto completo na proposta).
+  const observacao = [observacaoDaConta(principal, composicao), ...linhasDaComposicao(principal, lidos.partes), ...(obsDita ? [obsDita.replace(/\s*\n\s*/g, "; ")] : [])].filter(Boolean).join("; ") || null;
   // 27/11 (PR #236): a competência de uma COMPRA é o MÊS DA COMPRA (a mensagem): palavra de compra, parcelas ditas, ou foto do produto.
   // Qualquer OUTRA obrigação declarada (empréstimo, aluguel, conta que chegou) só tem a competência DITA — senão é perguntada.
   const compra = porFoto || (n !== null && n > 1) || COMPRA.test(t);
-  const competencia = compra ? dataMensagem.slice(0, 7) : comp.competencia ?? competenciaInformada ?? competenciaDita(principal, dataMensagem);
+  const competencia = compra ? dataMensagem.slice(0, 7) : dado.competencia ?? competenciaInformada ?? competenciaDita(semDesconto, dataMensagem);
   const jaPaga = JA_PAGA.test(t);
   const faltas = [];
   if (invalida) faltas.push("DATA_INVALIDA");
@@ -341,17 +422,18 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   if (!competencia) faltas.push("COMPETENCIA");
   const tipo = n === 1 ? TIPO_VALOR.TOTAL : tipoValor ?? tipoDoValor(t) ?? TIPO_VALOR.AMBIGUO;
   const ambiguo = tipo === TIPO_VALOR.AMBIGUO && valores.length === 1 && (n ?? 0) > 1;
+  const observacoes = observacoesPorData(semDesconto);
   let parcelas = [];
   let total = null;
   if (!faltas.length && !ambiguo) {
     const [v] = valores;
     if (tipo === TIPO_VALOR.PARCELA) {
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: v, observacao: observacoes[i] ?? null }));
       total = v * n;
     } else {
       const base = Math.floor(v / n);
       const resto = v - base * n;
-      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0) }));
+      parcelas = datas.map((d, i) => ({ numero: i + 1, total: n, vencimento: d, valorCentavos: base + (i === n - 1 ? resto : 0), observacao: observacoes[i] ?? null }));
       total = v;
     }
   }
@@ -359,8 +441,8 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   return Object.freeze({
     // compra: como antes (valor + data). Obrigação DECLARADA: basta o valor — o que faltar é perguntado (nunca vai para o fluxo comum
     // sem dono). Conta já PAGA não é conta a pagar relatada (é comprovante/despesa paga).
-    ehConta: !jaPaga && ((compra && valores.length > 0 && datas.length > 0) || (declarada && valores.length > 0)), faltas, ambiguo, descricao, fornecedor, forma,
-    competencia, dataEmissao, observacao, parcelas, totalCentavos: total, compra, jaPaga,
+    ehConta: !jaPaga && ((compra && valores.length > 0 && (datas.length > 0 || Boolean(desconto))) || (declarada && valores.length > 0)), faltas, ambiguo, descricao, fornecedor, forma,
+    observacao, composicao, competencia, dataEmissao, parcelas, totalCentavos: total, compra, jaPaga,
     valorCitadoCentavos: valores[0] ?? null, tipoValor: ambiguo ? TIPO_VALOR.AMBIGUO : tipo, quantidade: n,
   });
 }
@@ -395,7 +477,7 @@ export function complementoDaResposta(texto, { faltas = [], complemento = {}, da
   return usou ? novo : null;
 }
 
-const COMPRA = /\b(?:compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
+const COMPRA = /\b(?:emprestimo|financiamento|compra|compras|comprei|comprou|compramos|compraram|comprado|comprada|adquiri|adquirimos|adquirido)\b/;
 
 /** Resposta à pergunta "total ou cada parcela?": PARCELA, TOTAL ou null (não entendeu — pergunta de novo, sem consumir). */
 export function interpretarRespostaDoValor(texto) {
