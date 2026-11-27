@@ -257,3 +257,65 @@ t("CR-11 empréstimo BNB ponta a ponta: resumo com as observações individuais,
   await s.enviar(gw({ texto: "sim" }));
   assert.equal((await s.contas()).length, 3, "repetir o 'sim' não duplica");
 });
+
+// ------------------------------------------------------------------ 27/11: PLANO DE CONTAS em árvore + observação completa (BNB)
+import { CATALOGO } from "../../src/modules/mova-core/catalogo.js";
+const BNB_REAL = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026.";
+
+t("PL-1 o plano do Financeiro é uma ÁRVORE: a ferramenta 'categorias' do CORE lê TODAS as categorias lançáveis (inclui IMOBILIZADO), não só os grupos da raiz; sem duplicar", async () => {
+  const s = await relatada();
+  const arvore = await s.m.nucleo.consultarPlanoDeContas(s.cx);
+  const achatar = (xs) => xs.flatMap((c) => [c, ...achatar(c.filhas ?? [])]);
+  const todas = achatar(arvore);
+  assert.ok(arvore.length < todas.length, "a raiz tem menos nós que a árvore");
+  const r = await CATALOGO.categorias.executar({ porta: { ler: async () => arvore }, escopo: s.cx });
+  const codigos = r.dados.itens.map((x) => x.codigo);
+  assert.ok(codigos.includes("IMOBILIZADO"), "IMOBILIZADO (Compra de equipamentos e bens) está disponível");
+  assert.equal(new Set(codigos).size, codigos.length, "nenhuma categoria duplicada");
+  assert.ok(r.dados.total > arvore.length, `${r.dados.total} lançáveis (a raiz tinha só ${arvore.length} grupos)`);
+  const lancaveis = todas.filter((c) => c.aceitaLancamento && c.ativa !== false && c.natureza !== "RECEITA" && !(c.filhas ?? []).length).length;
+  assert.equal(r.dados.total, lancaveis);
+});
+
+t("PL-2 bebedouro (equipamento): oferece IMOBILIZADO entre as opções do plano oficial e, escolhido, a conta nasce com IMOBILIZADO (sem categoria genérica)", async () => {
+  const s = await relatada({ politica: {}, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.enviar(gw({ texto: POR_PARCELA }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_CATEGORIA");
+  const pergunta = await s.ultimoTexto();
+  assert.match(pergunta, /1\)?[ .-]*.*(equipamentos e bens|Imobilizado)/i, "IMOBILIZADO é a 1ª opção");
+  await s.enviar(gw({ texto: "1" }));
+  await s.enviar(gw({ texto: "sim" }));
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, await s.categoriasDas(cs)], [2, ["IMOBILIZADO", "IMOBILIZADO"]]);
+  assert.ok(cs.every((c) => c.saldoCentavos === 19450 && c.situacao !== "QUITADA"));
+});
+
+t("OB-1 empréstimo BNB: composição do total (Jailton + Vanessa = total) e o desconto da remuneração são PRESERVADOS — no resumo, na descrição da conta e na proposta; nada cortado em silêncio", async () => {
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.ateOResumo(gw({ texto: BNB_REAL }));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /Jailton R\$\s?395,34 \+ Vanessa R\$\s?2\.515,74 = R\$\s?2\.911,08/);
+  assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+  assert.match(resumo, /vence 07\/12\/2026/);
+  await s.enviar(gw({ texto: "sim" }));
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-07"]);
+  const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
+  for (const x of ["Jailton R$ 395,34", "Vanessa R$ 2.515,74", "R$ 2.911,08", "07/12/2026"]) assert.ok(String(lanc.descricao).includes(x), `${x} na descrição: ${lanc.descricao}`);
+  const [p] = await s.propostas();
+  assert.match(p.observacaoCompleta, /Jailton R\$ 395,34 \+ Vanessa R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração/);
+  assert.equal(p.observacaoNaDescricao, true);
+});
+
+t("OB-2 observação MAIOR que o limite de 200 caracteres da descrição: a conta aponta para a proposta, a proposta guarda o texto inteiro e o resumo AVISA", async () => {
+  const longo = `MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração ${"mensal conforme contrato com a cooperativa ".repeat(5)}em 07/12/2026.`;
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.ateOResumo(gw({ texto: longo }));
+  assert.match(await s.ultimoTexto(), /guarda a observação completa/);
+  await s.enviar(gw({ texto: "sim" }));
+  const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
+  assert.match(String(lanc.descricao), /obs\. completa na proposta MOVA/);
+  const [p] = await s.propostas();
+  assert.equal(p.observacaoNaDescricao, false);
+  assert.ok(p.observacaoCompleta.length > 150);
+});

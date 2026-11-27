@@ -316,7 +316,9 @@ export function criarFerramentas({ porta, armazenamento }) {
     },
     async CATEGORIAS(escopo) {
       const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);
-      const cats = (p?.categorias ?? p?.itens ?? []).filter((c) => c.aceitaLancamento && c.ativa !== false && c.natureza !== "RECEITA");
+      // 27/11: o plano é uma ÁRVORE (grupos com `filhas`); só a raiz era lida. Achata e conta o que aceita lançamento (inclui IMOBILIZADO).
+      const achatar = (xs) => (Array.isArray(xs) ? xs : []).flatMap((c) => [c, ...achatar(c.filhas)]);
+      const cats = achatar(Array.isArray(p) ? p : p?.categorias ?? p?.itens ?? []).filter((c) => c.aceitaLancamento && c.ativa !== false && c.natureza !== "RECEITA" && !(c.filhas ?? []).length);
       if (cats.length === 0) return insuficiente("PLANO_SEM_CATEGORIAS");
       return ok([`categorias de despesa/custo ativas: ${cats.length} (ex.: ${cats.slice(0, 5).map((c) => c.nome).join(", ")})`]);
     },

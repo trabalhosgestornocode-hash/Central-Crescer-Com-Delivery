@@ -171,6 +171,7 @@ export const RESPOSTA = Object.freeze({
     `• Competência: ${c.competencia.slice(5)}/${c.competencia.slice(0, 4)}${c.forma ? ` • Forma: ${{ CARTAO: "cartão", BOLETO: "boleto", PIX: "Pix", DINHEIRO: "dinheiro", TRANSFERENCIA: "transferência" }[c.forma]}` : ""}`,
     ...c.parcelas.map((p) => `• ${p.numero}/${p.total}: vence ${dataBr(p.vencimento)} — ${reais(p.valorCentavos)}${p.observacao ? ` (${p.observacao})` : ""}`),
     `• Total: ${reais(c.totalCentavos)} — situação: A PAGAR`,
+    ...(c.observacaoCompleta?.observacao ? [`• Observações: ${c.observacaoCompleta.observacao}`, ...(c.observacaoCompleta.cabe ? [] : ["• A descrição da conta tem limite de 200 caracteres: ela aponta para esta proposta, que guarda a observação completa."])] : []),
     ...(avisoFatura ? [avisoFatura] : []),
     `Responda "sim" para registrar ou "não" para cancelar. Nada foi registrado ainda.`,
   ].join("\n"),

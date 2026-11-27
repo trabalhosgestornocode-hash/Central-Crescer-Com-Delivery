@@ -805,6 +805,14 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       resposta: RESPOSTA.categoriaDefinida(nome, descricao, "A proposta segue aguardando a confirmação de quem aprova no Centro Financeiro. Nada foi lançado ainda.") });
   }
 
+  /** 27/11 — descrição da conta com a OBSERVAÇÃO dita; `cabe` = coube inteira nos 200 caracteres do núcleo (senão a proposta guarda o texto todo). */
+  function descricaoComObservacao(c) {
+    const obs = [c.observacao, ...c.parcelas.filter((p) => p.observacao).map((p) => `${p.numero}/${p.total} ${p.observacao}`)].filter(Boolean).join("; ") || null;
+    if (!obs) return { descricao: c.descricao.slice(0, 200), observacao: null, cabe: true };
+    const cheia = `${c.descricao} · ${obs}`;
+    return cheia.length <= 200 ? { descricao: cheia, observacao: obs, cabe: true } : { descricao: `${c.descricao} · obs. completa na proposta MOVA`.slice(0, 200), observacao: obs, cabe: false };
+  }
+
   /** 27/11 — unidades (da pessoa, desta configuração) envolvidas num evento: propostas e decisões dele. */
   async function unidadesDoEvento(eventoId, daPessoa) {
     const ids = new Set();
@@ -1249,8 +1257,9 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const sugestao = categoria ? null : sugestaoDeCriacao ?? cls.sugestaoDeCriacao ?? null;
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: c.fornecedor ?? FORNECEDOR_NAO_INFORMADO }, categoria: categoria ?? porta.categoriaProvisoria,
-      // 27/11: observações individuais das parcelas acompanham a descrição da conta (o contrato do núcleo não tem campo por parcela)
-      descricao: (c.parcelas.some((p) => p.observacao) ? `${c.descricao} · ${c.parcelas.filter((p) => p.observacao).map((p) => `${p.numero}/${p.total} ${p.observacao}`).join("; ")}` : c.descricao).slice(0, 120), competencia: c.competencia, dataEmissao: c.dataEmissao,
+      // 27/11: o núcleo não tem campo de observação (só a descrição, até 200 caracteres). A observação dita (composição do total, desconto,
+      // observações das parcelas) acompanha a descrição quando CABE; senão a descrição aponta para a proposta, que guarda o texto inteiro.
+      descricao: descricaoComObservacao(c).descricao, competencia: c.competencia, dataEmissao: c.dataEmissao,
       parcelas: c.parcelas.map((p) => ({ vencimento: p.vencimento, valorCentavos: p.valorCentavos })), ...(c.forma ? { formaPagamento: c.forma } : {}),
     };
     try { porta.validarComandoDeContaParcelada(bruto); } catch (e) {
@@ -1260,7 +1269,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const impressao = JSON.stringify(bruto);
     // a categoria do resumo fica gravada na pendência: o "sim" confirma ESTA (a leitura da resposta não traz a sugestão da original)
     const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
-    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
+    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
     }
@@ -1278,6 +1287,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // sem categoria do plano: a proposta fica para a classificação no Centro Financeiro (com a sugestão de criar a dita, se houver)
       ...(categoria ? {} : { classificacao: { pendente: true, motivo: cls.motivo, sugestaoDeCriacao: sugestao } }),
       ...(evento.midia ? { evidenciaNaoFiscal: "FOTO_DO_PRODUTO" } : {}),
+      ...(descricaoComObservacao(c).observacao ? { observacaoCompleta: descricaoComObservacao(c).observacao, observacaoNaDescricao: descricaoComObservacao(c).cabe } : {}),
       comando: { operacao: "registrarContaParcelada", entrada: bruto },
     }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria }), {
       posCriacao: confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
