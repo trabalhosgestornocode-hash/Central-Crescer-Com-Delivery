@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { FINANCEIRO, ALFA, CONFIG, FIN, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
 import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.js";
+import { TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 
 const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c3";
 const HUMANO = "eeeeeeee-0000-4000-8000-000000000001";
@@ -20,10 +21,10 @@ const CRIAR = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financ
 const ESCRITAS = ["registrarDespesaPagaPorComprovante", "enviarEvidencia", "registrarObrigacaoDocumental", "registrarPagamentoPorComprovante", "registrarObrigacao", "registrarMovimentacao", "pagarContaAPagar"];
 const ESPERADA = "Identifiquei que este documento pertence à Loja Alfa Norte Shopping. Essa unidade ainda não está habilitada no Financeiro do MOVA. Nenhum lançamento foi realizado.";
 
-async function montar({ responder = () => PIX() } = {}) {
+async function montar({ responder = () => PIX(), politica = true } = {}) {
   const s = await cenario({
     responder,
-    config: { ...CONFIG, unidadesNaoHabilitadas: [{ organizacaoId: ORG, unidadeId: NORTE, nome: "Loja Alfa Norte Shopping" }] },
+    config: { ...CONFIG, cadastroDeUnidades: "CONSULTADO", unidadesNaoHabilitadas: [{ organizacaoId: ORG, unidadeId: NORTE, nome: "Loja Alfa Norte Shopping" }] },
     extras: ({ nucleo }) => ({
       autonomia: true, pagamentoPorComprovante: true, criarDespesas: true,
       operacional: criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: "eeeeeeee-0000-4000-8000-0000000000a2",
@@ -31,7 +32,7 @@ async function montar({ responder = () => PIX() } = {}) {
     }),
   });
   // Política AUTOMÁTICA na loja habilitada (o cenário do achado): se a unidade fosse trocada, a despesa seria gravada.
-  await s.mova.armazenamento.politicas.criar({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
+  if (politica) await s.mova.armazenamento.politicas.criar({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 100000,
     responsavel: "Administrador Sintético", motivo: "Despesa paga por comprovante até R$ 1.000,00 (sintético)", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO });
   const escritas = () => s.chamadas.filter((x) => ESCRITAS.includes(x.nome));
   const textos = async () => (await s.saida()).map((r) => r.texto);
@@ -82,4 +83,18 @@ t("NH-5 a resposta a 'de qual unidade?' citando a loja não habilitada também b
   await s.enviar(gw({ texto: "alfa norte shopping", respostaA: original.mensagemId }));
   assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_HABILITADA");
   assert.deepEqual([s.escritas().length, await s.propostas()], [0, 0]);
+});
+
+t("NH-6 proposta ANTIGA (criada antes da trava) cuja mensagem cita a loja não habilitada: a aprovação humana é RECUSADA e nada é gravado", async () => {
+  const s = await montar({ politica: false });
+  const m = gw({ texto: "MOVA paguei a dedetização da loja alfa", doc: pdf("NH6") });
+  await s.enviar(m);
+  assert.equal((await s.ultima()).decisao, "PROPOSTA");
+  const { rows: [p] } = await s.banco.pool.query("select id from mova.proposta order by criada_em desc limit 1");
+  // simula a proposta criada pela regra antiga: a mensagem original citava a outra loja da rede
+  await s.banco.pool.query("update mova.evento set texto = $1 where evento_id = $2", ["MOVA paguei a dedetização da alfa norte shopping", m.eventoId]);
+  await assert.rejects(s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id }), /UNIDADE_NAO_CONFIRMADA/);
+  assert.equal(s.escritas().length, 0);
+  const { rows: [q] } = await s.banco.pool.query("select estado from mova.proposta where id = $1", [p.id]);
+  assert.equal(q.estado, "AGUARDANDO_REVISAO", "continua para revisão; nunca aplicada");
 });

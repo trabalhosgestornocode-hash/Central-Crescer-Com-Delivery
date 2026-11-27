@@ -19,6 +19,7 @@ import { ErroTransitorio } from "../gateway/fila.js";
 import { NIVEL, OPERACAO, conferirComExtrato, decidirAutonomia, validarPolitica } from "../dominio/autonomia.js";
 import { avaliarComprovante } from "../dominio/comprovante.js";
 import { ErroDeExecucao } from "./portaOperacional.js";
+import { revalidarUnidadeDaProposta } from "../dominio/unidade.js";
 
 /** Janela (dias) em que pagamentos ao mesmo favorecido somam para o limite da baixa documental (anti-fracionamento). */
 export const JANELA_FRACIONAMENTO_DIAS = 3;
@@ -29,7 +30,21 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {} }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
+  /**
+   * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
+   * execução — automática, retomada ou confirmada pelo participante. Sem confirmação: nada é gravado; fica como proposta.
+   */
+  async function unidadeConfirmada(proposta) {
+    if (!cfg) return { ok: true, motivo: null };
+    const evento = proposta.eventoId ? await a.eventos.obter(proposta.eventoId) : null;
+    const v = revalidarUnidadeDaProposta({ cfg, proposta, evento });
+    if (!v.ok) {
+      registrar({ tipo: "MOVA_UNIDADE_NAO_CONFIRMADA", motivo: v.motivo });
+      await a.auditoria.registrar({ acao: "EXECUCAO_RECUSADA_UNIDADE", atorTipo: "SISTEMA", atorRef: "mova", alvo: proposta.id, dados: { motivo: v.motivo, contradiz: v.contradiz } });
+    }
+    return v;
+  }
   // 24/11: conta a pagar NOVA a partir de boleto/nota (e o vínculo da nota com a conta existente) só com a chave própria.
   const contasLigadas = Boolean(criarContas);
   // 23/11: criar a conta a pagar (despesa sem conta prévia) só com as DUAS chaves: pagamento por comprovante e criação de despesas.
@@ -228,6 +243,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * @returns {Promise<{situacao:"EXECUTADA"|"CONFERIDA"|"AMBIGUA"|"AGUARDANDO_EXTRATO", nivel:string, motivos:string[], resultado?:object, motivo?:string}>}
    */
   async function aposBaixa(proposta, escopo) {
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { situacao: "AGUARDANDO_EXTRATO", nivel: NIVEL.SOMENTE_PROPOR, motivos: [u.motivo] };
     let conciliacao;
     try { conciliacao = await conferir(proposta, escopo); } catch (e) {
       registrar({ tipo: "MOVA_CONFERENCIA_ADIADA", codigo: e?.codigo ?? "LEITURA_FALHOU" });
@@ -292,6 +309,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    */
   async function aposDespesaNova(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!despesasLigadas) return { ...base, motivos: ["CRIACAO_DE_DESPESAS_DESLIGADA"] };
     if (proposta.tipo !== "DESPESA_PAGA" || !proposta.evidencia) return { ...base, motivos: ["SEM_COMPROVANTE"] };
     if (proposta.competenciaPendente || !proposta.comando?.entrada?.competencia) return { ...base, motivos: ["COMPETENCIA_PENDENTE"] };
@@ -341,6 +360,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    */
   async function aposJuros(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!jurosLigados) return { ...base, motivos: ["REGISTRO_DE_JUROS_DESLIGADO"] };
     const juros = proposta.comando?.juros;
     const e = proposta.comando?.entrada;
@@ -464,6 +485,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    */
   async function aposContaNova(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
     if (proposta.tipo !== "NOVA_OBRIGACAO" || !proposta.evidencia) return { ...base, motivos: ["SEM_DOCUMENTO"] };
     const e = proposta.comando?.entrada;
@@ -497,6 +520,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    */
   async function aposVinculoDeDocumento(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    const u = await unidadeConfirmada(proposta);
+    if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!contasLigadas) return { ...base, motivos: ["CRIACAO_DE_CONTAS_DESLIGADA"] };
     const obrigacaoId = proposta.comando?.entrada?.obrigacaoId;
     if (proposta.tipo !== "VINCULO_DE_DOCUMENTO" || !proposta.evidencia || !obrigacaoId) return { ...base, motivos: ["SEM_DOCUMENTO"] };

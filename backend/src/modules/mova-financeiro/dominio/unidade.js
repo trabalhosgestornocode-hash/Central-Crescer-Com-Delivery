@@ -20,9 +20,11 @@ export const RESULTADO_UNIDADE = Object.freeze({
   DOCUMENTO_DE_OUTRA_UNIDADE: "DOCUMENTO_DE_OUTRA_UNIDADE",
   FORA_DO_GRUPO: "UNIDADE_FORA_DO_GRUPO",
   // 27/11: o texto (ou a leitura do documento) cita EXPRESSAMENTE uma loja da mesma empresa que existe no cadastro da plataforma
-  // mas NÃO está habilitada no MOVA (ex.: "Subway North Shopping"). Bloqueia: nada é criado em nenhuma outra unidade.
+  // mas NÃO está habilitada no MOVA. Bloqueia: nada é criado em nenhuma outra unidade.
   NAO_HABILITADA: "UNIDADE_NAO_HABILITADA",
 });
+/** 27/11: situação do cadastro de lojas da plataforma na configuração (null = não gerido: simulação/testes antigos). */
+export const CADASTRO = Object.freeze({ CONSULTADO: "CONSULTADO", INDISPONIVEL: "INDISPONIVEL" });
 
 /** Unidades citadas no texto (apelido inteiro, por palavra). */
 export function unidadesCitadas(texto, unidades) {
@@ -31,110 +33,156 @@ export function unidadesCitadas(texto, unidades) {
   return unidades.filter((u) => u.apelidos.some((a) => t.includes(` ${a} `)));
 }
 
-// 27/11 — MARCA × LOJA. Achado em produção: "Controle de pragas subway North Shopping" virou Subway Saci, porque o apelido
-// "subway" (a MARCA, comum a toda a rede) bastava para identificar a loja. Agora:
-//   - apelido que é só o COMEÇO do nome da própria loja ("subway" de "subway saci"; "acai" e "acai no grau" de "acai no grau
-//     saci") é MARCA: nunca identifica a loja sozinho (só confirma outra evidência, ou responde a "de qual unidade?");
-//   - o nome completo e os demais apelidos ("subway saci", "acai saci") são ESPECÍFICOS: identificam a loja;
-//   - lojas da MESMA empresa que estão no cadastro da plataforma e não no MOVA (`cfg.unidadesNaoHabilitadas`) também são
-//     reconhecidas pelo nome específico — e bloqueiam com UNIDADE_NAO_HABILITADA.
-/** Palavras de cadastro que não identificam a loja ("Matriz Subway Centro", "Subway Saci — Matriz"). */
+// 27/11 — MARCA × LOJA. Achado em produção: "<serviço> <marca> <outra loja da rede>" virou a loja habilitada da mesma marca,
+// porque o apelido da MARCA (comum a toda a rede) bastava para identificar a loja. Regras:
+//   - apelido que é o começo do nome da própria loja ("sanduba" de "sanduba centro"), ou que outra loja do cadastro também
+//     carrega no nome, é MARCA: nunca identifica a loja sozinho;
+//   - o nome completo e os demais apelidos são ESPECÍFICOS: identificam a loja (comparação exata);
+//   - lojas das MESMAS empresas no cadastro e fora do MOVA (`cfg.unidadesNaoHabilitadas`) são reconhecidas pelo nome, pelo
+//     LOCAL (palavras que não divide com a loja habilitada) ou por uma palavra distintiva dele — com tolerância a UM erro de
+//     digitação em palavras longas — e bloqueiam (UNIDADE_NAO_HABILITADA);
+//   - MARCA seguida de um qualificador de lugar que não é da loja habilitada ("<marca> shopping <cidade>") = loja DESCONHECIDA
+//     (talvez nem cadastrada): pergunta, nunca assume;
+//   - pagador, CNPJ e "conversa de uma loja" identificam a EMPRESA; só valem como identificação definitiva da LOJA quando o
+//     cadastro foi CONSULTADO e a empresa tem só essa loja. Cadastro INDISPONÍVEL ⇒ só o nome específico identifica.
+/** Palavras de cadastro que não identificam a loja ("Matriz <marca> Centro", "<loja> — Matriz"). */
 const PALAVRAS_DE_CADASTRO = new Set(["matriz", "filial"]);
+/** Qualificadores de LUGAR: depois da marca, indicam uma loja específica (se não for a habilitada, é outra loja). */
+const QUALIFICADORES = ["shopping", "mall", "plaza", "center", "centro", "norte", "north", "sul", "south", "leste", "oeste", "avenida", "av", "rua", "bairro", "praia", "aeroporto", "outlet", "express", "park", "parque"];
+/** Palavras comuns demais para identificar uma loja sozinhas (mesmo sendo parte do nome). */
+const COMUNS = new Set([...QUALIFICADORES, "loja", "unidade", "delivery", "grau", "no", "na", "do", "da", "de", "dos", "das", "e", "city", "cidade", "vila", "jardim", "nova", "novo", "sao", "santa", "santo"]);
 export const nomeCanonico = (nome) => normalizar(nome).split(" ").filter((p) => p && !PALAVRAS_DE_CADASTRO.has(p)).join(" ");
 const comecaCom = (nome, a) => nome !== a && nome.startsWith(`${a} `);
 const contemPalavras = (nome, a) => ` ${nome} `.includes(` ${a} `);
+const palavras = (t) => normalizar(t).split(" ").filter(Boolean);
+
+/** Distância de edição limitada a 1 (troca, falta ou sobra de UMA letra), só em palavras de 5+ letras. */
+function quaseIgual(a, b) {
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 5 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, dif = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) { i++; j++; continue; }
+    if (++dif > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return dif + (a.length - i) + (b.length - j) <= 1;
+}
+/** Posição da sequência de palavras `forma` em `texto` (com `tolerante`, um erro por palavra longa); -1 se não houver. */
+function posicaoDaFrase(texto, forma, tolerante) {
+  for (let i = 0; i + forma.length <= texto.length; i++) {
+    if (forma.every((f, k) => (tolerante ? quaseIgual(texto[i + k], f) : texto[i + k] === f))) return i;
+  }
+  return -1;
+}
 
 /**
- * Apelidos que são MARCA (não identificam a loja sozinhos): o começo do próprio nome ("subway" de "subway saci") ou um
- * apelido que também aparece no nome de uma loja NÃO habilitada do cadastro ("alfa" × "loja alfa norte shopping") — um
- * apelido que outra loja também carrega no nome não distingue loja nenhuma.
+ * Apelidos que são MARCA (não identificam a loja sozinhos): o começo do próprio nome, ou um apelido que também aparece no nome
+ * de uma loja NÃO habilitada do cadastro. O nome completo da própria loja nunca vira marca.
  */
 export function marcasDaUnidade(u, naoHabilitadas = []) {
   const nome = nomeCanonico(u.nome);
   const outros = naoHabilitadas.map((x) => nomeCanonico(x.nome));
-  // O nome completo da própria loja nunca vira marca (a forma mais longa da não habilitada já vence quando é ela no texto).
   return (u.apelidos ?? []).filter((a) => a !== nome && (comecaCom(nome, a) || outros.some((o) => contemPalavras(o, a))));
 }
 
-/** Formas ESPECÍFICAS de cada loja (habilitada ou não), da mais longa para a mais curta, e as marcas conhecidas. */
-function formasEspecificas(habilitadas, naoHabilitadas) {
+/** Formas de cada loja: específicas das habilitadas (exatas) e das não habilitadas (tolerantes), da mais longa à mais curta. */
+function formasDasLojas(habilitadas, naoHabilitadas) {
   const marcas = [...new Set(habilitadas.flatMap((u) => marcasDaUnidade(u, naoHabilitadas)))];
   const formas = [];
   for (const u of habilitadas) {
     const daMarca = new Set(marcasDaUnidade(u, naoHabilitadas));
-    for (const a of new Set([nomeCanonico(u.nome), ...u.apelidos])) if (a && !daMarca.has(a)) formas.push({ forma: a, unidade: u, habilitada: true });
+    for (const a of new Set([nomeCanonico(u.nome), ...u.apelidos])) if (a && !daMarca.has(a)) formas.push({ forma: a.split(" "), unidade: u, habilitada: true });
   }
-  const especificasHabilitadas = new Set(formas.map((f) => f.forma));
-  // Loja não habilitada: o nome canônico e o LOCAL — as palavras do nome que ela NÃO divide com a loja habilitada mais parecida
-  // ("north shopping", "rio poty"), só com 2+ palavras: "centro" ou "saci" sozinhos são comuns demais para identificar algo.
+  const especificas = new Set(formas.map((f) => f.forma.join(" ")));
+  const palavrasHabilitadas = new Set(habilitadas.flatMap((u) => [nomeCanonico(u.nome), ...u.apelidos].flatMap((a) => a.split(" "))));
   for (const u of naoHabilitadas) {
-    const nome = nomeCanonico(u.nome);
-    const palavras = nome.split(" ").filter(Boolean);
-    if (palavras.length < 2) continue;
+    const nome = nomeCanonico(u.nome).split(" ").filter(Boolean);
+    if (nome.length < 2) continue;
     formas.push({ forma: nome, unidade: u, habilitada: false });
-    const parecida = habilitadas.map((h) => new Set(nomeCanonico(h.nome).split(" "))).map((s) => ({ s, n: palavras.filter((p) => s.has(p)).length }))
-      .sort((a, b) => b.n - a.n)[0];
+    const parecida = habilitadas.map((h) => new Set(nomeCanonico(h.nome).split(" "))).map((s) => ({ s, n: nome.filter((p) => s.has(p)).length })).sort((a, b) => b.n - a.n)[0];
     if (!parecida?.n) continue;
-    const local = palavras.filter((p) => !parecida.s.has(p)).join(" ");
-    if (local.split(" ").length >= 2 && contemPalavras(nome, local) && !especificasHabilitadas.has(local)) formas.push({ forma: local, unidade: u, habilitada: false });
+    const local = nome.filter((p) => !parecida.s.has(p));
+    if (local.length >= 2 && contemPalavras(nome.join(" "), local.join(" ")) && !especificas.has(local.join(" "))) formas.push({ forma: local, unidade: u, habilitada: false });
+    // Abreviação: uma palavra DISTINTIVA do local com 5+ letras ("north"), nunca comum nem de loja habilitada.
+    for (const p of local) if (p.length >= 5 && !COMUNS.has(p) && !palavrasHabilitadas.has(p)) formas.push({ forma: [p], unidade: u, habilitada: false });
   }
-  return { formas: formas.sort((a, b) => b.forma.length - a.forma.length), marcas };
+  return { formas: formas.sort((a, b) => b.forma.join(" ").length - a.forma.join(" ").length), marcas };
 }
 
 /**
- * Leitura de UM texto: lojas citadas pelo nome específico (habilitadas e não habilitadas) e as MARCAS citadas sem loja.
- * A forma mais longa vence ("subway north shopping" não deixa sobrar "subway" para a marca).
+ * Leitura de UM texto: lojas citadas (habilitadas e não habilitadas), MARCAS citadas sem loja e marca seguida de lugar que
+ * não é da loja habilitada (loja DESCONHECIDA). A forma mais longa vence e consome as palavras.
  */
 export function citacoesDoTexto(texto, habilitadas, naoHabilitadas = []) {
-  let t = ` ${normalizar(texto)} `;
-  const fortes = new Map(), naoHab = new Map(), marcas = new Set();
-  if (t.trim() === "") return { fortes, naoHab, marcas };
-  const { formas, marcas: todasMarcas } = formasEspecificas(habilitadas, naoHabilitadas);
+  const t = palavras(texto);
+  const fortes = new Map(), naoHab = new Map(), marcas = new Set(), desconhecidas = new Set();
+  if (!t.length) return { fortes, naoHab, marcas, desconhecidas };
+  const { formas, marcas: todasMarcas } = formasDasLojas(habilitadas, naoHabilitadas);
+  const consumir = (i, n) => { for (let k = i; k < i + n; k++) t[k] = "|"; };
   for (const f of formas) {
-    if (!t.includes(` ${f.forma} `)) continue;
-    (f.habilitada ? fortes : naoHab).set(f.unidade.unidadeId, f.unidade);
-    t = t.split(` ${f.forma} `).join(" | ");
+    for (let i = posicaoDaFrase(t, f.forma, !f.habilitada); i >= 0; i = posicaoDaFrase(t, f.forma, !f.habilitada)) {
+      (f.habilitada ? fortes : naoHab).set(f.unidade.unidadeId, f.unidade);
+      consumir(i, f.forma.length);
+    }
   }
-  for (const m of todasMarcas.sort((a, b) => b.length - a.length)) if (t.includes(` ${m} `)) { marcas.add(m); t = t.split(` ${m} `).join(" | "); }
-  return { fortes, naoHab, marcas };
+  for (const m of todasMarcas.map((x) => x.split(" ")).sort((a, b) => b.length - a.length)) {
+    for (let i = posicaoDaFrase(t, m, false); i >= 0; i = posicaoDaFrase(t, m, false)) {
+      marcas.add(m.join(" "));
+      if (t.slice(i + m.length, i + m.length + 3).some((p) => QUALIFICADORES.some((q) => quaseIgual(p, q)))) desconhecidas.add(m.join(" "));
+      consumir(i, m.length);
+    }
+  }
+  return { fortes, naoHab, marcas, desconhecidas };
 }
 
 /**
- * @param {{cfg:object, grupo:{unidades:string[]}, textos:string[], documentoDestinatario?:string|null, sugestaoIa?:string|null}} p
+ * @param {{cfg:object, grupo:{unidades:string[]}, textos:string[], documentoDestinatario?:string|null, sugestaoIa?:string|null,
+ *          pagador?:string|null, documentoPagador?:string|null, marcaBasta?:boolean, somenteLeitura?:boolean}} p
+ *   marcaBasta: resposta a "de qual unidade?" — a marca basta se NÃO houver outra loja conhecida da mesma marca.
+ *   somenteLeitura: consulta — a marca basta entre as lojas da conversa (nada é gravado).
  * @returns {{resultado:string, unidade:object|null, evidencia:string|null}}
  */
-export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = null, sugestaoIa = null, pagador = null, documentoPagador = null, marcaBasta = false }) {
+export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = null, sugestaoIa = null, pagador = null, documentoPagador = null, marcaBasta = false, somenteLeitura = false }) {
   const doGrupo = cfg.unidades.filter((u) => grupo.unidades.includes(u.unidadeId));
   const todas = cfg.unidades;
   const naoHabilitadas = cfg.unidadesNaoHabilitadas ?? [];
+  const cadastro = cfg.cadastroDeUnidades ?? null; // null = não gerido (simulação/testes antigos): evidência como antes
   const marcasDe = (u) => marcasDaUnidade(u, naoHabilitadas);
   // Documento: procura em TODAS as unidades configuradas, para detectar documento de unidade errada/fora do grupo.
   const doc = documentoDestinatario ? normalizarDocumento(documentoDestinatario) : "";
   const peloDocumento = doc ? todas.filter((u) => u.documentos.includes(doc)) : [];
-  // 27/11: só o nome ESPECÍFICO da loja identifica; a MARCA sozinha só confirma (ou basta na resposta a "de qual unidade?").
   const leituras = textos.map((t) => citacoesDoTexto(t, todas, naoHabilitadas));
   const fortes = new Map(leituras.flatMap((l) => [...l.fortes]));
   const naoHab = new Map(leituras.flatMap((l) => [...l.naoHab]));
   const marcasCitadas = new Set(leituras.flatMap((l) => [...l.marcas]));
+  const desconhecida = leituras.some((l) => l.desconhecidas.size);
   const daMarca = todas.filter((u) => marcasDe(u).some((m) => marcasCitadas.has(m)));
   const sug = sugestaoIa ? citacoesDoTexto(sugestaoIa, todas, naoHabilitadas) : null;
-  // Loja NÃO habilitada citada expressamente: bloqueia antes de qualquer outra evidência (pagador, CNPJ, grupo de uma loja),
-  // para que nenhuma delas redirecione o documento para outra loja. Citada junto de uma loja habilitada: conflito (pergunta).
+  // Loja NÃO habilitada citada: bloqueia antes de qualquer outra evidência (pagador, CNPJ, conversa de uma loja), para que
+  // nenhuma delas redirecione o documento para outra loja. Citada junto de uma loja habilitada: conflito (pergunta).
   if (naoHab.size) {
     if (fortes.size) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_CITA_NAO_HABILITADA_E_HABILITADA" };
     return { resultado: RESULTADO_UNIDADE.NAO_HABILITADA, unidade: null, evidencia: "TEXTO", unidadeDoDocumento: [...naoHab.values()].map((u) => u.nome).join(", ") };
   }
   if (sug?.naoHab.size && !fortes.size) return { resultado: RESULTADO_UNIDADE.NAO_HABILITADA, unidade: null, evidencia: "LEITURA_DO_DOCUMENTO", unidadeDoDocumento: [...sug.naoHab.values()].map((u) => u.nome).join(", ") };
   if (sug?.naoHab.size) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_IA" };
+  // Marca + lugar que não é da loja habilitada: loja desconhecida (pode nem estar cadastrada). Sem o nome específico, pergunta.
+  if (desconhecida && !fortes.size && !somenteLeitura) return { resultado: RESULTADO_UNIDADE.NAO_IDENTIFICADA, unidade: null, evidencia: "LOJA_DESCONHECIDA" };
   // Marca citada sem loja: vale como referência só quando aponta UMA loja da conversa; de outra conversa ⇒ fora do grupo.
   const marcaNaConversa = daMarca.filter((u) => doGrupo.includes(u));
   if (!fortes.size && daMarca.length && !marcaNaConversa.length) return { resultado: RESULTADO_UNIDADE.FORA_DO_GRUPO, unidade: null, evidencia: "MARCA" };
-  // Duas MARCAS diferentes da conversa ("a subway pagou o açaí") = cita várias (como antes); a mesma marca em duas lojas = sem referência.
+  // Duas MARCAS diferentes da conversa ("a <marca A> pagou a <marca B>") = cita várias; a mesma marca em duas lojas = sem referência.
   const marcasDistintas = new Set(marcaNaConversa.flatMap((u) => marcasDe(u).filter((m) => marcasCitadas.has(m))));
   const citadas = fortes.size ? [...fortes.values()] : marcaNaConversa.length === 1 || marcasDistintas.size > 1 ? marcaNaConversa : [];
   if (citadas.length > 1) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_CITA_VARIAS" };
   const citada = citadas[0] ?? null;
-  const expressa = fortes.size > 0 || marcaBasta;
+  // A marca só resolve "de qual unidade?" quando o cadastro foi lido e nenhuma OUTRA loja conhecida tem a mesma marca.
+  const marcaInequivoca = (u) => cadastro !== CADASTRO.INDISPONIVEL && marcasDe(u).filter((m) => marcasCitadas.has(m))
+    .every((m) => todas.filter((x) => marcasDe(x).includes(m)).length === 1 && !naoHabilitadas.some((x) => contemPalavras(nomeCanonico(x.nome), m)));
+  const expressa = fortes.size > 0 || Boolean(citada && (somenteLeitura || (marcaBasta && marcaInequivoca(citada))));
+  // Pagador/CNPJ/conversa de uma loja identificam a EMPRESA; a LOJA só quando o cadastro foi consultado e a empresa só tem ela.
+  const lojaUnicaDaEmpresa = (u) => cadastro === null || (cadastro === CADASTRO.CONSULTADO && !naoHabilitadas.some((x) => x.organizacaoId === u.organizacaoId));
   const documentoDe = peloDocumento.length === 1 ? peloDocumento[0] : null;
   // 24/11: pagador (procura em TODAS as unidades, para detectar comprovante pago pela conta de outra unidade).
   const pg = (pagador || documentoPagador) ? unidadePeloPagador({ unidades: todas, pagador, documentoPagador }) : { resultado: RESULTADO_PAGADOR.SEM_EVIDENCIA, unidade: null };
@@ -152,11 +200,44 @@ export function resolverUnidade({ cfg, grupo, textos, documentoDestinatario = nu
   const sugForte = sug ? [...sug.fortes.values()].filter((u) => doGrupo.includes(u)) : [];
   const sugerida = sugForte.length ? sugForte : sug ? doGrupo.filter((u) => marcasDe(u).some((m) => sug.marcas.has(m))) : [];
   const confirmaIa = (u) => sugerida.length === 0 || (sugerida.length === 1 && sugerida[0] === u) || (!sugForte.length && sugerida.includes(u));
-  // Marca sozinha não identifica a loja (segue para pagador, documento ou conversa de uma loja); exceção: resposta a "de qual unidade?".
+  const naoDefinitiva = { resultado: RESULTADO_UNIDADE.NAO_IDENTIFICADA, unidade: null, evidencia: "EMPRESA_COM_VARIAS_LOJAS" };
   if (citada && expressa) return confirmaIa(citada) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: citada, evidencia: "TEXTO" } : { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "TEXTO_X_IA" };
-  if (pagadorDe) return confirmaIa(pagadorDe) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: pagadorDe, evidencia: pg.evidencia } : { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "PAGADOR_X_IA" };
-  if (documentoDe) return confirmaIa(documentoDe) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: documentoDe, evidencia: "DOCUMENTO" } : { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "DOCUMENTO_X_IA" };
-  if (doGrupo.length === 1) return confirmaIa(doGrupo[0]) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: doGrupo[0], evidencia: "GRUPO_DE_UMA_UNIDADE" } : { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "GRUPO_X_IA" };
+  if (pagadorDe) {
+    if (!confirmaIa(pagadorDe)) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "PAGADOR_X_IA" };
+    return lojaUnicaDaEmpresa(pagadorDe) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: pagadorDe, evidencia: pg.evidencia } : naoDefinitiva;
+  }
+  if (documentoDe) {
+    if (!confirmaIa(documentoDe)) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "DOCUMENTO_X_IA" };
+    return lojaUnicaDaEmpresa(documentoDe) ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: documentoDe, evidencia: "DOCUMENTO" } : naoDefinitiva;
+  }
+  if (doGrupo.length === 1) {
+    if (!confirmaIa(doGrupo[0])) return { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: "GRUPO_X_IA" };
+    return lojaUnicaDaEmpresa(doGrupo[0]) || somenteLeitura ? { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: doGrupo[0], evidencia: "GRUPO_DE_UMA_UNIDADE" } : naoDefinitiva;
+  }
   // Grupo compartilhado sem evidência própria: a sugestão da IA NÃO basta.
   return { resultado: RESULTADO_UNIDADE.NAO_IDENTIFICADA, unidade: null, evidencia: null };
+}
+
+/**
+ * 27/11: REVALIDA a unidade de uma proposta antes de executá-la ou aprová-la (o cadastro e as regras podem ter mudado depois
+ * que ela foi criada). Usa só o que a proposta guardou: texto da mensagem, leitura do documento e a conversa.
+ * @returns {{ok:boolean, motivo:string|null, contradiz:boolean}} contradiz = a evidência aponta OUTRA loja (nunca aprovar);
+ *   !ok && !contradiz = evidência insuficiente (a execução automática para; uma pessoa no Centro Financeiro pode confirmar).
+ */
+export function revalidarUnidadeDaProposta({ cfg, proposta, evento = null }) {
+  const habilitada = cfg.unidades.find((u) => u.unidadeId === proposta.unidadeId);
+  if (!habilitada) return { ok: false, motivo: "UNIDADE_FORA_DO_MOVA", contradiz: true };
+  const conversa = cfg.gruposAutorizados?.find((g) => g.grupoId === (evento?.grupoId ?? evento?.grupo_jid)) ?? null;
+  const grupo = { unidades: conversa?.unidades ?? [proposta.unidadeId] };
+  const l = proposta.leitura ?? {};
+  const textos = [evento?.texto].filter(Boolean);
+  const r = resolverUnidade({ cfg, grupo, textos, documentoDestinatario: l.documentoDestinatario ?? null, sugestaoIa: l.unidadeSugerida ?? null,
+    pagador: l.pagador ?? null, documentoPagador: l.documentoPagador ?? null });
+  if (r.resultado === RESULTADO_UNIDADE.IDENTIFICADA) return r.unidade.unidadeId === proposta.unidadeId ? { ok: true, motivo: null, contradiz: false } : { ok: false, motivo: "UNIDADE_DIVERGENTE", contradiz: true };
+  if (r.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA) {
+    // A unidade foi ESCOLHIDA por uma pessoa (resposta a "de qual unidade?"): vale, desde que nada a contradiga.
+    if (proposta.esclarecidoPor) return { ok: true, motivo: null, contradiz: false };
+    return { ok: false, motivo: `UNIDADE_NAO_CONFIRMADA:${r.evidencia ?? "SEM_EVIDENCIA"}`, contradiz: false };
+  }
+  return { ok: false, motivo: r.resultado, contradiz: true };
 }

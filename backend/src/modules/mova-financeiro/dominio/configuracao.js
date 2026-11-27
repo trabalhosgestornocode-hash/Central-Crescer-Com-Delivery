@@ -148,16 +148,25 @@ export function validarConfiguracao(c) {
   entregadores = Object.freeze(entregadores.map((e) => Object.freeze({ ...e, organizacaoId: orgDe.get(e.unidadeId) })));
   const ocupados = new Set([...grupos, ...derivadas].map((g) => g.grupoId));
   const dosEntregadores = conversasDosEntregadores(entregadores, { ocupados });
-  // 27/11: lojas das MESMAS empresas que estão no cadastro da plataforma e não no MOVA (só para reconhecer e BLOQUEAR um
-  // documento delas; nunca dão acesso, conversa ou escopo). Entrada inválida é descartada; habilitada nunca entra aqui.
+  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
+    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores,
+    unidadesNaoHabilitadas: normalizarNaoHabilitadas(c.unidadesNaoHabilitadas, unidades), cadastroDeUnidades: situacaoDoCadastro(c.cadastroDeUnidades) });
+}
+
+/** 27/11: situação do cadastro de lojas: CONSULTADO | INDISPONIVEL | null (não gerido — simulação/testes antigos). */
+const situacaoDoCadastro = (s) => (s === "CONSULTADO" || s === "INDISPONIVEL" ? s : null);
+/**
+ * 27/11: lojas das MESMAS empresas que estão no cadastro da plataforma e não no MOVA (só para reconhecer e BLOQUEAR um
+ * documento delas; nunca dão acesso, conversa ou escopo). Entrada inválida é descartada; habilitada nunca entra aqui.
+ */
+export function normalizarNaoHabilitadas(lista, unidades) {
   const orgs = new Set(unidades.map((u) => u.organizacaoId));
-  const unidadesNaoHabilitadas = Object.freeze((Array.isArray(c.unidadesNaoHabilitadas) ? c.unidadesNaoHabilitadas : [])
+  const ids = new Set(unidades.map((u) => u.unidadeId));
+  return Object.freeze((Array.isArray(lista) ? lista : [])
     .filter((u) => UUID.test(u?.unidadeId ?? "") && UUID.test(u?.organizacaoId ?? "") && typeof u.nome === "string" && u.nome.trim())
     .map((u) => ({ unidadeId: u.unidadeId.toLowerCase(), organizacaoId: u.organizacaoId.toLowerCase(), nome: u.nome.trim().slice(0, 120) }))
     .filter((u) => orgs.has(u.organizacaoId) && !ids.has(u.unidadeId))
     .map((u) => Object.freeze(u)));
-  return Object.freeze({ modo: c.modo, identidadeServico: Object.freeze({ usuarioId: c.identidadeServico.usuarioId.toLowerCase() }), unidades: Object.freeze(unidades),
-    gruposAutorizados: Object.freeze([...grupos, ...derivadas, ...dosEntregadores]), entregadores, unidadesNaoHabilitadas });
 }
 
 /**
@@ -170,12 +179,19 @@ export function validarConfiguracao(c) {
 export function configuracaoViva(inicial, { recarregar = null, validadeMs = 60_000, relogio = () => Date.now() } = {}) {
   let atual = inicial;
   let lidoEm = relogio();
-  const semEntregadores = (c) => JSON.stringify({ ...c, entregadores: null, gruposAutorizados: c.gruposAutorizados.filter((g) => !g.entregador) });
+  // 27/11: o cadastro de lojas é trocado à parte (trocarCadastro); não conta como "outra mudança" na troca dos entregadores.
+  const semEntregadores = (c) => JSON.stringify({ ...c, entregadores: null, gruposAutorizados: c.gruposAutorizados.filter((g) => !g.entregador), unidadesNaoHabilitadas: null, cadastroDeUnidades: null });
   function trocarEntregadores(nova) {
     if (semEntregadores(nova) !== semEntregadores(atual)) return { trocado: false, motivo: "OUTRAS_MUDANCAS_EXIGEM_REINICIO" };
     const mudou = JSON.stringify(nova.entregadores) !== JSON.stringify(atual.entregadores);
-    atual = nova;
+    // o cadastro de lojas em vigor continua o atual (é trocado só por trocarCadastro)
+    atual = Object.freeze({ ...nova, unidadesNaoHabilitadas: atual.unidadesNaoHabilitadas, cadastroDeUnidades: atual.cadastroDeUnidades });
     return { trocado: mudou };
+  }
+  /** 27/11: troca SÓ o cadastro de lojas (atualização periódica), com a mesma normalização da configuração. */
+  function trocarCadastro({ lista, situacao }) {
+    atual = Object.freeze({ ...atual, unidadesNaoHabilitadas: normalizarNaoHabilitadas(lista ?? atual.unidadesNaoHabilitadas, atual.unidades), cadastroDeUnidades: situacaoDoCadastro(situacao) });
+    return { situacao: atual.cadastroDeUnidades, total: atual.unidadesNaoHabilitadas.length };
   }
   const viva = {};
   for (const k of Object.keys(inicial)) Object.defineProperty(viva, k, { enumerable: true, get: () => atual[k] });
@@ -187,6 +203,7 @@ export function configuracaoViva(inicial, { recarregar = null, validadeMs = 60_0
     return trocarEntregadores(await recarregar());
   } });
   Object.defineProperty(viva, "trocarEntregadores", { enumerable: false, value: trocarEntregadores });
+  Object.defineProperty(viva, "trocarCadastro", { enumerable: false, value: trocarCadastro });
   return Object.freeze(viva);
 }
 

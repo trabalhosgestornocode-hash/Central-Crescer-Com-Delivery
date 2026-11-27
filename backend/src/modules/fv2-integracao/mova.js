@@ -238,6 +238,42 @@ export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } 
   return e?.midia || (respostasPendentes && e?.contexto?.perguntaPendente) ? extrator.extrair(e) : EXTRATOR_DESLIGADO.extrair(e);
 } });
 
+/** 27/11: intervalo da atualização do cadastro de lojas (CONSULTADO) e da nova tentativa quando está INDISPONIVEL. */
+export const CADASTRO_ATUALIZAR_MS = 15 * 60 * 1000;
+export const CADASTRO_TENTAR_DE_NOVO_MS = 60 * 1000;
+/** Uma leitura boa vale por até 6 h se as seguintes falharem; depois disso, INDISPONIVEL (lojas novas podem ter surgido). */
+export const CADASTRO_VALIDADE_MS = 6 * 60 * 60 * 1000;
+/**
+ * 27/11: CADASTRO DE LOJAS da plataforma (mesmas empresas do MOVA). `estado()` = {unidadesNaoHabilitadas, cadastroDeUnidades}.
+ * Falha de leitura NUNCA é tratada como "não há outras lojas": sem leitura boa válida, a situação é INDISPONIVEL.
+ */
+export function criarCadastroDeLojas({ ler, relogio = () => Date.now(), registrar = () => {} }) {
+  let lista = [], situacao = "INDISPONIVEL", lidoEm = 0, tentou = false, timer = null;
+  async function atualizar(organizacoes) {
+    tentou = true;
+    try {
+      const nova = await ler(organizacoes);
+      if (!Array.isArray(nova)) throw Object.assign(new Error("cadastro inválido"), { codigo: "CADASTRO_INVALIDO" });
+      lista = nova; situacao = "CONSULTADO"; lidoEm = relogio();
+      registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES", situacao, total: lista.length });
+    } catch (e) {
+      if (!lidoEm || relogio() - lidoEm > CADASTRO_VALIDADE_MS) situacao = "INDISPONIVEL";
+      registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES_INDISPONIVEL", situacao, codigo: String(e?.codigo ?? e?.code ?? "ERRO").slice(0, 40) });
+    }
+    return estado();
+  }
+  function estado() { return { unidadesNaoHabilitadas: lista, cadastroDeUnidades: situacao }; }
+  function manterAtualizado(organizacoes, aplicar) {
+    const proxima = () => {
+      timer = setTimeout(async () => { aplicar(await atualizar(organizacoes)); proxima(); }, situacao === "CONSULTADO" ? CADASTRO_ATUALIZAR_MS : CADASTRO_TENTAR_DE_NOVO_MS);
+      timer.unref?.();
+    };
+    proxima();
+    return () => clearTimeout(timer);
+  }
+  return Object.freeze({ atualizar, estado, manterAtualizado, lidoAlgumaVez: () => tentou });
+}
+
 /**
  * Monta o MOVA sobre o pool do schema `mova` e o repositório do Financeiro. Testável: tudo injetável.
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
@@ -254,20 +290,17 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
     await verificarBancoFinanceiro();
   }
   // 27/11: lojas das mesmas empresas no CADASTRO da plataforma (para reconhecer e bloquear documento de loja não habilitada).
-  // Lido uma vez (cache); falha não derruba o MOVA: fica registrada e é tentada de novo na próxima leitura da configuração.
-  let naoHabilitadas = null;
+  // CONSULTADO só depois de uma leitura bem-sucedida; falha nunca vira "lista vazia = não há outras lojas" (INDISPONIVEL ⇒ só o
+  // nome específico identifica a loja). Atualizado periodicamente, nunca por mensagem.
+  const cadastro = unidadesDaPlataforma ? criarCadastroDeLojas({ ler: unidadesDaPlataforma, relogio: () => relogio().getTime(), registrar }) : null;
   const lerConfiguracao = async () => {
     const bruta = await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" });
-    if (unidadesDaPlataforma && naoHabilitadas === null) {
-      try {
-        naoHabilitadas = await unidadesDaPlataforma([...new Set(bruta.unidades.map((u) => u.organizacaoId))]);
-        registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES", total: naoHabilitadas.length });
-      } catch (e) { registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES_INDISPONIVEL", codigo: String(e?.codigo ?? e?.code ?? "ERRO").slice(0, 40) }); }
-    }
-    return validarConfiguracao({ ...bruta, unidadesNaoHabilitadas: naoHabilitadas ?? [] });
+    if (cadastro && !cadastro.lidoAlgumaVez()) await cadastro.atualizar([...new Set(bruta.unidades.map((u) => u.organizacaoId))]);
+    return validarConfiguracao({ ...bruta, ...(cadastro ? cadastro.estado() : {}) });
   };
   // 23/11: só a lista de entregadores é recarregada em funcionamento (a cada envio/rotina, no máximo 1×/min, ou na hora pelo cadastro).
   const configuracao = configuracaoViva(await lerConfiguracao(), { recarregar: lerConfiguracao, relogio: () => relogio().getTime() });
+  if (cadastro) cadastro.manterAtualizado([...new Set(configuracao.unidades.map((u) => u.organizacaoId))], (e) => configuracao.trocarCadastro(e));
   if (cfg.modo === "PILOTO") exigirEscopoDoPiloto(configuracao, cfg.pilotoUnidadeId);
   if (cfg.modo === "OPERACAO") exigirEscopoDaOperacao(configuracao, cfg.operacaoUnidades);
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));

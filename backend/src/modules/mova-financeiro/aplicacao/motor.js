@@ -457,8 +457,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const doDocumento = Boolean(evento.midia) && [...PAGAMENTOS, ...CONTAS].includes(saida.tipoDocumento);
     let u = resolverUnidade({ cfg, grupo: daPessoa, textos, documentoDestinatario: saida.documentoDestinatario, sugestaoIa: saida.unidadeSugerida,
       pagador: doDocumento ? saida.pagador ?? null : null, documentoPagador: doDocumento ? saida.documentoPagador ?? null : null,
-      // 27/11: a MARCA sozinha só basta na resposta a "de qual unidade?" e em consulta (só leitura); documento/lançamento exige a loja.
-      marcaBasta: Boolean(esclarecimento && !esclarecimento.divergencia) || (Boolean(consulta) && !evento.midia) });
+      // 27/11: a MARCA sozinha só basta na resposta a "de qual unidade?" (se não houver outra loja da marca) e em consulta (só leitura).
+      marcaBasta: Boolean(esclarecimento && !esclarecimento.divergencia), somenteLeitura: Boolean(consulta) && !evento.midia });
     // Agente 2 — CONSULTA (só leitura) sem unidade no texto: a unidade da conversa em andamento DESTA pessoa (janela curta).
     // Documento/lançamento continua exigindo evidência própria (nunca pelo histórico do participante).
     if (consulta && u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA && conversa?.unidadeId && daPessoa.unidades.includes(conversa.unidadeId)) {
@@ -577,6 +577,8 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // 15A (V-1): a justificativa e os campos ausentes da IA ficam na proposta para a revisão humana (texto puro não tem documento).
       leitura: { tipoDocumento: saida.tipoDocumento, intencao: saida.intencao, favorecido: saida.favorecido, identificadorDocumento: saida.identificadorDocumento, confianca: saida.confianca,
         pagador: saida.pagador ?? null, documentoPagador: saida.documentoPagador ?? null, instituicao: saida.instituicao ?? null, idTransacao: saida.idTransacao ?? null,
+        // 27/11: evidências de unidade lidas do documento, para REVALIDAR a unidade antes de executar/aprovar a proposta.
+        unidadeSugerida: saida.unidadeSugerida ?? null, documentoDestinatario: saida.documentoDestinatario ?? null,
         // 23/11: evidências bancárias do comprovante para a conciliação (nunca confirmam compensação): banco do recebedor, data e hora impressas, valor.
         instituicaoDestino: saida.instituicaoDestino ?? null, horaTransacao: saida.horaTransacao ?? null, dataPagamento: saida.dataPagamento ?? null, valorCentavos: saida.valorCentavos ?? null,
         // Execução 17: situação IMPRESSA e a avaliação determinística do comprovante (a IA não atesta autenticidade).

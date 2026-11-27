@@ -88,11 +88,116 @@ test("só a MARCA + evidência que a confirma: identificada pela evidência (pag
   assert.equal(so.resultado, RESULTADO_UNIDADE.IDENTIFICADA); assert.equal(so.evidencia, "GRUPO_DE_UMA_UNIDADE");
 });
 
-test("resposta a 'de qual unidade?' e consulta: a marca basta (marcaBasta)", () => {
-  assert.equal(r("sanduba", { marcaBasta: true }).unidade?.unidadeId, SANDUBA);
+test("resposta a 'de qual unidade?': a marca basta SÓ se nenhuma outra loja conhecida tem a mesma marca; consulta: basta na conversa", () => {
+  // há outras lojas Sanduba no cadastro: "sanduba" sozinho é ambiguidade real — não resolve nem na resposta
+  assert.equal(r("sanduba", { marcaBasta: true }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
+  assert.equal(r("sanduba centro", { marcaBasta: true }).unidade?.unidadeId, SANDUBA);
+  // nenhuma outra loja Gelato no cadastro: a marca resolve
   assert.equal(r("é do gelato", { marcaBasta: true }).unidade?.unidadeId, GELATO);
+  // consulta (só leitura): a marca basta entre as lojas da conversa
+  assert.equal(r("quanto gastou o sanduba", { somenteLeitura: true }).unidade?.unidadeId, SANDUBA);
   // mesmo na resposta, loja não habilitada citada bloqueia
   assert.equal(r("sanduba norte shopping", { marcaBasta: true }).resultado, RESULTADO_UNIDADE.NAO_HABILITADA);
+});
+
+// --- 27/11 (revisão do PR): cadastro CONSULTADO × INDISPONÍVEL, empresa com várias lojas, loja desconhecida, erro de digitação ---
+const comCadastro = (situacao, x = {}) => validarConfiguracao({ ...cfgBruta(x), cadastroDeUnidades: situacao });
+const cfgBruta = ({ naoHabilitadas = [{ organizacaoId: ORG_S, unidadeId: NORTE, nome: "Matriz Sanduba Norte Shopping" }, { organizacaoId: ORG_S, unidadeId: RIO_AZUL, nome: "Sanduba Rio Azul" }] } = {}) => ({
+  modo: "SIMULACAO", identidadeServico: { usuarioId: SERVICO },
+  unidades: [
+    { organizacaoId: ORG_S, unidadeId: SANDUBA, nome: "Sanduba Centro", apelidos: ["sanduba", "sanduba centro"], fontes, pagadores: [{ nome: "SANDUBA ALIMENTOS" }], documentos: ["11111111000111"] },
+    { organizacaoId: ORG_G, unidadeId: GELATO, nome: "Gelato no Ponto Centro", apelidos: ["gelato", "gelato centro", "gelato no ponto"], fontes, pagadores: [{ nome: "GELATO COMERCIO" }] },
+  ],
+  gruposAutorizados: [{ grupoId: GRUPO, unidades: [SANDUBA, GELATO], acesso: "ABERTO", multiempresa: true }],
+  unidadesNaoHabilitadas: naoHabilitadas,
+});
+const rc = (c, t, x = {}) => resolverUnidade({ cfg: c, grupo, textos: [].concat(t), ...x });
+
+test("cadastro CONSULTADO + empresa com OUTRAS lojas: pagador, CNPJ e conversa de uma loja não identificam a loja (pergunta)", () => {
+  const c = comCadastro("CONSULTADO");
+  assert.deepEqual([rc(c, "comprovante", { pagador: "SANDUBA ALIMENTOS" }).resultado, rc(c, "comprovante", { pagador: "SANDUBA ALIMENTOS" }).evidencia], [RESULTADO_UNIDADE.NAO_IDENTIFICADA, "EMPRESA_COM_VARIAS_LOJAS"]);
+  assert.equal(rc(c, "comprovante", { documentoDestinatario: "11.111.111/0001-11" }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
+  assert.equal(resolverUnidade({ cfg: c, grupo: { unidades: [SANDUBA] }, textos: ["comprovante"] }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
+  // com o nome específico, identifica (e o pagador da mesma empresa confirma)
+  assert.equal(rc(c, "comprovante sanduba centro", { pagador: "SANDUBA ALIMENTOS" }).unidade?.unidadeId, SANDUBA);
+  // empresa com UMA loja (Gelato): o pagador basta
+  assert.equal(rc(c, "comprovante", { pagador: "GELATO COMERCIO" }).unidade?.unidadeId, GELATO);
+  // consulta (só leitura) numa conversa de uma loja continua respondendo
+  assert.equal(resolverUnidade({ cfg: c, grupo: { unidades: [SANDUBA] }, textos: ["contas da semana"], somenteLeitura: true }).unidade?.unidadeId, SANDUBA);
+});
+
+test("cadastro INDISPONÍVEL: lista vazia por falha NÃO prova que não há outras lojas — só o nome específico identifica", () => {
+  const c = comCadastro("INDISPONIVEL", { naoHabilitadas: [] });
+  assert.equal(c.unidadesNaoHabilitadas.length, 0);
+  for (const x of [{ pagador: "GELATO COMERCIO" }, { pagador: "SANDUBA ALIMENTOS" }, { documentoDestinatario: "11111111000111" }]) {
+    assert.equal(rc(c, "comprovante", x).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA, JSON.stringify(x));
+  }
+  assert.equal(rc(c, "é do gelato", { marcaBasta: true }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA, "nem a marca na resposta");
+  assert.equal(rc(c, "gelato no ponto centro").unidade?.unidadeId, GELATO);
+  assert.equal(rc(c, "sanduba centro", { pagador: "SANDUBA ALIMENTOS" }).unidade?.unidadeId, SANDUBA);
+});
+
+test("loja DESCONHECIDA (nem no cadastro): marca + lugar que não é da loja habilitada ⇒ pergunta, nunca a loja da marca", () => {
+  const c = comCadastro("CONSULTADO");
+  for (const t of ["pragas gelato shopping das flores", "aluguel GELATO NO PONTO aeroporto", "conta sanduba av brasil", "gelato no ponto norte"]) {
+    const u = rc(c, t, { pagador: "GELATO COMERCIO" });
+    assert.equal(u.resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA, t); assert.equal(u.evidencia, "LOJA_DESCONHECIDA", t);
+  }
+  // o lugar da PRÓPRIA loja não é desconhecido
+  assert.equal(rc(c, "gelato no ponto centro").unidade?.unidadeId, GELATO);
+});
+
+test("erros de digitação e abreviações da loja NÃO habilitada também bloqueiam; palavras comuns e curtas não", () => {
+  const c = comCadastro("CONSULTADO", { naoHabilitadas: [{ organizacaoId: ORG_S, unidadeId: NORTE, nome: "Matriz Sanduba Ilhabela Shopping" }, { organizacaoId: ORG_S, unidadeId: RIO_AZUL, nome: "Sanduba Rio Azul" }] });
+  for (const t of ["pragas sanduba ilhabela shoping", "pragas sandubba ilhabela shopping", "conta da ilhabela", "conta da ilhabel", "pagamento sanduba rio azul"]) {
+    assert.equal(rc(c, t).resultado, RESULTADO_UNIDADE.NAO_HABILITADA, t);
+  }
+  // erro em palavra CURTA não é tolerado (evita confundir palavras comuns) — mas nunca vira a loja habilitada: pergunta
+  assert.equal(rc(c, "pagamento sanduba rio azull", { pagador: "SANDUBA ALIMENTOS" }).resultado, RESULTADO_UNIDADE.NAO_IDENTIFICADA);
+  for (const t of ["caneta azul", "compra no rio", "no shopping"]) assert.notEqual(rc(c, t).resultado, RESULTADO_UNIDADE.NAO_HABILITADA, t);
+});
+
+test("revalidação de PROPOSTA antiga: contradição nunca passa; evidência insuficiente para; escolha de uma pessoa vale", async () => {
+  const { revalidarUnidadeDaProposta } = await import("../../src/modules/mova-financeiro/dominio/unidade.js");
+  const c = comCadastro("CONSULTADO");
+  const prop = (x = {}) => ({ id: "p1", unidadeId: SANDUBA, leitura: { pagador: "SANDUBA ALIMENTOS" }, esclarecidoPor: null, ...x });
+  const ev = (texto) => ({ texto, grupoId: GRUPO });
+  assert.deepEqual(revalidarUnidadeDaProposta({ cfg: c, proposta: prop(), evento: ev("pragas sanduba norte shopping") }).contradiz, true);
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop(), evento: ev("pragas sanduba norte shopping") }).motivo, RESULTADO_UNIDADE.NAO_HABILITADA);
+  const insuf = revalidarUnidadeDaProposta({ cfg: c, proposta: prop(), evento: ev("comprovante") });
+  assert.deepEqual([insuf.ok, insuf.contradiz], [false, false]);
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop({ esclarecidoPor: "pessoa" }), evento: ev("comprovante") }).ok, true);
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop(), evento: ev("comprovante sanduba centro") }).ok, true);
+  // a leitura do documento aponta outra loja da conversa: divergente
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop({ leitura: { pagador: "GELATO COMERCIO" } }), evento: ev("comprovante") }).contradiz, true);
+  // a loja saiu do MOVA
+  assert.equal(revalidarUnidadeDaProposta({ cfg: c, proposta: prop({ unidadeId: NORTE }), evento: ev("x") }).motivo, "UNIDADE_FORA_DO_MOVA");
+});
+
+test("configuração viva: o cadastro é trocado sem reinício; a troca de entregadores preserva o cadastro em vigor", async () => {
+  const { configuracaoViva } = await import("../../src/modules/mova-financeiro/dominio/configuracao.js");
+  const v = configuracaoViva(comCadastro("INDISPONIVEL", { naoHabilitadas: [] }));
+  assert.deepEqual([v.cadastroDeUnidades, v.unidadesNaoHabilitadas.length], ["INDISPONIVEL", 0]);
+  v.trocarCadastro({ lista: [{ organizacaoId: ORG_S, unidadeId: NORTE, nome: "Sanduba Norte Shopping" }, { organizacaoId: ORG_OUTRA, unidadeId: DE_FORA, nome: "Sanduba Praia" }], situacao: "CONSULTADO" });
+  assert.deepEqual([v.cadastroDeUnidades, v.unidadesNaoHabilitadas.map((u) => u.unidadeId)], ["CONSULTADO", [NORTE]]);
+  assert.equal(resolverUnidade({ cfg: v, grupo, textos: ["pragas norte shopping"] }).resultado, RESULTADO_UNIDADE.NAO_HABILITADA);
+  assert.equal(v.trocarEntregadores(comCadastro("INDISPONIVEL", { naoHabilitadas: [] })).motivo, undefined);
+  assert.equal(v.cadastroDeUnidades, "CONSULTADO", "a lista de entregadores não derruba o cadastro");
+});
+
+test("cadastro de lojas: só CONSULTADO com leitura boa; falha antes = INDISPONIVEL; leitura boa vale 6 h; resposta inválida não conta", async () => {
+  const { criarCadastroDeLojas, CADASTRO_VALIDADE_MS } = await import("../../src/modules/fv2-integracao/mova.js");
+  let agora = 1_000_000, falhar = true, resposta = [{ unidadeId: NORTE, organizacaoId: ORG_S, nome: "x" }];
+  const c = criarCadastroDeLojas({ ler: async () => { if (falhar) throw Object.assign(new Error("fora"), { code: "ECONNRESET" }); return resposta; }, relogio: () => agora });
+  assert.deepEqual(await c.atualizar([ORG_S]), { unidadesNaoHabilitadas: [], cadastroDeUnidades: "INDISPONIVEL" });
+  falhar = false;
+  assert.equal((await c.atualizar([ORG_S])).cadastroDeUnidades, "CONSULTADO");
+  falhar = true; agora += 60_000;
+  assert.deepEqual(await c.atualizar([ORG_S]), { unidadesNaoHabilitadas: resposta, cadastroDeUnidades: "CONSULTADO" }, "falha passageira mantém a leitura boa");
+  agora += CADASTRO_VALIDADE_MS + 1;
+  assert.equal((await c.atualizar([ORG_S])).cadastroDeUnidades, "INDISPONIVEL", "leitura velha demais");
+  falhar = false; resposta = null;
+  assert.equal((await c.atualizar([ORG_S])).cadastroDeUnidades, "INDISPONIVEL", "resposta inválida não é leitura boa");
 });
 
 test("ENTRE EMPRESAS: a conta de uma loja pagou pela outra — nunca vira lançamento da pagadora", () => {
