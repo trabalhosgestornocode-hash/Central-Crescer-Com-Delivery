@@ -260,7 +260,7 @@ t("CR-11 empréstimo BNB ponta a ponta: resumo com as observações individuais,
 
 // ------------------------------------------------------------------ 27/11: PLANO DE CONTAS em árvore + observação completa (BNB)
 import { CATALOGO } from "../../src/modules/mova-core/catalogo.js";
-const BNB_REAL = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026.";
+const BNB_REAL = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vencimento 15/12/2026. Desconto da remuneração de novembro/2026 em 07/12/2026.";
 
 t("PL-1 o plano do Financeiro é uma ÁRVORE: a ferramenta 'categorias' do CORE lê TODAS as categorias lançáveis (inclui IMOBILIZADO), não só os grupos da raiz; sem duplicar", async () => {
   const s = await relatada();
@@ -296,10 +296,11 @@ t("OB-1 empréstimo BNB: composição do total (Jailton + Vanessa = total) e o d
   const resumo = await s.ultimoTexto();
   assert.match(resumo, /Jailton R\$\s?395,34 \+ Vanessa R\$\s?2\.515,74 = R\$\s?2\.911,08/);
   assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
-  assert.match(resumo, /vence 07\/12\/2026/);
+  assert.match(resumo, /1\/1: vence 15\/12\/2026/, "o vencimento é o dito; a data do desconto (07/12) é outra informação");
+  assert.doesNotMatch(resumo, /vence 07\/12/);
   await s.enviar(gw({ texto: "sim" }));
   const cs = await s.contas();
-  assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-07"]);
+  assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"]);
   const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
   for (const x of ["Jailton R$ 395,34", "Vanessa R$ 2.515,74", "R$ 2.911,08", "07/12/2026"]) assert.ok(String(lanc.descricao).includes(x), `${x} na descrição: ${lanc.descricao}`);
   const [p] = await s.propostas();
@@ -308,7 +309,7 @@ t("OB-1 empréstimo BNB: composição do total (Jailton + Vanessa = total) e o d
 });
 
 t("OB-2 observação MAIOR que o limite de 200 caracteres da descrição: a conta aponta para a proposta, a proposta guarda o texto inteiro e o resumo AVISA", async () => {
-  const longo = `MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração ${"mensal conforme contrato com a cooperativa ".repeat(5)}em 07/12/2026.`;
+  const longo = `MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vencimento 15/12/2026. Desconto da remuneração ${"mensal conforme contrato com a cooperativa ".repeat(5)}em 07/12/2026.`;
   const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
   await s.ateOResumo(gw({ texto: longo }));
   assert.match(await s.ultimoTexto(), /guarda a observação completa/);
@@ -318,4 +319,46 @@ t("OB-2 observação MAIOR que o limite de 200 caracteres da descrição: a cont
   const [p] = await s.propostas();
   assert.equal(p.observacaoNaDescricao, false);
   assert.ok(p.observacaoCompleta.length > 150);
+});
+
+t("OB-3 a data do desconto da remuneração NÃO vira vencimento: sem vencimento dito, o MOVA pergunta e nada é criado", async () => {
+  const sem = BNB_REAL.replace(", vencimento 15/12/2026", "");
+  const r = interpretarContaRelatada({ texto: sem, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.faltas.includes("VENCIMENTO"), r.parcelas.length, r.totalCentavos], [true, 0, null]);
+  assert.match(r.observacao, /07\/12\/2026/, "a observação preserva a data do desconto");
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.enviar(gw({ texto: sem }));
+  assert.equal((await s.contas()).length, 0);
+  assert.equal((await s.propostas()).length, 0);
+});
+
+t("OB-4 vencimento na MESMA frase da observação do desconto: o vencimento é o do banco; a data do desconto fica só nas observações", async () => {
+  const mesma = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026, vencimento do empréstimo 15/12/2026.";
+  const r = interpretarContaRelatada({ texto: mesma, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.faltas, r.parcelas.map((p) => p.vencimento)], [[], ["2026-12-15"]]);
+  assert.match(r.observacao, /07\/12\/2026/);
+  assert.doesNotMatch(r.observacao, /15\/12/, "o vencimento não entra na observação do desconto");
+  // ordem inversa: vencimento antes da observação
+  const inversa = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vence 15/12/2026 e o desconto da remuneração de novembro/2026 será em 07/12/2026.";
+  const i = interpretarContaRelatada({ texto: inversa, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([i.faltas, i.parcelas.map((p) => p.vencimento)], [[], ["2026-12-15"]]);
+  assert.match(i.observacao, /07\/12\/2026/);
+});
+
+t("OB-5 vencimento em RESPOSTA posterior: o MOVA pergunta só o vencimento, guarda o relato, e a resposta ('vencimento 15/12/2026' ou só a data) completa a conta; o desconto segue só na observação", async () => {
+  for (const resposta of ["vencimento 15/12/2026", "15/12/2026"]) {
+    const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+    await s.enviar(gw({ texto: BNB_REAL.replace(", vencimento 15/12/2026", "") }));
+    assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_VENCIMENTO", JSON.stringify(await s.decisao()));
+    assert.match(await s.ultimoTexto(), /Qual é o vencimento da conta/);
+    assert.equal((await s.contas()).length, 0);
+    await s.ateOResumo(gw({ texto: resposta }));
+    const resumo = await s.ultimoTexto();
+    assert.match(resumo, /1\/1: vence 15\/12\/2026/, resposta);
+    assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+    assert.doesNotMatch(resumo, /vence 07\/12/);
+    await s.enviar(gw({ texto: "sim" }));
+    const cs = await s.contas();
+    assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"], resposta);
+  }
 });

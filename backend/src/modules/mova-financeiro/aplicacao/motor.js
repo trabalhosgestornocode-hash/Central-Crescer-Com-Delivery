@@ -1213,7 +1213,10 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const div = esclarecimento?.divergencia ?? null;
     if (div && !String(div.tipo ?? "").startsWith("CONTA_RELATADA")) return null;
     // 27/11: FOTO do produto com legenda ⇒ a LEGENDA é o relato (a foto não é documento fiscal nem comprovante)
-    const textoDaConta = evento.midia ? (legendaDoDocumento(evento.texto) ?? "") : evento.texto;
+    let textoDaConta = evento.midia ? (legendaDoDocumento(evento.texto) ?? "") : evento.texto;
+    // 27/11: o vencimento veio em RESPOSTA posterior à pergunta: junta ao relato original (a data do desconto da remuneração segue só nas observações)
+    if (div?.tipo === "CONTA_RELATADA_VENCIMENTO") textoDaConta = `${div.relato}. ${esclarecimento.texto}`;
+    else if (div?.relato) textoDaConta = div.relato; // perguntas seguintes carregam o relato COMPLETO (com o vencimento já respondido)
     const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv, porFoto: Boolean(evento.midia) });
     // estado acumulado da conversa (cada pergunta carrega as respostas anteriores; nada é perguntado duas vezes)
     let tipoValor = div?.tipoValor ?? null;
@@ -1221,7 +1224,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const sugestaoDeCriacao = div?.sugestaoDeCriacao ?? null;
     if (div?.tipo === "CONTA_RELATADA_VALOR") {
       tipoValor = interpretarRespostaDoValor(esclarecimento.texto);
-      if (!tipoValor) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(ler(null)), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+      if (!tipoValor) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha, relato: textoDaConta }, RESPOSTA.contaRelatadaValorAmbiguo(ler(null)), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
     }
     const c = ler(tipoValor);
     if (!c.ehConta) return null;
@@ -1229,9 +1232,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (c.faltas.length) {
       const nomes = { DATA_INVALIDA: "uma data válida (dia/mês)", VALOR: "valor", VALORES_DIFERENTES: "qual é o valor (a mensagem tem mais de um)", DESCRICAO: "o que foi comprado",
         PARCELAS: "quantidade de parcelas (1 a 24)", VENCIMENTO: "vencimento", VENCIMENTOS_DAS_PARCELAS: "o vencimento de cada parcela", VENCIMENTO_ANTERIOR_A_COMPRA: "vencimentos a partir da data da compra" };
+      // 27/11: só falta o vencimento (ex.: a única data dita era a do desconto da remuneração) ⇒ pergunta e guarda o relato; a resposta completa a conta
+      if (c.faltas.length === 1 && c.faltas[0] === "VENCIMENTO") return perguntar(ctx, { tipo: "CONTA_RELATADA_VENCIMENTO", relato: textoDaConta, tipoValor, categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaVencimento(Boolean(c.observacao)), "CONTA_RELATADA_PERGUNTA_VENCIMENTO");
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONTA_RELATADA_INCOMPLETA:${c.faltas.join(",")}`, escopo, resposta: RESPOSTA.faltaInformacao(c.faltas.map((f) => nomes[f] ?? f)), injecao });
     }
-    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
+    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha, relato: textoDaConta }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
     const bloqueio = await competenciaAberta(ctx, c.competencia);
     if (bloqueio) return bloqueio;
     // Duplicidade: mesma parcela (valor + vencimento) já registrada nesta unidade ⇒ nada novo.
@@ -1250,7 +1255,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     if (!escolha && cls.perguntar) {
       if (!plano.length) escolha = "REVISAO"; // plano indisponível: nada é inventado; fica a classificar
-      else return perguntar(ctx, { tipo: "CONTA_RELATADA_CATEGORIA", tipoValor: c.tipoValor, opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao },
+      else return perguntar(ctx, { tipo: "CONTA_RELATADA_CATEGORIA", relato: textoDaConta, tipoValor: c.tipoValor, opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao },
         RESPOSTA.contaRelatadaCategoria({ opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao, descricao: c.descricao }), "CONTA_RELATADA_PERGUNTA_CATEGORIA");
     }
     const categoria = escolha === "REVISAO" ? null : escolha ? (plano.some((x) => x.codigo === escolha) ? escolha : null) : cls.codigo;
@@ -1268,7 +1273,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     const impressao = JSON.stringify(bruto);
     // a categoria do resumo fica gravada na pendência: o "sim" confirma ESTA (a leitura da resposta não traz a sugestão da original)
-    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
+    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", relato: textoDaConta, tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
     const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");

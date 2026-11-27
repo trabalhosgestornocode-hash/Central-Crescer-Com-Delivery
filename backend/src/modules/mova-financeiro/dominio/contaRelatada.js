@@ -63,11 +63,18 @@ const brl = (c) => `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\
  * 27/11 — OBSERVAÇÃO da conta: composição do total (quem pagou quanto) e a oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA, com as
  * observações individuais das parcelas. Só o que foi DITO. Nunca é cortada em silêncio: o motor guarda o texto inteiro na proposta.
  */
+/** 27/11 — oração do relato sobre DESCONTO/REMUNERAÇÃO/FOLHA. A data dela (ex.: desconto em 07/12) NÃO é vencimento da conta. */
+export function oracaoDeDesconto(texto) {
+  // termina no fim da frase OU antes de um vencimento dito na mesma frase ("…desconto em 07/12, vencimento do empréstimo 15/12")
+  const m = String(texto ?? "").match(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\s*[,;]?\s*(?:e\s+)?(?:o\s+|a\s+)?(?:primeiro\s+|1[ºo°]\s+)?(?:vencimento|vence|vencendo)\b|\.(?:\s|$)|;|\n|$)/i);
+  return m ? m[0] : null;
+}
+
 export function observacaoDaConta(texto, comp = null) {
   const partes = [];
   if (comp) partes.push(`${comp.componentes.map((c) => `${c.rotulo ? `${c.rotulo} ` : ""}${brl(c.valorCentavos)}`).join(" + ")} = ${brl(comp.totalCentavos)}`);
-  const oracao = String(texto ?? "").match(/\b(?:descont\w*|remunera\w*|folha)\b[^;\n]*?(?=\.(?:\s|$)|;|\n|$)/i);
-  if (oracao) partes.push(oracao[0].trim().replace(/[,\s]+$/, ""));
+  const oracao = oracaoDeDesconto(texto);
+  if (oracao) partes.push(oracao.trim().replace(/[,\s]+$/, ""));
   return partes.length ? partes.join("; ") : null;
 }
 
@@ -237,7 +244,10 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   const t = normalizar(String(texto ?? "").replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, " ").replace(/r\$\s*[\d.,]+|\b\d[\d.]*,\d{1,2}\b/gi, " "));
   const comp = composicaoDoTotal(texto);
   const valores = comp ? [comp.totalCentavos] : valoresCitados(texto);
-  const { datas, invalida } = datasCitadas(texto, dataMensagem);
+  // 27/11: a data do DESCONTO da remuneração (valor que sai do salário/folha) é informação distinta: não vira vencimento da conta.
+  const desconto = oracaoDeDesconto(texto);
+  const textoDeDatas = desconto ? String(texto).replace(desconto, " ") : texto;
+  const { datas, invalida } = datasCitadas(textoDeDatas, dataMensagem);
   let n = quantidadeDeParcelas(t);
   const forma = formaDePagamento(t);
   const fornecedor = fornecedorDito(texto);
@@ -258,7 +268,7 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
   if (datas.some((d) => d < dataMensagem)) faltas.push("VENCIMENTO_ANTERIOR_A_COMPRA");
   const tipo = n === 1 ? TIPO_VALOR.TOTAL : tipoValor ?? tipoDoValor(t) ?? TIPO_VALOR.AMBIGUO;
   const ambiguo = tipo === TIPO_VALOR.AMBIGUO && valores.length === 1 && (n ?? 0) > 1;
-  const observacoes = observacoesPorData(texto);
+  const observacoes = observacoesPorData(textoDeDatas);
   let parcelas = [];
   let total = null;
   if (!faltas.length && !ambiguo) {
@@ -274,7 +284,8 @@ export function interpretarContaRelatada({ texto, dataMensagem, unidades = [], t
     }
   }
   return Object.freeze({
-    ehConta: compra && valores.length > 0 && datas.length > 0, faltas, ambiguo, descricao, fornecedor, forma,
+    // 27/11: relato cuja ÚNICA data é a do desconto da remuneração continua sendo conta relatada (falta o vencimento ⇒ pergunta); nunca cai no fluxo comum, que poderia tomar o desconto como vencimento
+    ehConta: compra && valores.length > 0 && (datas.length > 0 || Boolean(desconto)), faltas, ambiguo, descricao, fornecedor, forma,
     observacao: observacaoDaConta(texto, comp), composicao: comp, competencia: dataMensagem.slice(0, 7), dataEmissao: dataMensagem, parcelas, totalCentavos: total,
     valorCitadoCentavos: valores[0] ?? null, tipoValor: ambiguo ? TIPO_VALOR.AMBIGUO : tipo, quantidade: n,
   });
