@@ -367,9 +367,11 @@ t("15A descarte auditável: SUPRIMIDA (sem DELETE), só PENDENTE até o corte, a
   assert.equal((await s.pool.query("select count(*)::int n from mova.resposta")).rows[0].n, 3, "nada apagado");
 });
 
+// 27/11: com "R$" escrito, o relato vira CONTA RELATADA (o MOVA pergunta o mês pelo WhatsApp — teste 15A-bis). Sem o valor escrito em
+// reais no texto (só a leitura o trouxe), segue o fluxo comum: proposta com a competência PENDENTE para a revisão (este teste).
 t("15A competência NUNCA presumida: conta sem competência nasce pendente; aplicar recusa; revisão informa (auditada) e aí aplica", async () => {
   const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }));
-  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, R$ 289,90, vence 25/10/2026" }));
+  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, 289,90, vence 25/10/2026" }));
   const [p] = await s.propostas(ALFA);
   assert.equal(p.tipo, "NOVA_OBRIGACAO");
   assert.equal(p.competenciaPendente, true);
@@ -387,6 +389,23 @@ t("15A competência NUNCA presumida: conta sem competência nasce pendente; apli
   const ob = (await s.m.nucleo.consultarContasAPagar(adm, {})).itens.find((x) => x.id === r.resultado.obrigacaoId);
   assert.deepEqual([ob.valorOriginalCentavos, ob.vencimento, ob.competencia], [28990, "2026-10-25", "2026-10"]);
   assert.ok((await s.mova.armazenamento.auditoria.listar()).some((x) => x.acao === "COMPETENCIA_REVISADA"));
+});
+
+t("15A-bis conta relatada sem o mês: o MOVA pergunta SÓ o mês, guarda o resto, mostra o resumo e só cria a proposta no 'sim' (competência dita)", async () => {
+  const s = await cenario(() => base({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }));
+  await s.enviar(msg({ texto: "chegou o boleto de internet da alfa, R$ 289,90, vence 25/10/2026" }));
+  assert.equal((await s.ultima()).motivo, "CONTA_RELATADA_FALTA_INFORMACAO");
+  const pergunta = (await s.mova.armazenamento.saida.listar()).at(-1).texto;
+  assert.match(pergunta, /falta:\n• o mês de referência \(competência\)/);
+  assert.doesNotMatch(pergunta, /vencimento/, "o vencimento já dito não é perguntado de novo");
+  assert.equal((await s.propostas(ALFA)).length, 0);
+  await s.enviar(msg({ texto: "outubro" }));
+  if ((await s.ultima()).motivo === "CONTA_RELATADA_PERGUNTA_CATEGORIA") await s.enviar(msg({ texto: "0" }));
+  assert.equal((await s.ultima()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
+  assert.match((await s.mova.armazenamento.saida.listar()).at(-1).texto, /Competência: 10\/2026[\s\S]*vence 25\/10\/2026 — R\$\s?289,90/);
+  await s.enviar(msg({ texto: "sim" }));
+  const [p] = await s.propostas(ALFA);
+  assert.deepEqual([p.tipo, p.valorCentavos, p.datas.competencia, p.datas.vencimento, p.comando.entrada.competencia], ["CONTA_RELATADA", 28990, "2026-10", "2026-10-25", "2026-10"]);
 });
 
 t("15A competência explícita é respeitada (sem pendência); despesa paga sem competência também fica pendente", async () => {

@@ -190,6 +190,8 @@ export function tituloAPagar(p, o, hoje) {
     situacao, vencido: emAberto && o.vencimento < hoje, pendencias, documentos, pagamentos,
     ...dimensoesDoPagamento(o, pagamentos),
     origem: o.fonte?.sistema ?? "MANUAL",
+    // 27/11: o que a pessoa disse ao relatar a conta (ex.: composição do empréstimo) e a forma de pagamento informada
+    observacao: o.observacao ?? null, formaPagamentoInformada: o.formaPagamento ?? null,
   };
 }
 

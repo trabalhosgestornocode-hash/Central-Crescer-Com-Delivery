@@ -90,7 +90,7 @@ export function operacoesEconomicas(b) {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
             competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: explicitas ? explicitas[i].vencimento : somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
-            ...(c.identificador ? { identificador: c.identificador } : {}),
+            ...(c.identificador ? { identificador: c.identificador } : {}), ...(c.extrasDaObrigacao ?? {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
           }));
         }
@@ -154,8 +154,14 @@ export function operacoesEconomicas(b) {
         contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
         competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
         documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
+        // 27/11: forma de pagamento (já validada, antes descartada) e observações ficam em CADA parcela da conta (campos livres da obrigação)
+        extrasDaObrigacao: { ...(v.formaPagamento ? { formaPagamento: v.formaPagamento } : {}), ...(v.observacao ? { observacao: v.observacao } : {}) },
       };
-      return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: true, aceitaImobilizado: true });
+      // 27/11: "só despesa (ou imobilizado)" é a regra da permissão ESTREITA (a do MOVA; o banco a impõe na 0033). Quem tem o registro
+      // AMPLO (`registrar`, o mesmo do formulário de conta a pagar, que já aceita patrimonial) aprova a conta relatada de empréstimo/
+      // parcelamento na Central sem virar despesa. Nenhuma permissão é ampliada: receita e títulos anteriores continuam recusados.
+      const amplo = Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR);
+      return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: !amplo, aceitaImobilizado: true });
     },
 
     /**

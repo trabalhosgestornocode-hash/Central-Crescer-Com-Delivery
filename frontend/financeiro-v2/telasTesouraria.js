@@ -296,6 +296,8 @@ ${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => 
   <dt>Classificação econômica</dt><dd>${t.classificacaoEconomica === "PENDENTE_DE_CLASSIFICACAO" ? '<span class="selo selo--alerta">Pendente</span> fora da DRE até ser classificada' : t.classificacaoEconomica === "PATRIMONIAL" ? "Patrimonial (fora do resultado)" : "Confirmada"}</dd>
   ${t.parcela?.total > 1 ? `<dt>Parcela</dt><dd>${t.parcela.numero} de ${t.parcela.total}</dd>` : ""}
   ${t.recorrencia ? `<dt>Recorrência</dt><dd>Mensal, dia ${t.recorrencia.diaDoMes}</dd>` : ""}
+  ${t.formaPagamentoInformada ? `<dt>Forma informada</dt><dd>${esc({ CARTAO: "Cartão", BOLETO: "Boleto", PIX: "Pix", DINHEIRO: "Dinheiro", TRANSFERENCIA: "Transferência" }[t.formaPagamentoInformada] ?? t.formaPagamentoInformada)}</dd>` : ""}
+  ${t.observacao ? `<dt>Observações</dt><dd style="white-space:pre-line">${esc(t.observacao)}</dd>` : ""}
 </dl>
 ${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
 <h3>Documentos</h3>${documentos(t.documentos)}
