@@ -229,7 +229,7 @@ export function validarImplantacaoDePlano(e) {
 }
 
 export function validarObrigacao(e) {
-  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte", "identificador"], "obrigacao");
+  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte", "identificador", "observacao"], "obrigacao");
   // Abertura: fornecedor NOVO criado na MESMA transação da obrigação (nunca fica órfão se a obrigação for recusada).
   if ((e.contraparteId === undefined) === (e.contraparteNova === undefined)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a contraparte existente OU a nova (exatamente uma).", { campo: "contraparteId" });
   const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
@@ -258,6 +258,8 @@ export function validarObrigacao(e) {
     fonte: fonte(e.fonte),
     // Título anterior à abertura: número do documento/repasse/pedido, usado na conferência das importações posteriores.
     ...(e.identificador !== undefined && e.identificador !== null && e.identificador !== "" ? { identificador: identificadorDoTitulo(e.identificador) } : {}),
+    // 27/11: observação dita (ex.: composição de um empréstimo pago por boleto) — só quando informada (a impressão das demais não muda)
+    ...(e.observacao !== undefined && e.observacao !== null && e.observacao !== "" ? { observacao: exigirTexto(e.observacao, "observacao", { max: 500 }) } : {}),
   };
 }
 

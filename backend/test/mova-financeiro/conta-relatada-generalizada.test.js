@@ -252,3 +252,38 @@ t("CG-8 permissões preservadas: a ação ESTREITA de conta relatada continua s�
   assert.equal(op.obrigacoes[0].observacao, entrada.observacao, "observação guardada na conta");
   await assert.rejects(s.m.nucleo.registrarContaParcelada(ctx(ORG, ALFA, TODAS, HUMANO), { ...entrada, categoria: "VENDA_BALCAO" }), (e) => e.codigo === "FV2_CATEGORIA_INVALIDA", "receita nunca");
 });
+
+t("CG-9 recuperação do BNB: pendência do mês REABERTA no banco com as observações informadas ⇒ a resposta do mês gera a proposta com Jailton/Vanessa e o desconto em folha; a Central registra a conta com a observação (sem digitar nada)", async () => {
+  const s = await comBoletoPago();
+  await s.enviar(gw({ texto: "Empréstimo BNB Pessoa Um e Pessoa Dois", doc: "%PDF-sintetico-boleto-bnb-recuperado" }));
+  await s.enviar(gw({ texto: "alfa" }));
+  assert.equal((await s.decisao()).motivo, "COMPETENCIA_AUSENTE");
+  // operação pontual de produção (mesma forma): a pendência do mês recebe as observações informadas; nada mais muda
+  const OBS = ["Pessoa Um R$ 395,34 + Pessoa Dois R$ 2.515,74 = R$ 2.911,08", "Previsão de desconto das remunerações de novembro/2026 em 07/12/2026"];
+  const n = await s.banco.pool.query("update mova.mensagem_pendente set leitura = leitura || jsonb_build_object('observacoes', $1::jsonb) where resolvida_em is null and leitura->'divergencia'->>'tipo' = 'COMPETENCIA'", [JSON.stringify(OBS)]);
+  assert.equal(n.rowCount, 1);
+  assert.equal((await s.lancamentos()).length, 0, "reabrir/complementar a pendência não lança nada");
+  await s.enviar(gw({ texto: "novembro/2026" }));
+  const texto = await s.ultimoTexto();
+  assert.match(texto, /Observações: Pessoa Um R\$ 395,34 \+ Pessoa Dois R\$ 2\.515,74 = R\$ 2\.911,08; Previsão de desconto das remunerações de novembro\/2026 em 07\/12\/2026/);
+  const [p] = (await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).filter((x) => x.tipo === "DESPESA_PAGA");
+  assert.match(p.comando.entrada.observacao, /07\/12\/2026/);
+  assert.equal((await s.lancamentos()).length, 0, "proposta: nada lançado antes da Central");
+  await s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id });
+  const [conta] = await s.contas();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos], ["QUITADA", 0], "pago: nada fica em aberto");
+  assert.match(conta.observacao, /Pessoa Um R\$ 395,34 \+ Pessoa Dois R\$ 2\.515,74 = R\$ 2\.911,08; Previsão de desconto/);
+  assert.match(conta.descricao, /original R\$ 2\.971,69, desconto R\$ 60,61, pago R\$ 2\.911,08/);
+  const item = (await s.m.nucleo.consultarContasAPagar(s.cx(), {})).itens.find((x) => x.id === conta.id);
+  assert.match(item.observacao, /Pessoa Dois R\$ 2\.515,74/, "Dashboard mostra as observações");
+  assert.equal((await s.contas()).length, 1, "uma conta só (nenhuma individual)");
+});
+
+t("CG-10 legenda do comprovante com composição e desconto em folha: a observação vai sozinha para a proposta (sem pendência especial)", async () => {
+  const s = await comBoletoPago();
+  await s.enviar(gw({ texto: "Empréstimo BNB alfa. Pessoa Um R$ 395,34, Pessoa Dois R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026.", doc: "%PDF-sintetico-boleto-legenda" }));
+  assert.equal((await s.decisao()).motivo, "DESPESA_PAGA", "o mês já estava na legenda: direto à proposta");
+  const [p] = (await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).filter((x) => x.tipo === "DESPESA_PAGA");
+  assert.match(p.comando.entrada.observacao, /Um R\$ 395,34 \+ Dois R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+  assert.equal(p.comando.pagamento.dataEfetiva, "2026-10-15", "a data do desconto em folha não muda a data do pagamento");
+});

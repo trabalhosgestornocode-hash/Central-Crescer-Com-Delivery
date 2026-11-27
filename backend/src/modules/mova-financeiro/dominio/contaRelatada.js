@@ -192,6 +192,17 @@ export function competenciaDoRelato(texto, dataMensagem, hoje = null) {
   return `${ano}-${String(mes).padStart(2, "0")}`;
 }
 
+/**
+ * 27/11 — OBSERVAÇÃO de um texto livre (legenda de comprovante, resposta): composição do total, oração do desconto da remuneração
+ * (com ou sem "Obs.") e a seção "Obs./Observações". Mesma regra da conta relatada; só o que foi DITO.
+ */
+export function observacaoDoTexto(texto) {
+  const { principal, observacao: obsDita } = separarObservacoes(texto);
+  const composicao = composicaoDoTotal(principal);
+  const partes = composicao ? [] : valorDoRelato(principal).partes;
+  return [observacaoDaConta(principal, composicao), ...linhasDaComposicao(principal, partes), ...(obsDita ? [obsDita.replace(/\s*\n\s*/g, "; ")] : [])].filter(Boolean).join("; ") || null;
+}
+
 /** "Descrição: Empréstimo BNB — Jailton e Vanessa" — a descrição DITA (prevalece sobre a primeira oração). */
 export function descricaoDita(texto) {
   const m = /\bdescri[çc][aã]o\s*:\s*([^\n]{2,160})/i.exec(String(texto ?? ""));
