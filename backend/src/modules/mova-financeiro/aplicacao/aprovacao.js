@@ -19,6 +19,7 @@ import { requisitosCompletos, unidadePorId } from "../dominio/configuracao.js";
 import { exigirContratoFinanceiro } from "./portaFinanceira.js";
 import { executorDaPessoa } from "./portaOperacional.js";
 import { NIVEL, validarPolitica } from "../dominio/autonomia.js";
+import { revalidarUnidadeDaProposta } from "../dominio/unidade.js";
 
 export class ErroDeAprovacao extends Error {
   constructor(codigo, detalhes = {}) { super(codigo); this.name = "ErroDeAprovacao"; this.codigo = codigo; this.detalhes = detalhes; }
@@ -106,6 +107,16 @@ export function criarAprovador({ cfg, armazenamento: a, nucleo: nucleoPadrao, fi
       // Agente 2 — Frente C: baixa JÁ conferida com uma saída do extrato só por confirmarBaixaPorExtrato (vincula a saída que
       // existe). Aplicar pelo caminho antigo criaria uma SEGUNDA saída (pagarContaAPagar) para o mesmo pagamento.
       if (p.tipo === "BAIXA_DE_OBRIGACAO" && p.conciliacao?.situacao === "CONFERIDA") throw new ErroDeAprovacao("BAIXA_CONFERIDA_COM_EXTRATO");
+      // 27/11: a unidade é REVALIDADA com o cadastro e as regras atuais. Evidência que aponta OUTRA loja (não habilitada,
+      // conflito, divergente) nunca é aprovada — nem por uma pessoa. Evidência só insuficiente: a pessoa, autenticada NESTA
+      // unidade, confirma ao aplicar (fica na auditoria).
+      const evOrigem = p.eventoId ? await a.eventos.obter(p.eventoId) : null;
+      const unidadeOk = revalidarUnidadeDaProposta({ cfg, proposta: p, evento: evOrigem });
+      if (!unidadeOk.ok && unidadeOk.contradiz) {
+        await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: `UNIDADE_NAO_CONFIRMADA:${unidadeOk.motivo}` });
+        throw new ErroDeAprovacao("UNIDADE_NAO_CONFIRMADA", { motivo: unidadeOk.motivo });
+      }
+      if (!unidadeOk.ok) await a.auditoria.registrar({ acao: "UNIDADE_CONFIRMADA_PELO_APROVADOR", atorTipo: "USUARIO", atorRef: ctx.usuarioId, alvo: p.id, dados: { motivo: unidadeOk.motivo } });
       if (!requisitosCompletos(unidadePorId(cfg, p.unidadeId))) {
         await a.aprovacoes.registrar({ propostaId: p.id, acao: "RECUSADA", usuarioId: ctx.usuarioId, motivo: "REQUISITOS_FINANCEIROS_INCOMPLETOS" });
         throw new ErroDeAprovacao("REQUISITOS_FINANCEIROS_INCOMPLETOS");

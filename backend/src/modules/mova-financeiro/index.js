@@ -58,7 +58,7 @@ export function criarMova({ configuracao, nucleo, concessoes, financeiro, extrat
   const filaUsada = fila ?? (pool ? criarFilaPostgres({ pool, relogio: () => relogio().getTime(), titular: titularDaFila }) : criarFilaMemoria({ relogio: () => relogio().getTime() }));
   const porta = criarPortaFinanceira({ nucleo, concessoes, financeiro });
   // Agente 2 — Frente C: conferência com o extrato + política de autonomia (só com `autonomia`); escrita só com a porta OPERACIONAL.
-  const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, pagamentoPorComprovante, criarDespesas, registrarJuros, criarContas, obterEvidencia: (r) => evidencias.obter(r), descartarEvidencia: (r) => evidencias.descartar?.(r), relogio, registrar }) : null;
+  const execucao = autonomia ? criarExecucao({ armazenamento, porta, identidadeLeitura: cfg.identidadeServico.usuarioId, operacional, pagamentoPorComprovante, criarDespesas, registrarJuros, criarContas, obterEvidencia: (r) => evidencias.obter(r), descartarEvidencia: (r) => evidencias.descartar?.(r), relogio, registrar, cfg }) : null;
   // Agente 2 — Frente D: entregadores no privado + rotina semanal (só com `entregadores`; escrita só pela porta OPERACIONAL).
   const fluxoEntregadores = entregadores ? criarEntregadoresMova({ cfg, porta, armazenamento, operacional, extrator, obterEvidencia: (r) => evidencias.obter(r), relogio, registrar, avisosNoGrupo }) : null;
   const motor = criarMotor({ cfg, porta, extrator, armazenamento, relogio, registrar, redator, somenteConsultas, comandosDeterministicos, execucao, entregadores: fluxoEntregadores,

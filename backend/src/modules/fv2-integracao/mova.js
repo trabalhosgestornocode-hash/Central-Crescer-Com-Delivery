@@ -238,12 +238,48 @@ export const extratorSoDeDocumentos = (extrator, { respostasPendentes = false } 
   return e?.midia || (respostasPendentes && e?.contexto?.perguntaPendente) ? extrator.extrair(e) : EXTRATOR_DESLIGADO.extrair(e);
 } });
 
+/** 27/11: intervalo da atualização do cadastro de lojas (CONSULTADO) e da nova tentativa quando está INDISPONIVEL. */
+export const CADASTRO_ATUALIZAR_MS = 15 * 60 * 1000;
+export const CADASTRO_TENTAR_DE_NOVO_MS = 60 * 1000;
+/** Uma leitura boa vale por até 6 h se as seguintes falharem; depois disso, INDISPONIVEL (lojas novas podem ter surgido). */
+export const CADASTRO_VALIDADE_MS = 6 * 60 * 60 * 1000;
+/**
+ * 27/11: CADASTRO DE LOJAS da plataforma (mesmas empresas do MOVA). `estado()` = {unidadesNaoHabilitadas, cadastroDeUnidades}.
+ * Falha de leitura NUNCA é tratada como "não há outras lojas": sem leitura boa válida, a situação é INDISPONIVEL.
+ */
+export function criarCadastroDeLojas({ ler, relogio = () => Date.now(), registrar = () => {} }) {
+  let lista = [], situacao = "INDISPONIVEL", lidoEm = 0, tentou = false, timer = null;
+  async function atualizar(organizacoes) {
+    tentou = true;
+    try {
+      const nova = await ler(organizacoes);
+      if (!Array.isArray(nova)) throw Object.assign(new Error("cadastro inválido"), { codigo: "CADASTRO_INVALIDO" });
+      lista = nova; situacao = "CONSULTADO"; lidoEm = relogio();
+      registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES", situacao, total: lista.length });
+    } catch (e) {
+      if (!lidoEm || relogio() - lidoEm > CADASTRO_VALIDADE_MS) situacao = "INDISPONIVEL";
+      registrar({ tipo: "MOVA_CADASTRO_DE_UNIDADES_INDISPONIVEL", situacao, codigo: String(e?.codigo ?? e?.code ?? "ERRO").slice(0, 40) });
+    }
+    return estado();
+  }
+  function estado() { return { unidadesNaoHabilitadas: lista, cadastroDeUnidades: situacao }; }
+  function manterAtualizado(organizacoes, aplicar) {
+    const proxima = () => {
+      timer = setTimeout(async () => { aplicar(await atualizar(organizacoes)); proxima(); }, situacao === "CONSULTADO" ? CADASTRO_ATUALIZAR_MS : CADASTRO_TENTAR_DE_NOVO_MS);
+      timer.unref?.();
+    };
+    proxima();
+    return () => clearTimeout(timer);
+  }
+  return Object.freeze({ atualizar, estado, manterAtualizado, lidoAlgumaVez: () => tentou });
+}
+
 /**
  * Monta o MOVA sobre o pool do schema `mova` e o repositório do Financeiro. Testável: tudo injetável.
  * @param {{cfg:object, pool:object, repositorio:object, verificarBancoFinanceiro?:() => Promise<void>, criarClienteIa?:() => object,
  *          enviarAoGateway?:Function, relogio?:() => Date, registrar?:Function}} p
  */
-export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null }) {
+export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verificarBancoFinanceiro = null, criarClienteIa = null, enviarAoGateway = null, releSaida = null, relogio = () => new Date(), registrar = () => {}, comAutomacao = null, operacionalDaPlataforma = null, titularDaFila = null, unidadesDaPlataforma = null }) {
   let cfg = cfgRecebida;
   if (cfg.modo === "HOMOLOGACAO" || cfg.modo === "PILOTO" || cfg.modo === "OPERACAO") {
     // HOMOLOGACAO/PILOTO: estado no banco de homologação marcado. OPERACAO: schema próprio de produção marcado (nunca o de teste).
@@ -253,9 +289,18 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
     // HOMOLOGACAO: o Financeiro também é o de homologação. PILOTO: a credencial do Financeiro é de leitura pura (0028).
     await verificarBancoFinanceiro();
   }
-  const lerConfiguracao = async () => validarConfiguracao(await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" }));
+  // 27/11: lojas das mesmas empresas no CADASTRO da plataforma (para reconhecer e bloquear documento de loja não habilitada).
+  // CONSULTADO só depois de uma leitura bem-sucedida; falha nunca vira "lista vazia = não há outras lojas" (INDISPONIVEL ⇒ só o
+  // nome específico identifica a loja). Atualizado periodicamente, nunca por mensagem.
+  const cadastro = unidadesDaPlataforma ? criarCadastroDeLojas({ ler: unidadesDaPlataforma, relogio: () => relogio().getTime(), registrar }) : null;
+  const lerConfiguracao = async () => {
+    const bruta = await carregarConfiguracao(pool, { identidadeServico: { usuarioId: cfg.servicoUsuarioId }, modo: cfg.modo ?? "SIMULACAO" });
+    if (cadastro && !cadastro.lidoAlgumaVez()) await cadastro.atualizar([...new Set(bruta.unidades.map((u) => u.organizacaoId))]);
+    return validarConfiguracao({ ...bruta, ...(cadastro ? cadastro.estado() : {}) });
+  };
   // 23/11: só a lista de entregadores é recarregada em funcionamento (a cada envio/rotina, no máximo 1×/min, ou na hora pelo cadastro).
   const configuracao = configuracaoViva(await lerConfiguracao(), { recarregar: lerConfiguracao, relogio: () => relogio().getTime() });
+  if (cadastro) cadastro.manterAtualizado([...new Set(configuracao.unidades.map((u) => u.organizacaoId))], (e) => configuracao.trocarCadastro(e));
   if (cfg.modo === "PILOTO") exigirEscopoDoPiloto(configuracao, cfg.pilotoUnidadeId);
   if (cfg.modo === "OPERACAO") exigirEscopoDaOperacao(configuracao, cfg.operacaoUnidades);
   const escopos = configuracao.unidades.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }));
@@ -400,6 +445,13 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       await c.connect();
       try { await exigirBancoDeHomologacao(c, cfg.marcador); } finally { await c.end(); }
     };
+    // 27/11: cadastro de lojas da plataforma (só id, empresa e nome), lido pelo cliente de serviço; import tardio (testes sem .env).
+    const unidadesDaPlataforma = async (organizacoes) => {
+      const { supabase } = await import("../../config/supabase.js");
+      const { data, error } = await supabase.from("unidades").select("id, organizacao_id, nome").in("organizacao_id", organizacoes);
+      if (error) throw Object.assign(new Error("cadastro de unidades indisponível"), { codigo: error.code ?? "SUPABASE" });
+      return (data ?? []).map((u) => ({ unidadeId: u.id, organizacaoId: u.organizacao_id, nome: u.nome }));
+    };
     let criarClienteIa = null;
     if (cfg.ia && !env.ANTHROPIC_API_KEY) registrar({ evento: "MOVA_IA_SEM_CHAVE", aviso: "MOVA_IA_HABILITADA=1 sem ANTHROPIC_API_KEY: leitura por IA fica desligada" }); // falha segura: o resto segue
     if (cfg.ia && env.ANTHROPIC_API_KEY) { const { default: Anthropic } = await import("@anthropic-ai/sdk"); criarClienteIa = () => new Anthropic({ maxRetries: 0, timeout: 60_000 }); } // sem nova tentativa oculta: cada tentativa passa pela reserva
@@ -416,10 +468,10 @@ export async function movaDaPlataforma({ env, registrar = () => {} }) {
       const leitor = criarLeitorFinanceiroMova({ pool: poolLeitor });
       // Escrita (Frente C/D): só se a plataforma registrar o provedor da identidade operacional (implantação do Agente 1).
       const operacionalDaPlataforma = cfg.escrita ? (obterDependenciasFv2?.()?.operacionalMova ?? null) : null;
-      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma, titularDaFila: criarTitularPorGeracao({ pool, geracao: GERACAO_DA_INSTANCIA, registrar }) });
+      return montarMova({ cfg, pool, repositorio: leitor.repositorio, comAutomacao: null, verificarBancoFinanceiro: leitor.verificar, criarClienteIa, enviarAoGateway, releSaida, registrar, operacionalDaPlataforma, titularDaFila: criarTitularPorGeracao({ pool, geracao: GERACAO_DA_INSTANCIA, registrar }), unidadesDaPlataforma });
     }
     const dep = obterDependenciasFv2();
-    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar });
+    return montarMova({ cfg, pool, repositorio: dep.repositorio, comAutomacao: dep.comAutomacaoMova ?? null, verificarBancoFinanceiro, criarClienteIa, enviarAoGateway, releSaida, registrar, unidadesDaPlataforma });
   })().catch(async (e) => {
     instancia = null;
     await Promise.allSettled(abertos.map((x) => x.end()));
