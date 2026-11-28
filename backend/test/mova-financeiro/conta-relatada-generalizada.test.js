@@ -33,10 +33,10 @@ const SUGESTAO = [[/honorários/i, "CONTABILIDADE"], [/aluguel/i, "ALUGUEL"], [/
 const LEITURA = (req) => { const j = JSON.stringify(req.messages ?? ""); const s = SUGESTAO.find(([re]) => re.test(j));
   return RELATOS.test(j) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 291108, categoriaSugerida: s?.[1] ?? null }) : base({}); };
 
-async function relatada({ politicas = [], concessao = null, criarContas = false, criarDespesas = false, responder = LEITURA, comCore = false } = {}) {
+async function relatada({ politicas = [], concessao = null, criarContas = false, criarDespesas = false, responder = LEITURA, comCore = false, config = CONFIG_GRUPO } = {}) {
   const core = [];
   const s = await cenario({
-    responder, config: CONFIG_GRUPO,
+    responder, config,
     extras: ({ nucleo }) => ({
       autonomia: true, criarContas, criarDespesas, pagamentoPorComprovante: criarDespesas,
       ...(concessao ? { operacional: criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: "eeeeeeee-0000-4000-8000-0000000000a2",
@@ -339,4 +339,19 @@ t("LW-2 empréstimo JÁ PAGO com a permissão: o MOVA pergunta a confirmação; 
   await n.enviar(gw({ texto: "não" }));
   assert.equal((await n.decisao()).motivo, "EMPRESTIMO_NAO_CONFIRMADO");
   assert.equal((await n.lancamentos()).length, 0);
+});
+
+t("LW-3 confirmação do empréstimo pago vinda de um LID (reconhecido pelo telefone autenticado) ⇒ executa (mesmo defeito do bebedouro, corrigido)", async () => {
+  const TEL = "+5500000000201"; const LID = "88000000000777@lid";
+  const config = { ...CONFIG_GRUPO, gruposAutorizados: CONFIG_GRUPO.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, participantes: g.participantes.map((p) => (p.ids.includes(FIN) ? { ...p, telefones: [TEL] } : p)) } : g)) };
+  const s = await relatada({ config, criarDespesas: true, criarContas: true, concessao: COM_EMPRESTIMO, responder: (req) => (/document|pdf/i.test(JSON.stringify(req.messages ?? "")) ? BOLETO_PAGO : base({})) });
+  await s.mova.armazenamento.politicas.criar({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 3000000,
+    responsavel: "Administrador Sintético", motivo: "Política sintética de despesa documental", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO });
+  await s.enviar(gw({ texto: "Empréstimo BNB alfa. Total R$ 2.911,08, competência novembro/2026.", doc: "%PDF-sintetico-boleto-lw3" }));
+  if ((await s.decisao()).motivo === "COMPETENCIA_AUSENTE") await s.enviar(gw({ texto: "novembro/2026" }));
+  assert.match(await s.ultimoTexto(), /Responda "sim"/);
+  await s.enviar(gw({ texto: "sim", de: LID, telefone: TEL }));
+  assert.equal((await s.decisao()).motivo, "EMPRESTIMO_PAGO_REGISTRADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos], ["QUITADA", 0]);
 });

@@ -1005,7 +1005,8 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const sim = respostaSimNao(esclarecimento.texto);
     if (sim === null) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.confirmarEmprestimoPago(p, {})}`, "EMPRESTIMO_RESPOSTA_NAO_ENTENDIDA");
     if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_NAO_CONFIRMADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoConfirmado(p), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
-    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
+    // 27/11: quem confirmou é reconhecido pelo identificador OU pelo telefone autenticado do Gateway (lista por telefone; WhatsApp manda LID)
+    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null });
     if (perfilNa(confirmador, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "EMPRESTIMO_CONFIRMACAO_SEM_PERFIL_FINANCEIRO", escopo, resposta: RESPOSTA.complementoSemPermissao(), injecao });
     const r = await execucao.aposDespesaNova(p, escopo, { confirmadoPor: esclarecimento.participanteId ?? evento.participanteId });
     if (r.situacao === "PAGO_POR_COMPROVANTE") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "EMPRESTIMO_PAGO_REGISTRADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoPagoRegistrado(p, r.resultado), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });

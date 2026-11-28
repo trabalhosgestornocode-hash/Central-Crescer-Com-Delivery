@@ -1,0 +1,2 @@
+Ordem: 01-backup.sql → ../atualizar.sql (aplica SÓ a 0035; base 0034) → 03-conferencia.sql → 04-concessao.sql. Reversão: 05-reversao.sql.
+Cada passo só com autorização própria. Gerado por backend/scripts/fv2/kitEmprestimo0035.mjs.
