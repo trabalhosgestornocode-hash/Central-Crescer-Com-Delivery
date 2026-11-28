@@ -301,6 +301,99 @@ t("NT-3 quem não é FINANCEIRO nas duas lojas não confirma: a pergunta continu
   assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0]);
 });
 
+// ------------------------------------------------------------------ 28/11: CONTA A PAGAR de nota/boleto confirmada pelo WhatsApp
+// Política CONTA_A_PAGAR "com confirmação" (decisão do proprietário: limite R$ 20.000, Açaí e Subway): o MOVA mostra o resumo e pergunta;
+// o "sim" de um FINANCEIRO da unidade registra. Sem confirmação, nada é lançado; acima do limite, só proposta para o Centro.
+const POL_CONFIRMA = (org, u, limiteCentavos = 2_000_000) => POL("CONTA_A_PAGAR", org, u, { nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos });
+async function comConfirmacao({ responder, config, limiteCentavos } = {}) {
+  const s = await multi({ responder, config, politicas: false });
+  for (const [org, u] of [[ORG, ALFA], [ORG_X, XIS]]) await s.mova.armazenamento.politicas.criar(POL_CONFIRMA(org, u, limiteCentavos), { criadaPor: HUMANO });
+  return s;
+}
+const entregar = (s, providerMessageId, destino = FIN) => s.banco.pool.query("update mova.resposta set estado = 'ENVIADA', provider_message_id = $1 where seq = (select max(seq) from mova.resposta where grupo_jid = $2)", [providerMessageId, destino]);
+const PERGUNTA_CONTA = /^Conta a pagar pronta para registrar no Loja Alfa: R\$ 450,00 para Distribuidora Sintética, vencimento 28\/10\/2026, competência 2026-10, categoria INSUMOS \(documento BOL-\d+\)\. Confirma o registro\? Responda \*sim\* citando esta mensagem/;
+
+t("CN-1 boleto com política 'com confirmação': resumo e pergunta; nada lançado antes; o 'sim' citando registra a conta (em aberto) com quem confirmou", async () => {
+  const s = await comConfirmacao({ responder: () => BOLETO({ pagador: "ALFA PRODUTOS" }) });
+  const doc = s.privado({ texto: "MOVA boleto da distribuidora", doc: pdf("cn-1") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), PERGUNTA_CONTA);
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG, ALFA)).length], [0, 0], "nada lançado antes do sim");
+  const [p0] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p0.estado, p0.autonomia?.nivel], ["AGUARDANDO_REVISAO", "APLICAR_COM_CONFIRMACAO"]);
+  await entregar(s, "3EB0CONFIRMACONTA0001");
+  await s.enviar(s.privado({ texto: "sim", respostaA: "3EB0CONFIRMACONTA0001" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "CONTA_NOVA_CONFIRMADA_REGISTRADA"]);
+  assert.match(await s.resposta(), /^Conta a pagar registrada: R\$ 450,00 para Distribuidora Sintética, vencimento 28\/10\/2026/);
+  const contas = await s.contas(ORG, ALFA);
+  assert.deepEqual([contas.length, contas[0].saldoCentavos, (await s.liquidacoes(ORG, ALFA)).length], [1, 45000, 0], "em aberto, sem baixa");
+  assert.equal((await s.propostas(ORG, ALFA))[0].estado, "APLICADA");
+  assert.ok((await s.mova.armazenamento.auditoria.listar()).some((a) => a.acao === "CONTA_NOVA_CONFIRMADA" && a.atorRef === FIN && a.dados?.situacao === "CONTA_REGISTRADA"));
+  // segunda confirmação não duplica
+  await s.enviar(s.privado({ texto: "sim", respostaA: "3EB0CONFIRMACONTA0001" }));
+  assert.equal((await s.contas(ORG, ALFA)).length, 1);
+});
+
+t("CN-2 'talvez' repete a pergunta; 'não' deixa a proposta para o Centro Financeiro, nada lançado", async () => {
+  const s = await comConfirmacao({ responder: () => BOLETO({ pagador: "ALFA PRODUTOS" }) });
+  const doc = s.privado({ texto: "MOVA boleto da distribuidora", doc: pdf("cn-2") });
+  await s.enviar(doc);
+  await s.enviar(s.privado({ texto: "talvez", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "CONTA_NOVA_RESPOSTA_NAO_ENTENDIDA");
+  assert.match(await s.resposta(), /^Não entendi\. Conta a pagar pronta para registrar no Loja Alfa/);
+  await s.enviar(s.privado({ texto: "não", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "CONTA_NOVA_NAO_CONFIRMADA");
+  assert.match(await s.resposta(), /não foi registrada\. A proposta [0-9a-f]{8} continua para revisão no Centro Financeiro/);
+  assert.deepEqual([s.escritas().length, (await s.contas(ORG, ALFA)).length, (await s.propostas(ORG, ALFA))[0].estado], [0, 0, "AGUARDANDO_REVISAO"]);
+});
+
+t("CN-3 acima do limite: só proposta (sem pergunta); proposta antiga sem política fica; criada a política, o 'sim' citando a resposta registra", async () => {
+  const s = await comConfirmacao({ responder: () => BOLETO({ pagador: "ALFA PRODUTOS" }), limiteCentavos: 40000 });
+  await s.enviar(s.privado({ texto: "MOVA boleto da distribuidora", doc: pdf("cn-3") }));
+  assert.match(await s.resposta(), /^Proposta [0-9a-f]{8} criada para revisão: conta a pagar de R\$ 450,00/);
+  assert.equal((await s.propostas(ORG, ALFA))[0].autonomia?.nivel, "SOMENTE_PROPOR");
+  await entregar(s, "3EB0PROPOSTACONTA0003");
+  // a política muda (o proprietário aumenta o limite): a confirmação citando a resposta da proposta registra pela política VIGENTE
+  const [atual] = (await s.mova.armazenamento.politicas.listar(ORG)).filter((x) => x.operacao === "CONTA_A_PAGAR" && x.unidadeId === ALFA && !x.revogadaEm);
+  assert.equal(await s.mova.armazenamento.politicas.revogar({ id: atual.id, organizacaoId: ORG, por: HUMANO }), true);
+  await s.mova.armazenamento.politicas.criar(POL_CONFIRMA(ORG, ALFA, 2_000_000), { criadaPor: HUMANO });
+  await s.enviar(s.privado({ texto: "pode registrar", respostaA: "3EB0PROPOSTACONTA0003" }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo], ["EXECUTADO", "CONTA_NOVA_CONFIRMADA_REGISTRADA"]);
+  assert.equal((await s.contas(ORG, ALFA)).length, 1);
+});
+
+t("CN-4 quem não é FINANCEIRO na unidade não confirma: nada lançado, a pergunta continua aberta e o FINANCEIRO confirma depois", async () => {
+  const OUTRO = "5500000000099@s.whatsapp.net";
+  const cfgBase = CONFIG();
+  const config = { ...cfgBase, gruposAutorizados: [{ ...cfgBase.gruposAutorizados[0], participantes: [...cfgBase.gruposAutorizados[0].participantes, { ids: [OUTRO], perfil: "CONSULTA", nome: "Consulta" }] }] };
+  const s = await comConfirmacao({ responder: () => BOLETO({ pagador: "ALFA PRODUTOS" }), config });
+  const doc = gw({ texto: "MOVA boleto da distribuidora", doc: pdf("cn-4") });
+  await s.enviar(doc);
+  // o grupo tem quem não é FINANCEIRO: o resumo com valores vai para o privado de quem enviou; a pendência fica lá
+  assert.match(await s.resposta(), PERGUNTA_CONTA);
+  await s.enviar(gw({ de: OUTRO, texto: "sim", respostaA: doc.mensagemId }));
+  assert.notEqual((await s.ultima()).decisao, "EXECUTADO");
+  assert.deepEqual([(await s.contas(ORG, ALFA)).length, s.escritas().length], [0, 0], "nada lançado");
+  await entregar(s, "3EB0CONFIRMAPRIVADO04");
+  await s.enviar(s.privado({ texto: "sim", respostaA: "3EB0CONFIRMAPRIVADO04" }));
+  assert.deepEqual([(await s.ultima()).motivo, (await s.contas(ORG, ALFA)).length], ["CONTA_NOVA_CONFIRMADA_REGISTRADA", 1]);
+});
+
+t("CN-5 caso real ponta a ponta: nota em nome da outra empresa → confirma a unidade → resumo → 'sim' registra só na Alfa", async () => {
+  const s = await comConfirmacao({ responder: () => NOTA_MP() });
+  const doc = s.privado({ texto: "Lançar essa despesa na alfa", doc: pdf("cn-5") });
+  await s.enviar(doc);
+  assert.equal((await s.ultima()).motivo, "UNIDADE_DO_TOMADOR_AGUARDANDO_CONFIRMACAO");
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  assert.match(await s.resposta(), /^Conta a pagar pronta para registrar no Loja Alfa: R\$ 7\.659,20/);
+  assert.equal((await s.contas(ORG, ALFA)).length, 0);
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["EXECUTADO", "CONTA_NOVA_CONFIRMADA_REGISTRADA"]);
+  assert.deepEqual([(await s.contas(ORG, ALFA)).length, (await s.contas(ORG_X, XIS)).length], [1, 0]);
+});
+
 t("NT-4 revalidação antes de executar: a unidade CONFIRMADA vale só para uma das duas lojas do conflito e só com quem confirmou registrado", async () => {
   const { revalidarUnidadeDaProposta } = await import("../../src/modules/mova-financeiro/dominio/unidade.js");
   const cfg = validarConfiguracao(CONFIG());

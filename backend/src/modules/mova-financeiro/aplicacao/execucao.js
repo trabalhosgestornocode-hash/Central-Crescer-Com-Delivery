@@ -586,7 +586,9 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * EM ABERTO (aparece no Contas a Pagar e no calendário oficial); nenhuma baixa sem comprovante de pagamento.
    * Fica como PROPOSTA (encaminhada à Central) quando falta fornecedor, categoria definida, competência, vencimento ou documento.
    */
-  async function aposContaNova(proposta, escopo) {
+  // 28/11: política CONTA_A_PAGAR "com confirmação" ⇒ sem `confirmadoPor` devolve AGUARDANDO_CONFIRMACAO (o motor pergunta no WhatsApp);
+  // com o "sim" de quem é FINANCEIRO na unidade (conferido pelo motor), registra no nível APLICAR_COM_CONFIRMACAO, com quem confirmou.
+  async function aposContaNova(proposta, escopo, { confirmadoPor = null } = {}) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
     const u = await unidadeConfirmada(proposta);
     if (!u.ok) return { ...base, motivos: [u.motivo] };
@@ -604,15 +606,18 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       unidadeId: escopo.unidadeId, valorCentavos: proposta.valorCentavos, hoje: hoje() });
     await a.propostas.anotar(escopo, proposta.id, { autonomia: decisao });
     const r0 = { ...base, nivel: decisao.nivel, motivos: decisao.motivos };
-    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return r0;
+    const comConfirmacao = decisao.nivel === NIVEL.APLICAR_COM_CONFIRMACAO;
+    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO && !comConfirmacao) return r0;
     if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
     for (const op of ["registrarObrigacaoDocumental", "enviarEvidencia"]) if (!(await operacional.pode(op, escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
-    const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
+    if (comConfirmacao && !confirmadoPor) return { ...r0, situacao: "AGUARDANDO_CONFIRMACAO" };
+    const nivel = comConfirmacao ? NIVEL.APLICAR_COM_CONFIRMACAO : NIVEL.APLICAR_AUTOMATICO;
+    const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR, proposta, escopo, politicaId: decisao.politicaId, nivel, passos: async () => {
       const ob = await operacional.chamar("registrarObrigacaoDocumental", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
       const obrigacao = ob.obrigacoes[0];
       const doc = await anexarDocumento({ proposta, escopo, obrigacaoId: obrigacao.id });
       return { obrigacaoId: obrigacao.id, documentoId: doc.documento.id, contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: e.categoria ?? null,
-        vencimento: e.vencimento, competencia: e.competencia, favorecido: proposta.leitura?.favorecido ?? null, situacaoConta: "ABERTA" };
+        vencimento: e.vencimento, competencia: e.competencia, favorecido: proposta.leitura?.favorecido ?? null, situacaoConta: "ABERTA", ...(comConfirmacao ? { confirmadoPor } : {}) };
     } });
     return r.ok ? { ...r0, situacao: "CONTA_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
   }
