@@ -16,14 +16,15 @@ const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c9";
 const CORRIGE = ["financeiro_v2.ver", "financeiro_v2.corrigir_conta_a_pagar"];
 const CFG = { ...CONFIG, gruposAutorizados: CONFIG.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, politicaResposta: "GRUPO_FINANCEIRO" } : g)) };
 
-async function conversa({ concessao = CORRIGE, corrigirContas = true, repositorio = null, nucleoOperacional = null } = {}) {
+// retrato padrão: só FINANCEIRO no grupo (como o grupo real) ⇒ os dados da conta podem sair no grupo; o OF-5 prova o caminho pelo privado
+async function conversa({ concessao = CORRIGE, corrigirContas = true, repositorio = null, nucleoOperacional = null, membros = [FIN, SO_ALFA] } = {}) {
   let iaChamada = 0;
   // no banco real a LEITURA do MOVA usa a identidade de leitura de produção (concessão do kit oficial)
   const config = repositorio ? { ...CFG, identidadeServico: { usuarioId: IDENTIDADE_DO_MOVA } } : CFG;
   const s = await cenario({ responder: () => { iaChamada++; return base({}); }, config, repositorio, ...(repositorio ? { humano: USUARIO } : {}), extras: ({ nucleo }) => ({ autonomia: true, corrigirContas,
     operacional: criarPortaOperacional({ nucleo: nucleoOperacional ?? nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: repositorio ? IDENTIDADE_DO_MOVA : "eeeeeeee-0000-4000-8000-0000000000a2",
       concessoes: criarConcessoesMemoria([{ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: ALFA, acoes: concessao }, { organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: BETA, acoes: concessao }]) }) }) });
-  await s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros: [FIN, SO_ALFA, CONS, OPER], verificadoEm: AGORA.toISOString() });
+  await s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros, verificadoEm: AGORA.toISOString() });
   const cx = (u = ALFA) => s.c(ORG, u);
   // bebedouro (2 parcelas, IMOBILIZADO, cartão) e conta de energia (1 parcela, despesa), registrados pelo núcleo oficial
   const bebedouro = await s.m.nucleo.registrarContaParcelada(cx(), { contraparteNova: { tipo: "FORNECEDOR", nome: "Loja Sintética de Equipamentos" }, categoria: "IMOBILIZADO",
@@ -171,7 +172,10 @@ t("OF-4 concorrência e isolamento: conta alterada entre o resumo e o 'sim' ⇒ 
   assert.equal((await s.obrigacoes(BETA))[0].vencimento, "2026-11-12", "a da Beta não muda");
   await s.dizer("MOVA, altere o vencimento da conta de água para 21/11");
   assert.equal((await s.decisao()).motivo, "CORRECAO_ESCOLHER_CONTA", "quem é FINANCEIRO nas duas vê as duas");
-  assert.match(await s.texto(), /Loja Alfa[\s\S]*Loja Beta|Loja Beta[\s\S]*Loja Alfa/);
+  // a lista mostra contas da Alfa E da Beta e um membro do grupo só tem a Alfa ⇒ vai SÓ para o privado de quem pediu
+  const ult = (await s.saida()).slice(-2);
+  assert.deepEqual([ult[0].destino, ult[1].destino, ult[1].texto], [FIN, GRUPO, "Os detalhes da conta foram para o seu privado."]);
+  assert.match(ult[0].texto, /Loja Alfa[\s\S]*Loja Beta|Loja Beta[\s\S]*Loja Alfa/);
 });
 
 test("OF-PG conversa real até a CORREÇÃO PERSISTIDA no PostgreSQL isolado: identidade estreita (kit oficial, só corrigir_conta_a_pagar), só a 2ª parcela, histórico com antes/depois pela identidade do MOVA", { skip: PULAR || motivoParaPularFv2(), timeout: 300000 }, async () => {
@@ -202,4 +206,42 @@ test("OF-PG conversa real até a CORREÇÃO PERSISTIDA no PostgreSQL isolado: id
   assert.equal(hist[0].u, OPERADOR);
   await s.dizer("sim");
   assert.equal(Number((await dono.query("select count(*) n from fv2_historico where registro_id = $1 and evento = 'CORRECAO'", [p2.id])).rows[0].n), 1, "sem segunda alteração");
+});
+
+t("OF-5 permissões de saída: com membro de CONSULTA no grupo, os dados da conta (antes/depois, opções) vão SÓ para o privado de quem pediu; no grupo, só o aviso; a confirmação no privado executa", async () => {
+  const s = await conversa({ membros: [FIN, SO_ALFA, CONS] });
+  const saidaDe = async () => (await s.saida()).map((r) => ({ destino: r.destino, texto: r.texto }));
+  await s.dizer("MOVA, altere o vencimento da conta de energia para 15/12.");
+  const saidas = await saidaDe();
+  const noGrupo = saidas.filter((x) => x.destino === GRUPO);
+  const noPrivado = saidas.filter((x) => x.destino !== GRUPO);
+  assert.deepEqual(noGrupo.map((x) => x.texto), ["Os detalhes da conta foram para o seu privado."], "no grupo, só o aviso");
+  assert.ok(noGrupo.every((x) => !/10\/11\/2026|15\/12\/2026|Fornecedor Sintético|R\$/.test(x.texto)), "nenhum dado da conta no grupo");
+  assert.equal(noPrivado.length, 1);
+  assert.equal(noPrivado[0].destino, FIN, "o privado de quem pediu");
+  assert.match(noPrivado[0].texto, /Vencimento: 10\/11\/2026 → 15\/12\/2026/);
+  // "sim" respondido NO PRIVADO
+  await s.enviar({ ...gw({ texto: "sim", de: FIN, grupo: FIN }) });
+  assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", JSON.stringify(await saidaDe()));
+  assert.equal((await s.porId(s.energia.id)).vencimento, "2026-12-15");
+  const finais = (await saidaDe()).slice(saidas.length);
+  assert.ok(finais.filter((x) => x.destino === GRUPO).every((x) => !/15\/12\/2026/.test(x.texto)), "o resultado também não expõe dados no grupo");
+});
+
+t("OF-6 várias parcelas: valores anteriores DIFERENTES aparecem por parcela; parcela alterada entre o resumo e o 'sim' ⇒ NENHUMA muda (tudo ou nada); parcela nova no grupo não entra", async () => {
+  const s = await conversa();
+  const [p1, p2] = s.bebedouro.obrigacoes;
+  // a 1ª parcela já tem observação diferente da 2ª
+  await s.m.nucleo.corrigirObrigacao(s.c(ORG, ALFA), { obrigacaoId: p1.id, mudancas: { descricao: "Bebedouro sintético (1ª)" }, justificativa: "Ajuste pela Central (sintético).", versaoEsperada: p1.versao });
+  await s.dizer("MOVA, altere a descrição de todas as parcelas do bebedouro: Bebedouro industrial sintético");
+  const resumo = await s.texto();
+  assert.match(resumo, /Parcela 1\/2 — Descrição: Bebedouro sintético \(1ª\) → Bebedouro industrial sintético/, resumo);
+  assert.match(resumo, /Parcela 2\/2 — Descrição: Bebedouro sintético → Bebedouro industrial sintético/);
+  // alguém mexe na 2ª parcela antes do "sim"
+  const p2a = await s.porId(p2.id);
+  await s.m.nucleo.corrigirObrigacao(s.c(ORG, ALFA), { obrigacaoId: p2.id, mudancas: { vencimento: "2026-12-20" }, justificativa: "Ajuste pela Central (sintético).", versaoEsperada: p2a.versao });
+  await s.dizer("sim");
+  assert.match((await s.decisao()).motivo, /CONFLITO_VERSAO/, await s.texto());
+  const depois = await s.obrigacoes();
+  assert.deepEqual(depois.filter((o) => o.grupoId === p1.grupoId).map((o) => o.descricao), ["Bebedouro sintético (1ª)", "Bebedouro sintético"], "nenhuma parcela alterada");
 });

@@ -13,6 +13,7 @@ const SO_BAIXA = [ACAO.VER, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.ENVIAR_DOCUMENTO];
 const compra = (x = {}) => ({ contraparteNova: { tipo: "FORNECEDOR", nome: "Loja Sintética de Equipamentos" }, categoria: "IMOBILIZADO", descricao: "Bebedouro sintético",
   competencia: "2026-10", dataEmissao: "2026-10-15", parcelas: [{ vencimento: "2026-11-19", valorCentavos: 19450 }, { vencimento: "2026-12-19", valorCentavos: 19450 }],
   formaPagamento: "CARTAO", fonte: { sistema: "MANUAL", idExterno: `MOVA:cc-${randomUUID()}` }, ...x });
+const versoesDe = (os) => Object.fromEntries(os.map((o) => [o.id, o.versao]));
 const corrigir = (o, mudancas, x = {}) => ({ obrigacaoId: o.id, versaoEsperada: o.versao, mudancas, justificativa: "Correção confirmada no WhatsApp (sintético).", ...x });
 const pagarPorComprovante = (n, c, o) => n.registrarPagamentoPorComprovante(c, { obrigacaoId: o.id, valorCentavos: o.saldoCentavos, dataPagamento: "2026-10-15",
   idTransacao: `E${randomUUID().replace(/-/g, "").slice(0, 26)}`, justificativa: "Pago conforme comprovante (sintético).", confirmar: true,
@@ -43,11 +44,18 @@ test("CC-2 todas as parcelas (GRUPO): fornecedor e descrição em todas + descri
   const m = await montarComCadastros();
   const conta = await m.nucleo.registrarContaParcelada(m.c, compra());
   const c = { ...m.c, permissoes: SO_CORRIGE };
-  const r = await m.nucleo.corrigirContaAPagar(c, corrigir(conta.obrigacoes[0], { contraparteId: m.fornecedor.id, descricao: "Bebedouro industrial sintético" }, { abrangencia: "GRUPO" }));
+  const r = await m.nucleo.corrigirContaAPagar(c, corrigir(conta.obrigacoes[0], { contraparteId: m.fornecedor.id, descricao: "Bebedouro industrial sintético" }, { abrangencia: "GRUPO", versoes: versoesDe(conta.obrigacoes) }));
   assert.equal(r.obrigacoes.length, 2);
   assert.ok(r.obrigacoes.every((o) => o.contraparteId === m.fornecedor.id && o.descricao === "Bebedouro industrial sintético"));
   assert.equal(r.lancamento.descricao, "Bebedouro industrial sintético");
-  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(r.obrigacoes[0], { vencimento: "2026-12-30" }, { abrangencia: "GRUPO" })), CODIGO.ENTRADA_INVALIDA);
+  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(r.obrigacoes[0], { vencimento: "2026-12-30" }, { abrangencia: "GRUPO", versoes: versoesDe(r.obrigacoes) })), CODIGO.ENTRADA_INVALIDA);
+  // o conjunto confirmado é exatamente o do resumo: sem a versão de uma parcela, ou com versão antiga, NADA muda
+  const atuais = r.obrigacoes;
+  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(atuais[0], { observacao: "x" }, { abrangencia: "GRUPO", versoes: versoesDe([atuais[0]]) })), CODIGO.CONFLITO_VERSAO);
+  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(atuais[0], { observacao: "x" }, { abrangencia: "GRUPO", versoes: { ...versoesDe(atuais), [atuais[1].id]: atuais[1].versao - 1 } })), CODIGO.CONFLITO_VERSAO);
+  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(atuais[0], { observacao: "x" }, { abrangencia: "GRUPO" })), CODIGO.ENTRADA_INVALIDA);
+  const depois = (await m.nucleo.consultarRegistros(m.c, { tipo: "OBRIGACAO" })).filter((o) => o.grupoId === atuais[0].grupoId);
+  assert.ok(depois.every((o) => (o.observacao ?? null) === null), "nenhuma parcela mudou (tudo ou nada)");
 });
 
 test("CC-3 recusas: versão antiga (concorrência), conta paga, empréstimo/patrimonial, sem a ação, período homologado; repetir sem mudança não grava", async () => {
@@ -65,7 +73,7 @@ test("CC-3 recusas: versão antiga (concorrência), conta paga, empréstimo/patr
   await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(p2Paga, { observacao: "x" })), CODIGO.OPERACAO_INVALIDA);
   // GRUPO com uma parcela paga: recusa inteira (nada muda)
   const p1Agora = (await m.nucleo.consultarRegistros(m.c, { tipo: "OBRIGACAO" })).find((o) => o.id === p1.id);
-  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(p1Agora, { descricao: "Grupo com paga" }, { abrangencia: "GRUPO" })), CODIGO.OPERACAO_INVALIDA);
+  await rejeita(m.nucleo.corrigirContaAPagar(c, corrigir(p1Agora, { descricao: "Grupo com paga" }, { abrangencia: "GRUPO", versoes: versoesDe((await m.nucleo.consultarRegistros(m.c, { tipo: "OBRIGACAO" })).filter((o) => o.grupoId === p1Agora.grupoId)) })), CODIGO.OPERACAO_INVALIDA);
   // empréstimo (patrimonial) e parcelamento tributário: proteção própria
   for (const categoria of ["EMPRESTIMOS_E_FINANCIAMENTOS", "PARCELAMENTO_TRIBUTARIO"]) {
     const reg = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" ? (x) => m.nucleo.registrarContaParceladaDeEmprestimo(m.c, x) : (x) => m.nucleo.registrarObrigacao(m.c, { contraparteId: m.fornecedor.id, valorOriginalCentavos: 50000, categoria, descricao: "Parcelamento sintético", competencia: "2026-10", dataEmissao: "2026-10-15", vencimento: "2026-11-30" });
@@ -103,7 +111,7 @@ test("CC-4 (banco) a 0036 num PostgreSQL REAL: a identidade estreita corrige só
   // caminho oficial: a 2ª parcela muda de fornecedor; a 1ª fica igual
   const r = await n.corrigirContaAPagar(comoU1, corrigir(p2, { contraparteNova: { tipo: "FORNECEDOR", nome: "Fornecedor Novo Sintético" }, observacao: "Troca (sintético)", formaPagamento: "BOLETO" }));
   assert.equal(r.obrigacoes[0].formaPagamento, "BOLETO");
-  const grupo = await n.corrigirContaAPagar(comoU1, corrigir(p1, { descricao: "Bebedouro corrigido (sintético)" }, { abrangencia: "GRUPO" }));
+  const grupo = await n.corrigirContaAPagar(comoU1, corrigir(p1, { descricao: "Bebedouro corrigido (sintético)" }, { abrangencia: "GRUPO", versoes: { [p1.id]: p1.versao, [p2.id]: r.obrigacoes[0].versao } }));
   assert.equal(grupo.lancamento.descricao, "Bebedouro corrigido (sintético)", "descrição do lançamento com o grupo inteiro elegível");
 
   // SQL cru como a APLICAÇÃO grava (versão + 1 e histórico na mesma transação): só a REGRA da 0036 pode recusar.
@@ -116,7 +124,8 @@ test("CC-4 (banco) a 0036 num PostgreSQL REAL: a identidade estreita corrige só
     return r.rowCount;
   }, { token: await interno.sessoes.emitir({ organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId }) });
   const pelaRegra = (re) => (e) => re.test(e.message) || (assert.fail(`recusa por outro motivo: ${e.code} ${e.message}`), false);
-  const SO_CADASTRAL = /correção estreita muda só|forma de pagamento inválida|só muda a posição/;
+  // recusas pelas barreiras de FORMA do banco (0036 para o cadastral; 0018/0031 para o resto: só posição, situação parcial/quitada, conservação)
+  const SO_CADASTRAL = /correção estreita muda só|forma de pagamento inválida|só muda a posição|só deixa a conta parcial ou quitada|não desfaz baixas|conserva|liquida/;
   const o = (id) => ["fv2_obrigacao", "OBRIGACAO", id];
   // o cadastral passa por SQL cru (a mesma forma que o núcleo grava) — prova que as recusas abaixo são da REGRA, não do histórico
   assert.equal(await alterarCru(U(1), ...o(p1.id), "vencimento = '2026-11-20'"), 1);

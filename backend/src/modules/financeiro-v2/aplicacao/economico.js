@@ -294,7 +294,12 @@ export function operacoesEconomicas(b) {
         const alvo = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Conta a pagar");
         if (alvo.versao !== c.versaoEsperada) falhar(CODIGO.CONFLITO_VERSAO, "A conta foi alterada depois do resumo. Confira de novo.", { versaoAtual: alvo.versao });
         const grupo = (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: alvo.grupoId } })).sort((x, y) => x.parcela.numero - y.parcela.numero);
-        const alvos = c.abrangencia === "GRUPO" ? grupo : [alvo];
+        const alvos = c.abrangencia === "GRUPO" ? grupo.filter((o) => o.situacao !== SITUACAO_TITULO.CANCELADA) : [alvo];
+        // GRUPO: o conjunto de parcelas e a versão de CADA uma são os confirmados (nada entra, sai ou mudou depois do resumo)
+        if (c.abrangencia === "GRUPO") {
+          const ids = Object.keys(c.versoes);
+          if (ids.length !== alvos.length || alvos.some((o) => c.versoes[o.id] !== o.versao)) falhar(CODIGO.CONFLITO_VERSAO, "As parcelas mudaram depois do resumo. Confira de novo.", { confirmadas: ids.length, atuais: alvos.length });
+        }
         const lancamento = await b.obterOuFalhar(tx, cx, TIPO.LANCAMENTO, alvo.lancamentoId, "Lançamento");
         const elegivelNoLancamento = lancamento.situacao === SITUACAO_LANCAMENTO.ATIVO && lancamento.origem?.tipo === TIPO.OBRIGACAO
           && (lancamento.natureza === NATUREZA_LANCAMENTO.DESPESA || (lancamento.natureza === NATUREZA_LANCAMENTO.PATRIMONIAL && lancamento.categoria === "IMOBILIZADO"));

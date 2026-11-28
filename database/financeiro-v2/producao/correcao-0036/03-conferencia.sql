@@ -2,7 +2,7 @@
 -- as 4 funções e os 2 gatilhos novos. Depois do 04: SÓ as 2 concessões do MOVA (Açaí no Grau Saci, Subway Saci) com a ação; nenhuma com sangria.
 select (select count(*) from financeiro_v2.fv2_migracao) migracoes,
        (select bool_or(nome = '0036_corrigir_conta_a_pagar.sql') from financeiro_v2.fv2_migracao) tem_0036,
-       (select bool_and(sha256 = 'c0fc4773bb2244e6dcf738341728277093773395b3fe16cb6465478afb2463d2' and sha256_aplicado = 'c0fc4773bb2244e6dcf738341728277093773395b3fe16cb6465478afb2463d2') from financeiro_v2.fv2_migracao where nome = '0036_corrigir_conta_a_pagar.sql') hash_confere,
+       (select bool_and(sha256 = 'dd66132c67499b31a025ba6cb3b1b3b16509cbc4192a55c5649ec2fb69b7cf7a' and sha256_aplicado = 'dd66132c67499b31a025ba6cb3b1b3b16509cbc4192a55c5649ec2fb69b7cf7a') from financeiro_v2.fv2_migracao where nome = '0036_corrigir_conta_a_pagar.sql') hash_confere,
        (select pg_get_constraintdef(oid) like '%corrigir_conta_a_pagar%' from pg_constraint where conname = 'fv2_concessao_acoes_lista') acao_na_lista,
        (select count(*) from pg_proc where proname in ('fv2_so_corrige_conta', 'fv2_conta_corrigivel', 'fv2_correcao_de_conta', 'fv2_correcao_de_lancamento')) funcoes_novas,
        (select count(*) from pg_trigger where tgname in ('fv2_obrigacao_correcao_estreita', 'fv2_lancamento_correcao_estreita')) gatilhos_novos,

@@ -4,7 +4,7 @@
 begin;
 set local search_path = financeiro_v2, pg_catalog, public;
 do $$ declare c record; begin
-  if not exists (select 1 from fv2_migracao where nome = '0036_corrigir_conta_a_pagar.sql' and sha256 = 'c0fc4773bb2244e6dcf738341728277093773395b3fe16cb6465478afb2463d2') then raise exception '0036: migração não aplicada (ou hash diferente) — nada foi feito'; end if;
+  if not exists (select 1 from fv2_migracao where nome = '0036_corrigir_conta_a_pagar.sql' and sha256 = 'dd66132c67499b31a025ba6cb3b1b3b16509cbc4192a55c5649ec2fb69b7cf7a') then raise exception '0036: migração não aplicada (ou hash diferente) — nada foi feito'; end if;
   if exists (select 1 from fv2_concessao x where x.usuario_id = '839a6da8-649d-4b6f-81c7-cb51c5c919cd' and exists (select 1 from jsonb_array_elements_text(x.acoes) a where not '["financeiro_v2.ver","financeiro_v2.enviar_documento","financeiro_v2.baixar_por_comprovante","financeiro_v2.registrar_obrigacao","financeiro_v2.registrar_juros","financeiro_v2.vincular_pagamento","financeiro_v2.prestar_sangria","financeiro_v2.registrar_conta_parcelada","financeiro_v2.registrar_intercompany","financeiro_v2.registrar_emprestimo","financeiro_v2.corrigir_conta_a_pagar"]'::jsonb ? a)) then
     raise exception '0036: a identidade operacional tem ação AMPLA — nada foi feito'; end if;
   select * into c from fv2_concessao where organizacao_id = 'e7216085-1ece-45dc-bc41-d74f11a88e40' and unidade_id = '4d3b75bd-79b5-4335-ae5b-a183580c3555' and usuario_id = '839a6da8-649d-4b6f-81c7-cb51c5c919cd' for update;

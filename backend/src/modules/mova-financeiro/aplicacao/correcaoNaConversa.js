@@ -16,13 +16,38 @@ const elegivel = (t) => !FORA.includes(t.situacao) && !(t.pagoCentavos > 0) && !
   && (t.natureza === "DESPESA" || (t.natureza === "PATRIMONIAL" && t.categoria?.codigo === "IMOBILIZADO"));
 
 /**
- * @param {{cfg:object, porta:object, armazenamento:object, execucao:object|null, concluir:Function, escopoDe:Function, hoje:Function, DECISAO:object}} deps
+ * @param {{cfg:object, porta:object, armazenamento:object, execucao:object|null, concluir:Function, escopoDe:Function, hoje:Function, DECISAO:object, rotear?:Function}} deps
  */
-export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir, escopoDe, hoje, DECISAO }) {
+export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir, escopoDe, hoje, DECISAO, rotear = null }) {
   const unidadePorId = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
-  const lembrar = (evento, divergencia, texto, motivo, escopo = null) =>
-    a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: null, divergencia } })
-      .then(() => concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, extra: { divergencia: divergencia.tipo } }));
+  /**
+   * Canal da conversa de correção: as mensagens levam dados da conta (fornecedor, valores, vencimento, observação) e seguem a MESMA
+   * regra das demais operações financeiras (DOCUMENTO_COM_VALOR): no grupo só quando a política e o retrato dos membros permitem;
+   * senão no privado de quem fala (no grupo, só o aviso). A pergunta pendente fica na conversa em que saiu.
+   */
+  function canal({ grupo, participante, unidades, quem = null }) {
+    // `us` = as unidades das contas que ESTA mensagem mostra ([] = mensagem sem dado de conta). Detalhe por conta/fornecedor no grupo
+    // só com TODOS os membros FINANCEIRO nessas unidades (mesma regra das consultas detalhadas); senão, privado.
+    const privadoDe = async (evento, us = unidades) => {
+      if (!rotear || !grupo) return null;
+      const e = quem ? { ...evento, participanteId: quem } : evento;
+      const r = await rotear(grupo, participante, e, us);
+      if (!r || r.noGrupo) return null;
+      return { destino: r.destino ?? null, aviso: "Os detalhes da conta foram para o seu privado.", avisoSemPrivado: "Os dados dessa conta não aparecem no grupo. Peça pelo privado do MOVA ou faça pela Central Financeira.", recusar: r.recusar === true };
+    };
+    const fim = async (evento, opts, us = unidades) => {
+      const privado = await privadoDe(evento, us);
+      if (privado?.recusar) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CORRECAO_DADOS_FORA_DO_GRUPO", escopo: opts.escopo ?? null, resposta: "Os dados dessa conta não podem ser mostrados nesta conversa. Peça pelo privado do MOVA." });
+      return concluir(evento, { ...opts, privado });
+    };
+    const lembrar = async (evento, divergencia, texto, motivo, escopo = null, us = unidades) => {
+      const privado = await privadoDe(evento, us);
+      if (privado?.recusar) return fim(evento, { escopo }, us);
+      await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida: null, divergencia } });
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, extra: { divergencia: divergencia.tipo }, privado });
+    };
+    return { fim, lembrar };
+  }
 
   /** Contas candidatas (título oficial + unidade) para o pedido; as não elegíveis só explicam por que não. */
   async function candidatas(pedido, unidades, ids = null) {
@@ -66,6 +91,7 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
   async function iniciar({ evento, grupo, participante, daPessoa, pedido, unidadeContexto = null, origemCitada = null }) {
     const unidades = cfg.unidades.filter((u) => daPessoa.unidades.includes(u.unidadeId) && perfilNa(participante, u.unidadeId) === "FINANCEIRO"
       && (!unidadeContexto || u.unidadeId === unidadeContexto));
+    const saida = canal({ grupo, participante, unidades: [] });
     if (!unidades.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CORRECAO_SEM_PERFIL_FINANCEIRO", resposta: "Só quem tem perfil FINANCEIRO na unidade pode alterar contas pelo WhatsApp." });
     if (!execucao?.corrigirContas || typeof execucao.aposCorrecaoDeConta !== "function") {
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_DE_CONTAS_DESLIGADA", resposta: "A alteração de contas pelo WhatsApp ainda não está ligada. Faça a alteração pela Central Financeira." });
@@ -80,57 +106,65 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
     }
     const achadas = await candidatas(pedido, unidades, ids);
     const aptas = achadas.filter((x) => elegivel(x.t));
-    if (!achadas.length) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ENCONTRADA", resposta: `Não encontrei conta a pagar com "${pedido.termos.join(" ")}". Confira o nome ou faça pela Central Financeira.` });
-    if (!aptas.length) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo: escopoDe(achadas[0].u),
-      resposta: "Essa conta não pode ser alterada pelo WhatsApp (já tem pagamento, está fechada ou é empréstimo/parcelamento/entre empresas). A alteração é pela Central Financeira." });
+    if (!achadas.length) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ENCONTRADA", resposta: `Não encontrei conta a pagar com "${pedido.termos.join(" ")}". Confira o nome ou faça pela Central Financeira.` });
+    if (!aptas.length) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo: escopoDe(achadas[0].u),
+      resposta: "Essa conta não pode ser alterada pelo WhatsApp (já tem pagamento, está fechada ou é empréstimo/parcelamento/entre empresas). A alteração é pela Central Financeira." }, [...new Set(achadas.map((x) => x.u.unidadeId))]);
     const lista = opcoes(pedido, aptas);
-    if (!lista.length) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_PARCELA_NAO_ENCONTRADA", resposta: `Não encontrei a parcela ${pedido.parcela === "ULTIMA" ? "última" : pedido.parcela} em aberto dessa conta.` });
-    if (lista.length > MAX_OPCOES) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CORRECAO_MUITAS_CONTAS", resposta: `Encontrei ${lista.length} contas com "${pedido.termos.join(" ")}". Diga mais (fornecedor, vencimento ou parcela).` });
+    if (!lista.length) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_PARCELA_NAO_ENCONTRADA", resposta: `Não encontrei a parcela ${pedido.parcela === "ULTIMA" ? "última" : pedido.parcela} em aberto dessa conta.` });
+    if (lista.length > MAX_OPCOES) return saida.fim(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CORRECAO_MUITAS_CONTAS", resposta: `Encontrei ${lista.length} contas com "${pedido.termos.join(" ")}". Diga mais (fornecedor, vencimento ou parcela).` });
     const pedidoGuardado = { campo: pedido.campo, valor: pedido.valor };
     if (lista.length > 1) {
       const varias = new Set(lista.map((o) => o.u.unidadeId)).size > 1;
       const alvos = lista.map((o) => ({ unidadeId: o.u.unidadeId, obrigacaoId: o.t.id, abrangencia: o.abrangencia }));
-      return lembrar(evento, { tipo: TIPO_CORRECAO.ESCOLHA, pedido: pedidoGuardado, alvos, unidadesExigidas: [...new Set(alvos.map((x) => x.unidadeId))] },
-        `Qual conta?\n${lista.map((o, i) => `${i + 1}. ${rotulo(o, varias)}`).join("\n")}\nResponda com o número.`, "CORRECAO_ESCOLHER_CONTA");
+      return saida.lembrar(evento, { tipo: TIPO_CORRECAO.ESCOLHA, pedido: pedidoGuardado, alvos, unidadesExigidas: [...new Set(alvos.map((x) => x.unidadeId))] },
+        `Qual conta?\n${lista.map((o, i) => `${i + 1}. ${rotulo(o, varias)}`).join("\n")}\nResponda com o número.`, "CORRECAO_ESCOLHER_CONTA", null, [...new Set(alvos.map((x) => x.unidadeId))]);
     }
-    return seguir(evento, pedidoGuardado, { unidadeId: lista[0].u.unidadeId, obrigacaoId: lista[0].t.id, abrangencia: lista[0].abrangencia });
+    return seguir(evento, pedidoGuardado, { unidadeId: lista[0].u.unidadeId, obrigacaoId: lista[0].t.id, abrangencia: lista[0].abrangencia }, saida);
   }
 
   const dicaDoValor = (campo) => ({ vencimento: "Informe a data (ex.: 15/12).", formaPagamento: "Informe Pix, boleto, cartão, dinheiro ou transferência.", fornecedor: "Informe o nome do fornecedor." }[campo] ?? "Informe o novo texto.");
 
   /** Com a conta escolhida: pergunta o valor (se faltou) ou monta o resumo antes → depois e pede a confirmação. */
-  async function seguir(evento, pedido, alvo) {
+  async function seguir(evento, pedido, alvo, saidaBase) {
     const u = unidadePorId(alvo.unidadeId);
+    const saida = { fim: (e, o) => saidaBase.fim(e, o, [alvo.unidadeId]), lembrar: (e, d, t, m, esc) => saidaBase.lembrar(e, d, t, m, esc, [alvo.unidadeId]) };
     const escopo = escopoDe(u);
     if (pedido.valor === null || pedido.valor === undefined) {
-      return lembrar(evento, { tipo: TIPO_CORRECAO.VALOR, pedido, alvo, unidadeId: alvo.unidadeId },
+      return saida.lembrar(evento, { tipo: TIPO_CORRECAO.VALOR, pedido, alvo, unidadeId: alvo.unidadeId },
         `Qual o novo ${NOME_DO_CAMPO[pedido.campo]}? ${dicaDoValor(pedido.campo)}`, "CORRECAO_PEDIR_VALOR", escopo);
     }
     const d = await porta.ler("detalharContaAPagar", escopo, { id: alvo.obrigacaoId });
     const t = d.titulo;
     const afetadas = alvo.abrangencia === "GRUPO" ? d.parcelas.filter((p) => p.situacao !== "CANCELADO") : [t];
-    if (!afetadas.every(elegivel)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo, resposta: "Essa conta mudou e não pode mais ser alterada pelo WhatsApp (pagamento, fechamento ou proteção própria). A alteração é pela Central Financeira." });
-    const antes = valorAtual(t, pedido.campo);
+    if (!afetadas.every(elegivel)) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo, resposta: "Essa conta mudou e não pode mais ser alterada pelo WhatsApp (pagamento, fechamento ou proteção própria). A alteração é pela Central Financeira." });
+    const antesPorParcela = afetadas.map((p) => ({ n: p.parcela?.numero ?? 1, total: p.parcela?.total ?? 1, antes: valorAtual(p, pedido.campo) }));
+    const antesDiferentes = new Set(antesPorParcela.map((x) => x.antes)).size > 1;
+    const antes = antesDiferentes ? "(varia por parcela)" : antesPorParcela[0].antes;
+    // GRUPO: a versão de CADA parcela vista agora vai junto; o núcleo recusa se o conjunto ou qualquer versão mudar
+    const versoes = alvo.abrangencia === "GRUPO" ? Object.fromEntries(afetadas.map((p) => [p.id, p.versao])) : null;
     const depois = valorNovo(pedido.campo, pedido.valor);
-    if (afetadas.every((p) => valorAtual(p, pedido.campo) === depois)) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_SEM_MUDANCA", escopo, resposta: `Nada a alterar: o ${NOME_DO_CAMPO[pedido.campo]} já é ${depois}.` });
+    if (afetadas.every((p) => valorAtual(p, pedido.campo) === depois)) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_SEM_MUDANCA", escopo, resposta: `Nada a alterar: o ${NOME_DO_CAMPO[pedido.campo]} já é ${depois}.` });
     const mudancas = pedido.campo === CAMPO_CORRECAO.FORNECEDOR ? { contraparteNova: { tipo: "FORNECEDOR", nome: pedido.valor } } : { [pedido.campo]: pedido.valor };
     // duplicidade: o mesmo pedido (mesma conta, mesmo campo) aguardando confirmação não vira outra proposta
     // (só se for EXATAMENTE o mesmo: mesma versão vista e mesmo valor novo; um pedido antigo com outra versão/valor é encerrado)
     let pendente = null;
     for (const p of (await a.propostas.listar(escopo)).filter((x) => x.tipo === "CORRECAO_DE_CONTA" && x.estado === "AGUARDANDO_REVISAO" && x.comando?.entrada?.obrigacaoId === alvo.obrigacaoId && x.comando?.campo === pedido.campo)) {
-      if (!pendente && p.comando.entrada.versaoEsperada === t.versao && p.comando.depois === depois && p.comando.entrada.abrangencia === alvo.abrangencia) pendente = p;
+      if (!pendente && p.comando.entrada.versaoEsperada === t.versao && p.comando.depois === depois && p.comando.entrada.abrangencia === alvo.abrangencia
+        && JSON.stringify(p.comando.entrada.versoes ?? null) === JSON.stringify(versoes)) pendente = p;
       else await a.propostas.transicionar(escopo, p.id, "AGUARDANDO_REVISAO", "REJEITADA");
     }
     const { proposta } = pendente ? { proposta: pendente } : await a.propostas.criar(escopo, {
       chaveIdempotencia: `${evento.eventoId}|CORRECAO_DE_CONTA|${alvo.obrigacaoId}|${alvo.abrangencia}|${pedido.campo}|v${t.versao}|${String(pedido.valor).slice(0, 80)}`, origem: "MOVA", tipo: "CORRECAO_DE_CONTA", eventoId: evento.eventoId, mensagemId: evento.mensagemId,
       participanteId: evento.participanteId, esclarecidoPor: null, valorCentavos: afetadas.reduce((s, p) => s + (p.saldoCentavos ?? 0), 0), evidencia: null, leitura: null,
-      comando: { operacao: "corrigirContaAPagar", campo: pedido.campo, antes, depois, rotulo: rotuloDaConta(t),
-        entrada: { obrigacaoId: alvo.obrigacaoId, abrangencia: alvo.abrangencia, mudancas, versaoEsperada: t.versao, justificativa: `Alteração de ${NOME_DO_CAMPO[pedido.campo]} pedida e confirmada no WhatsApp (MOVA).` } },
+      comando: { operacao: "corrigirContaAPagar", campo: pedido.campo, antes, depois, antesPorParcela, rotulo: rotuloDaConta(t),
+        entrada: { obrigacaoId: alvo.obrigacaoId, abrangencia: alvo.abrangencia, mudancas, versaoEsperada: t.versao, ...(versoes ? { versoes } : {}), justificativa: `Alteração de ${NOME_DO_CAMPO[pedido.campo]} pedida e confirmada no WhatsApp (MOVA).` } },
     });
     if (!pendente) await a.auditoria.registrar({ acao: "PROPOSTA_CRIADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { tipo: "CORRECAO_DE_CONTA", unidadeId: escopo.unidadeId, campo: pedido.campo } });
     const quais = alvo.abrangencia === "GRUPO" ? `todas as ${afetadas.length} parcelas de ${t.descricao ?? "a conta"}` : rotuloDaConta(t);
-    return lembrar(evento, { tipo: TIPO_CORRECAO.CONFIRMACAO, propostaId: proposta.id, unidadeId: alvo.unidadeId },
-      `Confirma a alteração em ${u.nome}?\n${quais}\n${NOME_DO_CAMPO[pedido.campo][0].toUpperCase()}${NOME_DO_CAMPO[pedido.campo].slice(1)}: ${antes} → ${depois}\nResponda "sim" para alterar ou "não" para cancelar.`, "CORRECAO_CONFIRMAR", escopo);
+    const Campo = `${NOME_DO_CAMPO[pedido.campo][0].toUpperCase()}${NOME_DO_CAMPO[pedido.campo].slice(1)}`;
+    const linhas = antesDiferentes ? antesPorParcela.map((x) => `Parcela ${x.n}/${x.total} — ${Campo}: ${x.antes} → ${depois}`).join("\n") : `${Campo}: ${antes} → ${depois}`;
+    return saida.lembrar(evento, { tipo: TIPO_CORRECAO.CONFIRMACAO, propostaId: proposta.id, unidadeId: alvo.unidadeId },
+      `Confirma a alteração em ${u.nome}?\n${quais}\n${linhas}\nResponda "sim" para alterar ou "não" para cancelar.`, "CORRECAO_CONFIRMAR", escopo);
   }
 
   /** Continuação (resposta citando a pergunta, ou resposta curta/valor na memória curta). */
@@ -147,49 +181,50 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
     if (!quem.participante || !unidadesDaDecisao.every((id) => perfilNa(quem.participante, id) === "FINANCEIRO")) {
       return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CORRECAO_SEM_PERFIL_FINANCEIRO", resposta: "Só quem tem perfil FINANCEIRO na unidade pode alterar contas pelo WhatsApp." });
     }
+    const saida = canal({ grupo, participante: quem.participante, unidades: unidadesDaDecisao, quem: resposta.participanteId });
     if (div.tipo === TIPO_CORRECAO.ESCOLHA) {
       const n = /^\s*(\d{1,2})\s*$/.exec(texto);
       const alvo = n ? div.alvos[Number(n[1]) - 1] : null;
-      if (!alvo) return lembrar(evento, div, `Não entendi. Responda só com o número da conta (1 a ${div.alvos.length}).`, "CORRECAO_ESCOLHA_NAO_ENTENDIDA");
-      return seguir(evento, div.pedido, alvo);
+      if (!alvo) return saida.lembrar(evento, div, `Não entendi. Responda só com o número da conta (1 a ${div.alvos.length}).`, "CORRECAO_ESCOLHA_NAO_ENTENDIDA");
+      return seguir(evento, div.pedido, alvo, saida);
     }
     if (div.tipo === TIPO_CORRECAO.VALOR) {
       const valor = valorDoCampo(div.pedido.campo, texto, hoje());
-      if (valor === null) return lembrar(evento, div, `Não entendi o novo ${NOME_DO_CAMPO[div.pedido.campo]}. ${dicaDoValor(div.pedido.campo)}`, "CORRECAO_VALOR_NAO_ENTENDIDO", escopoDe(unidadePorId(div.unidadeId)));
-      return seguir(evento, { ...div.pedido, valor }, div.alvo);
+      if (valor === null) return saida.lembrar(evento, div, `Não entendi o novo ${NOME_DO_CAMPO[div.pedido.campo]}. ${dicaDoValor(div.pedido.campo)}`, "CORRECAO_VALOR_NAO_ENTENDIDO", escopoDe(unidadePorId(div.unidadeId)));
+      return seguir(evento, { ...div.pedido, valor }, div.alvo, saida);
     }
     // CONFIRMAÇÃO
     const u = unidadePorId(div.unidadeId);
     const escopo = escopoDe(u);
     const p = await a.propostas.obter(escopo, div.propostaId);
-    if (!p || p.estado !== "AGUARDANDO_REVISAO") return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_JA_DECIDIDA", escopo, propostaId: div.propostaId, resposta: "Esse pedido de alteração já foi decidido." });
+    if (!p || p.estado !== "AGUARDANDO_REVISAO") return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_JA_DECIDIDA", escopo, propostaId: div.propostaId, resposta: "Esse pedido de alteração já foi decidido." });
     const sim = respostaSimNao(texto);
-    if (sim === null) return lembrar(evento, div, "Não entendi. Responda \"sim\" para alterar ou \"não\" para cancelar.", "CORRECAO_CONFIRMACAO_NAO_ENTENDIDA", escopo);
+    if (sim === null) return saida.lembrar(evento, div, "Não entendi. Responda \"sim\" para alterar ou \"não\" para cancelar.", "CORRECAO_CONFIRMACAO_NAO_ENTENDIDA", escopo);
     if (sim === false) {
       await a.propostas.transicionar(escopo, p.id, "AGUARDANDO_REVISAO", "REJEITADA");
       await a.auditoria.registrar({ acao: "CORRECAO_CANCELADA", atorTipo: "PARTICIPANTE", atorRef: resposta.participanteId, alvo: p.id, dados: { campo: p.comando.campo } });
-      return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CANCELADA", escopo, propostaId: p.id, resposta: "Cancelado. Nada foi alterado." });
+      return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CANCELADA", escopo, propostaId: p.id, resposta: "Cancelado. Nada foi alterado." });
     }
     const r = await execucao.aposCorrecaoDeConta(p, escopo, { confirmadoPor: resposta.participanteId });
     const campo = NOME_DO_CAMPO[p.comando.campo];
     if (r.situacao === "CORRIGIDA") {
       const x = r.resultado ?? {};
-      if (x.semMudanca) return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "CORRECAO_SEM_MUDANCA", escopo, propostaId: p.id, resposta: `Nada mudou: o ${campo} já era ${p.comando.depois}.` });
+      if (x.semMudanca) return saida.fim(evento, { decisao: DECISAO.EXECUTADO, motivo: "CORRECAO_SEM_MUDANCA", escopo, propostaId: p.id, resposta: `Nada mudou: o ${campo} já era ${p.comando.depois}.` });
       const texto2 = x.conferido === false
         ? `Alteração gravada, mas a conferência não bateu. A Central Financeira vai revisar.`
         : `Feito. ${campo[0].toUpperCase()}${campo.slice(1)} alterado de ${p.comando.antes} para ${p.comando.depois} em ${x.alteradas === 1 ? "1 conta" : `${x.alteradas} parcelas`}. Conferido no Financeiro.`;
-      return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: x.conferido === false ? "CORRECAO_GRAVADA_SEM_CONFERENCIA" : "CORRECAO_EXECUTADA", escopo, propostaId: p.id, resposta: texto2, extra: { confirmadoPor: resposta.participanteId } });
+      return saida.fim(evento, { decisao: DECISAO.EXECUTADO, motivo: x.conferido === false ? "CORRECAO_GRAVADA_SEM_CONFERENCIA" : "CORRECAO_EXECUTADA", escopo, propostaId: p.id, resposta: texto2, extra: { confirmadoPor: resposta.participanteId } });
     }
     const motivo = r.motivo ?? r.motivos?.[0] ?? "CORRECAO_NAO_EXECUTADA";
     // falha TRANSITÓRIA: nada mudou e a confirmação continua aberta; definitiva: o pedido é encerrado (nunca fica pendurado)
-    if (/INDISPONIVEL|TENTATIVAS_ESGOTADAS/.test(motivo)) return lembrar(evento, div, "Não consegui falar com o Financeiro agora. Nada foi alterado. Responda \"sim\" de novo em instantes.", `CORRECAO_NAO_EXECUTADA:${motivo}`, escopo);
+    if (/INDISPONIVEL|TENTATIVAS_ESGOTADAS/.test(motivo)) return saida.lembrar(evento, div, "Não consegui falar com o Financeiro agora. Nada foi alterado. Responda \"sim\" de novo em instantes.", `CORRECAO_NAO_EXECUTADA:${motivo}`, escopo);
     await a.propostas.transicionar(escopo, p.id, "AGUARDANDO_REVISAO", "REJEITADA");
     const explicacao = /CONFLITO_VERSAO/.test(motivo) ? "A conta mudou depois do resumo. Peça a alteração de novo para ver os dados atuais."
       : /COMPETENCIA/.test(motivo) ? "O período dessa conta está em fechamento. A alteração é pela Central Financeira."
         : /OPERACAO_INVALIDA|INTEGRIDADE/.test(motivo) ? "Essa conta não pode mais ser alterada pelo WhatsApp (pagamento ou proteção própria). A alteração é pela Central Financeira."
           : /DESLIGADA|SEM_CONCESSAO|SEM_IDENTIDADE/.test(motivo) ? "A alteração de contas pelo WhatsApp não está liberada para esta unidade. Faça pela Central Financeira."
             : "Não consegui alterar agora. Nada foi mudado; tente de novo ou faça pela Central Financeira.";
-    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: `CORRECAO_NAO_EXECUTADA:${motivo}`, escopo, propostaId: p.id, resposta: explicacao });
+    return saida.fim(evento, { decisao: DECISAO.PROPOSTA, motivo: `CORRECAO_NAO_EXECUTADA:${motivo}`, escopo, propostaId: p.id, resposta: explicacao });
   }
 
   return Object.freeze({ interpretar: (texto) => interpretarPedidoDeCorrecao(texto, hoje()), iniciar, continuar });

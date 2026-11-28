@@ -1,4 +1,4 @@
--- MOVA (28/11/2026): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
+-- MOVA 0027 (28/11/2026; a 0026 é da frente dos entregadores, conteúdo independente): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
 -- descrição, observação e forma de pagamento, pela ação ESTREITA `corrigir_conta_a_pagar` do Financeiro (migração 0036).
 -- Só acrescenta CORRECAO_DE_CONTA às listas fechadas de PROPOSTAS e EXECUÇÕES (a proposta guarda o antes/depois mostrado e a versão
 -- da conta; a execução é única por proposta). NÃO entra na lista de POLÍTICAS: correção cadastral não tem limite monetário e sempre

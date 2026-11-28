@@ -82,6 +82,14 @@ begin
   if (to_jsonb(old) - array['versao', 'atualizado_em', 'atualizado_por']) is not distinct from (to_jsonb(new) - array['versao', 'atualizado_em', 'atualizado_por']) then
     return new;
   end if;
+  -- Nenhum campo CADASTRAL mudou (baixa, vínculo, encargo, intercompany — mesmo quando a sessão da identidade enxerga TODAS as ações da
+  -- concessão): não é correção; a forma dessas gravações é conferida pelas barreiras próprias delas (0018/0029/0031/0034), como antes.
+  if old.contraparte_id is not distinct from new.contraparte_id and old.vencimento is not distinct from new.vencimento
+     and old.descricao is not distinct from new.descricao
+     and (coalesce(old.extras, '{}'::jsonb)->'observacao') is not distinct from (coalesce(new.extras, '{}'::jsonb)->'observacao')
+     and (coalesce(old.extras, '{}'::jsonb)->'formaPagamento') is not distinct from (coalesce(new.extras, '{}'::jsonb)->'formaPagamento') then
+    return new;
+  end if;
   if (to_jsonb(old) - livres) is distinct from (to_jsonb(new) - livres)
      or (coalesce(old.extras, '{}'::jsonb) - array['observacao', 'formaPagamento']) is distinct from (coalesce(new.extras, '{}'::jsonb) - array['observacao', 'formaPagamento']) then
     raise exception 'Financeiro v2: a correção estreita muda só fornecedor, vencimento, descrição, observação e forma de pagamento.' using errcode = '42501';
@@ -127,8 +135,13 @@ begin
   if not fv2_so_vincula() then
     return new;
   end if;
-  -- 0036: correção cadastral estreita (nenhuma coluna de posição muda; a forma é conferida por fv2_correcao_de_conta)
+  -- 0036: correção cadastral estreita — ALGUM campo cadastral muda e nenhuma coluna de posição; fv2_correcao_de_conta confere que
+  -- NADA além do cadastral mudou (competência, valor, situação… são recusados lá). Sem campo cadastral mudando, segue a barreira abaixo.
   if tg_table_name = 'fv2_obrigacao' and fv2_so_corrige_conta()
+     and ((to_jsonb(old)->'contraparte_id') is distinct from (to_jsonb(new)->'contraparte_id') or (to_jsonb(old)->'vencimento') is distinct from (to_jsonb(new)->'vencimento')
+       or (to_jsonb(old)->'descricao') is distinct from (to_jsonb(new)->'descricao')
+       or (to_jsonb(old)->'extras'->'observacao') is distinct from (to_jsonb(new)->'extras'->'observacao')
+       or (to_jsonb(old)->'extras'->'formaPagamento') is distinct from (to_jsonb(new)->'extras'->'formaPagamento'))
      and (to_jsonb(old)->>'liquidado_centavos') is not distinct from (to_jsonb(new)->>'liquidado_centavos')
      and (to_jsonb(old)->>'saldo_centavos') is not distinct from (to_jsonb(new)->>'saldo_centavos')
      and (to_jsonb(old)->>'ajustes_centavos') is not distinct from (to_jsonb(new)->>'ajustes_centavos')

@@ -452,7 +452,7 @@ export function validarCorrecaoObrigacao(e) {
  * uma confirmação antiga nunca altera conta que mudou). Valor, competência e categoria NÃO entram aqui.
  */
 export function validarCorrecaoDeContaAPagar(e) {
-  semCamposDesconhecidos(e, ["obrigacaoId", "abrangencia", "mudancas", "justificativa", "versaoEsperada"], "correcaoDeConta");
+  semCamposDesconhecidos(e, ["obrigacaoId", "abrangencia", "mudancas", "justificativa", "versaoEsperada", "versoes"], "correcaoDeConta");
   semCamposDesconhecidos(e.mudancas, ["contraparteId", "contraparteNova", "vencimento", "descricao", "observacao", "formaPagamento"], "mudancas");
   const m = e.mudancas;
   if (m.contraparteId !== undefined && m.contraparteNova !== undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o fornecedor existente OU o novo.", { campo: "mudancas.contraparteId" });
@@ -466,8 +466,14 @@ export function validarCorrecaoDeContaAPagar(e) {
   if (!Object.keys(mudancas).length) falhar(CODIGO.ENTRADA_INVALIDA, "Nenhuma mudança informada.");
   const abrangencia = exigirUmDe(e.abrangencia ?? "PARCELA", ["PARCELA", "GRUPO"], "abrangencia");
   if (abrangencia === "GRUPO" && mudancas.vencimento) falhar(CODIGO.ENTRADA_INVALIDA, "Vencimento se corrige parcela por parcela.", { campo: "mudancas.vencimento" });
+  // GRUPO: a versão de CADA parcela vista no resumo (id → versão). O conjunto confirmado é exatamente esse — nem mais, nem menos.
+  let versoes = null;
+  if (abrangencia === "GRUPO") {
+    if (!e.versoes || typeof e.versoes !== "object" || Array.isArray(e.versoes) || !Object.keys(e.versoes).length) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a versão de cada parcela confirmada.", { campo: "versoes" });
+    versoes = Object.fromEntries(Object.entries(e.versoes).map(([id, v]) => [exigirUuid(id, "versoes"), exigirInteiro(v, "versoes", { min: 1 })]));
+  } else if (e.versoes !== undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Versões por parcela só na correção de todas as parcelas.", { campo: "versoes" });
   return {
-    obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), abrangencia, mudancas,
+    obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), abrangencia, mudancas, versoes,
     justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
     versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }),
   };

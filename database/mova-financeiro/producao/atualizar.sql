@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
--- Novas: 0026_mova_correcao_de_conta.sql
+-- Novas: 0027_mova_correcao_de_conta.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -31,11 +31,11 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0023_mova_politica_sangria.sql' and sha256 = '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631') then raise exception 'MOVA atualização: 0023_mova_politica_sangria.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0024_mova_grupo_multiempresa.sql' and sha256 = '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47') then raise exception 'MOVA atualização: 0024_mova_grupo_multiempresa.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql' and sha256 = '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql ausente ou com outro conteúdo — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0026_mova_correcao_de_conta.sql') then raise exception 'MOVA atualização: 0026_mova_correcao_de_conta.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0027_mova_correcao_de_conta.sql') then raise exception 'MOVA atualização: 0027_mova_correcao_de_conta.sql já aplicada — nada foi feito'; end if;
 end $$;
 
--- ------------------------------------------------------------------------- 0026_mova_correcao_de_conta.sql (arquivo 892593c152a0c160638426ddb2190a76b1e0faaf354a1074a64c69124eb504e5)
--- MOVA (28/11/2026): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
+-- ------------------------------------------------------------------------- 0027_mova_correcao_de_conta.sql (arquivo 8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35)
+-- MOVA 0027 (28/11/2026; a 0026 é da frente dos entregadores, conteúdo independente): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
 -- descrição, observação e forma de pagamento, pela ação ESTREITA `corrigir_conta_a_pagar` do Financeiro (migração 0036).
 -- Só acrescenta CORRECAO_DE_CONTA às listas fechadas de PROPOSTAS e EXECUÇÕES (a proposta guarda o antes/depois mostrado e a versão
 -- da conta; a execução é única por proposta). NÃO entra na lista de POLÍTICAS: correção cadastral não tem limite monetário e sempre
@@ -47,4 +47,4 @@ alter table mova.operacao_executada add constraint operacao_executada_operacao_c
 alter table mova.proposta drop constraint proposta_tipo_check;
 alter table mova.proposta add constraint proposta_tipo_check
   check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY','CORRECAO_DE_CONTA'));
-insert into mova.mova_migracao (nome, sha256) values ('0026_mova_correcao_de_conta.sql', '892593c152a0c160638426ddb2190a76b1e0faaf354a1074a64c69124eb504e5');
+insert into mova.mova_migracao (nome, sha256) values ('0027_mova_correcao_de_conta.sql', '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35');

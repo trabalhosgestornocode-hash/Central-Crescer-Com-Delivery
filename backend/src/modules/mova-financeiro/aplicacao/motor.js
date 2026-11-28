@@ -99,7 +99,15 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
   // 28/11 (Operador Financeiro, fase 1): correção cadastral de conta a pagar pela conversa (operação oficial do núcleo; sem IA)
-  const correcoes = criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir: (...x) => concluir(...x), escopoDe, hoje, DECISAO });
+  const correcoes = criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir: (...x) => concluir(...x), escopoDe, hoje, DECISAO,
+    // mesma regra de saída das demais operações financeiras; a correção mostra a CONTA e o FORNECEDOR ⇒ no grupo só com o "detalhe"
+    // (todos os membros FINANCEIRO nas unidades da conta); senão, no privado de quem fala
+    rotear: async (g, p, e, us) => {
+      const r = await roteamento(g, p, e, "DOCUMENTO_COM_VALOR", us);
+      if (!r?.noGrupo || r.detalhe === true || !us.length) return r;
+      const jid = destinoPrivado(p, e.participanteId);
+      return { destino: jid && cfg.gruposAutorizados.some((x) => x.derivada && x.grupoId === jid) ? jid : null, motivo: "DETALHE_SO_PARA_FINANCEIRO" };
+    } });
 
   async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, respostasExtras = [], propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
     if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
