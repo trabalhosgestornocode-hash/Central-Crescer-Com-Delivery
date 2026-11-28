@@ -1,7 +1,7 @@
 // Aplicação do Financeiro v2 (demonstração local): roteamento por hash, filtros, carregamento sem flash de dados antigos,
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
-import { criarConsultor, definirTransporte, enviar, invalidarCache } from "./consulta.js";
+import { criarConsultor, definirTransporte, enviar, invalidarCache, lerJson } from "./consulta.js";
 import { ROTAS_PLATAFORMA, aquecerCredenciais, credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro, renovarCredenciaisDaPlataforma } from "./plataforma.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
@@ -10,7 +10,7 @@ import { iniciarMenuRecolhivel } from "./menu.js";
 
 // Módulos das telas pesadas: baixados SOB DEMANDA (só o da tela aberta entra no caminho da primeira pintura) e aquecidos logo depois
 // da primeira tela útil. Os nomes abaixo são os mesmos usados no resto do arquivo (adm, conf, ven, can, calCanais, impCanais, ent).
-let adm, conf, ven, can, calCanais, impCanais, ent;
+let adm, conf, ven, can, calCanais, impCanais, ent, mova;
 const CARREGADORES = {
   adm: () => import("./telasAdministracao.js").then((m) => { adm = m; return m; }),
   conf: () => import("./telasConferencias.js").then((m) => { conf = m; return m; }),
@@ -19,6 +19,8 @@ const CARREGADORES = {
   calCanais: () => import("./telasCalendarioCanais.js").then((m) => { calCanais = m; return m; }),
   impCanais: () => import("./telasImportacoesCanais.js").then((m) => { impCanais = m; return m; }),
   ent: () => import("./telasEntregadores.js").then((m) => { ent = m; return m; }),
+  // 28/11: o MOVA é uma seção do próprio Financeiro (#/mova/<seção>), com a mesma sessão — não mais uma página à parte.
+  mova: () => import("./telasMova.js").then((m) => { mova = m; return m; }),
 };
 const importados = new Map();
 /** Garante os módulos pedidos. Falha de rede NÃO fica guardada: a próxima tentativa baixa de novo. */
@@ -86,7 +88,7 @@ function filtrosIniciais() {
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "saipos", "swf", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-entre-empresas", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "entregadores-proprios", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["mova", "visao-geral", "dre", "saipos", "swf", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-entre-empresas", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "entregadores-proprios", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -331,7 +333,7 @@ async function carregar() {
   // PLATAFORMA: a unidade é SEMPRE a da sessão (o servidor ignora a que vier daqui). Então a consulta da tela não precisa esperar a sessão:
   // sai JUNTO com ela. Só é aproveitada se a competência que a sessão escolher for a mesma que se supôs (mês de hoje); senão é descartada e refeita.
   let adiantada = null;
-  if (MODO_PLATAFORMA && !estado.unidade && !estado.competenciaDaSessao) {
+  if (MODO_PLATAFORMA && !estado.unidade && !estado.competenciaDaSessao && estado.rota !== "mova") {
     const original = estado.competencia;
     estado.competencia = mesDeHojeEmSaoPaulo();
     const url = consultaDaRota();
@@ -357,6 +359,7 @@ async function carregar() {
     estado.unidades = s.dados.unidades;
     estado.dataBase = s.dados.dataBase ?? null;
     estado.csrf = s.dados.csrf ?? null;
+    estado.escritaHabilitada = s.dados.escritaHabilitada === true;
     estado.pessoasDemo = s.dados.pessoasDemo ?? [];
     estado.pessoas = null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
@@ -365,6 +368,8 @@ async function carregar() {
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
   if (await carregarFontes(meuCarregamento, fontesAdiantadas, urlDasFontes)) return; // erro, sessão vencida ou a rota mudou (SAIPOS ↔ SWF)
+  contarPendentesDoMova();
+  if (estado.rota === "mova") { await abrirMova(meuCarregamento, conteudo); return; }
   const urlDoCalendario = consultaDoCalendario();
   const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
   const urlDasImportacoes = consultaDasImportacoes();
@@ -426,6 +431,43 @@ async function carregar() {
     revisarAoCarregar = null;
     abrirDetalhe(`pendencia:${chave}`, conteudo);
   }
+}
+
+// ------------------------------------------------------------------ MOVA (28/11)
+let instanciaMova = null;
+const sessaoDoMova = () => ({ permissoes: permissoesDaUnidade(), escritaHabilitada: estado.escritaHabilitada === true, unidadeNome: nomeUnidade(), unidadeId: estado.unidade });
+const lerMova = (url) => lerJson(url, cabecalhos());
+const enviarMova = (url, corpo) => enviar(url, corpo, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
+/** Monta a seção do MOVA no conteúdo (mesma sessão, unidade e permissões; nada simulado). */
+async function abrirMova(meuCarregamento, conteudo) {
+  try { await garantir("mova"); } catch {
+    definirBoot(BOOT.PRONTO); definirDados("erro");
+    conteudo.innerHTML = telas.estado("rede", "Não foi possível baixar esta tela. Confira a conexão e tente de novo; nada foi alterado.");
+    return;
+  }
+  if (meuCarregamento !== numeroDoCarregamento) return;
+  conteudo.removeAttribute("aria-busy");
+  if (!permissoesDaUnidade().includes("financeiro_v2.ver") && MODO_PLATAFORMA) {
+    definirBoot(BOOT.PRONTO); definirDados("erro");
+    conteudo.innerHTML = telas.estado("negado", "Você não tem permissão para ver o MOVA nesta unidade.");
+    return;
+  }
+  instanciaMova = mova.montarMova(conteudo, { secao: estado.movaSecao, ler: lerMova, enviar: enviarMova, sessao: sessaoDoMova() });
+  definirDados("disponivel");
+  definirBoot(BOOT.PRONTO);
+  aquecerModulos();
+}
+/** Contador do menu (propostas aguardando revisão): uma leitura por unidade, fora da tela do MOVA também. */
+let contadorDoMovaDa = null;
+function contarPendentesDoMova() {
+  if (contadorDoMovaDa === estado.unidade || !estado.unidade) return;
+  if (MODO_PLATAFORMA && !permissoesDaUnidade().includes("financeiro_v2.ver")) return;
+  contadorDoMovaDa = estado.unidade;
+  lerMova("/api/fv2/mova/caixa").then((r) => {
+    if (!r.ok || contadorDoMovaDa !== estado.unidade) return;
+    const n = (r.dados?.itens ?? []).filter((i) => i.proposta?.estado === "AGUARDANDO_REVISAO").length;
+    for (const c of document.querySelectorAll("[data-mova-contador]")) { c.textContent = String(n); c.hidden = n === 0; }
+  });
 }
 
 /**
@@ -721,9 +763,17 @@ function acaoDoDiaDoCanal(acao, data, origem) {
 }
 
 function rotear() {
+  const antes = estado.rota;
   aplicarFiltrosDaUrl({ comRevisao: true });
-  for (const a of document.querySelectorAll("[data-rota]")) a.setAttribute("aria-current", a.dataset.rota === estado.rota ? "page" : "false");
+  marcarMenu();
+  // Dentro do MOVA, trocar de seção não refaz a tela (as leituras já feitas são reaproveitadas).
+  if (antes === "mova" && estado.rota === "mova" && instanciaMova?.raiz?.isConnected) { instanciaMova.irPara(estado.movaSecao, estado.movaBusca); return; }
   carregar();
+}
+function marcarMenu() {
+  const atual = estado.rota === "mova" ? (estado.movaSecao && estado.movaSecao !== "visao" ? `mova/${estado.movaSecao}` : "mova") : estado.rota;
+  for (const a of document.querySelectorAll("[data-rota]")) a.setAttribute("aria-current", a.dataset.rota === atual ? "page" : "false");
+  document.documentElement.dataset.rota = estado.rota;
 }
 
 /**
@@ -732,6 +782,8 @@ function rotear() {
  */
 function aplicarFiltrosDaUrl({ comRevisao = false } = {}) {
   const [pedida, consulta = ""] = location.hash.replace(/^#\//, "").split("?");
+  // MOVA: #/mova, #/mova/<seção>, #/mova/<seção>?filtro=…
+  if (pedida === "mova" || pedida.startsWith("mova/")) { estado.rota = "mova"; estado.movaSecao = pedida.split("/")[1] || "visao"; estado.movaBusca = consulta; return; }
   estado.rota = ROTAS.includes(pedida) ? pedida : "visao-geral";
   if (estado.rota === "vendas-e-recebimentos" && consulta) {
     // Ligação de outra tela (ex.: Visão Geral → Balcão): só filtros conhecidos; o resto é ignorado.
@@ -970,7 +1022,7 @@ document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[d
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; carregar(); });
 const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
-$("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; estado.fontesDaUnidade = null; reiniciarFiltros(); invalidarCache(); const nome = $("#topo-unidade"); if (nome) nome.textContent = nomeUnidade(); carregar(); });
+$("#filtro-unidade").addEventListener("change", (e) => { contadorDoMovaDa = null; estado.unidade = e.target.value; estado.fontesDaUnidade = null; reiniciarFiltros(); invalidarCache(); const nome = $("#topo-unidade"); if (nome) nome.textContent = nomeUnidade(); carregar(); });
 $("#filtro-sessao").addEventListener("change", (e) => { invalidarCache(); estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; estado.fontesDaUnidade = null; reiniciarFiltros(); carregar(); });
 iniciarMenuRecolhivel();
 rotear();

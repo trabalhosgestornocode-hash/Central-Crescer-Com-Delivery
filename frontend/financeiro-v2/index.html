@@ -14,6 +14,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="fv2.css">
+  <link rel="stylesheet" href="mova.css">
   <!-- Pré-carga PLANA só dos módulos da primeira tela (as demais telas são baixadas sob demanda e aquecidas em tempo ocioso): sem isso o navegador só descobre cada nível depois de baixar o anterior (cascata de 6 viagens). -->
   <link rel="modulepreload" href="app.js">
   <link rel="modulepreload" href="consulta.js">
@@ -69,7 +70,18 @@
         <ul aria-labelledby="nav-operacao">
           <li><a href="#/entregadores-proprios" data-rota="entregadores-proprios">Entregadores Próprios</a></li>
           <li><a href="#/documentos" data-rota="documentos">Documentos</a></li>
-          <li data-exige="financeiro_v2.ver" hidden><a href="centro-financeiro.html">Central de Operações MOVA</a></li>
+        </ul>
+      </div>
+      <!-- 28/11: o MOVA (agente financeiro do WhatsApp) é uma seção do Financeiro, com a mesma sessão e unidade. -->
+      <div class="nav-grupo" data-grupo="mova">
+        <p class="nav-titulo" id="nav-mova">MOVA</p>
+        <ul aria-labelledby="nav-mova">
+          <li data-exige="financeiro_v2.ver"><a href="#/mova" data-rota="mova">Visão geral</a></li>
+          <li data-exige="financeiro_v2.ver"><a href="#/mova/entrada" data-rota="mova/entrada">Caixa de entrada <span data-mova-contador hidden></span></a></li>
+          <li data-exige="financeiro_v2.ver"><a href="#/mova/operacoes" data-rota="mova/operacoes">Operações</a></li>
+          <li data-exige="financeiro_v2.ver"><a href="#/mova/conferencia" data-rota="mova/conferencia">Conferência</a></li>
+          <li data-exige="financeiro_v2.ver"><a href="#/mova/documentos" data-rota="mova/documentos">Documentos recebidos</a></li>
+          <li data-exige="financeiro_v2.ver"><a href="#/mova/configuracoes" data-rota="mova/configuracoes">Configurações</a></li>
         </ul>
       </div>
       <div class="nav-grupo">
