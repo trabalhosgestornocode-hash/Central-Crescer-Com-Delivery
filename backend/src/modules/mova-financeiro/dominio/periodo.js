@@ -83,3 +83,21 @@ export function idTransacaoConfiavel(id) {
   if (/^E\d{8}/i.test(v)) return /^E[0-9A-Z]{31}$/i.test(v) ? v : null;
   return v.length >= 6 ? v : null;
 }
+
+/**
+ * 28/11 (caso real: R$ 785,00 "identificador cortado" com o E2E completo impresso no próprio comprovante): quando o campo da
+ * transação veio incompleto (ou vazio), vale o IDENTIFICADOR DO DOCUMENTO se for um Pix E2E completo (espaços da quebra de linha
+ * removidos) e, havendo um trecho lido no campo da transação, do MESMO participante (os 9 primeiros caracteres: "E" + ISPB).
+ * Nunca inventa: sem E2E completo impresso, continua recortado.
+ * @returns {string|null}
+ */
+export function idTransacaoDaLeitura(saida) {
+  const limpo = (x) => (typeof x === "string" ? x.replace(/\s+/g, "") : null);
+  const lido = limpo(saida?.idTransacao);
+  const direto = idTransacaoConfiavel(lido);
+  if (direto) return direto;
+  const impresso = limpo(saida?.identificadorDocumento);
+  if (!impresso || !/^E\d{8}[0-9A-Z]{23}$/i.test(impresso)) return null;
+  if (lido && lido.slice(0, 9).toUpperCase() !== impresso.slice(0, 9).toUpperCase()) return null;
+  return impresso;
+}

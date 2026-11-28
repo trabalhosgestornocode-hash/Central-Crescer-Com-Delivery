@@ -20,6 +20,7 @@ import { NIVEL, OPERACAO, conferirComExtrato, decidirAutonomia, validarPolitica 
 import { avaliarComprovante } from "../dominio/comprovante.js";
 import { ErroDeExecucao } from "./portaOperacional.js";
 import { revalidarUnidadeDaProposta } from "../dominio/unidade.js";
+import { RESULTADO_PAGADOR, unidadePeloPagador } from "../dominio/pagador.js";
 
 /** Janela (dias) em que pagamentos ao mesmo favorecido somam para o limite da baixa documental (anti-fracionamento). */
 export const JANELA_FRACIONAMENTO_DIAS = 3;
@@ -42,6 +43,19 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
    * execução — automática, retomada ou confirmada pelo participante. Sem confirmação: nada é gravado; fica como proposta.
    */
+  /**
+   * 28/11 (caso real: R$ 590,00 pago pela empresa de uma loja de FORA do MOVA, lançado no Subway Saci): comprovante cujo pagador
+   * LIDO (nome ou CNPJ) não é pagador cadastrado de NENHUMA loja nunca é registrado automaticamente — vira proposta para a Central.
+   * Só vale quando há cadastro de pagadores (sem cadastro, nada muda) e quando o pagador foi lido.
+   */
+  function pagadorForaDoCadastro(proposta) {
+    if (!cfg?.unidades?.length) return false;
+    const l = proposta.leitura ?? {};
+    if (!l.pagador && !l.documentoPagador) return false;
+    if (!cfg.unidades.some((u) => (u.pagadores?.nomes?.length ?? 0) + (u.pagadores?.documentos?.length ?? 0) > 0)) return false;
+    return unidadePeloPagador({ unidades: cfg.unidades, pagador: l.pagador ?? null, documentoPagador: l.documentoPagador ?? null }).resultado === RESULTADO_PAGADOR.SEM_EVIDENCIA;
+  }
+
   async function unidadeConfirmada(proposta) {
     if (!cfg) return { ok: true, motivo: null };
     const evento = proposta.eventoId ? await a.eventos.obter(proposta.eventoId) : null;
@@ -323,6 +337,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     await a.propostas.anotar(escopo, proposta.id, { autonomiaDocumental: decisao, comprovante });
     const doc = { ...base, nivelDocumental: decisao.nivel, motivosDocumentais: decisao.motivos, comprovante: comprovante?.situacao ?? null };
     if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO) return doc;
+    // 28/11: pagador que não é de nenhuma loja cadastrada ⇒ nunca baixa automática (revisão na Central)
+    if (pagadorForaDoCadastro(proposta)) return { ...doc, nivelDocumental: NIVEL.SOMENTE_PROPOR, motivosDocumentais: [...decisao.motivos, "PAGADOR_NAO_CADASTRADO"] };
     if (!operacional) return { ...doc, motivosDocumentais: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
     if (!(await operacional.pode("registrarPagamentoPorComprovante", escopo))) return { ...doc, motivosDocumentais: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     const r = await pagarPorComprovante({ proposta, escopo, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, executor: operacional });
@@ -347,6 +363,10 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (emprestimo && !proposta.comando?.composicaoEmprestimo) return { ...base, motivos: ["EMPRESTIMO_COMPOSICAO_DESCONHECIDA"] };
     const u = await unidadeConfirmada(proposta);
     if (!u.ok) return { ...base, motivos: [u.motivo] };
+    if (pagadorForaDoCadastro(proposta)) {
+      await a.auditoria.registrar({ acao: "EXECUCAO_RECUSADA_PAGADOR", atorTipo: "SISTEMA", atorRef: "mova", alvo: proposta.id, dados: { motivo: "PAGADOR_NAO_CADASTRADO" } });
+      return { ...base, motivos: ["PAGADOR_NAO_CADASTRADO"] };
+    }
     if (!despesasLigadas) return { ...base, motivos: ["CRIACAO_DE_DESPESAS_DESLIGADA"] };
     if (proposta.tipo !== "DESPESA_PAGA" || !proposta.evidencia) return { ...base, motivos: ["SEM_COMPROVANTE"] };
     if (proposta.competenciaPendente || !proposta.comando?.entrada?.competencia) return { ...base, motivos: ["COMPETENCIA_PENDENTE"] };

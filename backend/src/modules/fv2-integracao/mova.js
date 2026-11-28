@@ -530,7 +530,10 @@ export function criarRouterMovaIsolado(env, { obterMova = () => movaDaPlataforma
   if (!cfg.habilitado || !cfg.recebimento) return null;
   const r = Router();
   r.use(express.raw({ type: "*/*", limit: LIMITE_CORPO_MOVA_BYTES }), exigirHmac(env.MOVA_GATEWAY_SECRET));
-  const receptor = { async receber(payload, o) { const m = await obterMova(); return m ? m.mova.receptor.receber(payload, o) : { status: "INDISPONIVEL", motivo: "MOVA_NAO_MONTADO" }; } };
+  const receptor = {
+    async receber(payload, o) { const m = await obterMova(); return m ? m.mova.receptor.receber(payload, o) : { status: "INDISPONIVEL", motivo: "MOVA_NAO_MONTADO" }; },
+    async reenviarSemEntrega(payload) { const m = await obterMova(); return m?.mova?.receptor?.reenviarSemEntrega ? m.mova.receptor.reenviarSemEntrega(payload) : { status: "INDISPONIVEL", motivo: "MOVA_NAO_MONTADO" }; },
+  };
   r.use(criarRotaEventosMova({ receptor }));
   return r;
 }

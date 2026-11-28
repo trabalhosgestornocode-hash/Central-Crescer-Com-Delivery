@@ -10,6 +10,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { linhaDoRecebido } from "../dominio/documentos.js";
 
+/** 28/11: prefixo da cópia de uma resposta que não chegou aos aparelhos (reenviada uma vez). */
+export const PREFIXO_REENVIO = "Reenvio — a mensagem anterior não chegou aos celulares:";
+
 const TRANSITORIOS = new Set(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EPIPE", "57P01", "57P02", "57P03", "08000", "08001", "08003", "08006", "53300"]);
 export function ehFalhaDeConexao(e) {
   return TRANSITORIOS.has(e?.code) || /Connection terminated|connect ECONNREFUSED|timeout exceeded when trying to connect/i.test(String(e?.message ?? ""));
@@ -523,6 +526,27 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
     }),
     saida: Object.freeze({
+      /**
+       * 28/11 — resposta ENVIADA que não chegou a nenhum aparelho (aviso do Gateway): UMA cópia volta à fila com o mesmo destino,
+       * evento e citação (quem responder citando a cópia continua a mesma conversa). Nunca reenvia uma cópia, nunca duas vezes a
+       * mesma mensagem, nunca mensagem com mais de 1 hora. Auditado (só ids).
+       */
+      async reenviarSemEntrega(providerMessageId) {
+        if (typeof providerMessageId !== "string" || !/^[A-Za-z0-9]{6,64}$/.test(providerMessageId)) return { situacao: "IGNORADO", motivo: "ID_INVALIDO" };
+        return emTransacao(pool, async (tx) => {
+          const o = (await tx(`select id, grupo_jid, resposta_a, evento_id, texto from mova.resposta
+                               where provider_message_id = $1 and estado = 'ENVIADA' and enviada_em > now() - interval '1 hour' for update`, [providerMessageId])).rows[0];
+          if (!o) return { situacao: "IGNORADO", motivo: "MENSAGEM_NAO_ENCONTRADA" };
+          if (String(o.texto).startsWith(PREFIXO_REENVIO)) return { situacao: "IGNORADO", motivo: "JA_E_REENVIO" };
+          const ja = await tx("select 1 from mova.auditoria where acao = 'RESPOSTA_REENVIADA' and dados->>'original' = $1 limit 1", [o.id]);
+          if (ja.rowCount) return { situacao: "IGNORADO", motivo: "JA_REENVIADA" };
+          const nova = (await tx("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id",
+            [o.grupo_jid, o.resposta_a, o.evento_id, `${PREFIXO_REENVIO}\n${o.texto}`])).rows[0].id;
+          await tx(`insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('RESPOSTA_REENVIADA', 'SISTEMA', 'gateway', 'resposta', $1)`,
+            [JSON.stringify({ motivo: "SEM_ENTREGA_NOS_APARELHOS", original: o.id, nova, providerOriginal: providerMessageId })]);
+          return { situacao: "REENFILEIRADA", respostaId: nova };
+        });
+      },
       async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
         return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
       },

@@ -10,6 +10,8 @@
 import { assinarRequisicao } from "./hmac.js";
 
 export const CAMINHO_EVENTO_MOVA = "/internal/mova/eventos/mova-grupo";
+/** 28/11: resposta do MOVA sem entrega a nenhum aparelho (o backend reenvia uma cópia, uma vez). */
+export const CAMINHO_SEM_ENTREGA_MOVA = "/internal/mova/eventos/mova-sem-entrega";
 
 /** Valida a configuração do canal. Devolve { ativo:false, motivo } ou { ativo:true, url, segredo }. Nunca devolve o segredo em log. */
 export function lerCanalMova({ url, segredo, segredoPrincipal }) {
@@ -37,11 +39,11 @@ export function criarCanalMova({ url, segredo, fetchFn = (...a) => fetch(...a), 
     if (janela.length >= maxPorMinuto) return false;
     janela.push(agora); return true;
   };
-  async function umaVez(corpo) {
-    const headers = { ...assinarRequisicao({ segredo, metodo: "POST", caminho: CAMINHO_EVENTO_MOVA, corpo }), "Content-Type": "application/json" };
+  async function umaVez(corpo, caminho = CAMINHO_EVENTO_MOVA) {
+    const headers = { ...assinarRequisicao({ segredo, metodo: "POST", caminho, corpo }), "Content-Type": "application/json" };
     const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      const r = await fetchFn(`${url}${CAMINHO_EVENTO_MOVA}`, { method: "POST", headers, body: corpo, signal: ctrl.signal });
+      const r = await fetchFn(`${url}${caminho}`, { method: "POST", headers, body: corpo, signal: ctrl.signal });
       return { status: r.status };
     } catch { return { status: 0 }; } finally { clearTimeout(timer); }
   }
@@ -57,6 +59,19 @@ export function criarCanalMova({ url, segredo, fetchFn = (...a) => fetch(...a), 
         if (i < tentativas - 1) await esperar(esperaMs[i] ?? esperaMs.at(-1) ?? 1000);
       }
       log("warn", "mova.canal_indisponivel", {});
+      return { entregue: false, motivo: "INDISPONIVEL" };
+    },
+    /** 28/11: avisa o backend que uma resposta do MOVA não chegou a nenhum aparelho. Só ids técnicos. Nunca lança. */
+    async notificarSemEntrega({ providerMessageId, correlationId = null }) {
+      if (typeof providerMessageId !== "string" || !/^[A-Za-z0-9]{6,64}$/.test(providerMessageId)) return { entregue: false, motivo: "ID_INVALIDO" };
+      const corpo = JSON.stringify({ providerMessageId, correlationId: typeof correlationId === "string" ? correlationId.slice(0, 200) : null });
+      for (let i = 0; i < tentativas; i++) {
+        const { status } = await umaVez(corpo, CAMINHO_SEM_ENTREGA_MOVA);
+        if (status >= 200 && status < 300) { log("info", "mova.sem_entrega_avisada", { providerMessageId, status }); return { entregue: true, status }; }
+        if (status !== 0 && status < 500 && status !== 429) { log("warn", "mova.sem_entrega_recusada", { providerMessageId, status }); return { entregue: false, motivo: "RECUSADO", status }; }
+        if (i < tentativas - 1) await esperar(esperaMs[i] ?? esperaMs.at(-1) ?? 1000);
+      }
+      log("warn", "mova.sem_entrega_indisponivel", { providerMessageId });
       return { entregue: false, motivo: "INDISPONIVEL" };
     },
   });

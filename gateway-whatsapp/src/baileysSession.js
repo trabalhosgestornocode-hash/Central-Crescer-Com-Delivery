@@ -178,6 +178,10 @@ export function criarSessaoBaileys({
   // MOVA (src/movaGrupo.js) — caminho À PARTE para os grupos autorizados do Centro Financeiro. Ausente ou sem grupos ⇒ nada
   // muda. Nunca altera o fluxo inbound abaixo (que continua descartando conteúdo de grupo) nem a sessão/socket.
   mova = null,
+  // 28/11 — mensagem do MOVA em grupo SEM nenhuma entrega a participante dentro do prazo (caso real: aceita pelo servidor, nenhum
+  // celular recebeu). Chamado UMA vez por mensagem com { providerMessageId, correlationId }; quem injeta decide o que fazer (avisar o
+  // backend, que reenvia uma cópia). Ausente ⇒ só o log.
+  aoSemEntrega = null,
 }) {
   let socket = null;
   // H.4-B.4 — contador de gerações de socket deste processo (sobe a cada socket criado): só correlação nos logs de envio/receipt.
@@ -270,7 +274,10 @@ export function criarSessaoBaileys({
   // servidor e a entrega/leitura por participante eram descartados ("provider_receipt_nao_rastreado"). Só LOG (sem número
   // completo, sem conteúdo); não altera o envio nem o Baileys.
   const redistribuicoesFeitas = new Set(); // grupos já redistribuídos neste processo (no máximo uma vez cada)
-  const recibosGrupo = new Map(); // providerMessageId -> {correlationId, enviadoEmMs}
+  const recibosGrupo = new Map(); // providerMessageId -> {correlationId, enviadoEmMs, grupoJid, entregue}
+  // 28/11: grupos cuja última mensagem não chegou a nenhum aparelho — no PRÓXIMO envio a chave de remetente é redistribuída
+  // (o mesmo que o Baileys faz num retry), para a cópia reenviada poder ser decifrada.
+  const redistribuirNaProxima = new Set();
   const mascararParticipante = (jid) => {
     const m = /^([0-9]+)(?::([0-9]+))?@(lid|s\.whatsapp\.net)$/.exec(String(jid ?? ""));
     return m ? { participante: `••${m[1].slice(-4)}@${m[3] === "lid" ? "lid" : "pn"}`, dispositivo: m[2] ? Number(m[2]) : 0 } : { participante: null, dispositivo: null };
@@ -283,6 +290,8 @@ export function criarSessaoBaileys({
       for (const id of ids) {
         const r = id && recibosGrupo.get(id);
         if (!r) continue;
+        // entrega/leitura por um PARTICIPANTE (não o aceite do servidor nem o recibo "sender" da própria conta)
+        if (origem === "receipt" && (a.type === undefined || a.type === "read") && (a.participant || a.from)) r.entregue = true;
         log(a.error || a.type === "retry" ? "warn" : "info", "grupo.recibo", { correlationId: r.correlationId, providerMessageId: id,
           tipo: origem === "ack" ? (a.error ? "ack_erro" : "ack_servidor") : (a.type ?? "entrega"), erro: a.error ?? null,
           ...mascararParticipante(a.participant ?? (origem === "ack" ? null : a.from)), latenciaMs: Date.now() - r.enviadoEmMs });
@@ -1911,6 +1920,25 @@ export function criarSessaoBaileys({
     } catch (e) { log("warn", "gateway.diagnostico_grupos_falhou", { codigo: e?.codigo ?? e?.name ?? "erro" }); }
   }
 
+  /**
+   * 28/11 — VIGIA de entrega das respostas do MOVA em grupo: se nenhum participante acusar entrega/leitura em
+   * `movaPrazoEntregaMs` (padrão 120 s; 0 desliga), registra `grupo.sem_entrega`, marca o grupo para redistribuir a chave no
+   * próximo envio e chama `aoSemEntrega` UMA vez. Só mensagens do MOVA (correlação "mova-resposta:"); nunca reenvia sozinho.
+   */
+  function vigiarEntrega({ providerMessageId, recibo, jidMascarado }) {
+    const prazo = Number.isFinite(config?.movaPrazoEntregaMs) ? config.movaPrazoEntregaMs : 120_000;
+    if (!(prazo > 0) || !String(recibo.correlationId ?? "").startsWith("mova-resposta:")) return;
+    const h = agendar(() => {
+      try {
+        if (recibo.entregue) return;
+        redistribuirNaProxima.add(recibo.grupoJid);
+        log("warn", "grupo.sem_entrega", { correlationId: recibo.correlationId, providerMessageId, jid: jidMascarado, prazoMs: prazo });
+        if (typeof aoSemEntrega === "function") Promise.resolve(aoSemEntrega({ providerMessageId, correlationId: recibo.correlationId })).catch(() => {});
+      } catch { /* vigia nunca interfere */ }
+    }, prazo);
+    h?.unref?.();
+  }
+
   /** Miolo comum do envio de texto a grupo (grupo interno e MOVA). Quem chama já autorizou o JID. */
   async function enviarTextoAGrupo({ grupoJid, texto, correlationId }) {
     {
@@ -1931,7 +1959,8 @@ export function criarSessaoBaileys({
       const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
       log("info", "grupo.send_start", { correlationId, socketGeneration: geracaoSocket, providerMessageId: providerIdGerado, jid: jidMascarado, lookupMs: Date.now() - t0,
         participantes: Number.isInteger(info?.participantes) ? info.participantes : null });
-      recibosGrupo.set(providerIdGerado, { correlationId, enviadoEmMs: Date.now() });
+      const recibo = { correlationId, enviadoEmMs: Date.now(), grupoJid, entregue: false };
+      recibosGrupo.set(providerIdGerado, recibo);
       while (recibosGrupo.size > 300) recibosGrupo.delete(recibosGrupo.keys().next().value);
       // 23/11: diagnóstico da distribuição da chave de remetente (só contagens e participantes mascarados; nenhum material
       // criptográfico). Opcionalmente, UMA redistribuição por processo, só para o grupo configurado e autorizado.
@@ -1939,9 +1968,11 @@ export function criarSessaoBaileys({
       const memoriaChave = async () => { try { return Object.keys((await chaves.get("sender-key-memory", [grupoJid]))?.[grupoJid] ?? {}); } catch { return null; } };
       let antes = await memoriaChave();
       const alvoRedistribuir = config?.movaRedistribuirChaveGrupo;
-      if (alvoRedistribuir && alvoRedistribuir === grupoJid && !redistribuicoesFeitas.has(grupoJid)
+      const porFaltaDeEntrega = redistribuirNaProxima.has(grupoJid);
+      if (((alvoRedistribuir && alvoRedistribuir === grupoJid && !redistribuicoesFeitas.has(grupoJid)) || porFaltaDeEntrega)
           && Array.isArray(config?.movaGrupos) && config.movaGrupos.includes(grupoJid)) {
         redistribuicoesFeitas.add(grupoJid);
+        redistribuirNaProxima.delete(grupoJid);
         try {
           await chaves.set({ "sender-key-memory": { [grupoJid]: null } });
           log("warn", "grupo.chave_redistribuicao", { correlationId, providerMessageId: providerIdGerado, jid: jidMascarado, aparelhosComChaveAntes: antes?.length ?? null });
@@ -1965,6 +1996,7 @@ export function criarSessaoBaileys({
         aparelhosConhecidos: depois?.length ?? null, chaveEnviadaAgora: novos?.length ?? null,
         aparelhos: (depois ?? []).slice(0, 60).map((j) => ({ ...mascararParticipante(j), chaveAgora: !!novos?.includes(j) })) });
       log("info", "grupo.send_resolved", { correlationId, providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1 });
+      vigiarEntrega({ providerMessageId, recibo, jidMascarado });
       return { providerMessageId, enviadoEm: new Date().toISOString(), grupo: { jid: info.jid, nome: info.nome } };
     }
   }

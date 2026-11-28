@@ -179,5 +179,14 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
     });
   }
 
-  return Object.freeze({ receber, trabalhar });
+  /** 28/11 — aviso do Gateway: resposta sem entrega a nenhum aparelho ⇒ uma cópia volta à fila (regra no armazenamento). */
+  async function reenviarSemEntrega(payload) {
+    const id = payload?.providerMessageId;
+    if (typeof armazenamento.saida.reenviarSemEntrega !== "function") return { status: "IGNORADO", motivo: "SEM_SUPORTE" };
+    if (typeof id !== "string" || !/^[A-Za-z0-9]{6,64}$/.test(id)) return { status: "RECUSADO", motivo: "ID_INVALIDO" };
+    const r = await armazenamento.saida.reenviarSemEntrega(id);
+    return r.situacao === "REENFILEIRADA" ? { status: "ENFILEIRADO", motivo: "REENVIO" } : { status: "IGNORADO", motivo: r.motivo };
+  }
+
+  return Object.freeze({ receber, trabalhar, reenviarSemEntrega });
 }
