@@ -32,6 +32,8 @@ export const PERFIS_OPERACIONAIS = Object.freeze({
   // 27/11 (0035) — NÃO concedido em produção sem revisão: PRINCIPAL DE EMPRÉSTIMO/FINANCIAMENTO (fora da DRE). Complemento das estreitas
   // de conta (relatada em aberto; paga por comprovante): só a categoria EMPRESTIMOS_E_FINANCIAMENTOS, com confirmação no WhatsApp.
   REGISTRAR_EMPRESTIMOS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_emprestimo"]),
+  // 28/11 (0036) — NÃO concedido em produção sem autorização: correção cadastral de conta a pagar aberta e sem pagamento.
+  CORRIGIR_CONTAS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.corrigir_conta_a_pagar"]),
 });
 export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(PERFIS_OPERACIONAIS).flat())]);
 

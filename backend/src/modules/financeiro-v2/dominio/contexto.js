@@ -59,6 +59,9 @@ export const ACAO = Object.freeze({
   // (registrar_conta_parcelada, registrar_obrigacao + baixar_por_comprovante) aceitando só a categoria EMPRESTIMOS_E_FINANCIAMENTOS.
   // Nunca lucros, aportes/retiradas, entre empresas, terceiros ou outra patrimonial. Migração 0035.
   REGISTRAR_EMPRESTIMO: "financeiro_v2.registrar_emprestimo",
+  // 28/11 — CORREÇÃO CADASTRAL de conta a pagar (fornecedor, vencimento, descrição, observação, forma de pagamento): só conta
+  // aberta, sem pagamento, de despesa/equipamento e de período editável. NÃO é `corrigir` (ampla). Migração 0036.
+  CORRIGIR_CONTA_A_PAGAR: "financeiro_v2.corrigir_conta_a_pagar",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 
