@@ -138,7 +138,7 @@ t("H2 nota com legenda 'subway' vai para a obrigação da SUBWAY (anexo oficial 
   assert.equal((await s.fechamento(XIS, "carlos")).situacaoDocumental, "NF_RECEBIDA");
   assert.equal((await s.fechamento(ALFA, "carlos")).situacaoDocumental, "AGUARDANDO_NF", "a nota da Subway não toca o Açaí");
   const out = await s.saida();
-  assert.ok(out.some((x) => x.destino === GRUPO_X && /^📄 Subway Sintética Ltda — Nota fiscal recebida de Carlos, semana 02\/11\/2026 a 08\/11\/2026\. Conferência concluída: valor correspondente ao fechamento\.$/.test(x.texto)));
+  assert.ok(out.some((x) => x.destino === GRUPO_X && x.texto.startsWith("📄 Subway Sintética Ltda — Nota fiscal recebida de Carlos, semana 02/11/2026 a 08/11/2026.") && /Entregas: \d+ · 💰 Valor: R\$ /.test(x.texto) && /Situação da nota: (Conferida e anexada ao Financeiro|Conferida; aguardando o anexo ao Financeiro)\./.test(x.texto)));
   assert.ok(!out.some((x) => x.destino === GRUPO), "nada no grupo do Açaí");
 });
 
@@ -177,7 +177,7 @@ t("H5 nota repetida não cria nova obrigação nem novo anexo; divergente vai pa
   assert.equal(n.conferencia, "DIVERGENTE");
   const out = await s.saida();
   assert.match(out.filter((x) => x.destino === CARLOS).at(-1).texto, /divergência: valor diferente do fechamento/);
-  assert.ok(out.some((x) => x.destino === GRUPO_X && /Conferência com divergência: pendente de revisão do financeiro\./.test(x.texto)));
+  assert.ok(out.some((x) => x.destino === GRUPO_X && /Situação da nota: (Divergência encontrada; pendente de revisão do financeiro|Anexada ao Financeiro com divergência; pendente de revisão do financeiro)./.test(x.texto)));
   assert.ok(!out.some((x) => x.destino === GRUPO_X && /2\.000|20,00/.test(x.texto)), "sem valores no grupo");
   await s.enviar(s.nota("nota subway", "d1")); // o MESMO arquivo de novo
   assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["DUPLICADO", "NOTA_JA_RECEBIDA"]);

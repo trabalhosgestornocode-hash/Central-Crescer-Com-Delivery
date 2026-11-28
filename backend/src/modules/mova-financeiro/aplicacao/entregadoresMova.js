@@ -11,7 +11,7 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, MIMES_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
+import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaNoGrupo, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, MIMES_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
@@ -131,14 +131,17 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const esc = { organizacaoId: escopo.organizacaoId, unidadeId: ent.unidadeId };
     // 23/11: leitura e conferência da nota (emitente, tomador, valor, período) — uma vez por nota; nunca libera nada sozinha.
     const conferencia = nota.conferencia ? { resultado: nota.conferencia, motivos: [] } : await lerEConferir(nota, alvo, evento, leituraPronta);
-    if (nova) await avisarNoGrupo({ unidadeId: ent.unidadeId, tipo: "AVISO_NOTA_RECEBIDA", semanaInicio: alvo.semanaInicio, entregador: ent.chave, chave: `AVISO_NOTA|${ent.unidadeId}|${ent.chave}|${alvo.semanaInicio}|${evento.midia.sha256}`, texto: avisoDeNotaRecebida(alvo, conferencia?.resultado ?? null, rotuloDe(ent.unidadeId)) });
+    // 29/11: UM aviso ao grupo por desfecho real da nota (sha + situação), depois que o desfecho existe: nunca "anexada" antes do anexo
+    const noGrupo = (situacao) => avisarNoGrupo({ unidadeId: ent.unidadeId, tipo: "AVISO_NOTA_RECEBIDA", semanaInicio: alvo.semanaInicio, entregador: ent.chave, chave: `AVISO_NOTA|${ent.unidadeId}|${ent.chave}|${alvo.semanaInicio}|${evento.midia.sha256}|${situacao}`, texto: avisoDeNotaNoGrupo(alvo, situacao, rotuloDe(ent.unidadeId)) });
+    const resultado = conferencia?.resultado ?? null;
     const respostaLida = conferencia ? respostaDaConferencia(alvo, conferencia) : null;
     if (!operacional || !(await operacional.pode("anexarDocumentoDoEntregador", esc))) {
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_PENDENTE", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: alvo.semanaInicio, conferencia: conferencia?.resultado ?? null, motivo: operacional ? "SEM_CONCESSAO_OPERACIONAL" : "SEM_IDENTIDADE_OPERACIONAL" } });
+      await noGrupo(resultado === "CONFERE" ? "CONFERIDA_AGUARDANDO_ANEXO" : resultado === "DIVERGENTE" ? "DIVERGENTE" : "AGUARDANDO_REVISAO");
       return { decisao: "PROPOSTA", motivo: "NOTA_PENDENTE_ANEXO", resposta: respostaLida ?? pend.resposta, escopo };
     }
     const bytes = await obterEvidencia(evento.midia.referencia);
-    if (!bytes) return { decisao: "BLOQUEADO", motivo: "SEM_EVIDENCIA", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
+    if (!bytes) { await noGrupo("FALHA"); return { decisao: "BLOQUEADO", motivo: "SEM_EVIDENCIA", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo }; }
     try {
       const r = await operacional.chamar("anexarDocumentoDoEntregador", esc, {
         inicio: alvo.semanaInicio, entregador: ent.chave, tipoAnexo: "NOTA_FISCAL",
@@ -147,11 +150,13 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const situacao = r.situacaoDocumental ?? r.fechamento?.situacaoDocumental ?? null;
       await a.notasEntregador.concluir(nota.id, { estado: "ANEXADA", documentoId: r.documento?.id ?? null, situacaoDocumental: situacao });
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_ANEXADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: nota.id, dados: { semana: alvo.semanaInicio, situacao } });
+      await noGrupo(resultado === "CONFERE" ? "CONFERIDA_ANEXADA" : resultado === "DIVERGENTE" ? "DIVERGENTE_ANEXADA" : "AGUARDANDO_REVISAO_ANEXADA");
       return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "CONFERE" ? mensagemNotaConferida({ ...alvo, vencimento: alvo.vencimento ?? null }, { empresa: rotuloDe(ent.unidadeId).empresa ?? rotuloDe(ent.unidadeId).unidade }) : conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
     } catch (e) {
       if (e instanceof ErroTransitorio) throw e; // fica PENDENTE_ANEXO; a nova tentativa da fila anexa
       await a.notasEntregador.concluir(nota.id, { estado: "RECUSADA", motivo: String(e?.detalhes?.motivo ?? e?.codigo ?? "RECUSADA").slice(0, 120) });
       registrar({ tipo: "MOVA_NOTA_ENTREGADOR_RECUSADA", codigo: e?.codigo ?? "ERRO" });
+      await noGrupo("FALHA");
       return { decisao: "BLOQUEADO", motivo: "NOTA_RECUSADA_NO_FINANCEIRO", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
     }
   }

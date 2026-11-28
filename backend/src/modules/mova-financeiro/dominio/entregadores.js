@@ -217,6 +217,9 @@ export function respostaDaConferencia(f, conferencia) {
  */
 export function mensagemNotaConferida(f, { empresa, nome = null } = {}) {
   const n = primeiroNome(nome ?? f.entregador?.nome);
+  // 29/11: se o pagamento desta semana JÁ está registrado, nunca manda "aguardar o pagamento"
+  if (f.situacaoPagamento === "PAGO") return [`Olá${n ? `, ${n}` : ""}! 👋`, "✅ Sua nota fiscal foi recebida e conferida com sucesso!", `🏢 Empresa: ${empresa}`, `📅 Período: ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`,
+    `🛵 Quantidade de entregas: ${f.entregas}`, `💰 Valor: ${reais(f.valorCentavos)}`, "📄 Nota fiscal: Conferida e anexada", "O pagamento desta semana já está registrado; nada mais a fazer por aqui.", "MOVA | Crescer com Delivery"].join(String.fromCharCode(10));
   return [`Olá${n ? `, ${n}` : ""}! 👋`, "✅ Sua nota fiscal foi recebida e conferida com sucesso!", `🏢 Empresa: ${empresa}`,
     `📅 Período: ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`, `🛵 Quantidade de entregas: ${f.entregas}`, `💰 Valor: ${reais(f.valorCentavos)}`,
     "📄 Nota fiscal: Conferida e anexada", ...(f.vencimento ? [`🗓️ Previsão de pagamento: ${dataBr(f.vencimento)}`] : []),
@@ -331,6 +334,22 @@ const RESULTADO_NO_GRUPO = Object.freeze({
   DIVERGENTE: "Conferência com divergência: pendente de revisão do financeiro.",
   INCONCLUSIVA: "Conferência inconclusiva: pendente de revisão do financeiro.",
 });
+/** 29/11: situação FINAL da nota no aviso ao grupo (só depois do desfecho real — "anexada" nunca é dito antes de o anexo existir). */
+const SITUACAO_DA_NOTA = Object.freeze({
+  CONFERIDA_ANEXADA: "Conferida e anexada ao Financeiro.",
+  CONFERIDA_AGUARDANDO_ANEXO: "Conferida; aguardando o anexo ao Financeiro.",
+  DIVERGENTE: "Divergência encontrada; pendente de revisão do financeiro.",
+  DIVERGENTE_ANEXADA: "Anexada ao Financeiro com divergência; pendente de revisão do financeiro.",
+  AGUARDANDO_REVISAO: "Recebida; aguardando revisão do financeiro.",
+  AGUARDANDO_REVISAO_ANEXADA: "Anexada ao Financeiro; aguardando revisão do financeiro.",
+  FALHA: "Falha ao processar ou anexar; o financeiro vai conferir.",
+  DUPLICADA: "Nota já recebida antes (duplicada); nada novo foi registrado.",
+});
+export const SITUACOES_DA_NOTA = Object.freeze(Object.keys(SITUACAO_DA_NOTA));
+export function avisoDeNotaNoGrupo(f, situacao, { empresa = null, unidade = null } = {}) {
+  return [`📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}.`,
+    `🛵 Entregas: ${f.entregas ?? 0} · 💰 Valor: ${reais(f.valorCentavos)}`, `Situação da nota: ${SITUACAO_DA_NOTA[situacao] ?? SITUACAO_DA_NOTA.AGUARDANDO_REVISAO}`].join(String.fromCharCode(10));
+}
 export function avisoDeNotaRecebida(f, resultado, { empresa = null, unidade = null } = {}) {
   return `📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}. ${RESULTADO_NO_GRUPO[resultado] ?? "Aguardando conferência do financeiro."}`;
 }
