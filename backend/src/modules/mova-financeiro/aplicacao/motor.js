@@ -268,6 +268,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     let unidadeContexto = null; // 27/11: unidade da mensagem do MOVA que a pessoa citou (nunca a padrão do CORE)
     // 28/11 (Operador Financeiro, fase 1): resposta a uma pergunta da CORREÇÃO de conta (escolha, valor novo, confirmação)
     if (esclarecimento && ehPendenciaDeCorrecao(esclarecimento.divergencia)) return correcoes.continuar({ evento, grupo, esclarecimento });
+    // 28/11: resposta à confirmação de CONTA A PAGAR de nota/boleto (política "com confirmação"): a proposta já existe; nada é relido.
+    if (esclarecimento?.divergencia?.tipo === "CONTA_NOVA_CONFIRMACAO") return responderConfirmacaoDeContaNova({ evento, grupo, esclarecimento });
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -347,6 +349,18 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // proposta DESPESA_PAGA: é desta proposta, na unidade DELA (nunca a padrão nem a última consultada). Se só o Centro Financeiro
         // pode aprovar, diz isso; nada é executado por canal não autorizado.
         if (origemCitada?.eventoId && (pedidoDeRetomar(evento.texto) || confirmacaoDeProposta(evento.texto))) {
+          // 28/11: CONTA A PAGAR de nota/boleto em revisão (ex.: criada antes da política "com confirmação"): a confirmação citando a resposta
+          // do MOVA registra pela política VIGENTE, se quem confirma é FINANCEIRO da unidade. Uma só proposta do evento; senão segue o fluxo.
+          if (confirmacaoDeProposta(evento.texto)) {
+            const contas = (await a.propostas.porEvento(origemCitada.eventoId)).filter((p) => p.tipo === "NOVA_OBRIGACAO" && p.estado === "AGUARDANDO_REVISAO" && p.evidencia);
+            if (contas.length === 1) {
+              const pc = contas[0];
+              const ev = await a.eventos.obter(origemCitada.eventoId);
+              const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? pc.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+              if (!podeConfirmar(origem, { divergencia: { tipo: "CONTA_NOVA_CONFIRMACAO", unidadeId: pc.unidadeId }, saida: null })) return recusarOutro();
+              return registrarContaNovaConfirmada({ evento, grupo, proposta: pc, confirmante: { participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null }, eventoOrigemId: origemCitada.eventoId });
+            }
+          }
           const propostas = (await a.propostas.porEvento(origemCitada.eventoId)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO");
           if (propostas.length) {
             const r = await responderConfirmacaoDeProposta(evento, propostas, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
@@ -1059,6 +1073,51 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_NAO_EXECUTADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])]), injecao });
   }
 
+  /**
+   * 28/11 — resposta à pergunta "Confirma o registro?" da conta a pagar de nota/boleto (política CONTA_A_PAGAR "com confirmação").
+   * "sim" ⇒ registra (unidade da PROPOSTA; quem confirma tem de ser FINANCEIRO nela); "não" ⇒ a proposta fica para o Centro Financeiro;
+   * outra coisa ⇒ repete a pergunta (pendência preservada).
+   */
+  async function responderConfirmacaoDeContaNova({ evento, grupo, esclarecimento }) {
+    const div = esclarecimento.divergencia;
+    const unidade = cfg.unidades.find((x) => x.unidadeId === div.unidadeId) ?? null;
+    if (!unidade) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_NOVA_UNIDADE_FORA_DO_MOVA", resposta: RESPOSTA.propostaNaoRetomavel() });
+    const escopo = escopoDe(unidade);
+    const p = await a.propostas.obter(escopo, div.propostaId);
+    if (!p || p.estado !== "AGUARDANDO_REVISAO" || p.tipo !== "NOVA_OBRIGACAO") return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_NOVA_PROPOSTA_JA_DECIDIDA", escopo, resposta: RESPOSTA.propostaNaoRetomavel() });
+    const sim = respostaSimNao(esclarecimento.texto) ?? (confirmacaoDeProposta(esclarecimento.texto) ? true : null);
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_NOVA_NAO_CONFIRMADA", escopo, propostaId: p.id, resposta: RESPOSTA.contaNovaNaoConfirmada(p), extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    if (sim === null) {
+      await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: esclarecimento.saida ?? null, divergencia: div } });
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONTA_NOVA_RESPOSTA_NAO_ENTENDIDA", escopo, propostaId: p.id, resposta: `Não entendi. ${RESPOSTA.confirmarContaNova(p, unidade.nome)}` });
+    }
+    return registrarContaNovaConfirmada({ evento, grupo, proposta: p, confirmante: { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null }, pendente: { esclarecimento, div } });
+  }
+
+  /** 28/11 — registra a conta a pagar de uma proposta NOVA_OBRIGACAO com a confirmação de quem é FINANCEIRO na unidade dela (auditado). */
+  async function registrarContaNovaConfirmada({ evento, grupo, proposta: p, confirmante, pendente = null, eventoOrigemId = null }) {
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId) ?? null;
+    if (!unidade) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONTA_NOVA_UNIDADE_FORA_DO_MOVA", resposta: RESPOSTA.propostaNaoRetomavel() });
+    const escopo = escopoDe(unidade);
+    const quem = identificarParticipante(grupo, confirmante);
+    if (quem.conflito) {
+      await a.auditoria.registrar({ acao: "IDENTIDADE_CONFLITANTE", atorTipo: "PARTICIPANTE", atorRef: confirmante.participanteId, alvo: p.id, dados: { fluxo: "CONTA_NOVA_CONFIRMACAO" } });
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IDENTIDADE_CONFLITANTE", escopo, propostaId: p.id, resposta: RESPOSTA.complementoSemPermissao() });
+    }
+    if (!quem.participante || quem.participante.aberto || perfilNa(quem.participante, unidade.unidadeId) !== "FINANCEIRO") {
+      // a pergunta continua aberta para quem pode (a pendência é devolvida)
+      if (pendente) await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: pendente.esclarecimento.saida ?? null, divergencia: pendente.div } });
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONTA_NOVA_CONFIRMACAO_SEM_PERFIL_FINANCEIRO", escopo, propostaId: p.id, resposta: RESPOSTA.complementoSemPermissao() });
+    }
+    if (eventoOrigemId) await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "CONTA_NOVA_CONFIRMADA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    if (!execucao?.criarContas || typeof execucao.aposContaNova !== "function") return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "CONTA_NOVA_NAO_EXECUTADA", escopo, propostaId: p.id, resposta: RESPOSTA.semExecucaoAutomatica(["CRIACAO_DE_CONTAS_DESLIGADA"]) });
+    const r = await execucao.aposContaNova(p, escopo, { confirmadoPor: confirmante.participanteId });
+    await a.auditoria.registrar({ acao: "CONTA_NOVA_CONFIRMADA", atorTipo: "PARTICIPANTE", atorRef: confirmante.participanteId, alvo: p.id, dados: { situacao: r.situacao, nivel: r.nivel ?? null, motivos: r.motivos ?? [] } });
+    if (r.situacao === "CONTA_REGISTRADA") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "CONTA_NOVA_CONFIRMADA_REGISTRADA", escopo, propostaId: p.id, resposta: RESPOSTA.contaRegistrada(p, r.resultado), extra: { confirmadoPor: confirmante.participanteId } });
+    const motivos = [...new Set([...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])];
+    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "CONTA_NOVA_NAO_EXECUTADA", escopo, propostaId: p.id, resposta: RESPOSTA.semExecucaoAutomatica(motivos), extra: { motivosExecucao: motivos } });
+  }
+
   async function tratarPagamento(ctx0) {
     // 25/11: identificador de transação RECORTADO na imagem (E2E incompleto) não serve de chave de duplicidade: é descartado e a
     // conferência segue pelas demais evidências (arquivo, conta, pergunta objetiva) — nunca afirma "mesma transação" por ele.
@@ -1626,8 +1685,16 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       comando: { operacao: "registrarObrigacao", entrada: comando.valor },
     }, comAvisoDeCompetencia(RESPOSTA.propostaObrigacao, competencia), {
       // 24/11: com a chave MOVA_OPERACAO_CRIAR_CONTAS e a política CONTA_A_PAGAR automática, registra a conta (em aberto) e anexa o documento.
+      // 28/11: política "com confirmação" ⇒ o MOVA mostra o resumo e pergunta; o "sim" de um FINANCEIRO da unidade registra.
       posCriacao: execucao?.criarContas && evento.midia ? async (p) => {
         const r = await execucao.aposContaNova(p, escopo);
+        if (r.situacao === "AGUARDANDO_CONFIRMACAO") {
+          // a resposta (com valores) pode ir para o privado: a pendência fica na conversa em que a pergunta saiu (como em `perguntar`)
+          const rota = await roteamento(ctx.grupo ?? null, ctx.participante ?? null, evento, "DOCUMENTO_COM_VALOR", [escopo.unidadeId]);
+          const destino = rota && !rota.noGrupo && rota.destino ? rota.destino : evento.grupoId;
+          await a.mensagens.lembrar(evento.mensagemId, { grupoId: destino, pendente: { evento, saida, divergencia: { tipo: "CONTA_NOVA_CONFIRMACAO", propostaId: p.id, unidadeId: escopo.unidadeId } } });
+          return { ...r, texto: RESPOSTA.confirmarContaNova(p, ctx.unidade?.nome ?? "unidade") };
+        }
         return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRegistrada(p, r.resultado) } : r;
       } : null,
     });
