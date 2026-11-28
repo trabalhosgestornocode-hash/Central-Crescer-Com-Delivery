@@ -484,6 +484,31 @@ export function validarCancelamentoObrigacao(e) {
   return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }) };
 }
 
+// 28/11 (0037) — operações ESTREITAS de conta a pagar existente (MOVA Operador Financeiro, fase 2). `versoes` = id → versão de CADA
+// registro confirmado no resumo (parcelas e, quando a operação o altera, o lançamento): o conjunto confirmado é exatamente esse.
+const versoesConfirmadas = (v, campo = "versoes") => {
+  if (!v || typeof v !== "object" || Array.isArray(v) || !Object.keys(v).length) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a versão de cada registro confirmado.", { campo });
+  return Object.fromEntries(Object.entries(v).map(([id, n]) => [exigirUuid(id, campo), exigirInteiro(n, campo, { min: 1 })]));
+};
+const justificativaDaConta = (e) => exigirTexto(e.justificativa, "justificativa", { max: 500 });
+export function validarReclassificacaoDeConta(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "categoria", "versoes", "justificativa"], "reclassificacaoDeConta");
+  return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), categoria: exigirTexto(e.categoria, "categoria", { max: 80 }), versoes: versoesConfirmadas(e.versoes), justificativa: justificativaDaConta(e) };
+}
+export function validarAjusteDeContaAPagar(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "valorCorretoCentavos", "versaoEsperada", "justificativa"], "ajusteDeConta");
+  return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), valorCorretoCentavos: exigirInteiro(e.valorCorretoCentavos, "valorCorretoCentavos", { min: 1 }),
+    versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }), justificativa: justificativaDaConta(e) };
+}
+export function validarMudancaDeCompetencia(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "competencia", "versoes", "justificativa"], "competenciaDeConta");
+  return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), competencia: exigirCompetencia(e.competencia, "competencia"), versoes: versoesConfirmadas(e.versoes), justificativa: justificativaDaConta(e) };
+}
+export function validarCancelamentoDeContaAPagar(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "abrangencia", "versoes", "justificativa"], "cancelamentoDeConta");
+  return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), abrangencia: exigirUmDe(e.abrangencia, ["PARCELA", "GRUPO"], "abrangencia"), versoes: versoesConfirmadas(e.versoes), justificativa: justificativaDaConta(e) };
+}
+
 /**
  * Execução 08C — confirmação de reclassificação. `versaoEsperada` (a versão vista na prévia) é OBRIGATÓRIA: uma prévia
  * antiga nunca autoriza alterar um lançamento que mudou. `documentoId`: evidência EXISTENTE no escopo a vincular.

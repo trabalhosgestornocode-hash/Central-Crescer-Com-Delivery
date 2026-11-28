@@ -39,6 +39,7 @@ import { criarRegistroDeAcessosNegadosMemoria } from "../infra/cofreDisco.js";
 import { operacoesDePlano } from "./plano.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { operacoesDeReclassificacao } from "./reclassificacao.js";
+import { operacoesDeContaAPagarEstreita } from "./contaAPagarEstreita.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
 import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
 import { operacoesDeBaixaPorComprovante } from "./baixaPorComprovante.js";
@@ -81,6 +82,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDePlano(base),
     ...operacoesEconomicas(base),
     ...operacoesDeReclassificacao(base),
+    ...operacoesDeContaAPagarEstreita(base), // 28/11 (0037) MOVA Operador Financeiro fase 2
     ...operacoesDeVendas(base),
     ...operacoesDeCaixa(base),
     ...operacoesDeDocumentos(base),

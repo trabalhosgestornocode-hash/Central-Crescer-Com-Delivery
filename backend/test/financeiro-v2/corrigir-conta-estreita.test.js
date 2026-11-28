@@ -135,9 +135,9 @@ test("CC-4 (banco) a 0036 num PostgreSQL REAL: a identidade estreita corrige só
     await assert.rejects(alterarCru(U(1), ...o(p1.id), set), pelaRegra(SO_CADASTRAL), `U1 não altera ${nome}`);
   }
   const l = ["fv2_lancamento", "LANCAMENTO", conta.lancamento.id];
-  await assert.rejects(alterarCru(U(1), ...l, "valor_centavos = 1"), pelaRegra(/no lançamento só a descrição/), "lançamento: valor");
-  await assert.rejects(alterarCru(U(1), ...l, "competencia = '2026-11'"), pelaRegra(/no lançamento só a descrição/), "lançamento: competência");
-  await assert.rejects(alterarCru(U(1), ...l, "situacao = 'CANCELADO'"), pelaRegra(/no lançamento só a descrição/), "lançamento: cancelar");
+  await assert.rejects(alterarCru(U(1), ...l, "valor_centavos = 1"), pelaRegra(/no lançamento só a descrição|(competência|cancelamento|reclassificação) estreit|fora das operações estreitas/), "lançamento: valor");
+  await assert.rejects(alterarCru(U(1), ...l, "competencia = '2026-11'"), pelaRegra(/no lançamento só a descrição|(competência|cancelamento|reclassificação) estreit|fora das operações estreitas/), "lançamento: competência");
+  await assert.rejects(alterarCru(U(1), ...l, "situacao = 'CANCELADO'"), pelaRegra(/no lançamento só a descrição|(competência|cancelamento|reclassificação) estreit|fora das operações estreitas/), "lançamento: cancelar");
   await assert.rejects(alterarCru(U(1), ...l, "categoria_codigo = 'INSUMOS'"), pelaRegra(/exige reclassificar/), "lançamento: categoria");
   assert.equal(await sqlComo(U(1), "delete from financeiro_v2.fv2_obrigacao where id = $1", [p1.id]).then((x) => x.rowCount, () => 0), 0, "nunca apaga");
 
