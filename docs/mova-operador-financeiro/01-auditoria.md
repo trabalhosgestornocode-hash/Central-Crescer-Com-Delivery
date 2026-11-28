@@ -25,9 +25,9 @@ Todas exigem `competência editável` (mês homologado recusa) e gravam antes/de
   (`liquidado/saldo/situacao`) — nunca fornecedor, vencimento, descrição, valor ou competência.
 - `fv2_obrigacao_documental` (0030/0033/0035): conta nova pela forma estreita nasce em aberto, sem repetição, no lançamento da mesma transação.
 - `fv2_obrigacao_sem_automacao` (0026/0027): a identidade técnica de entregadores não altera contas.
-- **Achado (baixo):** `extras` está entre as colunas livres do `fv2_vinculo_extrato_posicao`; uma identidade com
-  `baixar_por_comprovante` poderia, pelo banco, reescrever `extras` (onde ficam `observacao`/`formaPagamento`). A aplicação não faz
-  isso; a 0036 deve fechar: só as chaves de posição/vínculo podem mudar em `extras` por quem só baixa.
+- **Achado (baixo; precisado em 28/11 por teste de mutação):** `extras` está entre as colunas livres do `fv2_vinculo_extrato_posicao`.
+  Reescrever `observacao`/`formaPagamento` SOZINHO já era recusado (a regra "a baixa só deixa a conta parcial ou quitada"); o caminho
+  aberto era alterá-las JUNTO com uma baixa real, na mesma gravação. A aplicação nunca fez isso; a 0036 fecha esse caminho.
 
 ## 3. Lado MOVA (conversa)
 
