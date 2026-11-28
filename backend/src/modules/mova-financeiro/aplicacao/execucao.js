@@ -34,8 +34,10 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
 /** 28/11 (0036): correção cadastral — registrada nas EXECUÇÕES (idempotência/auditoria), fora das POLÍTICAS (sem limite monetário). */
 export const OPERACAO_CORRECAO_DE_CONTA = "CORRECAO_DE_CONTA";
+/** Operações do núcleo que o Operador Financeiro executa sobre conta a pagar existente (fase 1 + fase 2). */
+export const OPERACOES_DE_CONTA = Object.freeze(["corrigirContaAPagar", "reclassificarContaAPagar", "ajustarValorDeContaAPagar", "moverCompetenciaDeContaAPagar", "cancelarContaAPagar"]);
 
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, corrigirContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, corrigirContas = false, operarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
   /**
    * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
    * execução — automática, retomada ou confirmada pelo participante. Sem confirmação: nada é gravado; fica como proposta.
@@ -511,11 +513,14 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   async function aposCorrecaoDeConta(proposta, escopo, { confirmadoPor = null } = {}) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.APLICAR_COM_CONFIRMACAO, motivos: [] };
     const cmd = proposta.comando;
-    if (proposta.tipo !== "CORRECAO_DE_CONTA" || cmd?.operacao !== "corrigirContaAPagar" || !cmd.entrada?.obrigacaoId) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
-    if (!corrigirContas) return { ...base, motivos: ["CORRECAO_DE_CONTAS_DESLIGADA"] };
+    const op = cmd?.operacao;
+    if (proposta.tipo !== "CORRECAO_DE_CONTA" || !OPERACOES_DE_CONTA.includes(op) || !cmd.entrada?.obrigacaoId) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    // fase 1 (cadastral) com a chave de correção; fase 2 (categoria, valor, competência, cancelamento) com a chave PRÓPRIA
+    if (op === "corrigirContaAPagar" ? !corrigirContas : !operarContas) return { ...base, motivos: [op === "corrigirContaAPagar" ? "CORRECAO_DE_CONTAS_DESLIGADA" : "OPERACOES_DE_CONTAS_DESLIGADAS"] };
     if (!confirmadoPor) return { ...base, motivos: ["SEM_CONFIRMACAO"] };
     if (!operacional) return { ...base, motivos: ["SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode("corrigirContaAPagar", escopo))) return { ...base, motivos: ["SEM_CONCESSAO_OPERACIONAL"] };
+    if (!(await operacional.pode(op, escopo))) return { ...base, motivos: ["SEM_CONCESSAO_OPERACIONAL"] };
+    if (op !== "corrigirContaAPagar") return operarConta(proposta, escopo, { confirmadoPor, base });
     const m = cmd.entrada.mudancas;
     const r = await executarComReserva({ operacao: OPERACAO_CORRECAO_DE_CONTA, proposta, escopo, politicaId: null, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
       dadosDaAuditoria: (x) => ({ campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, obrigacaoIds: x.obrigacaoIds, antes: cmd.antes ?? null, depois: cmd.depois ?? null, confirmadoPor, conferido: x.conferido }),
@@ -530,6 +535,32 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
         for (const id of ids) { const d = await porta.ler("detalharContaAPagar", lendo(escopo), { id }); if (!confere(d.titulo)) conferido = false; }
         return { obrigacaoId: cmd.entrada.obrigacaoId, obrigacaoIds: ids, alteradas: ids.length, semMudanca: x.semMudanca === true, lancamentoAlterado: Boolean(x.lancamento),
           conferido, campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, confirmadoPor };
+      } });
+    if (r.ok) return { ...base, situacao: "CORRIGIDA", repetida: r.repetida === true, resultado: r.resultado };
+    return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
+  }
+
+  /**
+   * 28/11 (0037) — FASE 2: reclassificar a compra, ajustar o valor de uma parcela, mudar a competência da compra, cancelar parcela ou
+   * compra. Mesma trilha da correção (reserva única, identidade estreita, conta revalidada NA HORA pelo núcleo) e conferência pela
+   * leitura oficial depois de gravar: categoria do lançamento, valor da parcela, competência de lançamento e parcelas, situação.
+   */
+  async function operarConta(proposta, escopo, { confirmadoPor, base }) {
+    const cmd = proposta.comando;
+    const e = cmd.entrada;
+    const r = await executarComReserva({ operacao: OPERACAO_CORRECAO_DE_CONTA, proposta, escopo, politicaId: null, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
+      dadosDaAuditoria: (x) => ({ campo: cmd.campo, operacaoDaConta: cmd.operacao, abrangencia: e.abrangencia ?? null, obrigacaoIds: x.obrigacaoIds, antes: cmd.antes ?? null, depois: cmd.depois ?? null, confirmadoPor, conferido: x.conferido }),
+      passos: async () => {
+        const x = await operacional.chamar(cmd.operacao, escopo, e);
+        const ids = cmd.operacao === "ajustarValorDeContaAPagar" ? [e.obrigacaoId] : (x.obrigacoes ?? []).map((o) => o.id);
+        const det = await porta.ler("detalharContaAPagar", lendo(escopo), { id: e.obrigacaoId });
+        const doGrupo = new Map((det.parcelas ?? []).map((t) => [t.id, t]));
+        let conferido;
+        if (cmd.operacao === "reclassificarContaAPagar") conferido = x.repetido === true || det.lancamento?.categoria === e.categoria;
+        else if (cmd.operacao === "ajustarValorDeContaAPagar") conferido = x.semMudanca === true || (det.titulo.valorOriginalCentavos + det.titulo.ajustesCentavos === e.valorCorretoCentavos);
+        else if (cmd.operacao === "moverCompetenciaDeContaAPagar") conferido = det.lancamento?.competencia === e.competencia && (det.parcelas ?? []).every((t) => t.competencia === e.competencia);
+        else conferido = ids.length > 0 && ids.every((id) => doGrupo.get(id)?.situacao === "CANCELADO") && (e.abrangencia !== "GRUPO" || det.lancamento?.situacao === "CANCELADO");
+        return { obrigacaoId: e.obrigacaoId, obrigacaoIds: ids, alteradas: ids.length, semMudanca: x.semMudanca === true || x.repetido === true, conferido, campo: cmd.campo, abrangencia: e.abrangencia ?? null, confirmadoPor };
       } });
     if (r.ok) return { ...base, situacao: "CORRIGIDA", repetida: r.repetida === true, resultado: r.resultado };
     return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
@@ -694,5 +725,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ podeRegistrarEmprestimo, aposCorrecaoDeConta, corrigirContas: Boolean(corrigirContas), descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ podeRegistrarEmprestimo, aposCorrecaoDeConta, corrigirContas: Boolean(corrigirContas), operarContas: Boolean(operarContas), descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

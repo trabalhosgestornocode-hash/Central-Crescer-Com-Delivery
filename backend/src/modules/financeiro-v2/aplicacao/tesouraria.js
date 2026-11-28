@@ -292,7 +292,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
           dataBase: b.hoje(), titulo: tituloAPagar(p, o, b.hoje()),
           parcelas: p.obrigacoes.filter((x) => x.grupoId === o.grupoId).sort((x, y) => x.parcela.numero - y.parcela.numero).map((x) => tituloAPagar(p, x, b.hoje())),
           // UM lançamento econômico pelo grupo inteiro: pagar parcelas nunca cria outro.
-          lancamento: lancamento ? { valorCentavos: lancamento.valorCentavos, categoria: lancamento.categoria, classificacao: lancamento.classificacao, natureza: lancamento.natureza, competencia: lancamento.competencia, situacao: lancamento.situacao } : null,
+          lancamento: lancamento ? { id: lancamento.id, versao: lancamento.versao, valorCentavos: lancamento.valorCentavos, categoria: lancamento.categoria, classificacao: lancamento.classificacao, natureza: lancamento.natureza, competencia: lancamento.competencia, situacao: lancamento.situacao } : null,
           historico: await historicoDe(cx, tx, TIPO.OBRIGACAO, id),
         };
       });

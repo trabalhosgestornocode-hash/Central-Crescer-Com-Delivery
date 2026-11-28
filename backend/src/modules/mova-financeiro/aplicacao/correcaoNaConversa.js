@@ -4,7 +4,7 @@
 // confirmação autorizada ("sim" de FINANCEIRO da unidade, identidade canônica) → execução estreita (corrigir_conta_a_pagar, 0036)
 // com a conta revalidada na hora → conferência pela leitura oficial → resposta com o que mudou.
 // Parcelas: "a segunda parcela" altera SÓ ela; "todas as parcelas" altera a compra inteira. Sem indicação, pergunta (nunca todas por padrão).
-import { CAMPO_CORRECAO, NOME_DO_CAMPO, contaCasa, interpretarPedidoDeCorrecao, rotuloDaConta, valorAtual, valorDoCampo, valorNovo } from "../dominio/correcaoDeConta.js";
+import { CAMPOS_DA_FASE_2, CAMPO_CORRECAO, NOME_DO_CAMPO, contaCasa, interpretarPedidoDeCorrecao, rotuloDaConta, valorAtual, valorDoCampo, valorNovo } from "../dominio/correcaoDeConta.js";
 import { identificarParticipante, perfilNa } from "../dominio/participantes.js";
 import { respostaSimNao } from "../dominio/divergencia.js";
 
@@ -12,8 +12,15 @@ export const TIPO_CORRECAO = Object.freeze({ ESCOLHA: "CORRECAO_ESCOLHA", VALOR:
 export const ehPendenciaDeCorrecao = (div) => typeof div?.tipo === "string" && div.tipo.startsWith("CORRECAO_");
 const MAX_OPCOES = 9;
 const FORA = ["PAGO", "PARCIALMENTE_PAGO", "CANCELADO"]; // situação da leitura oficial (EM_ABERTO, VENCIDO, AGUARDANDO_… entram)
-const elegivel = (t) => !FORA.includes(t.situacao) && !(t.pagoCentavos > 0) && !t.competenciaHomologada
-  && (t.natureza === "DESPESA" || (t.natureza === "PATRIMONIAL" && t.categoria?.codigo === "IMOBILIZADO"));
+const naturezaOk = (t) => t.natureza === "DESPESA" || (t.natureza === "PATRIMONIAL" && t.categoria?.codigo === "IMOBILIZADO");
+const elegivel = (t) => !FORA.includes(t.situacao) && !(t.pagoCentavos > 0) && !t.competenciaHomologada && naturezaOk(t);
+// 28/11 (fase 2): o valor também se corrige com pagamento PARCIAL (nunca abaixo do pago); a categoria vale para a compra mesmo com pagamento
+const elegivelPara = (campo, t) => campo === "valor" ? !["PAGO", "CANCELADO"].includes(t.situacao) && !t.competenciaHomologada && naturezaOk(t)
+  : campo === "categoria" ? t.situacao !== "CANCELADO" && !t.competenciaHomologada && naturezaOk(t) : elegivel(t);
+const reais = (c) => "R$ " + (Number(c ?? 0) / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+const mesBr = (c) => (c ? c.slice(5, 7) + "/" + c.slice(0, 4) : "—");
+const dataBr = (d) => (d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(0, 4) : "—");
+const sem = (x) => String(x ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, execucao:object|null, concluir:Function, escopoDe:Function, hoje:Function, DECISAO:object, rotear?:Function}} deps
@@ -73,6 +80,9 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
     for (const grupo of porGrupo.values()) {
       grupo.sort((p, q) => (p.t.parcela?.numero ?? 1) - (q.t.parcela?.numero ?? 1));
       const total = grupo[0].t.parcela?.total ?? 1;
+      // fase 2: categoria e competência são da COMPRA inteira; valor é de UMA parcela (nunca "todas")
+      if (pedido.campo === CAMPO_CORRECAO.CATEGORIA || pedido.campo === CAMPO_CORRECAO.COMPETENCIA) { lista.push({ ...grupo[0], abrangencia: "GRUPO", grupo, daCompra: true }); continue; }
+      if (pedido.campo === CAMPO_CORRECAO.VALOR && pedido.parcela === null) { for (const x of grupo) lista.push({ ...x, abrangencia: "PARCELA" }); continue; }
       if (pedido.parcela !== null) {
         const n = pedido.parcela === "ULTIMA" ? total : pedido.parcela;
         for (const x of grupo.filter((y) => (y.t.parcela?.numero ?? 1) === n)) lista.push({ ...x, abrangencia: "PARCELA" });
@@ -80,12 +90,12 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
         lista.push({ ...grupo[0], abrangencia: total > 1 ? "GRUPO" : "PARCELA", grupo });
       } else {
         for (const x of grupo) lista.push({ ...x, abrangencia: "PARCELA" });
-        if (pedido.campo !== CAMPO_CORRECAO.VENCIMENTO) lista.push({ ...grupo[0], abrangencia: "GRUPO", grupo });
+        if (pedido.campo !== CAMPO_CORRECAO.VENCIMENTO) lista.push({ ...grupo[0], abrangencia: "GRUPO", grupo, daCompra: pedido.campo === CAMPO_CORRECAO.CANCELAR });
       }
     }
     return lista;
   }
-  const rotulo = (o, varias) => (o.abrangencia === "GRUPO" ? `${o.t.descricao ?? "Conta"} — TODAS as ${o.t.parcela?.total} parcelas · ${o.t.fornecedor?.nome ?? "sem fornecedor"}${varias ? ` · ${o.u.nome}` : ""}` : rotuloDaConta(o.t, varias ? o.u.nome : null));
+  const rotulo = (o, varias) => (o.abrangencia === "GRUPO" ? `${o.t.descricao ?? "Conta"} — ${o.daCompra ? "a compra inteira" : "TODAS as"} ${o.daCompra ? `(${o.t.parcela?.total ?? 1} parcela(s))` : `${o.t.parcela?.total} parcelas`} · ${o.t.fornecedor?.nome ?? "sem fornecedor"}${varias ? ` · ${o.u.nome}` : ""}` : rotuloDaConta(o.t, varias ? o.u.nome : null));
 
   /** Início: o texto É um pedido de correção (já conferido pelo motor). */
   async function iniciar({ evento, grupo, participante, daPessoa, pedido, unidadeContexto = null, origemCitada = null }) {
@@ -93,7 +103,8 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
       && (!unidadeContexto || u.unidadeId === unidadeContexto));
     const saida = canal({ grupo, participante, unidades: [] });
     if (!unidades.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CORRECAO_SEM_PERFIL_FINANCEIRO", resposta: "Só quem tem perfil FINANCEIRO na unidade pode alterar contas pelo WhatsApp." });
-    if (!execucao?.corrigirContas || typeof execucao.aposCorrecaoDeConta !== "function") {
+    const fase2 = CAMPOS_DA_FASE_2.includes(pedido.campo);
+    if ((fase2 ? !execucao?.operarContas : !execucao?.corrigirContas) || typeof execucao.aposCorrecaoDeConta !== "function") {
       return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_DE_CONTAS_DESLIGADA", resposta: "A alteração de contas pelo WhatsApp ainda não está ligada. Faça a alteração pela Central Financeira." });
     }
     if (pedido.valorInvalido) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CORRECAO_VALOR_INVALIDO", resposta: `Não entendi o novo ${NOME_DO_CAMPO[pedido.campo]} ("${pedido.bruto}"). ${dicaDoValor(pedido.campo)}` });
@@ -105,7 +116,7 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
       if (!ids.length) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CORRECAO_SEM_CONTA_IDENTIFICADA", resposta: "A mensagem citada não tem conta registrada. Diga o nome da conta (ex.: \"altere a observação da conta de energia\")." });
     }
     const achadas = await candidatas(pedido, unidades, ids);
-    const aptas = achadas.filter((x) => elegivel(x.t));
+    const aptas = achadas.filter((x) => elegivelPara(pedido.campo, x.t));
     if (!achadas.length) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ENCONTRADA", resposta: `Não encontrei conta a pagar com "${pedido.termos.join(" ")}". Confira o nome ou faça pela Central Financeira.` });
     if (!aptas.length) return saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo: escopoDe(achadas[0].u),
       resposta: "Essa conta não pode ser alterada pelo WhatsApp (já tem pagamento, está fechada ou é empréstimo/parcelamento/entre empresas). A alteração é pela Central Financeira." }, [...new Set(achadas.map((x) => x.u.unidadeId))]);
@@ -122,7 +133,7 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
     return seguir(evento, pedidoGuardado, { unidadeId: lista[0].u.unidadeId, obrigacaoId: lista[0].t.id, abrangencia: lista[0].abrangencia }, saida);
   }
 
-  const dicaDoValor = (campo) => ({ vencimento: "Informe a data (ex.: 15/12).", formaPagamento: "Informe Pix, boleto, cartão, dinheiro ou transferência.", fornecedor: "Informe o nome do fornecedor." }[campo] ?? "Informe o novo texto.");
+  const dicaDoValor = (campo) => ({ valor: "Informe o valor correto (ex.: 325,00).", competencia: "Informe o mês (ex.: novembro/2026).", categoria: "Informe a categoria como aparece no Dashboard.", vencimento: "Informe a data (ex.: 15/12).", formaPagamento: "Informe Pix, boleto, cartão, dinheiro ou transferência.", fornecedor: "Informe o nome do fornecedor." }[campo] ?? "Informe o novo texto.");
 
   /** Com a conta escolhida: pergunta o valor (se faltou) ou monta o resumo antes → depois e pede a confirmação. */
   async function seguir(evento, pedido, alvo, saidaBase) {
@@ -133,6 +144,7 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
       return saida.lembrar(evento, { tipo: TIPO_CORRECAO.VALOR, pedido, alvo, unidadeId: alvo.unidadeId },
         `Qual o novo ${NOME_DO_CAMPO[pedido.campo]}? ${dicaDoValor(pedido.campo)}`, "CORRECAO_PEDIR_VALOR", escopo);
     }
+    if (CAMPOS_DA_FASE_2.includes(pedido.campo)) return seguirFase2(evento, pedido, alvo, saida, u, escopo);
     const d = await porta.ler("detalharContaAPagar", escopo, { id: alvo.obrigacaoId });
     const t = d.titulo;
     const afetadas = alvo.abrangencia === "GRUPO" ? d.parcelas.filter((p) => p.situacao !== "CANCELADO") : [t];
@@ -165,6 +177,104 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
     const linhas = antesDiferentes ? antesPorParcela.map((x) => `Parcela ${x.n}/${x.total} — ${Campo}: ${x.antes} → ${depois}`).join("\n") : `${Campo}: ${antes} → ${depois}`;
     return saida.lembrar(evento, { tipo: TIPO_CORRECAO.CONFIRMACAO, propostaId: proposta.id, unidadeId: alvo.unidadeId },
       `Confirma a alteração em ${u.nome}?\n${quais}\n${linhas}\nResponda "sim" para alterar ou "não" para cancelar.`, "CORRECAO_CONFIRMAR", escopo);
+  }
+
+  /** Plano de contas da unidade (árvore achatada), só leitura. */
+  async function planoDe(escopo) {
+    try {
+      const p = await porta.ler("consultarPlanoDeContas", escopo, undefined);
+      const plano = []; const visitar = (xs) => { for (const c of xs ?? []) { plano.push(c); visitar(c?.filhas); } };
+      visitar(Array.isArray(p) ? p : p?.categorias ?? p?.itens ?? []);
+      return plano;
+    } catch { return []; }
+  }
+
+  /**
+   * FASE 2 (0037): monta o resumo com o EFEITO na DRE e a entrada exata da operação do núcleo (com as versões vistas agora).
+   * Compra com pagamento/ajuste/parcela cancelada que torne a operação ambígua ⇒ explica e manda para a Central (revisão humana).
+   */
+  async function seguirFase2(evento, pedido, alvo, saida, u, escopo) {
+    const d = await porta.ler("detalharContaAPagar", escopo, { id: alvo.obrigacaoId });
+    const t = d.titulo; const l = d.lancamento;
+    const todas = d.parcelas ?? [t];
+    const vivas = todas.filter((x) => x.situacao !== "CANCELADO");
+    const desc = t.descricao ?? "a conta";
+    const naoPode = (motivo) => saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_CONTA_NAO_ELEGIVEL", escopo, resposta: motivo + " A alteração é pela Central Financeira (revisão humana)." });
+    const nada = (texto) => saida.fim(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CORRECAO_SEM_MUDANCA", escopo, resposta: texto });
+    const just = (o) => o + " pedido e confirmado no WhatsApp (MOVA).";
+    const doLancamento = l?.id ? { [l.id]: l.versao } : {};
+    let operacao; let entrada; let antes; let depois; let resumo; let feito; let valorCentavos;
+    if (pedido.campo === CAMPO_CORRECAO.CATEGORIA) {
+      if (todas.some((x) => x.situacao === "CANCELADO" || x.ajustesCentavos)) return naoPode("Essa compra tem parcela cancelada ou ajuste de valor.");
+      const alvoTxt = sem(pedido.valor);
+      const cands = (await planoDe(escopo)).filter((c) => c.aceitaLancamento !== false && c.ativa !== false && !/A_CLASSIFICAR$/.test(c.codigo ?? "")
+        && (c.natureza === "DESPESA" || c.codigo === "IMOBILIZADO"));
+      const exatas = cands.filter((c) => sem(c.nome) === alvoTxt || sem(c.codigo).replace(/_/g, " ") === alvoTxt);
+      const achadas = exatas.length ? exatas : cands.filter((c) => sem(c.nome).includes(alvoTxt) || (alvoTxt.length >= 5 && alvoTxt.includes(sem(c.nome))));
+      if (achadas.length !== 1) {
+        return saida.fim(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CORRECAO_CATEGORIA_INDEFINIDA", escopo,
+          resposta: achadas.length ? "Qual categoria? " + achadas.slice(0, 6).map((c) => c.nome).join(" · ") + ". Repita o pedido com o nome exato." : "Não encontrei a categoria \"" + pedido.valor + "\" no plano de contas de " + u.nome + ". Use o nome como aparece no Dashboard." });
+      }
+      const nova = achadas[0];
+      if (nova.codigo === l.categoria) return nada("Nada a alterar: a compra já está em " + nova.nome + ".");
+      antes = t.categoria?.nome ?? l.categoria; depois = nova.nome;
+      const efeito = l.natureza === nova.natureza ? reais(l.valorCentavos) + " sai de " + antes + " e entra em " + depois
+        : nova.natureza === "PATRIMONIAL" ? reais(l.valorCentavos) + " sai do resultado (passa a ser compra de equipamento)" : reais(l.valorCentavos) + " entra no resultado como " + depois;
+      operacao = "reclassificarContaAPagar"; valorCentavos = l.valorCentavos;
+      entrada = { obrigacaoId: alvo.obrigacaoId, categoria: nova.codigo, versoes: { ...Object.fromEntries(todas.map((x) => [x.id, x.versao])), ...doLancamento }, justificativa: just("Reclassificação da compra") };
+      resumo = "Categoria da compra " + desc + " (" + reais(l.valorCentavos) + (todas.length > 1 ? " em " + todas.length + " parcelas" : "") + "): " + antes + " → " + depois + ".\nNa DRE de " + mesBr(l.competencia) + ": " + efeito + ".";
+      feito = "Categoria da compra " + desc + " alterada de " + antes + " para " + depois + ".";
+    } else if (pedido.campo === CAMPO_CORRECAO.VALOR) {
+      const anterior = t.valorOriginalCentavos + (t.ajustesCentavos ?? 0); const correto = pedido.valor; const dif = correto - anterior;
+      if (dif === 0) return nada("Nada a alterar: o valor já é " + reais(correto) + ".");
+      if (correto <= (t.pagoCentavos ?? 0)) return naoPode("O valor correto não pode ser igual ou menor que o já pago (" + reais(t.pagoCentavos) + ").");
+      antes = reais(anterior); depois = reais(correto);
+      operacao = "ajustarValorDeContaAPagar"; valorCentavos = Math.abs(dif);
+      entrada = { obrigacaoId: alvo.obrigacaoId, valorCorretoCentavos: correto, versaoEsperada: t.versao, justificativa: just("Correção de valor (anterior " + antes + ", correto " + depois + ")") };
+      resumo = rotuloDaConta(t) + "\nValor anterior " + antes + " → valor correto " + depois + " (diferença " + (dif > 0 ? "+" : "−") + reais(Math.abs(dif)) + ")." + (t.pagoCentavos > 0 ? " Já pago: " + reais(t.pagoCentavos) + "." : "")
+        + "\nO valor original fica registrado; a diferença entra como ajuste auditado na DRE de " + mesBr(l.competencia) + ".";
+      feito = "Valor da parcela " + (t.parcela?.numero ?? 1) + "/" + (t.parcela?.total ?? 1) + " de " + desc + " corrigido de " + antes + " para " + depois + " (ajuste de " + (dif > 0 ? "+" : "−") + reais(Math.abs(dif)) + ").";
+    } else if (pedido.campo === CAMPO_CORRECAO.COMPETENCIA) {
+      if (!todas.every((x) => elegivel(x) && !x.ajustesCentavos)) return naoPode("Essa compra tem pagamento, ajuste ou parcela cancelada.");
+      if (pedido.valor === l.competencia) return nada("Nada a alterar: a competência já é " + mesBr(l.competencia) + ".");
+      antes = mesBr(l.competencia); depois = mesBr(pedido.valor);
+      operacao = "moverCompetenciaDeContaAPagar"; valorCentavos = l.valorCentavos;
+      entrada = { obrigacaoId: alvo.obrigacaoId, competencia: pedido.valor, versoes: { ...Object.fromEntries(todas.map((x) => [x.id, x.versao])), ...doLancamento }, justificativa: just("Mudança de competência " + antes + " → " + depois) };
+      resumo = "Competência da compra " + desc + " (" + reais(l.valorCentavos) + "): " + antes + " → " + depois + ".\nNa DRE: " + reais(l.valorCentavos) + " sai de " + antes + " e entra em " + depois + ". Vencimentos e pagamentos não mudam.";
+      feito = "Competência da compra " + desc + " alterada de " + antes + " para " + depois + ".";
+    } else {
+      const grupoInteiro = alvo.abrangencia === "GRUPO" || vivas.length < 2;
+      if (grupoInteiro) {
+        if (!vivas.every(elegivel)) return naoPode("Essa compra tem pagamento (o estorno e o cancelamento são tratados na Central).");
+        const total = vivas.reduce((x, y) => x + y.valorOriginalCentavos + (y.ajustesCentavos ?? 0), 0);
+        operacao = "cancelarContaAPagar"; valorCentavos = total; antes = "ativa"; depois = "cancelada";
+        entrada = { obrigacaoId: alvo.obrigacaoId, abrangencia: "GRUPO", versoes: { ...Object.fromEntries(vivas.map((x) => [x.id, x.versao])), ...doLancamento }, justificativa: just("Cancelamento da compra") };
+        resumo = (todas.length > 1 ? "Cancelar a compra inteira " + desc + ": " + vivas.length + " parcela(s) em aberto" : "Cancelar a conta " + desc) + " (" + reais(total) + ").\nSai da DRE de " + mesBr(l.competencia) + "; nada é apagado (fica no histórico como cancelada).";
+        feito = (todas.length > 1 ? "Compra " + desc + " cancelada (" + vivas.length + " parcela(s))" : "Conta " + desc + " cancelada") + ".";
+      } else {
+        if (!elegivel(t)) return naoPode("Essa parcela tem pagamento ou já está cancelada.");
+        const v = t.valorOriginalCentavos + (t.ajustesCentavos ?? 0);
+        operacao = "cancelarContaAPagar"; valorCentavos = v; antes = "ativa"; depois = "cancelada";
+        entrada = { obrigacaoId: alvo.obrigacaoId, abrangencia: "PARCELA", versoes: { [t.id]: t.versao }, justificativa: just("Cancelamento da parcela") };
+        resumo = "Cancelar a parcela " + t.parcela.numero + "/" + t.parcela.total + " de " + desc + " (" + reais(v) + ", vence " + dataBr(t.vencimento) + "). As outras parcelas continuam.\nO valor sai da DRE de " + mesBr(l.competencia) + " por ajuste auditado; nada é apagado.";
+        feito = "Parcela " + t.parcela.numero + "/" + t.parcela.total + " de " + desc + " cancelada; as outras continuam.";
+      }
+    }
+    // duplicidade: o MESMO pedido aguardando confirmação (mesma entrada) não vira outra proposta; um antigo diferente é encerrado
+    let pendente = null;
+    for (const x of (await a.propostas.listar(escopo)).filter((y) => y.tipo === "CORRECAO_DE_CONTA" && y.estado === "AGUARDANDO_REVISAO" && y.comando?.entrada?.obrigacaoId === alvo.obrigacaoId && y.comando?.campo === pedido.campo)) {
+      if (!pendente && JSON.stringify(x.comando.entrada) === JSON.stringify(entrada)) pendente = x;
+      else await a.propostas.transicionar(escopo, x.id, "AGUARDANDO_REVISAO", "REJEITADA");
+    }
+    const { proposta } = pendente ? { proposta: pendente } : await a.propostas.criar(escopo, {
+      chaveIdempotencia: evento.eventoId + "|CORRECAO_DE_CONTA|" + operacao + "|" + alvo.obrigacaoId + "|" + JSON.stringify(entrada).length + "|" + String(pedido.valor).slice(0, 40) + "|" + (entrada.abrangencia ?? ""),
+      origem: "MOVA", tipo: "CORRECAO_DE_CONTA", eventoId: evento.eventoId, mensagemId: evento.mensagemId, participanteId: evento.participanteId, esclarecidoPor: null,
+      valorCentavos: Math.max(1, valorCentavos ?? 1), evidencia: null, leitura: null,
+      comando: { operacao, campo: pedido.campo, antes, depois, resumo, feito, rotulo: rotuloDaConta(t), entrada },
+    });
+    if (!pendente) await a.auditoria.registrar({ acao: "PROPOSTA_CRIADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { tipo: "CORRECAO_DE_CONTA", operacao, unidadeId: escopo.unidadeId, campo: pedido.campo } });
+    return saida.lembrar(evento, { tipo: TIPO_CORRECAO.CONFIRMACAO, propostaId: proposta.id, unidadeId: alvo.unidadeId },
+      "Confirma em " + u.nome + "?\n" + resumo + "\nResponda \"sim\" para confirmar ou \"não\" para desistir.", "CORRECAO_CONFIRMAR", escopo);
   }
 
   /** Continuação (resposta citando a pergunta, ou resposta curta/valor na memória curta). */
@@ -212,7 +322,8 @@ export function criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao
       if (x.semMudanca) return saida.fim(evento, { decisao: DECISAO.EXECUTADO, motivo: "CORRECAO_SEM_MUDANCA", escopo, propostaId: p.id, resposta: `Nada mudou: o ${campo} já era ${p.comando.depois}.` });
       const texto2 = x.conferido === false
         ? `Alteração gravada, mas a conferência não bateu. A Central Financeira vai revisar.`
-        : `Feito. ${campo[0].toUpperCase()}${campo.slice(1)} alterado de ${p.comando.antes} para ${p.comando.depois} em ${x.alteradas === 1 ? "1 conta" : `${x.alteradas} parcelas`}. Conferido no Financeiro.`;
+        : p.comando.feito ? `Feito. ${p.comando.feito} Conferido no Financeiro.`
+          : `Feito. ${campo[0].toUpperCase()}${campo.slice(1)} alterado de ${p.comando.antes} para ${p.comando.depois} em ${x.alteradas === 1 ? "1 conta" : `${x.alteradas} parcelas`}. Conferido no Financeiro.`;
       return saida.fim(evento, { decisao: DECISAO.EXECUTADO, motivo: x.conferido === false ? "CORRECAO_GRAVADA_SEM_CONFERENCIA" : "CORRECAO_EXECUTADA", escopo, propostaId: p.id, resposta: texto2, extra: { confirmadoPor: resposta.participanteId } });
     }
     const motivo = r.motivo ?? r.motivos?.[0] ?? "CORRECAO_NAO_EXECUTADA";
