@@ -91,6 +91,7 @@ const API = {
 };
 
 const posts = [];
+const leituras = [];
 let semApi = false;
 let servidor, base, navegador;
 before(async () => {
@@ -99,6 +100,7 @@ before(async () => {
     const u = new URL(req.url, "http://x");
     if (u.pathname.startsWith("/api/")) {
       if (req.method === "POST") { let c = ""; req.on("data", (d) => { c += d; }); req.on("end", () => { posts.push({ caminho: u.pathname, corpo: JSON.parse(c || "{}") }); res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); }); return; }
+      leituras.push(u.pathname + u.search);
       const d = semApi && u.pathname.startsWith("/api/fv2/mova/") ? null : API[u.pathname];
       res.writeHead(d ? 200 : 404, { "content-type": "application/json" }); res.end(JSON.stringify(d ?? { codigo: "NAO_ENCONTRADO", mensagem: "Rota de teste inexistente." }));
       return;
@@ -153,6 +155,8 @@ test("MV-2 caixa de entrada: filtro, gaveta de detalhe; aprovar exige a conta do
   await pagina.locator(".mova-gaveta [data-mova=aplicar]").click();
   await pagina.waitForSelector(".mova-toast--erro");
   assert.equal(posts.length, 0, "sem conta, nada é enviado");
+  assert.ok(leituras.some((x) => /^\/api\/fv2\/caixa-e-bancos\?inicio=\d{4}-\d{2}-01&fim=\d{4}-\d{2}-\d{2}$/.test(x)), "Caixa e Bancos é lido com período (o servidor exige inicio e fim)");
+  assert.equal(await pagina.locator(".mova-gaveta [data-mova-conta] option").count(), 3, "as contas da unidade aparecem");
   await pagina.locator(".mova-gaveta [data-mova-conta]").selectOption("c-1");
   await pagina.locator(".mova-gaveta [data-mova=aplicar]").click();
   await pagina.waitForSelector(".mova-toast--ok");
