@@ -44,7 +44,18 @@ const linhasDaCompra = (p, x = {}) => {
 
 export const RESPOSTA = Object.freeze({
   /** Pergunta padrão definida pelo proprietário (Execução 02). Responder a esta mensagem retoma o documento. */
-  unidadeNaoIdentificada: (nomes) => `Esse lançamento pertence à ${nomes.length > 1 ? `${nomes.slice(0, -1).join(", ")} ou ${nomes.at(-1)}` : nomes[0]}?`,
+  unidadeNaoIdentificada: (nomes, c = {}) => {
+    const lista = nomes.length > 1 ? `${nomes.slice(0, -1).join(", ")} ou ${nomes.at(-1)}` : nomes[0];
+    // 28/11: com o documento lido, a pergunta diz DE QUAL documento se trata (dois comprovantes seguidos não se confundem).
+    const doc = [c.valorCentavos ? reais(c.valorCentavos) : null, c.favorecido ? `para ${String(c.favorecido).slice(0, 60)}` : null,
+      c.pagador ? `pago por ${String(c.pagador).slice(0, 60)}${c.pagadorDeFora ? " (empresa que não é de nenhuma loja cadastrada)" : ""}` : null].filter(Boolean).join(", ");
+    const texto = c.texto ? `"${String(c.texto).replace(/\s+/g, " ").trim().slice(0, 80)}"` : null;
+    if (!doc && !texto) return `Esse lançamento pertence à ${lista}?`;
+    const sobre = doc ? `Sobre o documento de ${doc}${texto ? `, enviado com ${texto}` : ""}` : `Sobre a mensagem ${texto}`;
+    const loja = c.lojaDesconhecida ? " A mensagem cita uma loja que não é desta conversa." : "";
+    return `${sobre}:${loja} esse lançamento pertence à ${lista}? Responda citando esta mensagem. Se não for de nenhuma delas, nada será lançado.`;
+  },
+  pagadorNaoCadastrado: (pagador, unidade) => `Não lancei direto: o comprovante foi pago por ${pagador ? String(pagador).slice(0, 60) : "uma empresa"}, que não é pagadora cadastrada de nenhuma loja desta conversa. Se a despesa é mesmo do ${unidade}, um responsável confirma no Centro Financeiro; se for de outra loja, nada precisa ser feito aqui.`,
   /** Execução 13B: conversa sem pedido financeiro (saudação etc.) — não pergunta unidade nem cria nada. */
   // 16A — piloto de consultas: o MOVA só lê; lançamentos e documentos continuam no Centro Financeiro.
   conversaPiloto: () => "Olá! Sou o MOVA, assistente financeiro. Neste piloto eu respondo consultas: faturamento (total e por canal), despesas e custos da competência, contas a pagar e a receber, vencimentos, fluxo de caixa e pendências de conferência. Os números vêm do Financeiro, com a fonte e a situação de cada um. Nada é registrado por aqui.",

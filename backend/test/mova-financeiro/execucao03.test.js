@@ -225,7 +225,7 @@ t("11 unidade não identificada: pergunta padrão; a IA sozinha não decide", as
   const s = await cenario({ responder: () => comprovante({ unidadeSugerida: "Unidade Alfa" }) });
   await s.enviar(gw({ id: "E3UNID001", doc: bytes("sem-unidade"), mime: "image/jpeg", texto: "segue" }));
   assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
-  assert.equal(await s.resposta(), "Esse lançamento pertence à Unidade Alfa, Unidade Beta ou Unidade Gama?");
+  assert.match(await s.resposta(), /^Sobre o documento de R\$ 123,45[^:]*: esse lançamento pertence à Unidade Alfa, Unidade Beta ou Unidade Gama\?/);
 });
 
 t("12 unidade identificada depois: a resposta à pergunta retoma o MESMO documento (sem nova leitura da IA)", async () => {

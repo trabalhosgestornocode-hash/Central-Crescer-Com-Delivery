@@ -139,6 +139,9 @@ export const config = {
   // fechada movaGrupos. Apaga apenas a memória de "quem já recebeu a chave" desse grupo (o mesmo que o Baileys faz num retry);
   // credenciais, sessões privadas e outros grupos ficam intactos. Ausente ⇒ nada.
   movaRedistribuirChaveGrupo: String(process.env.WHATSAPP_MOVA_REDISTRIBUIR_CHAVE_GRUPO ?? "").trim() || null,
+  // 28/11: prazo (ms) para alguma entrega de uma resposta do MOVA em grupo; sem entrega ⇒ aviso ao backend (que reenvia uma cópia).
+  // Ausente ⇒ 120000; 0 desliga a vigia.
+  movaPrazoEntregaMs: /^\d{1,7}$/.test(String(process.env.WHATSAPP_MOVA_PRAZO_ENTREGA_MS ?? "").trim()) ? Number(process.env.WHATSAPP_MOVA_PRAZO_ENTREGA_MS.trim()) : 120_000,
   // Agente 2: transporte de SAÍDA das respostas do MOVA. RELE (padrão, homologação): o Gateway busca no relé. DIRETO (produção):
   // o backend entrega direto em /internal/mova/messages e a consulta ao relé fica desligada.
   movaSaidaModo: String(process.env.WHATSAPP_MOVA_SAIDA_MODO ?? "").trim().toUpperCase() || "RELE",

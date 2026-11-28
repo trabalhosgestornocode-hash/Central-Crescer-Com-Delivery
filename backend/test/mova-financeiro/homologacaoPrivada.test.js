@@ -111,7 +111,7 @@ t("08 unidade ambígua: pergunta com as unidades de TESTE", async () => {
   const s = await cenario(() => comprovante({}));
   await s.enviar(msg({ texto: "isso é da alfa ou da gama?", doc: pdf("amb") }));
   assert.equal((await s.ultima()).motivo, "UNIDADE_CONFLITANTE");
-  assert.equal((await s.mova.armazenamento.saida.listar()).at(-1).texto, "Esse lançamento pertence à Unidade Teste Alfa ou Unidade Teste Gama?");
+  assert.match((await s.mova.armazenamento.saida.listar()).at(-1).texto, /^Sobre o documento de R\$ 350,00[^:]*: esse lançamento pertence à Unidade Teste Alfa ou Unidade Teste Gama\?/);
 });
 
 t("09 transferência interna fictícia: não é despesa", async () => {

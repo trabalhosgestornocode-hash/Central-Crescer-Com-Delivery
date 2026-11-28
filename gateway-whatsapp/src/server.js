@@ -202,6 +202,8 @@ const sessao = criarSessaoBaileys({
   leaseManager,
   retryCache,
   mova,
+  // 28/11: resposta do MOVA sem entrega a nenhum aparelho ⇒ avisa o backend pelo canal isolado (ele reenvia uma cópia, uma vez)
+  aoSemEntrega: canal ? (x) => canal.notificarSemEntrega(x) : null,
 });
 
 // MOVA (15B) — fila de SAÍDA pelo relé: INERTE salvo canal ativo + WHATSAPP_MOVA_ENVIO_HABILITADO=1 + contato verificado.

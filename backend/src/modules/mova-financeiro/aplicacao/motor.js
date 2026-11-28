@@ -31,7 +31,8 @@ import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from ".
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { categoriaPatrimonialDoRelato, observacaoDoTexto, classificarContaRelatada, competenciaDoRelato, complementoDaResposta, ehPatrimonialForaDaDre, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
-import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
+import { contaCompativelComPeriodo, idTransacaoConfiavel, idTransacaoDaLeitura, periodoDaLegenda } from "../dominio/periodo.js";
+import { RESULTADO_PAGADOR, unidadePeloPagador } from "../dominio/pagador.js";
 import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, composicaoSoPrincipal, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
@@ -187,7 +188,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // (sem unidade) para a resposta poder ser conferida depois, quando a mensagem desta fila já tiver terminado.
         if (midiaLocal) await midiaLocal.guardar();
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: { ...SAIDA_VAZIA, legivel: true, tipoDocumento: "DESCONHECIDO", intencao: "DESCONHECIDA", confianca: "BAIXA" } } });
-        return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
+        return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes, contextoDaPergunta(evento, null, u)), injecao, extra: { evidenciaUnidade: u.evidencia, semLeitura: true } });
       }
       const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
         : u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
@@ -636,7 +637,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // beco sem saída; a resposta caía na conversa comum/CORE). A nova pendência é a operação original, do zero (nada é presumido).
       if (u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) {
         await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: esclarecimento?.saida ?? saida, ...(esclarecimento?.observacoes?.length ? { observacoes: esclarecimento.observacoes } : {}) } });
-        return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
+        return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes, contextoDaPergunta(esclarecimento?.evento ?? evento, esclarecimento?.saida ?? saida, u)), injecao, extra: { evidenciaUnidade: u.evidencia } });
       }
       const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
         : u.evidencia === "PAGADOR_FORA_DA_CONVERSA" && u.unidadeDoDocumento ? RESPOSTA.pagadorDeOutraUnidade(u.unidadeDoDocumento)
@@ -1121,8 +1122,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
   async function tratarPagamento(ctx0) {
     // 25/11: identificador de transação RECORTADO na imagem (E2E incompleto) não serve de chave de duplicidade: é descartado e a
     // conferência segue pelas demais evidências (arquivo, conta, pergunta objetiva) — nunca afirma "mesma transação" por ele.
-    const recortado = Boolean(ctx0.saida?.idTransacao) && !idTransacaoConfiavel(ctx0.saida.idTransacao);
-    const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } } : ctx0;
+    // 28/11: o E2E completo impresso no comprovante (identificador do documento) recupera o campo da transação lido incompleto.
+    const recuperado = ctx0.saida?.idTransacao || ctx0.saida?.identificadorDocumento ? idTransacaoDaLeitura(ctx0.saida) : null;
+    const recortado = Boolean(ctx0.saida?.idTransacao) && !recuperado;
+    const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } }
+      : recuperado && recuperado !== ctx0.saida?.idTransacao ? { ...ctx0, saida: { ...ctx0.saida, idTransacao: recuperado } } : ctx0;
     const { evento, escopo, saida, injecao, esclarecimento } = ctx;
     if (esclarecimento?.divergencia?.tipo === "EMPRESTIMO_PAGO_CONFIRMACAO") return confirmarEmprestimoPago(ctx);
     // 25/11 — resposta NATURAL a uma pergunta do MOVA: as regras curtas (determinísticas, custo zero) vêm primeiro; só se NÃO entenderem a
@@ -1387,7 +1391,10 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         }
         : execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
         const r = await execucao.aposDespesaNova(p, escopo);
-        return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
+        if (r.situacao === "PAGO_POR_COMPROVANTE") return { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) };
+        // 28/11: pago por empresa que não é de nenhuma loja cadastrada ⇒ nunca lançado direto; diz por quê.
+        if ((r.motivos ?? []).includes("PAGADOR_NAO_CADASTRADO")) return { ...r, texto: `${RESPOSTA.propostaDespesaPaga(p, resumo)}\n${RESPOSTA.pagadorNaoCadastrado(p.leitura?.pagador ?? null, cfg.unidades.find((x) => x.unidadeId === escopo.unidadeId)?.nome ?? "unidade")}` };
+        return r;
       } : null,
     });
   }
@@ -1698,6 +1705,23 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRegistrada(p, r.resultado) } : r;
       } : null,
     });
+  }
+
+  /**
+   * 28/11 (caso real: dois comprovantes seguidos, a pergunta "pertence à A ou B?" foi respondida pensando no outro): a pergunta de
+   * unidade diz DE QUAL documento se trata — valor, favorecido, pagador (e se ele não é de nenhuma loja do cadastro), o texto da
+   * mensagem e quando o texto cita uma loja que não é desta conversa.
+   */
+  function contextoDaPergunta(evento, saida, u) {
+    const pagador = saida?.pagador ?? null;
+    const pagadorDeFora = Boolean((pagador || saida?.documentoPagador) && cfg.unidades.some((x) => (x.pagadores?.nomes?.length ?? 0) + (x.pagadores?.documentos?.length ?? 0) > 0)
+      && unidadePeloPagador({ unidades: cfg.unidades, pagador, documentoPagador: saida?.documentoPagador ?? null }).resultado === RESULTADO_PAGADOR.SEM_EVIDENCIA);
+    return {
+      valorCentavos: Number.isSafeInteger(saida?.valorCentavos) && saida.valorCentavos > 0 ? saida.valorCentavos : null,
+      favorecido: saida?.favorecido ?? null, pagador, pagadorDeFora,
+      texto: evento?.texto ? mascararDadosSensiveis(String(evento.texto)) : null,
+      lojaDesconhecida: u?.evidencia === "LOJA_DESCONHECIDA",
+    };
   }
 
   /** Texto da resposta conforme o que a execução fez com a baixa (nada é dito como lançado sem ter sido). */

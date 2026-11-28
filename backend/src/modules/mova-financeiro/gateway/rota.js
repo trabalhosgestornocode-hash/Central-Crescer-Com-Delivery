@@ -5,6 +5,8 @@
 import { Router } from "express";
 
 export const ROTA_EVENTO_MOVA = "/eventos/mova-grupo";
+/** 28/11: aviso do Gateway de resposta sem entrega a nenhum aparelho (o MOVA reenvia uma cópia, uma vez). */
+export const ROTA_SEM_ENTREGA_MOVA = "/eventos/mova-sem-entrega";
 export const LIMITE_CORPO_MOVA_BYTES = 21 * 1024 * 1024; // mídia de até 15 MB em base64 + envelope
 
 const STATUS = { ENFILEIRADO: 202, DUPLICADO: 200, IGNORADO: 200, RECUSADO: 400, INDISPONIVEL: 503 };
@@ -15,6 +17,13 @@ export function criarRotaEventosMova({ receptor }) {
   r.post(ROTA_EVENTO_MOVA, async (req, res, next) => {
     try {
       const out = await receptor.receber(req.corpoJson, { formato: "GATEWAY" });
+      res.status(STATUS[out.status] ?? 500).json({ status: out.status, motivo: out.motivo ?? null });
+    } catch (e) { next(e); }
+  });
+  r.post(ROTA_SEM_ENTREGA_MOVA, async (req, res, next) => {
+    try {
+      if (typeof receptor.reenviarSemEntrega !== "function") return res.status(404).json({ status: "IGNORADO", motivo: "SEM_SUPORTE" });
+      const out = await receptor.reenviarSemEntrega(req.corpoJson);
       res.status(STATUS[out.status] ?? 500).json({ status: out.status, motivo: out.motivo ?? null });
     } catch (e) { next(e); }
   });

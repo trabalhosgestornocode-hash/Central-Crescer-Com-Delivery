@@ -175,7 +175,7 @@ t("06 identificação da unidade: pelo texto, pelo destinatário do documento; d
   assert.equal((await s.ultima()).unidadeId, BETA);
   await s.enviar(gw({ doc: c2, texto: "segue comprovante" }));
   assert.equal((await s.ultima()).motivo, "UNIDADE_NAO_IDENTIFICADA");
-  assert.equal((await s.respostas()).at(-1).texto, "Esse lançamento pertence à Unidade Alfa, Unidade Beta ou Unidade Gama?");
+  assert.match((await s.respostas()).at(-1).texto, /^Sobre o documento de R\$ 123,45, para Fornecedor Sintético Um[^:]*: esse lançamento pertence à Unidade Alfa, Unidade Beta ou Unidade Gama\?/);
 });
 
 // ======================================================================================== 7. unidade ambígua

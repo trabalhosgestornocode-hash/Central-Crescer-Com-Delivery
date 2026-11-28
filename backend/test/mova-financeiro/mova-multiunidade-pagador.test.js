@@ -831,3 +831,59 @@ t("EC-R3 favorecido que BATE com o fornecedor continua sendo o critério forte (
   assert.match(texto, /Conta encontrada no Loja Alfa: Fornecedor Sintético/);
   assert.doesNotMatch(texto, /ÚNICA em aberto/);
 });
+
+// ------------------------------------------------------------------ 28/11 (caso real): comprovante pago pela empresa de uma loja de FORA
+// Dois comprovantes seguidos; a pergunta "pertence à A ou B?" foi respondida pensando no outro e o de fora entrou como pago.
+t("FZ-1 pagador que não é de nenhuma loja cadastrada: mesmo com a loja no texto, NADA é lançado — proposta explicada", async () => {
+  const s = await multi({ responder: () => PIX({ pagador: "EMPRESA DE FORA SINTETICA LTDA", documentoPagador: "11.111.111/0001-11", favorecido: "Fornecedora Sintética" }) });
+  await s.enviar(s.privado({ texto: "MOVA compra de potes para a alfa", doc: pdf("fz1") }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.equal(p.estado, "AGUARDANDO_REVISAO");
+  assert.deepEqual([(await s.contas(ORG, ALFA)).length, (await s.liquidacoes(ORG, ALFA)).length, s.escritas().length], [0, 0, 0], "nada escrito");
+  assert.match(await s.resposta(), /Não lancei direto: o comprovante foi pago por EMPRESA DE FORA SINTETICA LTDA, que não é pagadora cadastrada de nenhuma loja desta conversa/);
+});
+
+t("FZ-2 pergunta de unidade diz DE QUAL documento se trata (valor, favorecido, pagador de fora, texto); a resposta não libera lançamento direto", async () => {
+  const s = await multi({ responder: () => PIX({ pagador: "EMPRESA DE FORA SINTETICA LTDA", documentoPagador: null, valorCentavos: 59000, favorecido: "Fornecedora Sintética" }) });
+  const doc = s.privado({ texto: "Compras de potes para a loja do centro", doc: pdf("fz2") });
+  await s.enviar(doc);
+  assert.match(await s.resposta(), /^Sobre o documento de R\$ 590,00, para Fornecedora Sintética, pago por EMPRESA DE FORA SINTETICA LTDA \(empresa que não é de nenhuma loja cadastrada\), enviado com "Compras de potes para a loja do centro": esse lançamento pertence à Loja Alfa ou Loja Xis\? Responda citando esta mensagem\./);
+  await s.enviar(s.privado({ texto: "alfa", respostaA: doc.mensagemId }));
+  assert.deepEqual([(await s.contas(ORG, ALFA)).length, s.escritas().length], [0, 0], "a resposta não vira lançamento direto");
+  assert.match(await s.resposta(), /Não lancei direto/);
+});
+
+t("FZ-3 identificador da transação lido incompleto, com o E2E completo impresso no documento: vale o impresso (sem 'cortado'); E2E de outro banco não vale", async () => {
+  const { idTransacaoDaLeitura } = await import("../../src/modules/mova-financeiro/dominio/periodo.js");
+  const completo = "E36900256202611281544WW7UEL9SF04";
+  assert.equal(idTransacaoDaLeitura({ idTransacao: "E36900256202611281544WW7", identificadorDocumento: completo }), completo);
+  assert.equal(idTransacaoDaLeitura({ idTransacao: null, identificadorDocumento: "E07237373202611281542200 7L7VQX6K" }), "E072373732026112815422007L7VQX6K", "quebra de linha");
+  assert.equal(idTransacaoDaLeitura({ idTransacao: "E11111111202611", identificadorDocumento: completo }), null, "outro participante: continua recortado");
+  assert.equal(idTransacaoDaLeitura({ idTransacao: "E3690025620261128", identificadorDocumento: "NF-123" }), null);
+  const s = await multi({ responder: () => PIX({ pagador: "ALFA PRODUTOS LTDA", idTransacao: "E0000000020261010PARCIAL", identificadorDocumento: "E0000000020261010PARCIAL00000099" }) });
+  await s.enviar(s.privado({ texto: "MOVA brownies", doc: pdf("fz3") }));
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.equal(p.leitura.idTransacao, "E0000000020261010PARCIAL00000099");
+  assert.equal(p.estado, "APLICADA");
+  assert.doesNotMatch(await s.resposta(), /cortado/);
+});
+
+t("FZ-4 resposta sem entrega a nenhum aparelho (aviso do Gateway): UMA cópia volta à fila, com o mesmo evento e a mesma citação; nunca duas, nunca de uma cópia", async () => {
+  const s = await multi({ responder: () => PIX({ pagador: "EMPRESA DE FORA SINTETICA LTDA", favorecido: "Fornecedora Sintética" }) });
+  await s.enviar(s.privado({ texto: "MOVA compra de potes para a alfa", doc: pdf("fz4") }));
+  const [orig] = (await s.banco.pool.query("select id, evento_id, resposta_a, texto from mova.resposta order by seq desc limit 1")).rows;
+  await s.mova.armazenamento.saida.marcarEnviada(orig.id, "3EB0SINTETICO0001");
+  assert.deepEqual(await s.mova.receptor.reenviarSemEntrega({ providerMessageId: "3EB0SINTETICO0001" }), { status: "ENFILEIRADO", motivo: "REENVIO" });
+  const [copia] = (await s.banco.pool.query("select id, evento_id, resposta_a, texto, estado from mova.resposta order by seq desc limit 1")).rows;
+  assert.deepEqual([copia.evento_id, copia.resposta_a, copia.estado], [orig.evento_id, orig.resposta_a, "PENDENTE"]);
+  assert.equal(copia.texto, `Reenvio — a mensagem anterior não chegou aos celulares:\n${orig.texto}`);
+  assert.deepEqual(await s.mova.receptor.reenviarSemEntrega({ providerMessageId: "3EB0SINTETICO0001" }), { status: "IGNORADO", motivo: "JA_REENVIADA" });
+  await s.mova.armazenamento.saida.marcarEnviada(copia.id, "3EB0SINTETICO0002");
+  assert.deepEqual(await s.mova.receptor.reenviarSemEntrega({ providerMessageId: "3EB0SINTETICO0002" }), { status: "IGNORADO", motivo: "JA_E_REENVIO" });
+  assert.deepEqual(await s.mova.receptor.reenviarSemEntrega({ providerMessageId: "3EB0DESCONHECIDO" }), { status: "IGNORADO", motivo: "MENSAGEM_NAO_ENCONTRADA" });
+  assert.deepEqual(await s.mova.receptor.reenviarSemEntrega({ providerMessageId: "x'; drop" }), { status: "RECUSADO", motivo: "ID_INVALIDO" });
+  // a resposta citando a CÓPIA continua a mesma conversa (o evento de origem é achado pelo id da cópia)
+  assert.deepEqual(await s.mova.armazenamento.saida.origemDaResposta({ providerMessageId: "3EB0SINTETICO0002", grupoId: FIN }), { eventoId: orig.evento_id, respostaA: orig.resposta_a });
+  const aud = (await s.banco.pool.query("select dados from mova.auditoria where acao = 'RESPOSTA_REENVIADA'")).rows;
+  assert.equal(aud.length, 1);
+});

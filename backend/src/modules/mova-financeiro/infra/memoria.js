@@ -300,6 +300,17 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         return r ? { eventoId: r.eventoId ?? null, respostaA: r.respostaA ?? null } : null;
       },
       async ehRespostaPropria(mensagemId) { return saida.some((r) => r.providerMessageId && r.providerMessageId === mensagemId); },
+      /** 28/11 — mesma regra do PostgreSQL: uma cópia, uma vez, nunca de uma cópia. */
+      async reenviarSemEntrega(providerMessageId) {
+        const o = saida.find((r) => r.providerMessageId === providerMessageId && r.estado === "ENVIADA");
+        if (!o) return { situacao: "IGNORADO", motivo: "MENSAGEM_NAO_ENCONTRADA" };
+        if (String(o.texto).startsWith("Reenvio — a mensagem anterior não chegou aos celulares:")) return { situacao: "IGNORADO", motivo: "JA_E_REENVIO" };
+        if (auditoria.some((x) => x.acao === "RESPOSTA_REENVIADA" && x.dados?.original === o.id)) return { situacao: "IGNORADO", motivo: "JA_REENVIADA" };
+        const id = `resposta-${saida.length + 1}`;
+        saida.push({ id, estado: "PENDENTE", criadaEm: relogio().toISOString(), grupoId: o.grupoId, respostaA: o.respostaA ?? null, eventoId: o.eventoId ?? null, texto: `Reenvio — a mensagem anterior não chegou aos celulares:\n${o.texto}` });
+        auditoria.push(Object.freeze({ acao: "RESPOSTA_REENVIADA", atorTipo: "SISTEMA", atorRef: "gateway", alvo: "resposta", dados: { motivo: "SEM_ENTREGA_NOS_APARELHOS", original: o.id, nova: id, providerOriginal: providerMessageId } }));
+        return { situacao: "REENFILEIRADA", respostaId: id };
+      },
     }),
     aprovacoes: Object.freeze({
       async registrar(a) { aprovacoes.push(Object.freeze({ ...a })); },
