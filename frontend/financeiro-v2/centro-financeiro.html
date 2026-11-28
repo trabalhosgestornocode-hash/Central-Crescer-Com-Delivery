@@ -3,31 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Centro Financeiro MOVA</title>
-  <meta name="description" content="Centro Financeiro com o agente MOVA — protótipo em simulação, com dados sintéticos. Não publicado.">
+  <title>MOVA — Crescer Com Delivery Financeiro</title>
   <meta name="robots" content="noindex">
-  <link rel="icon" type="image/jpeg" href="/assets/logo-crescer-central.jpeg?v=1">
-  <script src="tema.js"></script>
-  <link rel="stylesheet" href="fv2.css">
-  <link rel="stylesheet" href="centroFinanceiro.css">
+  <!-- 28/11: o MOVA passou a ser uma seção do Financeiro (#/mova), com a mesma sessão e unidade. Endereço antigo: só redireciona. -->
+  <script>
+    (function () {
+      var p = new URLSearchParams(location.search);
+      if (!p.has("modo")) p.set("modo", "plataforma");
+      location.replace("index.html?" + p.toString() + "#/mova");
+    })();
+  </script>
+  <!-- se o script não rodar (sem JS ou bloqueado), o navegador segue sozinho em 1 s -->
+  <meta http-equiv="refresh" content="1; url=index.html?modo=plataforma#/mova">
 </head>
-<body class="cf">
-  <a class="pular" href="#cf-conteudo">Pular para o conteúdo</a>
-  <div class="cf-simulacao" role="note"><strong>Simulação</strong> · dados sintéticos · leitura do grupo de WhatsApp desligada · nada é lançado no Financeiro</div>
-  <header class="cf-cabecalho">
-    <div>
-      <p class="cf-sobretitulo">Módulo Administrativo</p>
-      <h1>Centro Financeiro</h1>
-    </div>
-    <label class="cf-unidade">Unidade
-      <select id="cf-unidade" aria-describedby="cf-unidade-dica"></select>
-      <span id="cf-unidade-dica" class="cf-dica">Cada unidade tem seus próprios registros; nada é somado entre elas.</span>
-    </label>
-  </header>
-  <nav class="cf-abas" aria-label="Seções do Centro Financeiro">
-    <ul role="tablist" id="cf-abas"></ul>
-  </nav>
-  <main id="cf-conteudo" class="cf-conteudo" tabindex="-1"></main>
-  <script type="module" src="centroFinanceiro.js"></script>
+<body>
+  <p><a href="index.html?modo=plataforma#/mova">Abrir o MOVA no Financeiro</a></p>
 </body>
 </html>

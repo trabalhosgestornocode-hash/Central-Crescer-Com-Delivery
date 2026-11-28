@@ -49,6 +49,22 @@ export function criarConsultor(fetchFn = (...a) => transporte(...a), { usarCache
 }
 
 /**
+ * Leitura simples (sem cache e sem descarte): para telas que montam vários painéis ao mesmo tempo (MOVA). Mesmo transporte das
+ * consultas; nunca lança.
+ * @returns {Promise<{ok:boolean, status:number, dados:any, erro?:string, mensagem?:string}>}
+ */
+export async function lerJson(url, cabecalhos = {}, fetchFn = (...a) => transporte(...a)) {
+  try {
+    const r = await fetchFn(url, { headers: { accept: "application/json", ...cabecalhos }, credentials: "same-origin" });
+    const corpo = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, status: r.status, dados: corpo }
+      : { ok: false, status: r.status, dados: corpo, erro: corpo.erro ?? corpo.codigo ?? "FALHA", motivo: corpo.motivo ?? null, mensagem: corpo.mensagem ?? "Falha na consulta." };
+  } catch {
+    return { ok: false, status: 0, dados: null, erro: "SEM_CONEXAO", mensagem: "Não foi possível consultar. Verifique a conexão." };
+  }
+}
+
+/**
  * Ação mutável da demonstração local (POST JSON). Envia o token CSRF da sessão; nunca reexecuta sozinha e nunca
  * trata como sucesso uma resposta que não seja 2xx.
  * @returns {Promise<{ok:true, dados:any} | {ok:false, status:number, erro:string, mensagem:string}>}
