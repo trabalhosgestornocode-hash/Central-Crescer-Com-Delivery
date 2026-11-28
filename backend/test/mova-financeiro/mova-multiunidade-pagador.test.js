@@ -505,7 +505,7 @@ t("MU-15/18 duplicidade: o mesmo comprovante reenviado (e a MESMA mensagem repet
   assert.equal((await s.ultima()).decisao, "DUPLICADO");
 });
 
-t("MU-16 boleto da Xis → conta a pagar EM ABERTO no Contas a Pagar e no calendário oficial, com o boleto anexado; nenhuma baixa", async () => {
+t("MU-16 boleto da Xis → conta a pagar EM ABERTO no Contas a Pagar e no calendário oficial, com o boleto CONFERIDO (não guardado no Financeiro); nenhuma baixa", async () => {
   const s = await multi({ responder: () => BOLETO() });
   await s.enviar(s.privado({ texto: "MOVA boleto da distribuidora", doc: pdf("16") }));
   const h = await s.ultima();
@@ -516,9 +516,12 @@ t("MU-16 boleto da Xis → conta a pagar EM ABERTO no Contas a Pagar e no calend
   const dia = (await s.m.nucleo.consultarCalendarioFinanceiro(s.c(ORG_X, XIS), { mes: "2026-10" })).dias.find((d) => d.data === "2026-10-28");
   assert.deepEqual([dia.aVencer.quantidade, dia.aVencer.saldoCentavos], [1, 45000], "aparece a vencer no calendário oficial");
   assert.equal(dia.titulos[0].fornecedor, "Distribuidora Sintética");
-  const docs = await s.m.nucleo.consultarRegistros(s.c(ORG_X, XIS), { tipo: "DOCUMENTO" });
-  assert.deepEqual(docs.map((d) => d.tipo), ["BOLETO"]);
-  assert.match(await s.resposta(), /Conta a pagar registrada: R\$ 450,00 para Distribuidora Sintética, vencimento 28\/10\/2026/);
+  // 28/11: o arquivo é conferido pelo hash e NÃO é guardado no Financeiro (o núcleo operacional de produção não tem cofre)
+  assert.deepEqual(await s.m.nucleo.consultarRegistros(s.c(ORG_X, XIS), { tipo: "DOCUMENTO" }), []);
+  assert.deepEqual(s.escritas().map((x) => x.nome), ["registrarObrigacaoDocumental"], "nenhum envio de arquivo");
+  assert.match(await s.resposta(), /Conta a pagar registrada: R\$ 450,00 para Distribuidora Sintética, vencimento 28\/10\/2026 \(competência 2026-10\)\. Boleto BOL-\d+ conferido \(registrei o número e a verificação do arquivo; o arquivo em si não é guardado no Financeiro\)/);
+  const [p] = await s.propostas(ORG_X, XIS);
+  assert.equal(p.estado, "APLICADA");
   assert.deepEqual((await s.propostas(ORG, ALFA)).length, 0);
 });
 
@@ -543,16 +546,30 @@ t("MU-17 nota fiscal de conta JÁ registrada na Alfa: anexada à conta existente
   assert.deepEqual(s.escritas().map((x) => x.nome), ["enviarEvidencia"]);
 });
 
-t("MU-19 falha intermediária (cofre fora no anexo): proposta volta para revisão; nova tentativa reaproveita a MESMA conta (sem duplicar)", async () => {
-  const s = await multi({ responder: () => BOLETO(), falharEnvioUmaVez: true });
+t("MU-19 caso de produção (28/11): conta JÁ criada por uma tentativa anterior que falhou no anexo; a nova tentativa reaproveita a MESMA conta, sem duplicar, e aplica a proposta", async () => {
+  const s = await multi({ responder: () => BOLETO(), politicas: false });
   await s.enviar(s.privado({ texto: "MOVA boleto", doc: pdf("19") }));
   const [p] = await s.propostas(ORG_X, XIS);
-  assert.equal(p.estado, "AGUARDANDO_REVISAO", "a falha devolve a proposta");
-  assert.equal((await s.contas(ORG_X, XIS)).length, 1, "a conta registrada antes da falha fica (fonte MOVA:<proposta>)");
+  assert.equal(p.estado, "AGUARDANDO_REVISAO");
+  // a escrita parcial de antes da correção: a conta nasceu pela fonte MOVA:<proposta> e o anexo falhou (operação "falhou")
+  await s.m.nucleo.registrarObrigacaoDocumental(s.c(ORG_X, XIS), { ...p.comando.entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${p.id}` } });
+  assert.equal((await s.contas(ORG_X, XIS)).length, 1);
+  await s.mova.armazenamento.politicas.criar(POL("CONTA_A_PAGAR", ORG_X, XIS), { criadaPor: HUMANO });
   const r = await s.mova.execucao.aposContaNova(p, { organizacaoId: ORG_X, unidadeId: XIS });
-  assert.deepEqual([r.situacao, r.resultado.contaCriada], ["CONTA_REGISTRADA", false]);
+  assert.deepEqual([r.situacao, r.resultado.contaCriada, r.resultado.documento?.guardadoNoFinanceiro], ["CONTA_REGISTRADA", false, false]);
   assert.equal((await s.contas(ORG_X, XIS)).length, 1, "nenhuma segunda conta");
-  assert.equal((await s.m.nucleo.consultarRegistros(s.c(ORG_X, XIS), { tipo: "DOCUMENTO" })).length, 1);
+  assert.equal((await s.propostas(ORG_X, XIS))[0].estado, "APLICADA");
+});
+
+t("MU-19b arquivo da proposta ausente ou adulterado: nada é escrito (a conferência vem ANTES da conta)", async () => {
+  const s = await multi({ responder: () => BOLETO(), politicas: false });
+  await s.enviar(s.privado({ texto: "MOVA boleto", doc: pdf("19b") }));
+  const [p] = await s.propostas(ORG_X, XIS);
+  await s.mova.armazenamento.politicas.criar(POL("CONTA_A_PAGAR", ORG_X, XIS), { criadaPor: HUMANO });
+  const r = await s.mova.execucao.aposContaNova({ ...p, evidencia: { ...p.evidencia, sha256: "0".repeat(64) } }, { organizacaoId: ORG_X, unidadeId: XIS });
+  assert.equal(r.situacao, "PROPOSTA");
+  assert.ok(r.motivos.includes("DOCUMENTO_NAO_CONFERE"));
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, s.escritas().length], [0, 0]);
 });
 
 t("MU-20 nenhuma transferência ou pagamento bancário real: o MOVA só usa as ações estreitas (conta, comprovante, documento)", async () => {
@@ -574,7 +591,8 @@ t("H-3 boleto do ALFA (empresa ORG): conta em aberto na Alfa, no Contas a Pagar 
   assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).unidadeId], ["EXECUTADO", ALFA]);
   const cap = await s.m.nucleo.consultarContasAPagar(s.c(ORG, ALFA), {});
   const item = cap.itens.find((x) => x.fornecedor?.nome === "Laticínios Sintéticos");
-  assert.deepEqual([item.valorOriginalCentavos, item.saldoCentavos, item.vencimento, item.situacao !== "PAGO", item.pendencias.includes("SEM_DOCUMENTO")], [78900, 78900, "2026-10-28", true, false]);
+  // 28/11: o boleto é conferido e não guardado no Financeiro ⇒ a conta mostra a pendência "sem documento" (o arquivo fica no MOVA)
+  assert.deepEqual([item.valorOriginalCentavos, item.saldoCentavos, item.vencimento, item.situacao !== "PAGO", item.pendencias.includes("SEM_DOCUMENTO")], [78900, 78900, "2026-10-28", true, true]);
   assert.equal((await s.contas(ORG_X, XIS)).length, 0);
 });
 
