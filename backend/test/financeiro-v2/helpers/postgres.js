@@ -35,7 +35,10 @@ export function ambiente() {
 
 export const motivoParaPular = () => {
   const a = ambiente();
-  return a.disponivel ? false : `PostgreSQL local isolado indisponível: ${a.motivo}`;
+  if (a.disponivel) return false;
+  // 27/11: teste de PostgreSQL NUNCA passa em silêncio sem o banco — sem ele, FALHA. Pular só com a escolha consciente TESTES_SEM_BANCO=1.
+  if (process.env.TESTES_SEM_BANCO !== "1") throw new Error(`Financeiro v2: PostgreSQL de teste obrigatório indisponível — ${a.motivo}. Rode node scripts/fv2-banco-teste.mjs iniciar (ou TESTES_SEM_BANCO=1 para pular conscientemente).`);
+  return `PostgreSQL local isolado indisponível: ${a.motivo}`;
 };
 
 const pools = new Set();

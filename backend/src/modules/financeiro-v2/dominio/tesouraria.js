@@ -177,7 +177,7 @@ export function tituloAPagar(p, o, hoje) {
   if (emAberto && documentos.length === 0) pendencias.push("SEM_DOCUMENTO");
   if (emAberto && provisoria) pendencias.push("CLASSIFICACAO_PROVISORIA");
   return {
-    id: o.id, grupoId: o.grupoId,
+    id: o.id, grupoId: o.grupoId, versao: o.versao, // 28/11: a versão vista (a correção estreita confere que a conta não mudou desde o resumo)
     fornecedor: fornecedor ? { id: fornecedor.id, nome: fornecedor.nome, tipo: fornecedor.tipo } : null,
     descricao: o.descricao, categoria: lancamento ? { codigo: lancamento.categoria, nome: categoria?.nome ?? lancamento.categoria } : null,
     classificacao: lancamento?.classificacao ?? null, natureza: lancamento?.natureza ?? null,
@@ -190,6 +190,8 @@ export function tituloAPagar(p, o, hoje) {
     situacao, vencido: emAberto && o.vencimento < hoje, pendencias, documentos, pagamentos,
     ...dimensoesDoPagamento(o, pagamentos),
     origem: o.fonte?.sistema ?? "MANUAL",
+    // 27/11: o que a pessoa disse ao relatar a conta (ex.: composição do empréstimo) e a forma de pagamento informada
+    observacao: o.observacao ?? null, formaPagamentoInformada: o.formaPagamento ?? null,
   };
 }
 

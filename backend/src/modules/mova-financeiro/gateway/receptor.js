@@ -16,7 +16,7 @@ import { MIMES_SEM_LEITURA } from "../aplicacao/recebimentoDocumental.js";
 import { conversaAutorizada, grupoAutorizado, mascarar } from "../dominio/configuracao.js";
 import { ErroTransitorio } from "./fila.js";
 import { RESPOSTA } from "../aplicacao/respostas.js";
-import { ACESSO, CAPACIDADES, RETRATO_VALIDADE_MS, algumaUnidadePermite, foiAcionado, participanteAutorizado } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, RETRATO_VALIDADE_MS, algumaUnidadePermite, foiAcionado, identificarParticipante, participanteAutorizado } from "../dominio/participantes.js";
 
 /** Tamanho real do conteúdo em base64 (sem decodificar). */
 const bytesDoBase64 = (b64) => { const s = String(b64).replace(/\s/g, ""); return Math.floor((s.length * 3) / 4) - (s.endsWith("==") ? 2 : s.endsWith("=") ? 1 : 0); };
@@ -92,6 +92,12 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
       // qualquer coisa (texto e documento de terceiro não ficam no banco); só um código no log operacional.
       const grupo = grupoAutorizado(cfg, bruto.grupoId);
       if ((grupo.acesso ?? ACESSO.ABERTO) === ACESSO.LISTA) {
+        // 27/11: identificador e telefone autenticado de PESSOAS DIFERENTES ⇒ bloqueia e registra a inconsistência (sem conteúdo)
+        if (identificarParticipante(grupo, bruto).conflito) {
+          registrar({ tipo: "MOVA_IDENTIDADE_CONFLITANTE", grupo: mascarar(bruto.grupoId) });
+          await armazenamento?.auditoria?.registrar?.({ acao: "IDENTIDADE_CONFLITANTE", atorTipo: "SISTEMA", atorRef: "receptor", alvo: mascarar(bruto.grupoId), dados: { motivo: "IDENTIFICADOR_E_TELEFONE_DE_PESSOAS_DIFERENTES", mensagemId: bruto.mensagemId ?? null } });
+          return { status: "IGNORADO", motivo: "IDENTIDADE_CONFLITANTE" };
+        }
         if (!participanteAutorizado(grupo, bruto)) { registrar({ tipo: "MOVA_PARTICIPANTE_NAO_AUTORIZADO", grupo: mascarar(bruto.grupoId) }); return { status: "IGNORADO", motivo: "PARTICIPANTE_NAO_AUTORIZADO" }; }
         const a = await foiAcionado({ grupo, bruto, armazenamento });
         if (!a.acionado) {

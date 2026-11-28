@@ -29,10 +29,10 @@ function consultar(pool) {
 const linhaCadastro = (r) => ({ id: r.id, chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, observacoes: r.observacoes ?? null, ativo: r.ativo,
   criadoEm: r.criado_em.toISOString(), cadastradoPor: r.cadastrado_por ?? null, verificadoEm: r.verificado_em?.toISOString() ?? null,
   revogadoEm: r.revogado_em?.toISOString() ?? null, revogadoPor: r.revogado_por ?? null, motivoRevogacao: r.motivo_revogacao ?? null });
-/** 28/11: a fila com prioridade só é usada depois da migração 0027 (detecção única por pool); antes dela tudo segue como era. */
+/** 28/11: a fila com prioridade só é usada depois da migração 0028 (detecção única por pool); antes dela tudo segue como era. */
 const filaNovaPorPool = new WeakMap();
 const fiscalNovaPorPool = new WeakMap();
-/** Migração 0028 (identidade fiscal) aplicada? Sem ela o MOVA segue com a conferência por nome, como antes. */
+/** Migração 0029 (identidade fiscal) aplicada? Sem ela o MOVA segue com a conferência por nome, como antes. */
 function fiscalNovaDe(pool) {
   if (!fiscalNovaPorPool.has(pool)) fiscalNovaPorPool.set(pool, pool.query("select 1 from information_schema.tables where table_schema = 'mova' and table_name = 'identidade_fiscal_vinculo'").then((r) => r.rowCount > 0).catch(() => false));
   return fiscalNovaPorPool.get(pool);
@@ -172,6 +172,11 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q(`select 1 from mova.decisao d where d.evento_id = $1 and d.decisao not in ('FALHOU','REPROCESSAR')
                           and d.seq > coalesce((select max(r.seq) from mova.decisao r where r.evento_id = $1 and r.decisao = 'REPROCESSAR'), 0) limit 1`, [eventoId])).rowCount > 0;
       },
+      /** 27/11: decisões de um evento (unidades envolvidas na mensagem que a pessoa citou). */
+      async porEvento(eventoId) {
+        const r = await q("select organizacao_id, unidade_id, evento_id, decisao, motivo, proposta_id from mova.decisao where evento_id = $1 order by seq", [eventoId]);
+        return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id }));
+      },
       async todos() {
         const r = await q("select * from mova.decisao order by seq");
         return r.rows.map((x) => ({ organizacaoId: x.organizacao_id, unidadeId: x.unidade_id, eventoId: x.evento_id, decisao: x.decisao, motivo: x.motivo, propostaId: x.proposta_id, sinaisDeInjecao: x.sinais_injecao, ...x.extra }));
@@ -234,7 +239,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async lembrar(mensagemId, { grupoId, pendente }) {
         if (!pendente) { await q("update mova.mensagem_pendente set resolvida_em = now() where mensagem_id = $1 and resolvida_em is null", [mensagemId]); return; }
         await q(`insert into mova.mensagem_pendente (mensagem_id, grupo_jid, evento_id, leitura) values ($1,$2,$3,$4)
-                 on conflict (mensagem_id) do update set leitura = excluded.leitura, grupo_jid = excluded.grupo_jid, criada_em = now(), resolvida_em = null`, [mensagemId, grupoId, pendente.evento.eventoId, JSON.stringify({ evento: pendente.evento, saida: pendente.saida, ...(pendente.divergencia ? { divergencia: pendente.divergencia } : {}) })]);
+                 on conflict (mensagem_id) do update set leitura = excluded.leitura, grupo_jid = excluded.grupo_jid, criada_em = now(), resolvida_em = null`, [mensagemId, grupoId, pendente.evento.eventoId, JSON.stringify({ evento: pendente.evento, saida: pendente.saida, ...(pendente.divergencia ? { divergencia: pendente.divergencia } : {}), ...(pendente.observacoes?.length ? { observacoes: pendente.observacoes } : {}) })]);
       },
       /** Resolução ATÔMICA: duas respostas simultâneas à mesma pergunta não retomam o documento duas vezes. */
       /**
@@ -414,7 +419,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
       },
     }),
-    // 28/11: IDENTIDADE FISCAL aprendida das notas (migração 0028). Sem a migração, `disponivel()` é falso e o fluxo antigo segue igual.
+    // 28/11: IDENTIDADE FISCAL aprendida das notas (migração 0029). Sem a migração, `disponivel()` é falso e o fluxo antigo segue igual.
     identidadesFiscais: Object.freeze({
       async disponivel() { return fiscalNovaDe(pool); },
       async doEntregador({ unidadeId, entregador }) {

@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
--- Novas: 0026_mova_entregador_notificacoes_pagamento.sql, 0027_mova_fila_prioridade_limites.sql, 0028_mova_identidade_fiscal.sql
+-- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql, 0027_mova_correcao_de_conta.sql
+-- Novas: 0026_mova_entregador_notificacoes_pagamento.sql, 0028_mova_fila_prioridade_limites.sql, 0029_mova_identidade_fiscal.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -31,9 +31,10 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0023_mova_politica_sangria.sql' and sha256 = '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631') then raise exception 'MOVA atualização: 0023_mova_politica_sangria.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0024_mova_grupo_multiempresa.sql' and sha256 = '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47') then raise exception 'MOVA atualização: 0024_mova_grupo_multiempresa.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql' and sha256 = '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql ausente ou com outro conteúdo — nada foi feito'; end if;
+  if not exists (select 1 from mova.mova_migracao where nome = '0027_mova_correcao_de_conta.sql' and sha256 = '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35') then raise exception 'MOVA atualização: 0027_mova_correcao_de_conta.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0026_mova_entregador_notificacoes_pagamento.sql') then raise exception 'MOVA atualização: 0026_mova_entregador_notificacoes_pagamento.sql já aplicada — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0027_mova_fila_prioridade_limites.sql') then raise exception 'MOVA atualização: 0027_mova_fila_prioridade_limites.sql já aplicada — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0028_mova_identidade_fiscal.sql') then raise exception 'MOVA atualização: 0028_mova_identidade_fiscal.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0028_mova_fila_prioridade_limites.sql') then raise exception 'MOVA atualização: 0028_mova_fila_prioridade_limites.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0029_mova_identidade_fiscal.sql') then raise exception 'MOVA atualização: 0029_mova_identidade_fiscal.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee)
@@ -119,7 +120,7 @@ grant update (estado, resposta_id, tentativas_envio, reenvios, ultimo_erro, envi
 grant update (respostas, chamadas_ia, tokens_entrada, tokens_saida, atualizado_em) on mova.atendimento_metrica to mova_app;
 insert into mova.mova_migracao (nome, sha256) values ('0026_mova_entregador_notificacoes_pagamento.sql', '287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee');
 
--- ------------------------------------------------------------------------- 0027_mova_fila_prioridade_limites.sql (arquivo a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0)
+-- ------------------------------------------------------------------------- 0028_mova_fila_prioridade_limites.sql (arquivo c397d9bae61f1c66eb69220371d349754f3e61bd6fef5688746064af7cf39eae)
 -- MOVA (28/11/2026): FILA DE SAÍDA COM PRIORIDADE, CATEGORIAS, VALIDADE, ADIAMENTO E LIMITES CONFIGURÁVEIS (sem deploy).
 --
 -- Reaproveita a fila persistente que já existe (mova.resposta é a caixa de saída: estado, tentativas, lease, id do provedor).
@@ -127,7 +128,7 @@ insert into mova.mova_migracao (nome, sha256) values ('0026_mova_entregador_noti
 -- Atingir um limite NÃO descarta: a mensagem continua PENDENTE com `liberar_em` no futuro; só expira (EXPIRADA, visível e auditável)
 -- depois da validade da sua prioridade. Os limites ficam em tabela (por empresa, unidade, grupo e finalidade) e cada mudança é auditada.
 -- Nada é semeado: sem regras na tabela valem os limites padrão do código (2.000 / 100 / 500, reserva para a prioridade crítica).
--- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0027.sql).
+-- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0028.sql).
 
 -- 1) Colunas da fila (defaults compatíveis com o que já existia).
 alter table mova.resposta add column categoria text not null default 'PROATIVA'
@@ -188,9 +189,9 @@ grant select, insert on mova.limite_envio, mova.limite_envio_historico, mova.ale
 grant update (valor, ativo, atualizado_por, atualizado_em) on mova.limite_envio to mova_app;
 grant usage on all sequences in schema mova to mova_app;
 comment on table mova.limite_envio is 'Limites de envio do WhatsApp por escopo. Sem linhas valem os padrões do código. Cada alteração grava mova.limite_envio_historico.';
-insert into mova.mova_migracao (nome, sha256) values ('0027_mova_fila_prioridade_limites.sql', 'a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0');
+insert into mova.mova_migracao (nome, sha256) values ('0028_mova_fila_prioridade_limites.sql', 'c397d9bae61f1c66eb69220371d349754f3e61bd6fef5688746064af7cf39eae');
 
--- ------------------------------------------------------------------------- 0028_mova_identidade_fiscal.sql (arquivo 97bafe89946451a198229db2f0da87d235c5dc92af1ad7ad6209ce6f2d5b6781)
+-- ------------------------------------------------------------------------- 0029_mova_identidade_fiscal.sql (arquivo 0332e3af98d7c7cd48ae96936383fc1b31c67c728ab08caa3419386cb05323d5)
 -- MOVA (28/11/2026): IDENTIDADE FISCAL APRENDIDA DAS NOTAS (sem cadastro manual).
 --
 -- O MOVA passa a guardar, internamente, quem é o prestador (CPF/CNPJ) de cada entregador, deduzido das notas que o Financeiro já tem
@@ -201,7 +202,7 @@ insert into mova.mova_migracao (nome, sha256) values ('0027_mova_fila_prioridade
 --   identidade_fiscal_tomador    a empresa tomadora de cada unidade (configurada ou aprendida das notas aprovadas)
 --   nota_leitura_fiscal          cache da leitura por hash: a mesma nota nunca é lida (nem paga em IA) duas vezes
 -- Uma nota continua pertencendo SÓ à empresa tomadora da sua obrigação; o vínculo é por unidade. Sem DELETE para o app.
--- Aditiva e reversível (recuperacao/reverter-0028.sql). Não altera nenhum dado existente.
+-- Aditiva e reversível (recuperacao/reverter-0029.sql). Não altera nenhum dado existente.
 
 create table mova.identidade_fiscal (
   id uuid primary key default gen_random_uuid(),
@@ -281,4 +282,4 @@ grant select, insert on mova.identidade_fiscal, mova.identidade_fiscal_vinculo, 
 grant update (razao_social, nome_fantasia, municipio, atualizada_em) on mova.identidade_fiscal to mova_app;
 grant update (identidade_id, situacao, motivo, origem, candidatos, atualizada_em) on mova.identidade_fiscal_vinculo to mova_app;
 grant update (documento, situacao, notas, entregadores, atualizada_em) on mova.identidade_fiscal_tomador to mova_app;
-insert into mova.mova_migracao (nome, sha256) values ('0028_mova_identidade_fiscal.sql', '97bafe89946451a198229db2f0da87d235c5dc92af1ad7ad6209ce6f2d5b6781');
+insert into mova.mova_migracao (nome, sha256) values ('0029_mova_identidade_fiscal.sql', '0332e3af98d7c7cd48ae96936383fc1b31c67c728ab08caa3419386cb05323d5');

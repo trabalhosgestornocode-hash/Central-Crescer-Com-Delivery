@@ -269,7 +269,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
   /**
    * 28/11 — O que o MOVA já sabe do prestador desta nota: identidade fiscal do entregador (aprendida do Financeiro), empresa tomadora da
    * unidade, chave de acesso repetida. A 1ª nota de quem ainda não tem histórico é candidata e consolida sozinha com evidência inequívoca.
-   * Sem a migração 0028 devolve o "vazio" e a conferência segue só pelo nome, como antes.
+   * Sem a migração 0029 devolve o "vazio" e a conferência segue só pelo nome, como antes.
    */
   async function contextoFiscal(nota, fechamento, leitura) {
     const vazio = { identidade: null, tomador: null, chaveDuplicada: false, concluir: async () => {} };

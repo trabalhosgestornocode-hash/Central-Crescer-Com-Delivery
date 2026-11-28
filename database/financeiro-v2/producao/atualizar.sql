@@ -1,36 +1,38 @@
 -- Financeiro v2 — ATUALIZAÇÃO do schema financeiro_v2 (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` (não superusuário), numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e hash): 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql, 0026_entregadores_proprios.sql, 0027_bloqueio_automacao_definer.sql, 0028_leitor_mova.sql, 0029_pagamento_por_comprovante.sql, 0030_registrar_obrigacao_documental.sql, 0031_registrar_juros_no_pagamento.sql, 0032_prestar_sangria.sql
--- Novas: 0033_registrar_conta_parcelada.sql, 0034_operacoes_entre_empresas.sql
+-- Já instaladas (conferidas por nome e hash): 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql, 0025_fechamento_manual_caixa.sql, 0026_entregadores_proprios.sql, 0027_bloqueio_automacao_definer.sql, 0028_leitor_mova.sql, 0029_pagamento_por_comprovante.sql, 0030_registrar_obrigacao_documental.sql, 0031_registrar_juros_no_pagamento.sql, 0032_prestar_sangria.sql, 0033_registrar_conta_parcelada.sql, 0034_operacoes_entre_empresas.sql, 0035_registrar_emprestimo.sql, 0036_corrigir_conta_a_pagar.sql
+-- Novas: 0037_operacoes_de_conta_a_pagar.sql
 
 do $$ declare n int; begin
   if not exists (select 1 from pg_namespace where nspname = 'financeiro_v2') then raise exception 'FV2 atualização: schema financeiro_v2 não existe — nada foi feito'; end if;
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 atualização: não aplicar como superusuário'; end if;
   if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 atualização: existe publicação FOR ALL TABLES — nada foi feito'; end if;
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 32 then raise exception 'FV2 atualização: % migrações registradas (esperado 32) — nada foi feito', n; end if;
-  select count(*) into n from financeiro_v2.fv2_migracao m join (values ('0001_fundacao.sql', 'ef5d9f835541d6fce2807109be1a5737813084bd94130f9714e5105b0e361427'), ('0002_importacoes.sql', 'd49d3b6bd531bf2d031e86a0ca0245a28632a6fa177017bcd4ff9433807c088a'), ('0003_concessoes.sql', 'a6e58f09056935eb2414f5d2119433e92e9919930eb88eb0e16acbd4bd076ec9'), ('0004_formacao.sql', 'ce5b6ecf822b69f86a4a6cd190d6dcad52c59ad33a0df0f07b398e9dd3d5b9bf'), ('0005_composicao_venda.sql', '8dbbc4296a95cc46648a38fb69ae407d5a41efdf5d1ced2c96c7f5bd408472d8'), ('0006_tesouraria.sql', 'f4170c545e077e9d44fcd03bb21aa0c3712ec0c154e5e54ef6bcc53d5a0232a8'), ('0007_saldo_referencia.sql', 'e27550c85b6b1d5195e1986e750aa944b64372e1690c8ab9481a634b48e6e21a'), ('0008_conferencias_indices.sql', '25042551aa6730531d8ce9a460ab64660ef95e8f71da4fb2228a53e8279c22e9'), ('0009_configuracoes_fechamento.sql', '7d986399161f897288d31772d6774f586c86ab29366e4dd4a330990fcc5e7e05'), ('0010_auditoria_posicao_posterior.sql', '45714c799f03d562136b1038b6a91809bd0414adc71a5fd2541784f2af4cf7f6'), ('0011_sessao_banco_e_concessoes.sql', 'f89aba0ad79f4bef458751ed0468d85f7bc9d850872a905e3ffb1a2cb2610c5d'), ('0012_permissao_por_acao.sql', 'cd0f8f8e3e2d05beaef02a7832ffd32765f5aa9ed1067208239c8f3b430f6fa2'), ('0013_acoes_granulares.sql', '23482b0a571c0f212470443dc1eae001c67dd70b3e4bb4aed96d5b2b489b22cc'), ('0014_reclassificacao.sql', '598cd8c434a5987747a58f64010a84642747b22a42ff54453f666924f5323e68'), ('0015_indices_carga_por_competencia.sql', '314227f5309c2bf0917d27d39b4dac8b31a1aa249220fdfee041f0721db1976a'), ('0016_envio_de_evidencias.sql', '161206c52160277c846fe32a8de0908bf177357561945df19ff73b3ae766a918'), ('0017_indices_seletivos.sql', '01666ecf61be707c262bde5867dce5380595d9a81a4226f5778e862d4ecf1926'), ('0018_fechamento_ressalvas_baixa_extrato.sql', '7a312af6949f039bb6ec7a21e8488f06eaf7dad7756a618e995334448daeaeec'), ('0019_com_pendencias_sem_contorno.sql', 'ca7d6fd943a640ce83afa8d96f79b70e6662e62d86fc5cb8bfaca05f49a629e1'), ('0020_baixa_antecipada.sql', '719f956225b03eb1a40b4a97c53a1803517bf5bd8e927ab3ffda10c4b54d3254'), ('0021_liberacao_por_unidade.sql', 'b24ed9c2e8f18e4f881f76d3e7e7f3d2bb3eec24637c1a40189e75073c1a4b64'), ('0022_abertura_da_unidade.sql', '43de10df4e73e9d53ecd01cc2607dd2629f8ec665a4fd2ca865ffcd819394a21'), ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23'), ('0024_canais_e_operadoras.sql', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59'), ('0025_fechamento_manual_caixa.sql', 'ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2'), ('0026_entregadores_proprios.sql', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312'), ('0027_bloqueio_automacao_definer.sql', '957abaa956fbb97a0b39f4549e43647e798ba8badc268955713f40b97332f25e'), ('0028_leitor_mova.sql', '760ac6416ee6b357c2a55edf92a894e89aa0da151435bf06450ccc2813b40b6b'), ('0029_pagamento_por_comprovante.sql', '9d071a32523aaa71ab1f9792cb4d002ba34222bafcb4814c8108a621113ab679'), ('0030_registrar_obrigacao_documental.sql', '2d39204d2d2de6f3806266e1ab2c1c45129ce62d61b3b8ec91a0f54574a83e09'), ('0031_registrar_juros_no_pagamento.sql', '7deef8e2183cb59df0bce45fa8a30d0d7edc5bb7f135ce3ecd9388de22e93e1b'), ('0032_prestar_sangria.sql', '144ef8570397022abe8fcc3d49249d821bb36a726830e06395328a59815106e8')) v(nome, sha) on v.nome = m.nome and v.sha = m.sha256;
-  if n <> 32 then raise exception 'FV2 atualização: migrações instaladas diferem do Git (nome/hash) — nada foi feito'; end if;
+  if n <> 36 then raise exception 'FV2 atualização: % migrações registradas (esperado 36) — nada foi feito', n; end if;
+  select count(*) into n from financeiro_v2.fv2_migracao m join (values ('0001_fundacao.sql', 'ef5d9f835541d6fce2807109be1a5737813084bd94130f9714e5105b0e361427'), ('0002_importacoes.sql', 'd49d3b6bd531bf2d031e86a0ca0245a28632a6fa177017bcd4ff9433807c088a'), ('0003_concessoes.sql', 'a6e58f09056935eb2414f5d2119433e92e9919930eb88eb0e16acbd4bd076ec9'), ('0004_formacao.sql', 'ce5b6ecf822b69f86a4a6cd190d6dcad52c59ad33a0df0f07b398e9dd3d5b9bf'), ('0005_composicao_venda.sql', '8dbbc4296a95cc46648a38fb69ae407d5a41efdf5d1ced2c96c7f5bd408472d8'), ('0006_tesouraria.sql', 'f4170c545e077e9d44fcd03bb21aa0c3712ec0c154e5e54ef6bcc53d5a0232a8'), ('0007_saldo_referencia.sql', 'e27550c85b6b1d5195e1986e750aa944b64372e1690c8ab9481a634b48e6e21a'), ('0008_conferencias_indices.sql', '25042551aa6730531d8ce9a460ab64660ef95e8f71da4fb2228a53e8279c22e9'), ('0009_configuracoes_fechamento.sql', '7d986399161f897288d31772d6774f586c86ab29366e4dd4a330990fcc5e7e05'), ('0010_auditoria_posicao_posterior.sql', '45714c799f03d562136b1038b6a91809bd0414adc71a5fd2541784f2af4cf7f6'), ('0011_sessao_banco_e_concessoes.sql', 'f89aba0ad79f4bef458751ed0468d85f7bc9d850872a905e3ffb1a2cb2610c5d'), ('0012_permissao_por_acao.sql', 'cd0f8f8e3e2d05beaef02a7832ffd32765f5aa9ed1067208239c8f3b430f6fa2'), ('0013_acoes_granulares.sql', '23482b0a571c0f212470443dc1eae001c67dd70b3e4bb4aed96d5b2b489b22cc'), ('0014_reclassificacao.sql', '598cd8c434a5987747a58f64010a84642747b22a42ff54453f666924f5323e68'), ('0015_indices_carga_por_competencia.sql', '314227f5309c2bf0917d27d39b4dac8b31a1aa249220fdfee041f0721db1976a'), ('0016_envio_de_evidencias.sql', '161206c52160277c846fe32a8de0908bf177357561945df19ff73b3ae766a918'), ('0017_indices_seletivos.sql', '01666ecf61be707c262bde5867dce5380595d9a81a4226f5778e862d4ecf1926'), ('0018_fechamento_ressalvas_baixa_extrato.sql', '7a312af6949f039bb6ec7a21e8488f06eaf7dad7756a618e995334448daeaeec'), ('0019_com_pendencias_sem_contorno.sql', 'ca7d6fd943a640ce83afa8d96f79b70e6662e62d86fc5cb8bfaca05f49a629e1'), ('0020_baixa_antecipada.sql', '719f956225b03eb1a40b4a97c53a1803517bf5bd8e927ab3ffda10c4b54d3254'), ('0021_liberacao_por_unidade.sql', 'b24ed9c2e8f18e4f881f76d3e7e7f3d2bb3eec24637c1a40189e75073c1a4b64'), ('0022_abertura_da_unidade.sql', '43de10df4e73e9d53ecd01cc2607dd2629f8ec665a4fd2ca865ffcd819394a21'), ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23'), ('0024_canais_e_operadoras.sql', '06d24fc401594af33601efceee76a0945059eb10bb8c729ef0b5c5ba185a7a59'), ('0025_fechamento_manual_caixa.sql', 'ffb42c1db5a02ba97eaeaf8c0047d4efbcc4568476f7907eda633b2d261135a2'), ('0026_entregadores_proprios.sql', '787d09876c61debe4c1d600862b80b482d7034a37c845596862383ee5d796312'), ('0027_bloqueio_automacao_definer.sql', '957abaa956fbb97a0b39f4549e43647e798ba8badc268955713f40b97332f25e'), ('0028_leitor_mova.sql', '760ac6416ee6b357c2a55edf92a894e89aa0da151435bf06450ccc2813b40b6b'), ('0029_pagamento_por_comprovante.sql', '9d071a32523aaa71ab1f9792cb4d002ba34222bafcb4814c8108a621113ab679'), ('0030_registrar_obrigacao_documental.sql', '2d39204d2d2de6f3806266e1ab2c1c45129ce62d61b3b8ec91a0f54574a83e09'), ('0031_registrar_juros_no_pagamento.sql', '7deef8e2183cb59df0bce45fa8a30d0d7edc5bb7f135ce3ecd9388de22e93e1b'), ('0032_prestar_sangria.sql', '144ef8570397022abe8fcc3d49249d821bb36a726830e06395328a59815106e8'), ('0033_registrar_conta_parcelada.sql', '6182191b1090739bf7ee2e1305a71ec347ad291bfbd8e80008b931844f63f7bc'), ('0034_operacoes_entre_empresas.sql', 'd2ee48024db6ec4f4163718a08b5306468673f9ac234af40663c3f5bc558ac92'), ('0035_registrar_emprestimo.sql', '3a02c8fa1079abe762a1267027c0ff36cf9478b03b69358dfec49d525b982509'), ('0036_corrigir_conta_a_pagar.sql', 'dd66132c67499b31a025ba6cb3b1b3b16509cbc4192a55c5649ec2fb69b7cf7a')) v(nome, sha) on v.nome = m.nome and v.sha = m.sha256;
+  if n <> 36 then raise exception 'FV2 atualização: migrações instaladas diferem do Git (nome/hash) — nada foi feito'; end if;
 end $$;
 set local search_path = financeiro_v2, pg_catalog;
 
--- ------------------------------------------------------------------------- 0033_registrar_conta_parcelada.sql (arquivo 6182191b1090739bf7ee2e1305a71ec347ad291bfbd8e80008b931844f63f7bc)
+-- ------------------------------------------------------------------------- 0037_operacoes_de_conta_a_pagar.sql (arquivo d35d12cca2c55001cdf8925cc640bcfaee8a94e02b92ba008e799150d1255e44)
 grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
 -- =====================================================================================================================
--- Financeiro v2 — migração 0033: CONTA A PAGAR RELATADA E PARCELADA com ação ESTREITA — MOVA (26/11/2026)
+-- Financeiro v2 — migração 0037: OPERAÇÕES ESTREITAS DE CONTA A PAGAR EXISTENTE — MOVA Operador Financeiro, fase 2 (28/11/2026)
 --
--- Espelho de economico.registrarContaParcelada. Ação nova `financeiro_v2.registrar_conta_parcelada` (MIGRAÇÃO RESTRITIVA:
--- nenhuma concessão existente a recebe). Caso real: "compra de bebedouro para o açaí, 2 parcelas no cartão, dia 19/12 e 19/01,
--- R$ 194,50" — conta a pagar SEM documento (o relato confirmado no WhatsApp é a origem), em N parcelas com vencimentos EXPLÍCITOS.
--- Quem SÓ tem esta ação (sem registrar/aplicar/corrigir/cancelar/conciliar) grava:
---   * UM lançamento ATIVO pelo TOTAL, de DESPESA — ou PATRIMONIAL apenas na categoria IMOBILIZADO ("Compra de equipamentos e
---     bens", que não entra no resultado) —, com origem OBRIGACAO, criado na MESMA transação das parcelas;
---   * de 1 a 24 parcelas em aberto, sem recorrência, apontando para esse lançamento; a SOMA das parcelas é igual ao total
---     (conferida no fim da transação);
---   * a contraparte nova do relato (ou "Fornecedor não informado") e o histórico dessa operação.
--- Nada de movimentação, liquidação (a conta NÃO nasce paga), documento, receita, dedução, conta, categoria ou alteração de registro
--- existente: as políticas de ALTERAÇÃO não são ampliadas. Políticas ampliadas a partir da expressão ATUAL (pg_policy).
--- A forma de quem só tem `registrar_obrigacao` (0030: uma parcela, despesa, valor igual ao do lançamento) continua IGUAL.
+-- Espelho de aplicacao/contaAPagarEstreita.js. Quatro ações novas (MIGRAÇÃO RESTRITIVA: nenhuma concessão existente as recebe),
+-- cada uma só com a SUA forma, conferida aqui mesmo quando a sessão da identidade enxerga TODAS as ações da concessão (lição da 0036):
+--   * reclassificar_conta_a_pagar      — categoria do LANÇAMENTO da compra (despesa ↔ despesa / equipamento), grupo sem ajuste nem
+--                                        parcela cancelada; a forma da reclassificação continua a da 0014 (só categoria muda).
+--   * ajustar_conta_a_pagar            — AJUSTE documentado (lançamento próprio, MESMA categoria e competência da compra) numa parcela
+--                                        aberta ou parcial; o saldo continua positivo e a situação não muda. O valor original nunca muda.
+--   * mover_competencia_conta_a_pagar  — competência do lançamento e de TODAS as parcelas, sem pagamento, ajuste ou parcela cancelada,
+--                                        entre dois períodos ABERTOS/PRELIMINARES. Vencimentos, liquidações e caixa não mudam.
+--   * cancelar_conta_a_pagar           — parcela sem pagamento CANCELADA (com ajuste negativo do valor dela, saldo zero) ou a compra
+--                                        inteira (parcelas, lançamento e lançamentos de ajuste cancelados). Nada é apagado.
+-- Comum: lançamento ATIVO nascido de conta a pagar, de DESPESA ou PATRIMONIAL só em IMOBILIZADO (empréstimo, parcelamento tributário,
+-- entre empresas e outras patrimoniais ficam FORA); período ABERTO ou FECHAMENTO_PRELIMINAR; nenhuma ação ampla.
+-- As barreiras existentes (posição da 0018/0031/0036, juros da 0031, contas estreitas da 0030/0033/0035, ações do lançamento da
+-- 0014/0036) passam a reconhecer EXATAMENTE essas formas; tudo o mais segue recusado como antes.
 -- =====================================================================================================================
 
 -- 1) Catálogo do banco.
@@ -38,42 +40,402 @@ alter table fv2_concessao drop constraint fv2_concessao_acoes_lista;
 alter table fv2_concessao add constraint fv2_concessao_acoes_lista check (acoes <@ '["financeiro_v2.ver", "financeiro_v2.registrar",
   "financeiro_v2.corrigir", "financeiro_v2.cancelar", "financeiro_v2.conciliar", "financeiro_v2.fechar", "financeiro_v2.homologar",
   "financeiro_v2.revisar", "financeiro_v2.configurar", "financeiro_v2.importar", "financeiro_v2.conceder", "financeiro_v2.documentos",
-  "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.revogar", "financeiro_v2.confirmar_importacao", "financeiro_v2.reabrir",
-  "financeiro_v2.reclassificar", "financeiro_v2.enviar_documento", "financeiro_v2.vincular_pagamento",
+  "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.revogar", "financeiro_v2.confirmar_importacao",
+  "financeiro_v2.reabrir", "financeiro_v2.reclassificar", "financeiro_v2.enviar_documento", "financeiro_v2.vincular_pagamento",
   "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros",
-  "financeiro_v2.prestar_sangria", "financeiro_v2.registrar_conta_parcelada"]'::jsonb);
+  "financeiro_v2.prestar_sangria", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany",
+  "financeiro_v2.registrar_emprestimo", "financeiro_v2.corrigir_conta_a_pagar", "financeiro_v2.reclassificar_conta_a_pagar",
+  "financeiro_v2.ajustar_conta_a_pagar", "financeiro_v2.mover_competencia_conta_a_pagar", "financeiro_v2.cancelar_conta_a_pagar"]'::jsonb);
 
--- 2) Políticas de INCLUSÃO: acrescenta a ação às expressões ATUAIS (sem vínculo documental: a conta relatada não tem documento).
+-- 2) Políticas: acrescenta a ação às expressões ATUAIS, só onde a operação grava.
 do $$
 declare
   r record;
   expr text;
 begin
   for r in select * from (values
-      ('fv2_lancamento', 'fv2_lancamento_incluir'),
-      ('fv2_obrigacao', 'fv2_obrigacao_incluir'),
-      ('fv2_contraparte', 'fv2_contraparte_incluir'),
-      ('fv2_historico', 'fv2_historico_incluir')
-    ) as v(tabela, politica) loop
-    select pg_get_expr(p.polwithcheck, p.polrelid) into expr
+      ('fv2_lancamento', 'fv2_lancamento_alterar', 'using', 'reclassificar_conta_a_pagar'), ('fv2_lancamento', 'fv2_lancamento_alterar', 'check', 'reclassificar_conta_a_pagar'),
+      ('fv2_lancamento', 'fv2_lancamento_alterar', 'using', 'mover_competencia_conta_a_pagar'), ('fv2_lancamento', 'fv2_lancamento_alterar', 'check', 'mover_competencia_conta_a_pagar'),
+      ('fv2_lancamento', 'fv2_lancamento_alterar', 'using', 'cancelar_conta_a_pagar'), ('fv2_lancamento', 'fv2_lancamento_alterar', 'check', 'cancelar_conta_a_pagar'),
+      ('fv2_lancamento', 'fv2_lancamento_incluir', 'check', 'ajustar_conta_a_pagar'), ('fv2_lancamento', 'fv2_lancamento_incluir', 'check', 'cancelar_conta_a_pagar'),
+      ('fv2_ajuste', 'fv2_ajuste_incluir', 'check', 'ajustar_conta_a_pagar'), ('fv2_ajuste', 'fv2_ajuste_incluir', 'check', 'cancelar_conta_a_pagar'),
+      ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'using', 'ajustar_conta_a_pagar'), ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'check', 'ajustar_conta_a_pagar'),
+      ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'using', 'mover_competencia_conta_a_pagar'), ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'check', 'mover_competencia_conta_a_pagar'),
+      ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'using', 'cancelar_conta_a_pagar'), ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'check', 'cancelar_conta_a_pagar'),
+      ('fv2_historico', 'fv2_historico_incluir', 'check', 'reclassificar_conta_a_pagar'), ('fv2_historico', 'fv2_historico_incluir', 'check', 'ajustar_conta_a_pagar'),
+      ('fv2_historico', 'fv2_historico_incluir', 'check', 'mover_competencia_conta_a_pagar'), ('fv2_historico', 'fv2_historico_incluir', 'check', 'cancelar_conta_a_pagar')
+    ) as v(tabela, politica, parte, acao) loop
+    select case r.parte when 'using' then pg_get_expr(p.polqual, p.polrelid) else pg_get_expr(p.polwithcheck, p.polrelid) end into expr
       from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace ns on ns.oid = c.relnamespace
      where ns.nspname = current_schema() and c.relname = r.tabela and p.polname = r.politica;
     if expr is null then
-      raise exception 'Financeiro v2 0033: política %.% não encontrada.', r.tabela, r.politica;
+      raise exception 'Financeiro v2 0037: política %.% (%) não encontrada.', r.tabela, r.politica, r.parte;
     end if;
-    execute format('alter policy %I on %I with check ((%s) or (select fv2_tem_acao(array[%L])))', r.politica, r.tabela, expr, 'financeiro_v2.registrar_conta_parcelada');
+    execute format('alter policy %I on %I %s ((%s) or (select fv2_tem_acao(array[%L])))', r.politica, r.tabela,
+      case r.parte when 'using' then 'using' else 'with check' end, expr, 'financeiro_v2.' || r.acao);
   end loop;
 end $$;
 
--- 3) Quem grava SEM ação ampla: a forma do que é gravado é conferida pelo banco (qualquer gravador não superusuário).
-create or replace function fv2_so_registra_conta_parcelada() returns boolean language sql stable as $$
+-- 3) Predicados comuns.
+create or replace function fv2_pode_estreita(p_acao text) returns boolean language sql stable as $$
   select not (select rolsuper from pg_roles where rolname = current_user)
-     and fv2_tem_acao(array['financeiro_v2.registrar_conta_parcelada'])
+     and fv2_tem_acao(array[p_acao])
      and not fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.aplicar', 'financeiro_v2.corrigir', 'financeiro_v2.cancelar', 'financeiro_v2.conciliar'])
 $$;
+create or replace function fv2_periodo_estreito(p_org uuid, p_unidade uuid, p_competencia text) returns boolean language sql stable as $$
+  select coalesce((select c.estado from fv2_competencia c where c.organizacao_id = p_org and c.unidade_id = p_unidade and c.competencia = p_competencia), 'ABERTA')
+         in ('ABERTA', 'FECHAMENTO_PRELIMINAR')
+$$;
+-- Lançamento de COMPRA elegível: ativo, nascido de conta a pagar, despesa ou equipamento (IMOBILIZADO).
+create or replace function fv2_compra_elegivel(p_situacao text, p_origem jsonb, p_natureza text, p_categoria text) returns boolean language sql immutable as $$
+  select p_situacao = 'ATIVO' and p_origem->>'tipo' = 'OBRIGACAO' and (p_natureza = 'DESPESA' or (p_natureza = 'PATRIMONIAL' and p_categoria = 'IMOBILIZADO'))
+$$;
+-- Colunas que MUDARAM (fora as de controle de versão).
+create or replace function fv2_colunas_alteradas(p_old jsonb, p_new jsonb) returns text[] language sql immutable as $$
+  select coalesce(array_agg(k order by k), '{}') from jsonb_object_keys(p_old || p_new) k
+   where k not in ('versao', 'atualizado_em', 'atualizado_por') and (p_old->k) is distinct from (p_new->k)
+$$;
 
--- A função da 0030 passa a conhecer as DUAS formas estreitas. A identidade que tem as duas ações grava qualquer uma delas, e cada
--- gravação é conferida pela forma em que se encaixa (uma parcela com o valor do lançamento = 0030; parcelada = 0033).
+-- 4) Forma ESTREITA de uma alteração de CONTA (fv2_obrigacao): 'COMPETENCIA' | 'AJUSTE' | 'CANCELAMENTO' | null (não é desta migração).
+create or replace function fv2_forma_estreita_da_conta(o fv2_obrigacao, n fv2_obrigacao) returns text language plpgsql stable as $$
+declare
+  mud text[] := fv2_colunas_alteradas(to_jsonb(o), to_jsonb(n));
+  l record;
+  soma bigint;
+begin
+  select x.situacao, x.origem, x.natureza, x.categoria_codigo, x.competencia into l from fv2_lancamento x
+   where x.organizacao_id = o.organizacao_id and x.unidade_id = o.unidade_id and x.id = o.lancamento_id;
+  if l is null or not fv2_compra_elegivel(l.situacao, l.origem, l.natureza, l.categoria_codigo) or not fv2_periodo_estreito(o.organizacao_id, o.unidade_id, l.competencia) then
+    return null;
+  end if;
+  select coalesce(sum(a.valor_centavos), 0) into soma from fv2_ajuste a where a.organizacao_id = n.organizacao_id and a.unidade_id = n.unidade_id and a.alvo_tipo = 'OBRIGACAO' and a.alvo_id = n.id;
+  if mud = array['competencia'] and fv2_pode_estreita('financeiro_v2.mover_competencia_conta_a_pagar')
+     and o.situacao = 'ABERTA' and o.liquidado_centavos = 0 and o.ajustes_centavos = 0 and soma = 0
+     and fv2_periodo_estreito(o.organizacao_id, o.unidade_id, o.competencia) and fv2_periodo_estreito(n.organizacao_id, n.unidade_id, n.competencia) then
+    return 'COMPETENCIA';
+  end if;
+  if mud <@ array['ajustes_centavos', 'saldo_centavos'] and 'ajustes_centavos' = any(mud) and fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar')
+     and o.situacao in ('ABERTA', 'PARCIAL') and n.situacao = o.situacao and n.saldo_centavos > 0 and n.ajustes_centavos = soma then
+    return 'AJUSTE';
+  end if;
+  if mud <@ array['situacao', 'ajustes_centavos', 'saldo_centavos'] and n.situacao = 'CANCELADA' and o.situacao = 'ABERTA' and o.liquidado_centavos = 0
+     and fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar') and n.ajustes_centavos = soma
+     and (not 'ajustes_centavos' = any(mud) or n.saldo_centavos = 0) then
+    return 'CANCELAMENTO';
+  end if;
+  return null;
+end $$;
+
+-- 5) Forma ESTREITA de uma alteração de LANÇAMENTO: confere reclassificação, competência e cancelamento (descrição é da 0036).
+create or replace function fv2_lancamento_operacao_estreita() returns trigger language plpgsql as $$
+declare
+  mud text[] := fv2_colunas_alteradas(to_jsonb(old), to_jsonb(new));
+  a record;
+  ruim boolean;
+begin
+  -- quem altera lançamento por uma ação ESTREITA (correção da 0036 ou as desta migração): só as formas reconhecidas abaixo
+  if not (fv2_pode_estreita('financeiro_v2.corrigir_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.reclassificar_conta_a_pagar')
+          or fv2_pode_estreita('financeiro_v2.mover_competencia_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')) then
+    return new;
+  end if;
+  if mud <@ array['descricao'] then
+    return new; -- correção cadastral (0036) ou nada
+  end if;
+  -- reclassificação da COMPRA (a forma "só categoria" é conferida pela 0014)
+  if mud <@ array['categoria_id', 'categoria_codigo', 'classificacao', 'natureza'] and 'categoria_codigo' = any(mud) then
+    if fv2_tem_acao(array['financeiro_v2.reclassificar']) then
+      return new; -- reclassificação oficial (ampla): regras da 0014
+    end if;
+    select exists (select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id
+                    and (o.situacao = 'CANCELADA' or o.ajustes_centavos <> 0)) into ruim;
+    if fv2_pode_estreita('financeiro_v2.reclassificar_conta_a_pagar') and fv2_compra_elegivel(old.situacao, old.origem, old.natureza, old.categoria_codigo)
+       and (new.natureza = 'DESPESA' or (new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'IMOBILIZADO'))
+       and new.categoria_codigo not in ('DESPESAS_A_CLASSIFICAR', 'DESCONTOS_A_CLASSIFICAR')
+       and fv2_periodo_estreito(old.organizacao_id, old.unidade_id, old.competencia) and not ruim then
+      return new;
+    end if;
+    raise exception 'Financeiro v2: a reclassificação estreita vale só para a compra de despesa/equipamento sem ajuste nem parcela cancelada, em período aberto.' using errcode = '42501';
+  end if;
+  -- competência da COMPRA: as parcelas já estão no período novo (mesma transação), sem pagamento nem ajuste
+  if mud = array['competencia'] then
+    select exists (select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id
+                    and (o.competencia <> new.competencia or o.situacao <> 'ABERTA' or o.liquidado_centavos <> 0 or o.ajustes_centavos <> 0)) into ruim;
+    if fv2_pode_estreita('financeiro_v2.mover_competencia_conta_a_pagar') and fv2_compra_elegivel(old.situacao, old.origem, old.natureza, old.categoria_codigo)
+       and fv2_periodo_estreito(old.organizacao_id, old.unidade_id, old.competencia) and fv2_periodo_estreito(new.organizacao_id, new.unidade_id, new.competencia) and not ruim then
+      return new;
+    end if;
+    raise exception 'Financeiro v2: a competência estreita muda a compra inteira (sem pagamento, ajuste ou parcela cancelada) entre períodos abertos.' using errcode = '42501';
+  end if;
+  -- cancelamento: (a) o lançamento da COMPRA com todas as parcelas já canceladas, sem pagamento; (b) o lançamento de AJUSTE de uma
+  -- parcela dessa compra (cancelado junto com ela)
+  if mud = array['situacao'] and old.situacao = 'ATIVO' and new.situacao = 'CANCELADO' and fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')
+     and fv2_periodo_estreito(old.organizacao_id, old.unidade_id, old.competencia) then
+    if fv2_compra_elegivel(old.situacao, old.origem, old.natureza, old.categoria_codigo)
+       and not exists (select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id
+                        and (o.situacao <> 'CANCELADA' or o.liquidado_centavos <> 0))
+       and exists (select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id) then
+      return new;
+    end if;
+    if old.origem->>'tipo' = 'AJUSTE' then
+      select aj.alvo_id, ob.situacao, ob.liquidado_centavos, lc.natureza, lc.categoria_codigo into a
+        from fv2_ajuste aj join fv2_obrigacao ob on ob.organizacao_id = aj.organizacao_id and ob.unidade_id = aj.unidade_id and ob.id = aj.alvo_id
+        join fv2_lancamento lc on lc.organizacao_id = ob.organizacao_id and lc.unidade_id = ob.unidade_id and lc.id = ob.lancamento_id
+       where aj.organizacao_id = old.organizacao_id and aj.unidade_id = old.unidade_id and aj.id = (old.origem->>'id')::uuid and aj.alvo_tipo = 'OBRIGACAO';
+      if a.alvo_id is not null and a.situacao = 'CANCELADA' and a.liquidado_centavos = 0 and a.categoria_codigo = old.categoria_codigo then
+        return new;
+      end if;
+    end if;
+    raise exception 'Financeiro v2: o cancelamento estreito vale só para a compra sem pagamento (ou o ajuste de parcela dela), em período aberto.' using errcode = '42501';
+  end if;
+  raise exception 'Financeiro v2: alteração de lançamento fora das operações estreitas de conta a pagar.' using errcode = '42501';
+end $$;
+create trigger fv2_lancamento_operacao_estreita before update on fv2_lancamento for each row execute function fv2_lancamento_operacao_estreita();
+
+-- 6) AJUSTE estreito (valor ou cancelamento de parcela): o lançamento do ajuste e o ajuste apontam um para o outro, na MESMA categoria
+--    e competência da compra, para uma parcela aberta/parcial elegível. Conferido no FIM da transação (o lançamento nasce antes do ajuste).
+create or replace function fv2_ajuste_estreito_confere() returns trigger language plpgsql as $$
+declare
+  aj record;
+  ob record;
+  lc record;
+begin
+  if not (fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar'))
+     or new.origem->>'tipo' is distinct from 'AJUSTE' or new.categoria_codigo = 'JUROS_E_MULTAS_DE_FORNECEDORES' then
+    return null; -- juros: forma da 0031
+  end if;
+  select x.* into aj from fv2_ajuste x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = (new.origem->>'id')::uuid;
+  if aj.id is null or aj.lancamento_id is distinct from new.id or aj.alvo_tipo <> 'OBRIGACAO' or aj.valor_centavos <> new.valor_centavos then
+    raise exception 'Financeiro v2: o lançamento de ajuste estreito precisa do ajuste correspondente, com o mesmo valor.' using errcode = '42501';
+  end if;
+  select x.* into ob from fv2_obrigacao x where x.organizacao_id = aj.organizacao_id and x.unidade_id = aj.unidade_id and x.id = aj.alvo_id;
+  select x.* into lc from fv2_lancamento x where x.organizacao_id = ob.organizacao_id and x.unidade_id = ob.unidade_id and x.id = ob.lancamento_id;
+  if ob.id is null or lc.id is null or lc.categoria_codigo <> new.categoria_codigo or lc.competencia <> new.competencia or new.retido_no_repasse
+     or not fv2_compra_elegivel(lc.situacao, lc.origem, lc.natureza, lc.categoria_codigo) or not fv2_periodo_estreito(new.organizacao_id, new.unidade_id, new.competencia) then
+    raise exception 'Financeiro v2: o ajuste estreito fica na mesma categoria e competência da compra elegível.' using errcode = '42501';
+  end if;
+  return null;
+end $$;
+create constraint trigger fv2_lancamento_ajuste_estreito after insert on fv2_lancamento deferrable initially deferred
+  for each row execute function fv2_ajuste_estreito_confere();
+
+-- 6b) Fim da transação: a CONTA alterada pela forma estreita termina coerente com a COMPRA — competência igual à do lançamento; parcela
+--     cancelada com saldo zero pelo ajuste (parcela) ou com o lançamento da compra cancelado (compra inteira).
+create or replace function fv2_conta_estreita_coerente() returns trigger language plpgsql as $$
+declare
+  lc record;
+begin
+  if not (fv2_pode_estreita('financeiro_v2.mover_competencia_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')) then
+    return null;
+  end if;
+  select x.competencia, x.situacao into lc from fv2_lancamento x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.lancamento_id;
+  if new.competencia is distinct from old.competencia and new.competencia is distinct from lc.competencia then
+    raise exception 'Financeiro v2: a competência muda na compra inteira (lançamento e parcelas juntos).' using errcode = '42501';
+  end if;
+  if new.situacao = 'CANCELADA' and old.situacao <> 'CANCELADA' and not (new.saldo_centavos = 0 or lc.situacao = 'CANCELADO') then
+    raise exception 'Financeiro v2: parcela cancelada sozinha exige o ajuste do valor dela; a compra inteira cancela também o lançamento.' using errcode = '42501';
+  end if;
+  return null;
+end $$;
+create constraint trigger fv2_obrigacao_estreita_coerente after update on fv2_obrigacao deferrable initially deferred
+  for each row execute function fv2_conta_estreita_coerente();
+
+-- 7) Inclusão do AJUSTE estreito: aponta para uma conta aberta/parcial da compra elegível e para o SEU lançamento (criado antes, mesma
+--    transação), com o mesmo valor, a mesma categoria e a mesma competência da compra. Ajuste de juros segue a forma da 0031.
+create or replace function fv2_ajuste_estreito() returns trigger language plpgsql as $$
+declare
+  ob record;
+  lc record;
+  la record;
+begin
+  if not (fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')) then
+    return new;
+  end if;
+  select x.* into la from fv2_lancamento x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.lancamento_id;
+  if la.id is not null and la.categoria_codigo = 'JUROS_E_MULTAS_DE_FORNECEDORES' and fv2_so_registra_juros() then
+    return new; -- encargo do pagamento: forma da 0031
+  end if;
+  select x.* into ob from fv2_obrigacao x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.alvo_id;
+  select x.* into lc from fv2_lancamento x where x.organizacao_id = ob.organizacao_id and x.unidade_id = ob.unidade_id and x.id = ob.lancamento_id;
+  if new.alvo_tipo <> 'OBRIGACAO' or new.valor_centavos = 0 or la.id is null or la.origem->>'tipo' <> 'AJUSTE' or la.origem->>'id' <> new.id::text
+     or la.valor_centavos <> new.valor_centavos or ob.id is null or ob.situacao not in ('ABERTA', 'PARCIAL') or lc.id is null
+     or la.categoria_codigo <> lc.categoria_codigo or la.competencia <> lc.competencia or new.competencia <> lc.competencia
+     or not fv2_compra_elegivel(lc.situacao, lc.origem, lc.natureza, lc.categoria_codigo) or not fv2_periodo_estreito(new.organizacao_id, new.unidade_id, new.competencia) then
+    raise exception 'Financeiro v2: o ajuste estreito aponta para uma conta aberta da compra elegível e para o seu lançamento, na mesma categoria e competência.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+create trigger fv2_ajuste_estreito before insert on fv2_ajuste for each row execute function fv2_ajuste_estreito();
+
+-- 8) Barreira de POSIÇÃO (0018/0031/0036): IDÊNTICA, reconhecendo as formas estreitas desta migração.
+create or replace function fv2_vinculo_extrato_posicao() returns trigger language plpgsql as $$
+declare
+  livres text[] := array['versao', 'atualizado_em', 'atualizado_por', 'extras'] || tg_argv[0]::text[];
+  soma bigint;
+  so_encargo boolean := false;
+begin
+  if not fv2_so_vincula() then
+    return new;
+  end if;
+  -- 0037: operação ESTREITA de conta (competência, ajuste de valor, cancelamento) reconhecida na forma EXATA (fv2_forma_estreita_da_conta)
+  if tg_table_name = 'fv2_obrigacao' then
+    if fv2_forma_estreita_da_conta(old, new) is not null then
+      return new;
+    end if;
+  end if;
+  -- 0036: correção cadastral estreita — ALGUM campo cadastral muda e nenhuma coluna de posição; fv2_correcao_de_conta confere que
+  -- NADA além do cadastral mudou (competência, valor, situação… são recusados lá). Sem campo cadastral mudando, segue a barreira abaixo.
+  if tg_table_name = 'fv2_obrigacao' and fv2_so_corrige_conta()
+     and ((to_jsonb(old)->'contraparte_id') is distinct from (to_jsonb(new)->'contraparte_id') or (to_jsonb(old)->'vencimento') is distinct from (to_jsonb(new)->'vencimento')
+       or (to_jsonb(old)->'descricao') is distinct from (to_jsonb(new)->'descricao')
+       or (to_jsonb(old)->'extras'->'observacao') is distinct from (to_jsonb(new)->'extras'->'observacao')
+       or (to_jsonb(old)->'extras'->'formaPagamento') is distinct from (to_jsonb(new)->'extras'->'formaPagamento'))
+     and (to_jsonb(old)->>'liquidado_centavos') is not distinct from (to_jsonb(new)->>'liquidado_centavos')
+     and (to_jsonb(old)->>'saldo_centavos') is not distinct from (to_jsonb(new)->>'saldo_centavos')
+     and (to_jsonb(old)->>'ajustes_centavos') is not distinct from (to_jsonb(new)->>'ajustes_centavos')
+     and (to_jsonb(old)->>'situacao') is not distinct from (to_jsonb(new)->>'situacao') then
+    return new;
+  end if;
+  -- 0036: quem só muda a posição não reescreve a observação nem a forma de pagamento da conta
+  if tg_table_name = 'fv2_obrigacao'
+     and ((to_jsonb(old)->'extras'->'observacao') is distinct from (to_jsonb(new)->'extras'->'observacao')
+       or (to_jsonb(old)->'extras'->'formaPagamento') is distinct from (to_jsonb(new)->'extras'->'formaPagamento')) then
+    raise exception 'Financeiro v2: a baixa não altera a observação nem a forma de pagamento da conta.' using errcode = '42501';
+  end if;
+  if tg_table_name = 'fv2_obrigacao' and fv2_tem_acao(array['financeiro_v2.registrar_juros'])
+     and (to_jsonb(new)->>'ajustes_centavos') is distinct from (to_jsonb(old)->>'ajustes_centavos') then
+    select coalesce(sum(a.valor_centavos), 0) into soma from fv2_ajuste a
+     where a.organizacao_id = new.organizacao_id and a.unidade_id = new.unidade_id and a.alvo_id = new.id;
+    if soma <> (to_jsonb(new)->>'ajustes_centavos')::bigint
+       or (to_jsonb(new)->>'ajustes_centavos')::bigint < (to_jsonb(old)->>'ajustes_centavos')::bigint
+       or new.situacao is distinct from old.situacao then
+      raise exception 'Financeiro v2: o encargo só soma à conta o ajuste registrado com ele, sem reduzir nem mudar a situação.' using errcode = '42501';
+    end if;
+    livres := livres || array['ajustes_centavos', 'saldo_centavos'];
+    so_encargo := true;
+  end if;
+  if (to_jsonb(old) - livres) is distinct from (to_jsonb(new) - livres) then
+    raise exception 'Financeiro v2: vincular pagamento do extrato só muda a posição (alocado/pago/saldo), nada mais.' using errcode = '42501';
+  end if;
+  if (to_jsonb(new)->>tg_argv[1])::bigint < (to_jsonb(old)->>tg_argv[1])::bigint then
+    raise exception 'Financeiro v2: vincular pagamento do extrato não desfaz baixas (use o estorno, com a permissão própria).' using errcode = '42501';
+  end if;
+  if tg_table_name = 'fv2_obrigacao' and not so_encargo and (to_jsonb(new)->>'situacao') not in ('PARCIAL', 'QUITADA') then
+    raise exception 'Financeiro v2: vincular pagamento do extrato só deixa a conta parcial ou quitada.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+
+-- 9) Barreira de AÇÕES do lançamento (0014/0036): IDÊNTICA, com as ações estreitas desta migração nas listas.
+create or replace function fv2_exigir_acao_do_lancamento() returns trigger language plpgsql as $$
+declare
+  cat record;
+begin
+  if (select rolsuper from pg_roles where rolname = current_user) then
+    return new;
+  end if;
+  if (new.categoria_id, new.categoria_codigo, new.classificacao, new.natureza)
+       is not distinct from (old.categoria_id, old.categoria_codigo, old.classificacao, old.natureza) then
+    -- Sem mudança de categoria: as ações de sempre (0036: + corrigir_conta_a_pagar, limitada à DESCRIÇÃO por fv2_correcao_de_lancamento). `reclassificar` sozinho não muda valor nem cancela.
+    -- 0037: + mover_competencia/cancelar_conta_a_pagar (a forma é conferida por fv2_lancamento_operacao_estreita)
+    if not fv2_tem_acao(array['financeiro_v2.cancelar', 'financeiro_v2.corrigir', 'financeiro_v2.revisar', 'financeiro_v2.corrigir_conta_a_pagar',
+                              'financeiro_v2.mover_competencia_conta_a_pagar', 'financeiro_v2.cancelar_conta_a_pagar']) then
+      raise exception 'Financeiro v2: alterar o lançamento exige cancelar, corrigir ou revisar.' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+  -- 0037: + reclassificar_conta_a_pagar (só a compra elegível: fv2_lancamento_operacao_estreita)
+  if not fv2_tem_acao(array['financeiro_v2.reclassificar', 'financeiro_v2.reclassificar_conta_a_pagar']) then
+    raise exception 'Financeiro v2: mudar a categoria de um lançamento exige reclassificar.' using errcode = '42501';
+  end if;
+  if old.situacao <> 'ATIVO' then
+    raise exception 'Financeiro v2: lançamento cancelado não é reclassificado.' using errcode = 'FV037';
+  end if;
+  if (new.valor_centavos, new.moeda, new.competencia, new.situacao, new.data_operacao, new.descricao, new.origem, new.canal,
+      new.retido_no_repasse, new.fonte_sistema, new.fonte_id_externo)
+       is distinct from (old.valor_centavos, old.moeda, old.competencia, old.situacao, old.data_operacao, old.descricao, old.origem, old.canal,
+      old.retido_no_repasse, old.fonte_sistema, old.fonte_id_externo) then
+    raise exception 'Financeiro v2: a reclassificação muda só a categoria — a identidade do fato econômico é preservada.' using errcode = 'FV037';
+  end if;
+  if not (new.natureza = old.natureza
+          or (old.origem->>'tipo' = 'OBRIGACAO' and old.natureza in ('DESPESA', 'PATRIMONIAL') and new.natureza in ('DESPESA', 'PATRIMONIAL'))) then
+    raise exception 'Financeiro v2: natureza econômica incompatível na reclassificação.' using errcode = 'FV038';
+  end if;
+  if new.categoria_codigo in ('DESCONTOS_A_CLASSIFICAR', 'DESPESAS_A_CLASSIFICAR') then
+    raise exception 'Financeiro v2: categoria provisória não é destino de reclassificação.' using errcode = 'FV038';
+  end if;
+  select c.codigo, c.natureza, c.classificacao, c.aceita_lancamento, c.ativa into cat
+    from fv2_categoria c where c.id = new.categoria_id and c.organizacao_id = new.organizacao_id and c.unidade_id = new.unidade_id;
+  if cat.codigo is null or cat.codigo <> new.categoria_codigo or cat.natureza <> new.natureza or cat.classificacao <> new.classificacao
+     or not cat.aceita_lancamento or not cat.ativa then
+    raise exception 'Financeiro v2: a categoria de destino não confere com o plano de contas da unidade.' using errcode = 'FV038';
+  end if;
+  return new;
+end $$;
+
+-- 10) Forma do ENCARGO (0031): IDÊNTICA, deixando o ajuste estreito (fora da categoria de juros) para os gatilhos desta migração.
+create or replace function fv2_juros_documental() returns trigger language plpgsql as $$
+declare
+  o record;
+  l record;
+begin
+  if not fv2_so_registra_juros() then
+    return new;
+  end if;
+  if tg_table_name = 'fv2_lancamento' then
+    if new.origem->>'tipo' is distinct from 'AJUSTE' then
+      return new; -- outros lançamentos são decididos pelas políticas/gatilhos das demais ações
+    end if;
+    -- 0037: ajuste ESTREITO de valor/cancelamento (fora da categoria de juros): conferido pelos gatilhos da 0037
+    if new.categoria_codigo <> 'JUROS_E_MULTAS_DE_FORNECEDORES' and (fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')) then
+      return new;
+    end if;
+    if new.natureza <> 'DESPESA' or new.situacao <> 'ATIVO' or new.valor_centavos <= 0 or new.categoria_codigo <> 'JUROS_E_MULTAS_DE_FORNECEDORES' or new.retido_no_repasse then
+      raise exception 'Financeiro v2: o encargo do pagamento é uma despesa ativa na categoria oficial de juros e multas.' using errcode = '42501';
+    end if;
+    return new;
+  end if;
+  -- fv2_ajuste
+  -- 0037: ajuste ESTREITO (lançamento fora da categoria de juros): conferido por fv2_ajuste_estreito
+  if (fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar')) and coalesce((select x.categoria_codigo from fv2_lancamento x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.lancamento_id), '') <> 'JUROS_E_MULTAS_DE_FORNECEDORES' then
+    return new;
+  end if;
+  if new.alvo_tipo <> 'OBRIGACAO' or new.valor_centavos <= 0 or new.lancamento_id is null then
+    raise exception 'Financeiro v2: o encargo é um ajuste positivo de conta a pagar, com seu lançamento.' using errcode = '42501';
+  end if;
+  select x.* into o from fv2_obrigacao x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.alvo_id;
+  select x.* into l from fv2_lancamento x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.lancamento_id;
+  if o.id is null or l.id is null or l.categoria_codigo <> 'JUROS_E_MULTAS_DE_FORNECEDORES' or l.valor_centavos <> new.valor_centavos then
+    raise exception 'Financeiro v2: o encargo aponta para a conta e para o lançamento de juros e multas com o mesmo valor.' using errcode = '42501';
+  end if;
+  if new.valor_centavos * 10 > o.valor_base_centavos then
+    raise exception 'Financeiro v2: encargo acima de 10%% do valor da conta exige uma pessoa autorizada.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+
+-- 12) Correção de lançamento (0036): IDÊNTICA, mas só atua quando a DESCRIÇÃO muda (as demais formas são das barreiras da 0037).
+create or replace function fv2_correcao_de_lancamento() returns trigger language plpgsql as $$
+begin
+  if not fv2_so_corrige_conta() then
+    return new;
+  end if;
+  -- 0037: a descrição NÃO mudou ⇒ não é correção cadastral (reclassificação, competência, cancelamento: conferidos pelas barreiras da 0037)
+  if old.descricao is not distinct from new.descricao then
+    return new;
+  end if;
+  if (to_jsonb(old) - array['versao', 'atualizado_em', 'atualizado_por', 'descricao']) is distinct from (to_jsonb(new) - array['versao', 'atualizado_em', 'atualizado_por', 'descricao']) then
+    raise exception 'Financeiro v2: a correção estreita muda no lançamento só a descrição.' using errcode = '42501';
+  end if;
+  if old.origem->>'tipo' <> 'OBRIGACAO' or exists (
+       select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id
+          and not fv2_conta_corrigivel(o.organizacao_id, o.unidade_id, o.id))
+     or not exists (select 1 from fv2_obrigacao o where o.organizacao_id = old.organizacao_id and o.unidade_id = old.unidade_id and o.lancamento_id = old.id) then
+    raise exception 'Financeiro v2: a descrição do lançamento só muda com todas as parcelas da conta abertas e sem pagamento.' using errcode = '42501';
+  end if;
+  return new;
+end $$;
+
+-- 11) Contas estreitas (0030/0033/0035): IDÊNTICA, aceitando o lançamento de AJUSTE estreito (conferido pelos gatilhos desta migração).
 create or replace function fv2_obrigacao_documental() returns trigger language plpgsql as $$
 declare
   l record;
@@ -87,16 +449,18 @@ begin
   if tg_table_name = 'fv2_lancamento' then
     -- 27/11: PRESERVA a exceção da 0031 (encargo do pagamento por quem tem registrar_juros; forma conferida por
     -- fv2_juros_documental). A primeira versão desta migração a perdia e recusava toda despesa paga com juros/multa.
-    if documental and new.origem->>'tipo' = 'AJUSTE' and fv2_tem_acao(array['financeiro_v2.registrar_juros']) then
+    -- 0037: + ajuste ESTREITO de valor/cancelamento de parcela (forma conferida pelos gatilhos da 0037)
+    if new.origem->>'tipo' = 'AJUSTE' and ((documental and fv2_tem_acao(array['financeiro_v2.registrar_juros'])) or (fv2_pode_estreita('financeiro_v2.ajustar_conta_a_pagar') or fv2_pode_estreita('financeiro_v2.cancelar_conta_a_pagar'))) then
       return new;
     end if;
     if new.situacao <> 'ATIVO' or new.valor_centavos <= 0 or new.origem->>'tipo' <> 'OBRIGACAO' or new.retido_no_repasse then
       raise exception 'Financeiro v2: só se registra lançamento ativo nascido de conta a pagar.' using errcode = '42501';
     end if;
-    if new.natureza = 'DESPESA' or (parcelada and new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'IMOBILIZADO') then
+    if new.natureza = 'DESPESA' or (parcelada and new.natureza = 'PATRIMONIAL' and new.categoria_codigo = 'IMOBILIZADO')
+       or fv2_principal_de_emprestimo(new.natureza, new.categoria_codigo) then
       return new;
     end if;
-    raise exception 'Financeiro v2: conta a pagar estreita só em categoria de DESPESA (ou compra de equipamentos, na relatada).' using errcode = '42501';
+    raise exception 'Financeiro v2: conta a pagar estreita só em categoria de DESPESA (ou compra de equipamentos, na relatada, ou principal de empréstimo com registrar_emprestimo).' using errcode = '42501';
   end if;
   -- fv2_obrigacao
   if new.recorrencia is not null or new.situacao <> 'ABERTA' or new.liquidado_centavos <> 0 or new.ajustes_centavos <> 0 then
@@ -107,8 +471,9 @@ begin
   if not found or l.criado_em_xid <> xid_atual or l.origem->>'id' <> new.grupo_id::text then
     raise exception 'Financeiro v2: a conta a pagar estreita aponta para o lançamento criado com ela (mesma transação).' using errcode = '42501';
   end if;
-  -- forma da 0030: uma parcela, valor igual ao do lançamento, natureza DESPESA
-  if documental and (new.parcela->>'total')::int = 1 and l.valor_centavos = new.valor_base_centavos and l.natureza = 'DESPESA' then
+  -- forma da 0030: uma parcela, valor igual ao do lançamento, natureza DESPESA (0035: ou principal de empréstimo com a ação nova)
+  if documental and (new.parcela->>'total')::int = 1 and l.valor_centavos = new.valor_base_centavos
+     and (l.natureza = 'DESPESA' or fv2_principal_de_emprestimo(l.natureza, l.categoria_codigo)) then
     return new;
   end if;
   -- forma da 0033: 1 a 24 parcelas do MESMO lançamento (a soma é conferida no fim da transação)
@@ -118,456 +483,8 @@ begin
   end if;
   raise exception 'Financeiro v2: forma de conta a pagar não permitida para esta permissão estreita.' using errcode = '42501';
 end $$;
-
--- 4) Soma das parcelas = total do lançamento (no fim da transação, quando todas as parcelas já foram gravadas).
-create or replace function fv2_conta_parcelada_soma() returns trigger language plpgsql as $$
-declare
-  total bigint;
-  soma bigint;
-  qtd int;
-begin
-  if not fv2_so_registra_conta_parcelada() then
-    return null;
-  end if;
-  select l.valor_centavos into total from fv2_lancamento l
-   where l.organizacao_id = new.organizacao_id and l.unidade_id = new.unidade_id and l.id = new.lancamento_id;
-  select coalesce(sum(o.valor_base_centavos), 0), count(*) into soma, qtd from fv2_obrigacao o
-   where o.organizacao_id = new.organizacao_id and o.unidade_id = new.unidade_id and o.grupo_id = new.grupo_id;
-  if soma <> total or qtd <> (new.parcela->>'total')::int then
-    raise exception 'Financeiro v2: as parcelas da conta relatada precisam somar o total do lançamento.' using errcode = '42501';
-  end if;
-  return null;
-end $$;
-create constraint trigger fv2_obrigacao_parcelada_soma after insert on fv2_obrigacao deferrable initially deferred
-  for each row execute function fv2_conta_parcelada_soma();
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0033_registrar_conta_parcelada.sql', '6182191b1090739bf7ee2e1305a71ec347ad291bfbd8e80008b931844f63f7bc', '6182191b1090739bf7ee2e1305a71ec347ad291bfbd8e80008b931844f63f7bc');
-
--- ------------------------------------------------------------------------- 0034_operacoes_entre_empresas.sql (arquivo d2ee48024db6ec4f4163718a08b5306468673f9ac234af40663c3f5bc558ac92)
-grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
--- =====================================================================================================================
--- Financeiro v2 — migração 0034: OPERAÇÕES ENTRE EMPRESAS (intercompany) — MOVA (26/11/2026)
---
--- Espelho de aplicacao/intercompany.js. Caso real: a Subway Saci (MP ALIMENTOS) pagou R$ 6.495,60 à distribuidora pelo Açaí no Grau
--- Saci (AF PRODUTOS). Empresa PAGADORA e empresa BENEFICIÁRIA são dimensões diferentes:
---   * DEVEDORA (quem se beneficiou, ex.: Açaí): a conta do fornecedor é LIQUIDADA "paga por outra empresa" — liquidação SEM saída
---     bancária nesta empresa (`extras.origemDoVinculo = 'INTERCOMPANY'`) — e nasce o PASSIVO com a credora. A despesa é reconhecida
---     UMA vez (pela conta do fornecedor); nenhuma saída de banco ou caixa é inventada na devedora.
---   * CREDORA (quem pagou, ex.: Subway): nasce o ATIVO (a receber da devedora). A saída real é a do EXTRATO: ela só é LIGADA ao
---     ativo quando existe (nunca criada aqui) — não é despesa operacional da credora nem duplica a saída importada.
--- Os dois lados (um em cada escopo) compartilham UM vínculo (`vinculo_id`), gravados na MESMA transação do banco (a aplicação assume
--- a sessão de cada escopo em sequência). REEMBOLSO (parcial ou integral) liquida os dois lados; não é receita nem despesa.
--- Vencimento do reembolso é OPCIONAL (nunca inventado). Categoria contábil: OPERACOES_ENTRE_EMPRESAS (patrimonial; fora da DRE).
--- Ação nova `financeiro_v2.registrar_intercompany` (MIGRAÇÃO RESTRITIVA: nenhuma concessão existente a recebe).
--- Mesmas proteções das demais tabelas: escopo por empresa/unidade (RLS), sem exclusão, versão e histórico obrigatórios.
--- =====================================================================================================================
-
-create table fv2_intercompany (
-  seq                        bigint generated always as identity,
-  id                         uuid not null primary key,
-  organizacao_id             uuid not null,
-  unidade_id                 uuid not null,
-  versao                     integer not null check (versao >= 1),
-  criado_em                  timestamptz not null,
-  criado_por                 uuid not null,
-  atualizado_em              timestamptz not null,
-  atualizado_por             uuid not null,
-  chave_idempotencia         text not null check (length(chave_idempotencia) between 1 and 400),
-  impressao                  text,
-  extras                     jsonb not null default '{}'::jsonb check (jsonb_typeof(extras) = 'object'),
-  vinculo_id                 uuid not null,
-  papel                      text not null check (papel in ('DEVEDORA', 'CREDORA')),
-  contraparte_organizacao_id uuid not null,
-  contraparte_unidade_id     uuid not null,
-  contraparte_nome           text not null check (length(btrim(contraparte_nome)) between 1 and 200),
-  descricao                  text not null check (length(btrim(descricao)) between 1 and 300),
-  data_pagamento             date not null,
-  valor_centavos             bigint not null check (valor_centavos > 0),
-  reembolsado_centavos       bigint not null default 0 check (reembolsado_centavos >= 0),
-  saldo_centavos             bigint not null,
-  vencimento                 date,
-  situacao                   text not null check (situacao in ('ABERTO', 'PARCIAL', 'LIQUIDADO')),
-  obrigacao_id               uuid,
-  movimentacao_id            uuid,
-  documento_ids              uuid[] not null default '{}',
-  liquidacoes                jsonb not null default '[]'::jsonb check (jsonb_typeof(liquidacoes) = 'array'),
-  unique (organizacao_id, unidade_id, id),
-  unique (organizacao_id, unidade_id, vinculo_id),
-  check (reembolsado_centavos <= valor_centavos),
-  check (saldo_centavos = valor_centavos - reembolsado_centavos),
-  check (situacao = case when reembolsado_centavos = 0 then 'ABERTO' when reembolsado_centavos = valor_centavos then 'LIQUIDADO' else 'PARCIAL' end),
-  check ((organizacao_id, unidade_id) <> (contraparte_organizacao_id, contraparte_unidade_id)),
-  check (papel = 'DEVEDORA' or obrigacao_id is null),
-  check (papel = 'CREDORA' or movimentacao_id is null),
-  check (vencimento is null or vencimento >= data_pagamento),
-  check (atualizado_em >= criado_em)
-);
-alter table fv2_intercompany add constraint fv2_intercompany_escopo_fk foreign key (organizacao_id, unidade_id) references fv2_escopo;
-create unique index fv2_intercompany_chave_uq on fv2_intercompany (organizacao_id, unidade_id, chave_idempotencia);
--- uma conta do fornecedor só é paga por outra empresa UMA vez; uma saída do extrato só sustenta UM ativo intercompany
-create unique index fv2_intercompany_obrigacao_uq on fv2_intercompany (organizacao_id, unidade_id, obrigacao_id) where obrigacao_id is not null;
-create unique index fv2_intercompany_movimentacao_uq on fv2_intercompany (organizacao_id, unidade_id, movimentacao_id) where movimentacao_id is not null;
-create index fv2_intercompany_vencimento on fv2_intercompany (organizacao_id, unidade_id, vencimento) where situacao <> 'LIQUIDADO';
-
-create trigger fv2_intercompany_sem_delete before delete on fv2_intercompany for each row execute function fv2_proibir_exclusao();
-create trigger fv2_intercompany_sem_truncate before truncate on fv2_intercompany for each statement execute function fv2_proibir_exclusao();
-create trigger fv2_intercompany_versao before update on fv2_intercompany for each row execute function fv2_guardar_versao();
-create constraint trigger fv2_intercompany_historico after insert or update on fv2_intercompany deferrable initially deferred
-  for each row execute function fv2_exigir_historico('INTERCOMPANY');
-
--- O fato original é imutável: só o reembolso (posição + histórico de liquidações), o vencimento informado depois e a ligação da saída
--- do extrato (uma vez) mudam. O histórico de liquidações só CRESCE.
-create function fv2_intercompany_imutavel() returns trigger language plpgsql as $$
-declare
-  livres text[] := array['versao', 'atualizado_em', 'atualizado_por', 'extras', 'reembolsado_centavos', 'saldo_centavos', 'situacao', 'liquidacoes', 'vencimento', 'movimentacao_id'];
-  m record;
-  xid_atual text := (pg_current_xact_id()::text::bigint % 4294967296)::text;
-begin
-  if tg_op = 'INSERT' then
-    if new.reembolsado_centavos <> 0 or jsonb_array_length(new.liquidacoes) <> 0 then
-      raise exception 'FV2: a operação entre empresas nasce sem reembolso' using errcode = 'FV010';
-    end if;
-    if new.movimentacao_id is not null then
-      select x.* into m from fv2_movimentacao x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.movimentacao_id;
-      if not found or m.sentido <> 'SAIDA' or m.situacao <> 'VALIDA' or m.valor_centavos <> new.valor_centavos or m.xmin::text = xid_atual then
-        raise exception 'FV2: só uma saída JÁ importada do extrato, válida e do mesmo valor, é ligada ao ativo entre empresas' using errcode = 'FV010';
-      end if;
-    end if;
-    return new;
-  end if;
-  if (to_jsonb(old) - livres) is distinct from (to_jsonb(new) - livres) then
-    raise exception 'FV2: o fato original da operação entre empresas não pode ser alterado' using errcode = 'FV010';
-  end if;
-  if new.reembolsado_centavos < old.reembolsado_centavos or jsonb_array_length(new.liquidacoes) < jsonb_array_length(old.liquidacoes)
-     or coalesce((select jsonb_agg(e order by i) from jsonb_array_elements(new.liquidacoes) with ordinality t(e, i) where i <= jsonb_array_length(old.liquidacoes)), '[]'::jsonb) is distinct from old.liquidacoes
-     or new.reembolsado_centavos <> coalesce((select sum((e->>'valorCentavos')::bigint) from jsonb_array_elements(new.liquidacoes) e), 0) then
-    raise exception 'FV2: reembolso entre empresas só acrescenta liquidações (nada é apagado ou reescrito)' using errcode = 'FV010';
-  end if;
-  if old.movimentacao_id is not null and new.movimentacao_id is distinct from old.movimentacao_id then
-    raise exception 'FV2: a saída do extrato ligada à operação entre empresas não se troca' using errcode = 'FV010';
-  end if;
-  if old.movimentacao_id is null and new.movimentacao_id is not null then
-    select x.* into m from fv2_movimentacao x where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.movimentacao_id;
-    if not found or m.sentido <> 'SAIDA' or m.situacao <> 'VALIDA' or m.valor_centavos <> new.valor_centavos or m.xmin::text = xid_atual then
-      raise exception 'FV2: só uma saída JÁ importada do extrato, válida e do mesmo valor, é ligada ao ativo entre empresas' using errcode = 'FV010';
-    end if;
-  end if;
-  return new;
-end $$;
-create trigger fv2_intercompany_fato before insert or update on fv2_intercompany for each row execute function fv2_intercompany_imutavel();
-
-alter table fv2_intercompany enable row level security;
-alter table fv2_intercompany force row level security;
-create policy fv2_intercompany_escopo on fv2_intercompany
-  using (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
-  with check (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()));
-create policy fv2_intercompany_ler on fv2_intercompany as restrictive for select using ((select fv2_sessao_operacional()));
-create policy fv2_intercompany_incluir on fv2_intercompany as restrictive for insert with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.registrar_intercompany'])));
-create policy fv2_intercompany_alterar on fv2_intercompany as restrictive for update
-  using ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.registrar_intercompany'])))
-  with check ((select fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.corrigir', 'financeiro_v2.registrar_intercompany'])));
-grant select, insert, update on fv2_intercompany to fv2_app;
-
-create or replace function fv2_tabela_do_tipo(p_tipo text) returns regclass language sql immutable as $$
-  select case p_tipo
-    when 'CONTA' then 'fv2_conta' when 'CONTRAPARTE' then 'fv2_contraparte' when 'CATEGORIA' then 'fv2_categoria'
-    when 'LANCAMENTO' then 'fv2_lancamento' when 'VENDA' then 'fv2_venda' when 'PAGAMENTO_VENDA' then 'fv2_pagamento_venda'
-    when 'OBRIGACAO' then 'fv2_obrigacao' when 'RECEBIVEL' then 'fv2_recebivel' when 'MOVIMENTACAO' then 'fv2_movimentacao'
-    when 'LIQUIDACAO' then 'fv2_liquidacao' when 'TRANSFERENCIA' then 'fv2_transferencia' when 'AJUSTE' then 'fv2_ajuste'
-    when 'ESTORNO' then 'fv2_estorno' when 'DOCUMENTO' then 'fv2_documento' when 'VINCULO_DOCUMENTAL' then 'fv2_vinculo_documental'
-    when 'CORRESPONDENCIA' then 'fv2_correspondencia' when 'COMPETENCIA' then 'fv2_competencia'
-    when 'IMPORTACAO' then 'fv2_importacao' when 'REGISTRO_FONTE' then 'fv2_registro_fonte' when 'CONCESSAO' then 'fv2_concessao'
-    when 'PROPOSTA' then 'fv2_proposta' when 'DIVERGENCIA_FONTE' then 'fv2_divergencia_fonte'
-    when 'SALDO_CONTA' then 'fv2_saldo_conta' when 'SESSAO_CAIXA' then 'fv2_sessao_caixa'
-    when 'VERSAO_FECHAMENTO' then 'fv2_versao_fechamento' when 'ATRIBUICAO_PENDENCIA' then 'fv2_atribuicao_pendencia'
-    when 'CANAL_PROCESSADOR' then 'fv2_canal_processador' when 'CONFIGURACAO_UNIDADE' then 'fv2_configuracao_unidade'
-    when 'ABERTURA' then 'fv2_abertura' when 'FECHAMENTO_CAIXA' then 'fv2_fechamento_caixa'
-    when 'SEMANA_ENTREGADORES' then 'fv2_semana_entregadores' when 'FECHAMENTO_ENTREGADOR' then 'fv2_fechamento_entregador'
-    when 'EXTRA_ENTREGADOR' then 'fv2_extra_entregador' when 'INTERCOMPANY' then 'fv2_intercompany'
-  end::regclass
-$$;
-
--- Catálogo do banco.
-alter table fv2_concessao drop constraint fv2_concessao_acoes_lista;
-alter table fv2_concessao add constraint fv2_concessao_acoes_lista check (acoes <@ '["financeiro_v2.ver", "financeiro_v2.registrar",
-  "financeiro_v2.corrigir", "financeiro_v2.cancelar", "financeiro_v2.conciliar", "financeiro_v2.fechar", "financeiro_v2.homologar",
-  "financeiro_v2.revisar", "financeiro_v2.configurar", "financeiro_v2.importar", "financeiro_v2.conceder", "financeiro_v2.documentos",
-  "financeiro_v2.aprovar", "financeiro_v2.aplicar", "financeiro_v2.revogar", "financeiro_v2.confirmar_importacao", "financeiro_v2.reabrir",
-  "financeiro_v2.reclassificar", "financeiro_v2.enviar_documento", "financeiro_v2.vincular_pagamento",
-  "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros",
-  "financeiro_v2.prestar_sangria", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany"]'::jsonb);
-
--- Liquidação SEM saída bancária: por comprovante (0029) ou PAGA POR OUTRA EMPRESA (esta migração, com o passivo intercompany).
-alter table fv2_liquidacao drop constraint fv2_liquidacao_sem_movimentacao;
-alter table fv2_liquidacao add constraint fv2_liquidacao_sem_movimentacao check (
-  movimentacao_id is not null
-  or (alvo_tipo = 'OBRIGACAO' and extras->>'origemDoVinculo' = 'COMPROVANTE' and (extras->>'documentoId') is not null)
-  or (alvo_tipo = 'OBRIGACAO' and extras->>'origemDoVinculo' = 'INTERCOMPANY' and (extras->>'intercompanyId') is not null));
-
--- Políticas: a ação estreita liquida a conta do fornecedor (liquidação + posição da conta) e grava o histórico. Nada mais.
-do $$
-declare
-  r record;
-  expr text;
-begin
-  for r in select * from (values
-      ('fv2_liquidacao', 'fv2_liquidacao_incluir', 'check'),
-      ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'using'),
-      ('fv2_obrigacao', 'fv2_obrigacao_alterar', 'check'),
-      ('fv2_historico', 'fv2_historico_incluir', 'check')
-    ) as v(tabela, politica, parte) loop
-    select case when r.parte = 'using' then pg_get_expr(p.polqual, p.polrelid) else pg_get_expr(p.polwithcheck, p.polrelid) end into expr
-      from pg_policy p join pg_class c on c.oid = p.polrelid join pg_namespace ns on ns.oid = c.relnamespace
-     where ns.nspname = current_schema() and c.relname = r.tabela and p.polname = r.politica;
-    if expr is null then
-      raise exception 'Financeiro v2 0034: política %.% (%) não encontrada.', r.tabela, r.politica, r.parte;
-    end if;
-    execute format('alter policy %I on %I %s ((%s) or (select fv2_tem_acao(array[%L])))', r.politica, r.tabela,
-      case when r.parte = 'using' then 'using' else 'with check' end, expr, 'financeiro_v2.registrar_intercompany');
-  end loop;
-end $$;
-
--- Quem SÓ tem a ação estreita de intercompany (sem ação ampla nem outra ação que altere contas) só muda a POSIÇÃO da conta liquidada.
-create or replace function fv2_so_intercompany() returns boolean language sql stable as $$
-  select not (select rolsuper from pg_roles where rolname = current_user)
-     and fv2_tem_acao(array['financeiro_v2.registrar_intercompany'])
-     and not fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.aplicar', 'financeiro_v2.corrigir', 'financeiro_v2.cancelar', 'financeiro_v2.conciliar',
-                                'financeiro_v2.baixar_por_comprovante', 'financeiro_v2.vincular_pagamento', 'financeiro_v2.prestar_sangria', 'financeiro_v2.registrar_juros'])
-$$;
-create or replace function fv2_obrigacao_paga_por_outra_empresa() returns trigger language plpgsql as $$
-begin
-  if not fv2_so_intercompany() then
-    return new;
-  end if;
-  if (to_jsonb(old) - array['versao', 'atualizado_em', 'atualizado_por', 'liquidado_centavos', 'saldo_centavos', 'situacao'])
-       is distinct from (to_jsonb(new) - array['versao', 'atualizado_em', 'atualizado_por', 'liquidado_centavos', 'saldo_centavos', 'situacao'])
-     or new.liquidado_centavos <= old.liquidado_centavos then
-    raise exception 'Financeiro v2: a operação entre empresas só registra o pagamento da conta (nada mais muda).' using errcode = '42501';
-  end if;
-  return new;
-end $$;
-create trigger fv2_obrigacao_intercompany before update on fv2_obrigacao for each row execute function fv2_obrigacao_paga_por_outra_empresa();
-
--- Pagamento por comprovante (0029/0032) + liquidação PAGA POR OUTRA EMPRESA: exige o passivo DEVEDORA desta unidade, desta conta e
--- do mesmo valor, gravado antes na mesma transação. Data não futura. Quem só tem a ação estreita nunca grava liquidação com saída.
-create or replace function fv2_pagamento_por_comprovante() returns trigger language plpgsql as $$
-declare
-  tipo_doc text;
-  m record;
-  livres text[] := array['versao', 'atualizado_em', 'atualizado_por', 'extras', 'movimentacao_id'];
-  so_documental boolean;
-begin
-  if (select rolsuper from pg_roles where rolname = current_user) then
-    return new;
-  end if;
-  so_documental := not fv2_tem_acao(array['financeiro_v2.registrar', 'financeiro_v2.aplicar', 'financeiro_v2.vincular_pagamento', 'financeiro_v2.cancelar']);
-  if tg_op = 'INSERT' then
-    if new.movimentacao_id is not null then
-      if so_documental and not fv2_so_presta_sangria() then
-        raise exception 'Financeiro v2: quem só baixa por comprovante não grava liquidação com saída bancária.' using errcode = '42501';
-      end if;
-      return new;
-    end if;
-    if new.alvo_tipo = 'OBRIGACAO' and coalesce(new.extras->>'origemDoVinculo', '') = 'INTERCOMPANY' then
-      if not exists (select 1 from fv2_intercompany i
-                      where i.organizacao_id = new.organizacao_id and i.unidade_id = new.unidade_id and i.id = (new.extras->>'intercompanyId')::uuid
-                        and i.papel = 'DEVEDORA' and i.obrigacao_id = new.alvo_id and i.valor_centavos = new.valor_centavos
-                        and i.data_pagamento = new.data_efetiva) then
-        raise exception 'Financeiro v2: conta paga por outra empresa exige o passivo entre empresas desta conta, do mesmo valor e data.' using errcode = '42501';
-      end if;
-      if new.data_efetiva > current_date + 1 then
-        raise exception 'Financeiro v2: pagamento por outra empresa não pode ter data futura.' using errcode = '42501';
-      end if;
-      return new;
-    end if;
-    if new.alvo_tipo <> 'OBRIGACAO' or coalesce(new.extras->>'origemDoVinculo', '') <> 'COMPROVANTE' then
-      raise exception 'Financeiro v2: liquidação sem saída bancária só para pagamento de conta por comprovante.' using errcode = '42501';
-    end if;
-    select d.tipo into tipo_doc from fv2_documento d
-     where d.organizacao_id = new.organizacao_id and d.unidade_id = new.unidade_id and d.id = (new.extras->>'documentoId')::uuid;
-    if tipo_doc is distinct from 'COMPROVANTE' then
-      raise exception 'Financeiro v2: pagamento sem extrato exige um documento COMPROVANTE desta unidade.' using errcode = '42501';
-    end if;
-    if new.data_efetiva > current_date + 1 then
-      raise exception 'Financeiro v2: pagamento por comprovante não pode ter data futura (agendamento não é pagamento).' using errcode = '42501';
-    end if;
-    return new;
-  end if;
-  if old.movimentacao_id is not null and new.movimentacao_id is distinct from old.movimentacao_id then
-    raise exception 'Financeiro v2: a saída de uma liquidação não se troca.' using errcode = '42501';
-  end if;
-  if old.movimentacao_id is null and new.movimentacao_id is not null then
-    if (to_jsonb(old) - livres) is distinct from (to_jsonb(new) - livres)
-       or coalesce(new.extras->>'origemDoVinculo', '') <> 'COMPROVANTE'
-       or (old.extras->'documentoId') is distinct from (new.extras->'documentoId') then
-      raise exception 'Financeiro v2: conciliar o pagamento por comprovante só liga a saída do extrato (nada mais muda).' using errcode = '42501';
-    end if;
-    select x.* into m from fv2_movimentacao x
-     where x.organizacao_id = new.organizacao_id and x.unidade_id = new.unidade_id and x.id = new.movimentacao_id;
-    if not found or m.sentido <> 'SAIDA' or m.situacao <> 'VALIDA' or m.transferencia_id is not null or m.pagamento_id is not null
-       or m.estorno_id is not null or m.natureza in ('DEVOLUCAO', 'TRANSFERENCIA_INTERNA')
-       or m.valor_centavos <> new.valor_centavos - new.estornado_centavos then
-      raise exception 'Financeiro v2: a conciliação exige saída válida do extrato com o valor do pagamento.' using errcode = '42501';
-    end if;
-    return new;
-  end if;
-  if fv2_so_vincula() and (to_jsonb(old) - array['versao', 'atualizado_em', 'atualizado_por']) is distinct from (to_jsonb(new) - array['versao', 'atualizado_em', 'atualizado_por']) then
-    raise exception 'Financeiro v2: sem permissão para alterar esta liquidação além da conciliação.' using errcode = '42501';
-  end if;
-  return new;
-end $$;
-
--- =====================================================================================================================
--- 27/11 (revisão do PR #236) — AUTORIZAÇÃO VINCULADA À OPERAÇÃO (fim do CONTRAPARTE_SEM_SESSAO)
---
--- A sessão da plataforma é de UMA unidade e a autoridade só emite sessão de banco para o escopo DESSA sessão (regra mantida).
--- Para a operação entre empresas, a autoridade passa a poder emitir UMA sessão para a OUTRA empresa quando, e só quando:
---   * a MESMA pessoa (usuario_id) tem concessão ATIVA com aprovar + aplicar + registrar_intercompany NAS DUAS unidades;
---   * a autenticação é aal2 com segundo fator RECENTE (≤ 10 min), conferido pela autoridade e registrado aqui;
---   * a finalidade é INTERCOMPANY e a sessão fica PRESA à chave da operação (só grava o registro/reembolso dessa chave);
---   * a validade é curta (≤ 120 s) e as ações da sessão ficam RESTRITAS a ver + registrar_intercompany (acoes_autorizadas),
---     mesmo que a concessão da pessoa seja mais ampla — portanto vale o regime ESTREITO (fv2_so_intercompany) nessa empresa;
---   * cada emissão fica na auditoria fv2_autorizacao_vinculada (sem exclusão nem alteração).
--- Sessões comuns não mudam (acoes_autorizadas nulo ⇒ regra de sempre). RLS, MFA e escopo continuam valendo.
--- =====================================================================================================================
-
-create table fv2_autorizacao_vinculada (
-  id                          uuid primary key default gen_random_uuid(),
-  sessao_id                   uuid not null unique references fv2_sessao_banco (id),
-  usuario_id                  uuid not null,
-  organizacao_id              uuid not null,            -- escopo da sessão vinculada (a outra empresa)
-  unidade_id                  uuid not null,
-  principal_organizacao_id    uuid not null,            -- escopo da sessão da plataforma (onde a pessoa aprovou)
-  principal_unidade_id        uuid not null,
-  finalidade                  text not null check (finalidade = 'INTERCOMPANY'),
-  chave                       text not null check (length(chave) between 1 and 300),
-  proposta_id                 uuid,
-  nivel_autenticacao          text not null check (nivel_autenticacao = 'aal2'),
-  segundo_fator_em            timestamptz not null,
-  emitida_por                 text not null default session_user,
-  emitida_em                  timestamptz not null default clock_timestamp(),
-  expira_em                   timestamptz not null,
-  foreign key (organizacao_id, unidade_id) references fv2_escopo,
-  foreign key (principal_organizacao_id, principal_unidade_id) references fv2_escopo,
-  check ((organizacao_id, unidade_id) <> (principal_organizacao_id, principal_unidade_id)),
-  check (expira_em > emitida_em and expira_em <= emitida_em + interval '121 seconds')
-);
-create function fv2_autorizacao_vinculada_imutavel() returns trigger language plpgsql as $$
-begin
-  raise exception 'Financeiro v2: a autorização vinculada é registro de auditoria e não se altera.' using errcode = 'FV002';
-end $$;
-create trigger fv2_autorizacao_vinculada_sem_delete before delete on fv2_autorizacao_vinculada for each row execute function fv2_proibir_exclusao();
-create trigger fv2_autorizacao_vinculada_sem_update before update on fv2_autorizacao_vinculada for each row execute function fv2_autorizacao_vinculada_imutavel();
-alter table fv2_autorizacao_vinculada enable row level security;
-alter table fv2_autorizacao_vinculada force row level security;
--- leitura (auditoria) nas DUAS unidades envolvidas, com sessão operacional; gravação só pela função da autoridade (abaixo)
-create policy fv2_autorizacao_vinculada_ler on fv2_autorizacao_vinculada for select using ((select fv2_sessao_operacional()) and (
-  (organizacao_id = (select fv2_org()) and unidade_id = (select fv2_uni()))
-  or (principal_organizacao_id = (select fv2_org()) and principal_unidade_id = (select fv2_uni()))));
-create policy fv2_autorizacao_vinculada_guardiao on fv2_autorizacao_vinculada to fv2_guardiao using (true) with check (true);
-revoke all on fv2_autorizacao_vinculada from public;
-grant select on fv2_autorizacao_vinculada to fv2_app;
-grant select, insert on fv2_autorizacao_vinculada to fv2_guardiao;
-
--- Permissão por ação passa a respeitar as ações RESTRITAS da sessão (só as sessões vinculadas as têm; as comuns: nulo).
-create or replace function fv2_tem_acao(p_acoes text[]) returns boolean
-language sql stable security definer set search_path = pg_catalog, financeiro_v2, pg_temp as $$
-  select exists (
-    select 1
-      from fv2__sessao_vigente() s
-      join fv2_concessao c on c.organizacao_id = s.organizacao_id and c.unidade_id = s.unidade_id and c.usuario_id = s.usuario_id
-     where s.finalidade = 'OPERACAO' and c.situacao = 'ATIVA' and c.acoes ?| p_acoes
-       and (s.acoes_autorizadas is null or s.acoes_autorizadas ?| p_acoes)
-  )
-$$;
-
-/** Chave da operação a que a sessão VIGENTE está presa (null = sessão comum). */
-create function fv2__chave_vinculada() returns text language sql stable security definer set search_path = pg_catalog, financeiro_v2, pg_temp as $$
-  select a.chave from fv2__sessao_vigente() s join fv2_autorizacao_vinculada a on a.sessao_id = s.sessao_id
-$$;
-alter function fv2__chave_vinculada() owner to fv2_guardiao;
-revoke all on function fv2__chave_vinculada() from public;
-grant execute on function fv2__chave_vinculada() to fv2_app;
-
-create function fv2_abrir_sessao_vinculada(p_usuario uuid, p_principal_organizacao uuid, p_principal_unidade uuid, p_organizacao uuid,
-  p_unidade uuid, p_validade_segundos integer, p_finalidade text, p_chave text, p_proposta uuid, p_nivel_autenticacao text,
-  p_segundo_fator_em timestamptz)
-returns text language plpgsql volatile security definer set search_path = pg_catalog, financeiro_v2, pg_temp as $$
-declare
-  token text := fv2__novo_token();
-  exigidas text[] := array['financeiro_v2.aprovar', 'financeiro_v2.aplicar', 'financeiro_v2.registrar_intercompany'];
-  sessao uuid;
-  expira timestamptz;
-begin
-  if p_usuario is null or p_principal_organizacao is null or p_principal_unidade is null or p_organizacao is null or p_unidade is null then
-    raise exception 'Financeiro v2: autorização vinculada incompleta.' using errcode = '22023';
-  end if;
-  if p_organizacao = p_principal_organizacao and p_unidade = p_principal_unidade then
-    raise exception 'Financeiro v2: a autorização vinculada é para a OUTRA empresa da operação.' using errcode = '22023';
-  end if;
-  if p_finalidade is distinct from 'INTERCOMPANY' or coalesce(length(btrim(p_chave)), 0) not between 1 and 300 then
-    raise exception 'Financeiro v2: autorização vinculada só para operação entre empresas, com a chave da operação.' using errcode = '22023';
-  end if;
-  if p_validade_segundos is null or p_validade_segundos < 1 or p_validade_segundos > 120 then
-    raise exception 'Financeiro v2: autorização vinculada vale no máximo 120 s.' using errcode = '22023';
-  end if;
-  if p_nivel_autenticacao is distinct from 'aal2' or p_segundo_fator_em is null
-     or p_segundo_fator_em < clock_timestamp() - interval '10 minutes' or p_segundo_fator_em > clock_timestamp() + interval '1 minute' then
-    raise exception 'Financeiro v2: a autorização vinculada exige segundo fator recente (aal2, últimos 10 minutos).' using errcode = 'FV020';
-  end if;
-  if not exists (select 1 from fv2_escopo e where e.organizacao_id = p_organizacao and e.unidade_id = p_unidade)
-     or not exists (select 1 from fv2_escopo e where e.organizacao_id = p_principal_organizacao and e.unidade_id = p_principal_unidade) then
-    raise exception 'Financeiro v2: escopo não configurado.' using errcode = 'FV020';
-  end if;
-  -- Compartilhada nas duas unidades: uma revogação em andamento nunca é "furada".
-  perform fv2__trava_concessoes(p_principal_organizacao, p_principal_unidade, false);
-  perform fv2__trava_concessoes(p_organizacao, p_unidade, false);
-  -- a MESMA pessoa, com as permissões de aprovar a operação, NAS DUAS empresas (concessão gravada e ativa agora)
-  if not exists (select 1 from fv2_concessao c where c.organizacao_id = p_principal_organizacao and c.unidade_id = p_principal_unidade
-                  and c.usuario_id = p_usuario and c.situacao = 'ATIVA' and c.acoes ?& exigidas)
-     or not exists (select 1 from fv2_concessao c where c.organizacao_id = p_organizacao and c.unidade_id = p_unidade
-                  and c.usuario_id = p_usuario and c.situacao = 'ATIVA' and c.acoes ?& exigidas) then
-    raise exception 'Financeiro v2: a pessoa precisa de aprovar, aplicar e registrar_intercompany nas duas empresas.' using errcode = 'FV020';
-  end if;
-  expira := clock_timestamp() + make_interval(secs => p_validade_segundos);
-  insert into fv2_sessao_banco (token_hash, usuario_id, organizacao_id, unidade_id, finalidade, pode_escrever, acoes_autorizadas, referencia, expira_em)
-  values (sha256(convert_to(token, 'UTF8')), p_usuario, p_organizacao, p_unidade, 'OPERACAO', true,
-          '["financeiro_v2.registrar_intercompany", "financeiro_v2.ver"]'::jsonb, left('vinculada:INTERCOMPANY:' || p_chave, 200), expira)
-  returning id into sessao;
-  insert into fv2_autorizacao_vinculada (sessao_id, usuario_id, organizacao_id, unidade_id, principal_organizacao_id, principal_unidade_id,
-    finalidade, chave, proposta_id, nivel_autenticacao, segundo_fator_em, expira_em)
-  values (sessao, p_usuario, p_organizacao, p_unidade, p_principal_organizacao, p_principal_unidade, p_finalidade, p_chave, p_proposta,
-          p_nivel_autenticacao, p_segundo_fator_em, expira);
-  return token;
-end $$;
-alter function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) owner to fv2_guardiao;
-revoke all on function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) from public;
-grant execute on function fv2_abrir_sessao_vinculada(uuid, uuid, uuid, uuid, uuid, integer, text, text, uuid, text, timestamptz) to fv2_autoridade;
-
--- A sessão vinculada só grava a operação da SUA chave: o lado novo (insert) e o reembolso cuja liquidação nova tem a mesma chave.
-create function fv2_intercompany_da_chave() returns trigger language plpgsql as $$
-declare
-  ch text := fv2__chave_vinculada();
-begin
-  if ch is null then
-    return new;
-  end if;
-  if tg_op = 'INSERT' then
-    if new.chave_idempotencia not in ('intercompany:' || ch || ':DEVEDORA', 'intercompany:' || ch || ':CREDORA') then
-      raise exception 'Financeiro v2: a autorização vinculada não cobre esta operação entre empresas.' using errcode = '42501';
-    end if;
-    return new;
-  end if;
-  if new.movimentacao_id is distinct from old.movimentacao_id
-     or jsonb_array_length(new.liquidacoes) <> jsonb_array_length(old.liquidacoes) + 1
-     or (new.liquidacoes -> (jsonb_array_length(new.liquidacoes) - 1))->>'chave' is distinct from ch then
-    raise exception 'Financeiro v2: a autorização vinculada só registra o reembolso da sua chave.' using errcode = '42501';
-  end if;
-  return new;
-end $$;
-create trigger fv2_intercompany_chave_vinculada before insert or update on fv2_intercompany for each row execute function fv2_intercompany_da_chave();
-revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
-insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0034_operacoes_entre_empresas.sql', 'd2ee48024db6ec4f4163718a08b5306468673f9ac234af40663c3f5bc558ac92', '40767cdc35fce0e08a319b1d9df3a239090e9029260cb77c7f7401a92a35bc7c');
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0037_operacoes_de_conta_a_pagar.sql', 'd35d12cca2c55001cdf8925cc640bcfaee8a94e02b92ba008e799150d1255e44', 'd35d12cca2c55001cdf8925cc640bcfaee8a94e02b92ba008e799150d1255e44');
 
 do $$ declare f record; begin
   -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
@@ -592,7 +509,7 @@ end $$;
 revoke fv2_guardiao from current_user;
 do $$ declare n int; txt text; begin
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 34 then raise exception 'FV2 pós: % migrações registradas (esperado 34)', n; end if;
+  if n <> 37 then raise exception 'FV2 pós: % migrações registradas (esperado 37)', n; end if;
   select string_agg(c.relname, ', ') into txt from pg_class c join pg_namespace s on s.oid = c.relnamespace
     where s.nspname = 'financeiro_v2' and c.relkind = 'r' and c.relname <> 'fv2_migracao'
       and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_administrador_corporativo','fv2_administrador_corporativo_historico','fv2_provisionamento_inicial','fv2_sessao_banco')

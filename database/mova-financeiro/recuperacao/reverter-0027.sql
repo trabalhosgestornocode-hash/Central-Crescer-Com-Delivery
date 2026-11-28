@@ -1,21 +1,15 @@
--- Reversão da migração 0027 (fila com prioridade e limites configuráveis). Só rodar com o envio DESLIGADO.
--- Mensagens EXPIRADA voltam a FALHOU (o estado antigo mais próximo) antes de remover o valor do check.
-begin;
+-- MOVA — RECUPERAÇÃO da 0027_mova_correcao_de_conta (volta as listas fechadas de PROPOSTAS e EXECUÇÕES ao estado da 0025; a 0026 é da frente dos entregadores e não toca estas listas).
+-- Uma transação; aborta sem mudar nada se já existir proposta ou execução de CORRECAO_DE_CONTA (o histórico nunca é apagado).
 do $$ begin
-  if not exists (select 1 from mova.mova_migracao where nome = '0027_mova_fila_prioridade_limites.sql') then raise exception 'MOVA recuperação: 0027 não está aplicada — nada a desfazer'; end if;
-  if exists (select 1 from mova.mova_migracao where nome > '0027_mova_fila_prioridade_limites.sql') then raise exception 'MOVA recuperação: há migrações depois da 0027 — desfazer essas primeiro'; end if;
+  if not exists (select 1 from mova.mova_migracao where nome = '0027_mova_correcao_de_conta.sql') then raise exception 'MOVA recuperação: 0027 não está aplicada — nada a desfazer'; end if;
+  if exists (select 1 from mova.operacao_executada where operacao = 'CORRECAO_DE_CONTA') then raise exception 'MOVA recuperação: existe correção de conta executada — nada foi feito'; end if;
+  if exists (select 1 from mova.proposta where tipo = 'CORRECAO_DE_CONTA') then raise exception 'MOVA recuperação: existem propostas de correção de conta — nada foi feito'; end if;
 end $$;
-update mova.resposta set estado = 'FALHOU', ultimo_erro = coalesce(ultimo_erro, 'EXPIRADA') where estado = 'EXPIRADA';
-alter table mova.resposta drop constraint resposta_estado_check;
-alter table mova.resposta add constraint resposta_estado_check check (estado in ('PENDENTE', 'ENVIANDO', 'ENVIADA', 'FALHOU', 'SUPRIMIDA'));
-drop index if exists mova.resposta_fila_prioridade;
-drop index if exists mova.resposta_envio_dia;
-alter table mova.resposta drop column if exists categoria, drop column if exists prioridade, drop column if exists valida_ate,
-  drop column if exists liberar_em, drop column if exists motivo_adiamento, drop column if exists adiamentos,
-  drop column if exists organizacao_id, drop column if exists unidade_id;
--- As tabelas de limites e alertas guardam histórico/auditoria: são preservadas (renomeadas), nunca apagadas.
-alter table mova.limite_envio rename to limite_envio_revertida_0027;
-alter table mova.limite_envio_historico rename to limite_envio_historico_revertida_0027;
-alter table mova.alerta_envio rename to alerta_envio_revertida_0027;
-delete from mova.mova_migracao where nome = '0027_mova_fila_prioridade_limites.sql';
-commit;
+alter table mova.proposta drop constraint proposta_tipo_check;
+alter table mova.proposta add constraint proposta_tipo_check
+  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+delete from mova.mova_migracao where nome = '0027_mova_correcao_de_conta.sql';

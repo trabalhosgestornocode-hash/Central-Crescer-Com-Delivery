@@ -79,6 +79,8 @@ export function criarConversaWhatsapp({ core, cfg, modo, unidadesDoPiloto, ident
     // unidade citada não é desta conversa (ou é loja não habilitada no MOVA, 27/11): o motor atual responde
     if (r.resultado === RESULTADO_UNIDADE.FORA_DO_GRUPO || r.resultado === RESULTADO_UNIDADE.NAO_HABILITADA) return null;
     if (r.resultado === RESULTADO_UNIDADE.IDENTIFICADA && r.unidade && grupoDaPessoa.unidades.includes(r.unidade.unidadeId)) return r.unidade.unidadeId;
+    // 27/11: o participante CITOU uma mensagem do MOVA de uma unidade determinada ⇒ a conversa continua NELA (nunca a primeira do cadastro).
+    if (evento.unidadeContexto && grupoDaPessoa.unidades.includes(evento.unidadeContexto)) return evento.unidadeContexto;
     const anterior = ultimaUnidade.get(chave);
     if (anterior && grupoDaPessoa.unidades.includes(anterior)) return anterior;
     return permitidas[0].u;

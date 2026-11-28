@@ -85,7 +85,7 @@ end $$;
 export const INSTALADAS_EM_PRODUCAO = Object.freeze(["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008", "0009", "0010", "0011", "0012", "0013", "0014", "0015"]); // conferido em produção 24/11 (nome + sha256); 0015 entra pelo atualizar.sql
 // ^ base HISTÓRICA dos aplicar-<NNNN>.sql já usados (0017, orçamento, propostas, sangria, multiempresa): não mudar, eles provam a ordem daquela época.
 // 27/11 (PR #236) — base do atualizar.sql: produção conferida SOMENTE LEITURA em 27/11 (nome + sha256 iguais ao Git): 0001–0018, 0020, 0022–0024.
-export const INSTALADAS_PARA_ATUALIZAR = Object.freeze([...INSTALADAS_EM_PRODUCAO, "0016", "0017", "0018", "0020", "0022", "0023", "0024", "0025"]); // 28/11: produção conferida SOMENTE LEITURA (mova.mova_migracao): 0001–0018, 0020, 0022–0025
+export const INSTALADAS_PARA_ATUALIZAR = Object.freeze([...INSTALADAS_EM_PRODUCAO, "0016", "0017", "0018", "0020", "0022", "0023", "0024", "0025", "0027"]); // 28/11: 0027 (correção de conta) já aplicada em produção (conferido em 28/11, somente leitura); 0025 conferida em produção (23 registradas; 0019/0021 adiadas)
 /** Migrações ADIADAS por decisão (não entram no atualizar.sql até serem autorizadas). 0010 autorizada em 23/11 com a 0012 (PR #188). */
 // 0019 (MOVA CORE: vínculo e memória) e 0021 (conhecimento corporativo F5): só no banco ISOLADO de homologação até autorização
 // específica — nenhuma das duas está em produção (27/11) e a 0025 não depende delas.

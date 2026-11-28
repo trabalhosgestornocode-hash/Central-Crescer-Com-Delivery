@@ -30,7 +30,14 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
 /**
  * @param {{armazenamento:object, porta:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
+/** 27/11 (0035): categoria do principal de empréstimos e financiamentos (fora da DRE). */
+const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
+/** 28/11 (0036): correção cadastral — registrada nas EXECUÇÕES (idempotência/auditoria), fora das POLÍTICAS (sem limite monetário). */
+export const OPERACAO_CORRECAO_DE_CONTA = "CORRECAO_DE_CONTA";
+/** Operações do núcleo que o Operador Financeiro executa sobre conta a pagar existente (fase 1 + fase 2). */
+export const OPERACOES_DE_CONTA = Object.freeze(["corrigirContaAPagar", "reclassificarContaAPagar", "ajustarValorDeContaAPagar", "moverCompetenciaDeContaAPagar", "cancelarContaAPagar"]);
+
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, corrigirContas = false, operarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
   /**
    * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
    * execução — automática, retomada ou confirmada pelo participante. Sem confirmação: nada é gravado; fica como proposta.
@@ -212,12 +219,12 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * sem saída bancária) numa ÚNICA operação atômica do Financeiro. Se qualquer parte falhar, nada fica gravado (antes, uma falha no
    * pagamento deixava a conta em aberto). Idempotente: mesma fonte (MOVA:<proposta>) e mesmo arquivo devolvem o que já existe.
    */
-  async function registrarDespesaPaga({ proposta, escopo, entrada = proposta.comando.entrada, dataPagamento = proposta.comando.pagamento.dataEfetiva, nivel, executor }) {
+  async function registrarDespesaPaga({ proposta, escopo, entrada = proposta.comando.entrada, dataPagamento = proposta.comando.pagamento.dataEfetiva, nivel, executor, operacaoFinanceira = null }) {
     const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
     if (!bytes) throw new ErroDeExecucao("SEM_EVIDENCIA_DO_COMPROVANTE");
     const mime = proposta.evidencia.mime;
     const encargos = proposta.comando?.encargos ?? null;
-    const r = await executor.chamar(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo, {
+    const r = await executor.chamar(operacaoFinanceira ?? (encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante"), escopo, {
       ...(encargos ? { encargos: { jurosCentavos: encargos.jurosCentavos, multaCentavos: encargos.multaCentavos } } : {}),
       obrigacao: { ...entrada, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } },
       comprovante: { arquivo: { conteudo: bytes, nome: `comprovante-mova-${curto(proposta.id)}.${EXTENSAO[mime] ?? "bin"}`, tipoMime: mime },
@@ -242,9 +249,31 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * a proposta fica aguardando extrato e é reconferida depois.
    * @returns {Promise<{situacao:"EXECUTADA"|"CONFERIDA"|"AMBIGUA"|"AGUARDANDO_EXTRATO", nivel:string, motivos:string[], resultado?:object, motivo?:string}>}
    */
+  /**
+   * 28/11 (0035, revisão) — a conta alvo de uma BAIXA é principal de EMPRÉSTIMO? Lida no Financeiro na hora (nunca da proposta).
+   * Leitura que falha ⇒ "desconhecida" ⇒ tratada como empréstimo (nada automático). Baixa de empréstimo existente NUNCA é
+   * automática (nem por comprovante, nem pelo extrato): a composição da parcela (principal × juros) e a confirmação humana são
+   * exigidas ⇒ fica para a revisão no Centro Financeiro, dentro dos limites que a pessoa aprovar.
+   * Mesmo defeito, outro fluxo: PARCELAMENTO TRIBUTÁRIO (principal, a parcela paga embute juros/SELIC) — mesma regra.
+   */
+  const PRINCIPAL_DE_DIVIDA = new Set([CATEGORIA_EMPRESTIMO, "PARCELAMENTO_TRIBUTARIO"]);
+  async function baixaDeEmprestimo(proposta, escopo) {
+    const id = proposta.comando?.entrada?.obrigacaoId;
+    if (!id) return false;
+    try {
+      const d = await porta.ler("detalharContaAPagar", lendo(escopo), { id });
+      return PRINCIPAL_DE_DIVIDA.has(d?.lancamento?.categoria ?? null) || !d?.lancamento;
+    } catch { return true; }
+  }
+  const BAIXA_DE_EMPRESTIMO = "BAIXA_DE_EMPRESTIMO_EXIGE_REVISAO_HUMANA";
+
   async function aposBaixa(proposta, escopo) {
     const u = await unidadeConfirmada(proposta);
     if (!u.ok) return { situacao: "AGUARDANDO_EXTRATO", nivel: NIVEL.SOMENTE_PROPOR, motivos: [u.motivo] };
+    if (await baixaDeEmprestimo(proposta, escopo)) {
+      await a.propostas.anotar(escopo, proposta.id, { revisaoHumana: BAIXA_DE_EMPRESTIMO });
+      return { situacao: "AGUARDANDO_EXTRATO", nivel: NIVEL.SOMENTE_PROPOR, motivos: [BAIXA_DE_EMPRESTIMO] };
+    }
     let conciliacao;
     try { conciliacao = await conferir(proposta, escopo); } catch (e) {
       registrar({ tipo: "MOVA_CONFERENCIA_ADIADA", codigo: e?.codigo ?? "LEITURA_FALHOU" });
@@ -307,8 +336,15 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * — idempotente), (2) anexa o comprovante a ela e (3) registra o pagamento POR COMPROVANTE (conciliação pendente). Qualquer
    * falha volta a proposta para revisão; a nova tentativa reaproveita o que já foi gravado (mesma fonte, mesmo arquivo).
    */
-  async function aposDespesaNova(proposta, escopo) {
+  async function aposDespesaNova(proposta, escopo, { confirmadoPor = null } = {}) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
+    // 27/11 (0035): pagamento de EMPRÉSTIMO (principal, fora da DRE) — só com a confirmação de um FINANCEIRO no WhatsApp, sem encargos,
+    // pela política DESPESA_DOCUMENTAL vigente (limite da unidade) e com `registrar_emprestimo` concedida à identidade operacional.
+    const emprestimo = proposta.comando?.entrada?.categoria === CATEGORIA_EMPRESTIMO;
+    if (emprestimo && !confirmadoPor) return { ...base, motivos: ["EMPRESTIMO_EXIGE_CONFIRMACAO_NO_WHATSAPP"] };
+    if (emprestimo && proposta.comando?.encargos) return { ...base, motivos: ["EMPRESTIMO_COM_ENCARGO_SO_NA_CENTRAL"] };
+    // 28/11: sem juros LIDOS não quer dizer só principal — a composição precisa estar comprovada no documento ou declarada
+    if (emprestimo && !proposta.comando?.composicaoEmprestimo) return { ...base, motivos: ["EMPRESTIMO_COMPOSICAO_DESCONHECIDA"] };
     const u = await unidadeConfirmada(proposta);
     if (!u.ok) return { ...base, motivos: [u.motivo] };
     if (!despesasLigadas) return { ...base, motivos: ["CRIACAO_DE_DESPESAS_DESLIGADA"] };
@@ -326,21 +362,24 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (doEncargo) await a.propostas.anotar(escopo, proposta.id, { autonomiaJuros: doEncargo });
     const motivos0 = [...new Set([...decisao.motivos, ...(doEncargo?.motivos ?? [])])];
     const r0 = { ...base, nivel: decisao.nivel, nivelDocumental: decisao.nivel, motivos: motivos0, motivosDocumentais: motivos0, comprovante: comprovante?.situacao ?? null };
-    if (decisao.nivel !== NIVEL.APLICAR_AUTOMATICO || (doEncargo && doEncargo.nivel !== NIVEL.APLICAR_AUTOMATICO)) return r0;
+    const nivelAceito = emprestimo ? [NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) : decisao.nivel === NIVEL.APLICAR_AUTOMATICO;
+    if (!nivelAceito || (doEncargo && doEncargo.nivel !== NIVEL.APLICAR_AUTOMATICO)) return r0;
     if (!operacional) return { ...r0, motivosDocumentais: [...motivos0, "SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode(encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", escopo))) return { ...r0, motivosDocumentais: [...motivos0, "SEM_CONCESSAO_OPERACIONAL"] };
+    const operacaoFinanceira = emprestimo ? "registrarPagamentoDeEmprestimoPorComprovante" : encargos ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante";
+    if (!(await operacional.pode(operacaoFinanceira, escopo))) return { ...r0, motivosDocumentais: [...motivos0, "SEM_CONCESSAO_OPERACIONAL"] };
     const { reserva, repetida } = await reservar(OPERACAO.DESPESA_DOCUMENTAL, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, decisao.politicaId, operacional);
     if (repetida) return { ...r0, ...(repetida.ok ? { situacao: "PAGO_POR_COMPROVANTE", resultado: repetida.operacao?.resultado } : { motivo: repetida.motivo }) };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ...r0, motivo: "PROPOSTA_JA_DECIDIDA" }; }
     try {
-      const resultado = await registrarDespesaPaga({ proposta, escopo, nivel: NIVEL.APLICAR_AUTOMATICO, executor: operacional });
+      const resultado = { ...(await registrarDespesaPaga({ proposta, escopo, nivel: emprestimo ? NIVEL.APLICAR_COM_CONFIRMACAO : NIVEL.APLICAR_AUTOMATICO, executor: operacional, operacaoFinanceira })), ...(emprestimo ? { confirmadoPor } : {}) };
       const { obrigacaoId } = resultado;
       await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
       await descartarArquivo(proposta, escopo);
       const operacao = await a.operacoes.concluir(reserva.id, resultado);
       await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
-        dados: { operacao: OPERACAO.DESPESA_DOCUMENTAL, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId, movimentacaoId: null, conciliacao: "PENDENTE" } });
+        dados: { operacao: OPERACAO.DESPESA_DOCUMENTAL, nivel: emprestimo ? NIVEL.APLICAR_COM_CONFIRMACAO : NIVEL.APLICAR_AUTOMATICO, politicaId: decisao.politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId, movimentacaoId: null, conciliacao: "PENDENTE",
+          ...(emprestimo ? { categoria: CATEGORIA_EMPRESTIMO, confirmadoPor, composicao: proposta.comando.composicaoEmprestimo.fonte } : {}) } });
       return { ...r0, situacao: "PAGO_POR_COMPROVANTE", resultado, operacao };
     } catch (erro) {
       const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
@@ -366,6 +405,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     const juros = proposta.comando?.juros;
     const e = proposta.comando?.entrada;
     if (proposta.tipo !== "BAIXA_DE_OBRIGACAO" || !proposta.evidencia || !(juros?.valorCentavos > 0) || !e?.obrigacaoId) return { ...base, motivos: ["SEM_COMPROVANTE_OU_ENCARGO"] };
+    if (await baixaDeEmprestimo(proposta, escopo)) return { ...base, motivos: [BAIXA_DE_EMPRESTIMO] };
     const comprovante = comprovanteDa(proposta);
     const politicas = await politicasDe(escopo.organizacaoId);
     const comum = { politicas, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, hoje: hoje(), conciliacao: { situacao: "AGUARDANDO_EXTRATO" }, comprovante };
@@ -441,8 +481,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   }
 
   /** Executa UMA operação de escrita da proposta com reserva idempotente, trava da proposta e auditoria (padrão das demais). */
-  async function executarComReserva({ operacao, proposta, escopo, politicaId, passos }) {
-    const { reserva, repetida } = await reservar(operacao, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, politicaId, operacional);
+  async function executarComReserva({ operacao, proposta, escopo, politicaId, passos, nivel = NIVEL.APLICAR_AUTOMATICO, dadosDaAuditoria = null }) {
+    const { reserva, repetida } = await reservar(operacao, proposta, escopo, nivel, politicaId, operacional);
     if (repetida) return repetida.ok ? { ok: true, repetida: true, resultado: repetida.operacao?.resultado } : { ok: false, motivo: repetida.motivo };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ok: false, motivo: "PROPOSTA_JA_DECIDIDA" }; }
@@ -451,7 +491,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
       const op = await a.operacoes.concluir(reserva.id, resultado);
       await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
-        dados: { operacao, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId: resultado.obrigacaoId ?? null, movimentacaoId: null } });
+        dados: { operacao, nivel, politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId: resultado.obrigacaoId ?? null, movimentacaoId: null, ...(dadosDaAuditoria ? dadosDaAuditoria(resultado) : {}) } });
       return { ok: true, resultado, operacao: op };
     } catch (erro) {
       const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
@@ -461,6 +501,69 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       registrar({ tipo: "MOVA_OPERACAO_FALHOU", codigo });
       return { ok: false, motivo: codigo, detalhes: erro?.detalhes ?? null };
     }
+  }
+
+  /**
+   * 28/11 (0036) — CORREÇÃO CADASTRAL de conta a pagar confirmada no WhatsApp (fornecedor, vencimento, descrição, observação, forma de
+   * pagamento). Sem política nem limite monetário (só informação cadastral), mas SEMPRE com a confirmação de um FINANCEIRO da unidade
+   * (`confirmadoPor`), a chave MOVA_OPERACAO_CORRIGIR_CONTAS e a ação estreita `corrigir_conta_a_pagar` na concessão. Uma execução
+   * por proposta (reserva); o Financeiro revalida a conta NA HORA (aberta, sem pagamento, período editável, versão vista no resumo).
+   * Depois de gravar, CONFERE pela leitura oficial que cada parcela alterada tem o valor novo (`conferido`).
+   */
+  async function aposCorrecaoDeConta(proposta, escopo, { confirmadoPor = null } = {}) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.APLICAR_COM_CONFIRMACAO, motivos: [] };
+    const cmd = proposta.comando;
+    const op = cmd?.operacao;
+    if (proposta.tipo !== "CORRECAO_DE_CONTA" || !OPERACOES_DE_CONTA.includes(op) || !cmd.entrada?.obrigacaoId) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    // fase 1 (cadastral) com a chave de correção; fase 2 (categoria, valor, competência, cancelamento) com a chave PRÓPRIA
+    if (op === "corrigirContaAPagar" ? !corrigirContas : !operarContas) return { ...base, motivos: [op === "corrigirContaAPagar" ? "CORRECAO_DE_CONTAS_DESLIGADA" : "OPERACOES_DE_CONTAS_DESLIGADAS"] };
+    if (!confirmadoPor) return { ...base, motivos: ["SEM_CONFIRMACAO"] };
+    if (!operacional) return { ...base, motivos: ["SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode(op, escopo))) return { ...base, motivos: ["SEM_CONCESSAO_OPERACIONAL"] };
+    if (op !== "corrigirContaAPagar") return operarConta(proposta, escopo, { confirmadoPor, base });
+    const m = cmd.entrada.mudancas;
+    const r = await executarComReserva({ operacao: OPERACAO_CORRECAO_DE_CONTA, proposta, escopo, politicaId: null, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
+      dadosDaAuditoria: (x) => ({ campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, obrigacaoIds: x.obrigacaoIds, antes: cmd.antes ?? null, depois: cmd.depois ?? null, confirmadoPor, conferido: x.conferido }),
+      passos: async () => {
+        const x = await operacional.chamar("corrigirContaAPagar", escopo, cmd.entrada);
+        const ids = (x.obrigacoes ?? []).map((o) => o.id);
+        // conferência pela leitura OFICIAL (o que o Dashboard mostra), parcela por parcela
+        const confere = (t) => (!m.vencimento || t.vencimento === m.vencimento) && (!m.descricao || t.descricao === m.descricao)
+          && (m.observacao === undefined || (t.observacao ?? null) === m.observacao) && (m.formaPagamento === undefined || (t.formaPagamentoInformada ?? null) === m.formaPagamento)
+          && (!m.contraparteId || t.fornecedor?.id === m.contraparteId) && (!m.contraparteNova || String(t.fornecedor?.nome ?? "").trim().toLowerCase() === m.contraparteNova.nome.trim().toLowerCase());
+        let conferido = true;
+        for (const id of ids) { const d = await porta.ler("detalharContaAPagar", lendo(escopo), { id }); if (!confere(d.titulo)) conferido = false; }
+        return { obrigacaoId: cmd.entrada.obrigacaoId, obrigacaoIds: ids, alteradas: ids.length, semMudanca: x.semMudanca === true, lancamentoAlterado: Boolean(x.lancamento),
+          conferido, campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, confirmadoPor };
+      } });
+    if (r.ok) return { ...base, situacao: "CORRIGIDA", repetida: r.repetida === true, resultado: r.resultado };
+    return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
+  }
+
+  /**
+   * 28/11 (0037) — FASE 2: reclassificar a compra, ajustar o valor de uma parcela, mudar a competência da compra, cancelar parcela ou
+   * compra. Mesma trilha da correção (reserva única, identidade estreita, conta revalidada NA HORA pelo núcleo) e conferência pela
+   * leitura oficial depois de gravar: categoria do lançamento, valor da parcela, competência de lançamento e parcelas, situação.
+   */
+  async function operarConta(proposta, escopo, { confirmadoPor, base }) {
+    const cmd = proposta.comando;
+    const e = cmd.entrada;
+    const r = await executarComReserva({ operacao: OPERACAO_CORRECAO_DE_CONTA, proposta, escopo, politicaId: null, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
+      dadosDaAuditoria: (x) => ({ campo: cmd.campo, operacaoDaConta: cmd.operacao, abrangencia: e.abrangencia ?? null, obrigacaoIds: x.obrigacaoIds, antes: cmd.antes ?? null, depois: cmd.depois ?? null, confirmadoPor, conferido: x.conferido }),
+      passos: async () => {
+        const x = await operacional.chamar(cmd.operacao, escopo, e);
+        const ids = cmd.operacao === "ajustarValorDeContaAPagar" ? [e.obrigacaoId] : (x.obrigacoes ?? []).map((o) => o.id);
+        const det = await porta.ler("detalharContaAPagar", lendo(escopo), { id: e.obrigacaoId });
+        const doGrupo = new Map((det.parcelas ?? []).map((t) => [t.id, t]));
+        let conferido;
+        if (cmd.operacao === "reclassificarContaAPagar") conferido = x.repetido === true || det.lancamento?.categoria === e.categoria;
+        else if (cmd.operacao === "ajustarValorDeContaAPagar") conferido = x.semMudanca === true || (det.titulo.valorOriginalCentavos + det.titulo.ajustesCentavos === e.valorCorretoCentavos);
+        else if (cmd.operacao === "moverCompetenciaDeContaAPagar") conferido = det.lancamento?.competencia === e.competencia && (det.parcelas ?? []).every((t) => t.competencia === e.competencia);
+        else conferido = ids.length > 0 && ids.every((id) => doGrupo.get(id)?.situacao === "CANCELADO") && (e.abrangencia !== "GRUPO" || det.lancamento?.situacao === "CANCELADO");
+        return { obrigacaoId: e.obrigacaoId, obrigacaoIds: ids, alteradas: ids.length, semMudanca: x.semMudanca === true || x.repetido === true, conferido, campo: cmd.campo, abrangencia: e.abrangencia ?? null, confirmadoPor };
+      } });
+    if (r.ok) return { ...base, situacao: "CORRIGIDA", repetida: r.repetida === true, resultado: r.resultado };
+    return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
   }
 
   /** Anexa o documento da proposta (boleto/nota) ao cofre do Financeiro, ligado à conta a pagar (idempotente pelo conteúdo). */
@@ -520,6 +623,11 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
    * paga a cobrem) e a identidade operacional com `registrar_conta_parcelada`: registra a conta EM ABERTO, com as parcelas ditas,
    * pelo serviço oficial (fonte MOVA:<proposta> — idempotente). Nunca registra como paga. Sem algum requisito, fica a PROPOSTA.
    */
+  /** 27/11 (0035): a identidade operacional pode registrar empréstimo (conta a pagar ou pagamento) nesta unidade? */
+  async function podeRegistrarEmprestimo(escopo, tipo) {
+    return Boolean(operacional) && (await operacional.pode(tipo === "PAGAMENTO" ? "registrarPagamentoDeEmprestimoPorComprovante" : "registrarContaParceladaDeEmprestimo", escopo));
+  }
+
   async function aposContaRelatada(proposta, escopo) {
     const base = { situacao: "PROPOSTA", nivel: NIVEL.SOMENTE_PROPOR, motivos: [] };
     const u = await unidadeConfirmada(proposta);
@@ -538,9 +646,12 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     // A confirmação no WhatsApp já é a "confirmação de uma pessoa": APLICAR_COM_CONFIRMACAO e APLICAR_AUTOMATICO executam; sem política, só propõe.
     if (![NIVEL.APLICAR_AUTOMATICO, NIVEL.APLICAR_COM_CONFIRMACAO].includes(decisao.nivel) || !proposta.esclarecidoPor) return r0;
     if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
-    if (!(await operacional.pode("registrarContaParcelada", escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
+    // 27/11 (0035): conta de EMPRÉSTIMO ainda a pagar — a mesma operação, só na categoria do principal (+ registrar_emprestimo)
+    const opConta = e.categoria === CATEGORIA_EMPRESTIMO ? "registrarContaParceladaDeEmprestimo" : "registrarContaParcelada";
+    if (e.categoria === CATEGORIA_EMPRESTIMO && !proposta.comando?.composicaoEmprestimo) return { ...r0, motivos: [...decisao.motivos, "EMPRESTIMO_COMPOSICAO_DESCONHECIDA"] };
+    if (!(await operacional.pode(opConta, escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     const r = await executarComReserva({ operacao, proposta, escopo, politicaId: decisao.politicaId, passos: async () => {
-      const ob = await operacional.chamar("registrarContaParcelada", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
+      const ob = await operacional.chamar(opConta, escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
       return { obrigacaoId: ob.obrigacoes[0].id, obrigacaoIds: ob.obrigacoes.map((o) => o.id), contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null,
         categoria: e.categoria, competencia: e.competencia, parcelas: e.parcelas.length, confirmadoPor: proposta.esclarecidoPor, situacaoConta: "ABERTA" };
     } });
@@ -614,5 +725,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ podeRegistrarEmprestimo, aposCorrecaoDeConta, corrigirContas: Boolean(corrigirContas), operarContas: Boolean(operarContas), descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }

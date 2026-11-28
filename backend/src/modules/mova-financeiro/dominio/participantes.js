@@ -65,9 +65,22 @@ export function validarParticipantes(lista, { unidadesDoGrupo, campo, exigir }) 
 
 /** Participante AUTORIZADO do grupo, pelo JID ou pelo telefone verificado. Grupo ABERTO (legado) ⇒ perfil FINANCEIRO, todas as unidades. */
 export function participanteAutorizado(grupo, { participanteId, telefoneE164 = null }) {
-  if (!grupo || !participanteId) return null;
-  if ((grupo.acesso ?? ACESSO.ABERTO) === ACESSO.ABERTO) return { perfil: PERFIL.FINANCEIRO, unidades: grupo.unidades, privado: null, nome: null, aberto: true };
-  return grupo.participantes.find((p) => p.ids.includes(participanteId) || (telefoneE164 && p.telefones.includes(telefoneE164))) ?? null;
+  return identificarParticipante(grupo, { participanteId, telefoneE164 }).participante;
+}
+
+/**
+ * 27/11 — IDENTIDADE de quem enviou/esclareceu/confirmou: o identificador do WhatsApp (JID de telefone ou LID) E o telefone AUTENTICADO
+ * pelo Gateway (canal HMAC; nunca um número escrito no corpo da mensagem). Os dois apontando para PESSOAS DIFERENTES da lista ⇒
+ * `conflito` e ninguém é reconhecido (falha fechada): nenhuma operação segue com uma identidade ambígua.
+ * @returns {{participante: object|null, conflito: boolean}}
+ */
+export function identificarParticipante(grupo, { participanteId, telefoneE164 = null }) {
+  if (!grupo || !participanteId) return { participante: null, conflito: false };
+  if ((grupo.acesso ?? ACESSO.ABERTO) === ACESSO.ABERTO) return { participante: { perfil: PERFIL.FINANCEIRO, unidades: grupo.unidades, privado: null, nome: null, aberto: true }, conflito: false };
+  const porId = grupo.participantes.find((p) => p.ids.includes(participanteId)) ?? null;
+  const porTelefone = telefoneE164 ? grupo.participantes.find((p) => p.telefones.includes(telefoneE164)) ?? null : null;
+  if (porId && porTelefone && porId !== porTelefone) return { participante: null, conflito: true };
+  return { participante: porId ?? porTelefone, conflito: false };
 }
 
 /** Destino privado do participante: o cadastrado; senão o próprio JID, se for de telefone. Nunca um JID de grupo. */

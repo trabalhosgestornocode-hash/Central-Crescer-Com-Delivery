@@ -5,7 +5,7 @@
 -- Atingir um limite NÃO descarta: a mensagem continua PENDENTE com `liberar_em` no futuro; só expira (EXPIRADA, visível e auditável)
 -- depois da validade da sua prioridade. Os limites ficam em tabela (por empresa, unidade, grupo e finalidade) e cada mudança é auditada.
 -- Nada é semeado: sem regras na tabela valem os limites padrão do código (2.000 / 100 / 500, reserva para a prioridade crítica).
--- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0027.sql).
+-- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0028.sql).
 
 -- 1) Colunas da fila (defaults compatíveis com o que já existia).
 alter table mova.resposta add column categoria text not null default 'PROATIVA'

@@ -40,6 +40,16 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   // 26/11: conta a pagar RELATADA por texto (parcelas explícitas, em aberto, sem documento) — ação ESTREITA própria (0033); a de
   // conta por documento (`registrar_obrigacao`) não cobre esta modalidade.
   registrarContaParcelada: "REGISTRAR_CONTA_PARCELADA",
+  // 27/11 (0035): EMPRÉSTIMO — a mesma conta relatada / o mesmo pagamento por comprovante, só na categoria do principal (+ registrar_emprestimo)
+  registrarContaParceladaDeEmprestimo: ["REGISTRAR_CONTA_PARCELADA", "REGISTRAR_EMPRESTIMO"],
+  registrarPagamentoDeEmprestimoPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO", "REGISTRAR_EMPRESTIMO"],
+  // 28/11 (0036): correção cadastral de conta a pagar aberta e sem pagamento (fornecedor, vencimento, descrição, observação, forma)
+  corrigirContaAPagar: "CORRIGIR_CONTA_A_PAGAR",
+  // 28/11 (0037): fase 2 — cada operação com a SUA ação estreita
+  reclassificarContaAPagar: "RECLASSIFICAR_CONTA_A_PAGAR",
+  ajustarValorDeContaAPagar: "AJUSTAR_CONTA_A_PAGAR",
+  moverCompetenciaDeContaAPagar: "MOVER_COMPETENCIA_CONTA_A_PAGAR",
+  cancelarContaAPagar: "CANCELAR_CONTA_A_PAGAR",
 });
 /**
  * 27/11 — operações que gravam em DUAS empresas numa transação (passivo numa, ativo na outra). Ação ESTREITA nas duas; nunca a

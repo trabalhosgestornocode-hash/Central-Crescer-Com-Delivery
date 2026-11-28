@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { criarConcessoesMemoria } from "../../src/modules/financeiro-v2/index.js";
 import { ALFA, CONFIG, FIN, FINANCEIRO, GRUPO, OPER, ORG, base, cenario, gw, t } from "./helpers/operacao.js";
 import { criarPortaOperacional } from "../../src/modules/mova-financeiro/index.js";
-import { interpretarContaRelatada } from "../../src/modules/mova-financeiro/dominio/contaRelatada.js";
+import { interpretarContaRelatada, observacoesPorData, valoresCitados } from "../../src/modules/mova-financeiro/dominio/contaRelatada.js";
 import { AGORA, TODAS, ctx } from "../financeiro-v2/helpers/cenario.js";
 
 const HUMANO = "eeeeeeee-0000-4000-8000-000000000001";
@@ -22,7 +22,7 @@ const UNICA = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300
 const FORA_DO_PLANO = "MOVA, compra de polpa para a alfa, fornecedor Polpa Norte, R$ 300,00, vence 10/12, categoria brinquedos";
 const LEGENDA_DA_FOTO = "bebedouro para a alfa, 2 parcelas no cartão, dia 19/12 e 19/01, parcelas de R$ 194,50";
 // IA simulada realista: só o relato é conta; "sim", "não", "cada parcela", "1" sozinhos seriam OUTRA (nunca chegam à IA no fluxo certo).
-const LEITURA = (req) => (/bebedouro|Polpa Norte/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
+const LEITURA = (req) => (/bebedouro|Polpa Norte|BNB/i.test(JSON.stringify(req.messages ?? "")) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 19450, vencimento: "2026-12-19", categoriaSugerida: "INSUMOS" }) : base({}));
 
 async function relatada({ politica = null, concessao = null, criarContas = false } = {}) {
   const s = await cenario({
@@ -226,4 +226,158 @@ t("CR-9 FOTO do produto com legenda: a legenda é o relato; a foto fica como evi
   const [p] = await s.propostas();
   assert.deepEqual([p.evidenciaNaoFiscal, p.comando.entrada.parcelas.length, p.valorCentavos], ["FOTO_DO_PRODUTO", 2, 38900]);
   assert.equal((await s.contas()).length, 0, "foto não é comprovante: nunca vira pagamento");
+});
+
+// ------------------------------------------------------------------ 27/11: valor SEM "R$" e observações individuais por parcela (empréstimo BNB)
+const BNB = "MOVA, empréstimo BNB para a alfa, total 2.911,08, 3 parcelas: 10/12 (carência), 10/01 (reajuste IPCA), 10/02";
+
+t("CR-10 empréstimo BNB: 'total 2.911,08' (sem R$) é dinheiro; 18.000/400 sem vírgula decimal não; as observações vêm junto de cada data; nada é inventado", () => {
+  const r = interpretarContaRelatada({ texto: BNB, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.ehConta, r.faltas, r.descricao, r.totalCentavos, r.tipoValor], [true, [], "Empréstimo BNB", 291108, "TOTAL"]);
+  assert.deepEqual(r.parcelas.map((p) => [p.vencimento, p.valorCentavos, p.observacao]), [["2026-12-10", 97036, "carência"], ["2027-01-10", 97036, "reajuste IPCA"], ["2027-02-10", 97036, null]]);
+  assert.equal(r.parcelas.reduce((s, p) => s + p.valorCentavos, 0), 291108, "sem centavo perdido");
+  assert.deepEqual(valoresCitados("ar condicionado 18.000 pago 260,00"), [26000]);
+  assert.deepEqual(valoresCitados("freezer 400 litros, reajuste de 10,50%, vence 10/12"), []);
+  assert.deepEqual(valoresCitados("Pagamento de R$ 500 referente ao aluguel"), [50000]);
+  assert.deepEqual(observacoesPorData("vence 10/12: carência, 10/01"), ["carência", null]);
+});
+
+t("CR-11 empréstimo BNB ponta a ponta: resumo com as observações individuais, 'sim' registra 3 parcelas EM ABERTO (nunca paga) uma só vez; repetir o 'sim' não duplica", async () => {
+  const CONC = ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"];
+  const s = await relatada({ politica: { limiteCentavos: 500000 }, concessao: CONC, criarContas: true });
+  await s.ateOResumo(gw({ texto: BNB }));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /1\/3: vence 10\/12\/2026 — R\$\s?970,36 \(carência\)/);
+  assert.match(resumo, /2\/3: vence 10\/01\/2027 — R\$\s?970,36 \(reajuste IPCA\)/);
+  assert.match(resumo, /Total: R\$\s?2\.911,08/);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).decisao, "PROPOSTA", JSON.stringify(await s.decisao()));
+  await aprovarEmprestimoNaCentral(s);
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, cs.reduce((x, c) => x + c.saldoCentavos, 0), cs.every((c) => c.situacao !== "QUITADA")], [3, 291108, true]);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.contas()).length, 3, "repetir o 'sim' não duplica");
+});
+
+/**
+ * 27/11 (consolidação #244/#245): o principal do empréstimo é PATRIMONIAL ("Empréstimos e financiamentos (principal)", fora da DRE) e
+ * nunca vira despesa. A permissão ESTREITA do MOVA (0033) registra só despesa/imobilizado ⇒ o "sim" cria a PROPOSTA (nada lançado) e a
+ * Central (registro amplo) aprova. Esta função confere isso e aprova, para os testes seguirem conferindo a conta registrada.
+ */
+async function aprovarEmprestimoNaCentral(s) {
+  const [p] = await s.propostas();
+  assert.equal(p?.comando?.entrada?.categoria, "EMPRESTIMOS_E_FINANCIAMENTOS", "principal do empréstimo: categoria patrimonial");
+  assert.equal((await s.contas()).length, 0, "patrimonial: a permissão estreita não registra sozinha");
+  assert.equal((await s.mova.aprovador.aplicar(ctx(ORG, ALFA, TODAS, HUMANO), { propostaId: p.id })).estado, "APLICADA");
+  const ls = await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" });
+  assert.ok(ls.length > 0 && ls.every((l) => l.natureza === "PATRIMONIAL"), "fora da DRE");
+  return p;
+}
+
+// ------------------------------------------------------------------ 27/11: PLANO DE CONTAS em árvore + observação completa (BNB)
+import { CATALOGO } from "../../src/modules/mova-core/catalogo.js";
+const BNB_REAL = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vencimento 15/12/2026. Desconto da remuneração de novembro/2026 em 07/12/2026.";
+
+t("PL-1 o plano do Financeiro é uma ÁRVORE: a ferramenta 'categorias' do CORE lê TODAS as categorias lançáveis (inclui IMOBILIZADO), não só os grupos da raiz; sem duplicar", async () => {
+  const s = await relatada();
+  const arvore = await s.m.nucleo.consultarPlanoDeContas(s.cx);
+  const achatar = (xs) => xs.flatMap((c) => [c, ...achatar(c.filhas ?? [])]);
+  const todas = achatar(arvore);
+  assert.ok(arvore.length < todas.length, "a raiz tem menos nós que a árvore");
+  const r = await CATALOGO.categorias.executar({ porta: { ler: async () => arvore }, escopo: s.cx });
+  const codigos = r.dados.itens.map((x) => x.codigo);
+  assert.ok(codigos.includes("IMOBILIZADO"), "IMOBILIZADO (Compra de equipamentos e bens) está disponível");
+  assert.equal(new Set(codigos).size, codigos.length, "nenhuma categoria duplicada");
+  assert.ok(r.dados.total > arvore.length, `${r.dados.total} lançáveis (a raiz tinha só ${arvore.length} grupos)`);
+  const lancaveis = todas.filter((c) => c.aceitaLancamento && c.ativa !== false && c.natureza !== "RECEITA" && !(c.filhas ?? []).length).length;
+  assert.equal(r.dados.total, lancaveis);
+});
+
+t("PL-2 bebedouro (equipamento): oferece IMOBILIZADO entre as opções do plano oficial e, escolhido, a conta nasce com IMOBILIZADO (sem categoria genérica)", async () => {
+  const s = await relatada({ politica: {}, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.enviar(gw({ texto: POR_PARCELA }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_CATEGORIA");
+  const pergunta = await s.ultimoTexto();
+  assert.match(pergunta, /1\)?[ .-]*.*(equipamentos e bens|Imobilizado)/i, "IMOBILIZADO é a 1ª opção");
+  await s.enviar(gw({ texto: "1" }));
+  await s.enviar(gw({ texto: "sim" }));
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, await s.categoriasDas(cs)], [2, ["IMOBILIZADO", "IMOBILIZADO"]]);
+  assert.ok(cs.every((c) => c.saldoCentavos === 19450 && c.situacao !== "QUITADA"));
+});
+
+t("OB-1 empréstimo BNB: composição do total (Jailton + Vanessa = total) e o desconto da remuneração são PRESERVADOS — no resumo, na descrição da conta e na proposta; nada cortado em silêncio", async () => {
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.ateOResumo(gw({ texto: BNB_REAL }));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /Jailton R\$\s?395,34 \+ Vanessa R\$\s?2\.515,74 = R\$\s?2\.911,08/);
+  assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+  assert.match(resumo, /1\/1: vence 15\/12\/2026/, "o vencimento é o dito; a data do desconto (07/12) é outra informação");
+  assert.doesNotMatch(resumo, /vence 07\/12/);
+  await s.enviar(gw({ texto: "sim" }));
+  await aprovarEmprestimoNaCentral(s);
+  const cs = await s.contas();
+  assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"]);
+  const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
+  for (const x of ["Jailton R$ 395,34", "Vanessa R$ 2.515,74", "R$ 2.911,08", "07/12/2026"]) assert.ok(String(lanc.descricao).includes(x), `${x} na descrição: ${lanc.descricao}`);
+  const [p] = await s.propostas();
+  assert.match(p.observacaoCompleta, /Jailton R\$ 395,34 \+ Vanessa R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração/);
+  assert.equal(p.observacaoNaDescricao, true);
+});
+
+t("OB-2 observação MAIOR que o limite de 200 caracteres da descrição: a conta aponta para a proposta, a proposta guarda o texto inteiro e o resumo AVISA", async () => {
+  const longo = `MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vencimento 15/12/2026. Desconto da remuneração ${"mensal conforme contrato com a cooperativa ".repeat(5)}em 07/12/2026.`;
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.ateOResumo(gw({ texto: longo }));
+  assert.match(await s.ultimoTexto(), /guarda a observação completa/);
+  await s.enviar(gw({ texto: "sim" }));
+  await aprovarEmprestimoNaCentral(s);
+  const lanc = (await s.m.nucleo.consultarRegistros(s.cx, { tipo: "LANCAMENTO" }))[0];
+  assert.match(String(lanc.descricao), /obs\. completa na proposta MOVA/);
+  const [p] = await s.propostas();
+  assert.equal(p.observacaoNaDescricao, false);
+  assert.ok(p.observacaoCompleta.length > 150);
+});
+
+t("OB-3 a data do desconto da remuneração NÃO vira vencimento: sem vencimento dito, o MOVA pergunta e nada é criado", async () => {
+  const sem = BNB_REAL.replace(", vencimento 15/12/2026", "");
+  const r = interpretarContaRelatada({ texto: sem, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.faltas.includes("VENCIMENTO"), r.parcelas.length, r.totalCentavos], [true, 0, null]);
+  assert.match(r.observacao, /07\/12\/2026/, "a observação preserva a data do desconto");
+  const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+  await s.enviar(gw({ texto: sem }));
+  assert.equal((await s.contas()).length, 0);
+  assert.equal((await s.propostas()).length, 0);
+});
+
+t("OB-4 vencimento na MESMA frase da observação do desconto: o vencimento é o do banco; a data do desconto fica só nas observações", async () => {
+  const mesma = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026, vencimento do empréstimo 15/12/2026.";
+  const r = interpretarContaRelatada({ texto: mesma, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([r.faltas, r.parcelas.map((p) => p.vencimento)], [[], ["2026-12-15"]]);
+  assert.match(r.observacao, /07\/12\/2026/);
+  assert.doesNotMatch(r.observacao, /15\/12/, "o vencimento não entra na observação do desconto");
+  // ordem inversa: vencimento antes da observação
+  const inversa = "MOVA, empréstimo BNB para a alfa. Jailton R$ 395,34, Vanessa R$ 2.515,74, total R$ 2.911,08, vence 15/12/2026 e o desconto da remuneração de novembro/2026 será em 07/12/2026.";
+  const i = interpretarContaRelatada({ texto: inversa, dataMensagem: "2026-11-27", unidades: [{ apelidos: ["alfa"] }] });
+  assert.deepEqual([i.faltas, i.parcelas.map((p) => p.vencimento)], [[], ["2026-12-15"]]);
+  assert.match(i.observacao, /07\/12\/2026/);
+});
+
+t("OB-5 vencimento em RESPOSTA posterior: o MOVA pergunta só o vencimento, guarda o relato, e a resposta ('vencimento 15/12/2026' ou só a data) completa a conta; o desconto segue só na observação", async () => {
+  for (const resposta of ["vencimento 15/12/2026", "15/12/2026"]) {
+    const s = await relatada({ politica: { operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 500000 }, concessao: ["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"], criarContas: true });
+    await s.enviar(gw({ texto: BNB_REAL.replace(", vencimento 15/12/2026", "") }));
+    assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_PERGUNTA_VENCIMENTO", JSON.stringify(await s.decisao()));
+    assert.match(await s.ultimoTexto(), /Qual é o vencimento da conta/);
+    assert.equal((await s.contas()).length, 0);
+    await s.ateOResumo(gw({ texto: resposta }));
+    const resumo = await s.ultimoTexto();
+    assert.match(resumo, /1\/1: vence 15\/12\/2026/, resposta);
+    assert.match(resumo, /Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
+    assert.doesNotMatch(resumo, /vence 07\/12/);
+    await s.enviar(gw({ texto: "sim" }));
+    await aprovarEmprestimoNaCentral(s);
+    const cs = await s.contas();
+    assert.deepEqual([cs.length, cs[0]?.saldoCentavos, cs[0]?.vencimento], [1, 291108, "2026-12-15"], resposta);
+  }
 });

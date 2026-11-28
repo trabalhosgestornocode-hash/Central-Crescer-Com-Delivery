@@ -30,13 +30,13 @@ export const CASOS = Object.freeze([
   { id: "C02", cobre: ["conta a pagar", "data"], real: true,
     texto: "MOVA, chegou o boleto de internet da gama: R$ 289,90, vence em 25/10/2026.",
     ideal: L({ intencao: "REGISTRAR_CONTA", valorCentavos: 28990, vencimento: "2026-10-25", categoriaSugerida: "INTERNET", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Gama" }),
-    esperado: { decisao: "PROPOSTA", intencao: "REGISTRAR_CONTA", valorCentavos: 28990, unidade: "GAMA", categoria: /INTERNET|TELEF|TELECOM|COMUNICA/, data: { campo: "vencimento", valor: "2026-10-25" },
-      proposta: { tipo: "NOVA_OBRIGACAO", valorCentavos: 28990, unidade: "GAMA", datas: { vencimento: "2026-10-25" } } } },
+    // 27/11 (conta relatada generalizada): sem o mês de referência DITO, o MOVA pergunta só ele (nada é registrado nem presumido)
+    esperado: { decisao: "PEDIR_INFORMACAO", motivo: "CONTA_RELATADA_FALTA_INFORMACAO", intencao: "REGISTRAR_CONTA", valorCentavos: 28990, unidade: "GAMA", categoria: /INTERNET|TELEF|TELECOM|COMUNICA/, data: { campo: "vencimento", valor: "2026-10-25" } } },
   { id: "C03", cobre: ["despesa recorrente"], real: true,
     texto: "MOVA, o aluguel da alfa é R$ 2.500,00 todo mês e vence dia 10. Registre o de novembro.",
     ideal: L({ intencao: "REGISTRAR_CONTA", valorCentavos: 250000, vencimento: "2026-11-10", competencia: "2026-11", categoriaSugerida: "ALUGUEL", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }),
-    esperado: { decisao: "PROPOSTA", intencao: "REGISTRAR_CONTA", valorCentavos: 250000, unidade: "ALFA", categoria: /ALUGUEL/, data: { campo: "vencimento", valor: "2026-11-10" },
-      proposta: { tipo: "NOVA_OBRIGACAO", valorCentavos: 250000, unidade: "ALFA", datas: { vencimento: "2026-11-10" } } },
+    // 27/11: tudo dito (valor, "dia 10", novembro) ⇒ resumo e pedido de confirmação pelo WhatsApp (a proposta só nasce no "sim")
+    esperado: { decisao: "PEDIR_INFORMACAO", motivo: "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", intencao: "REGISTRAR_CONTA", valorCentavos: 250000, unidade: "ALFA", categoria: /ALUGUEL/, data: { campo: "vencimento", valor: "2026-11-10" } },
     nota: "recorrência NÃO é criada: só a ocorrência pedida (capacidade de recorrência não existe)" },
   { id: "C04", cobre: ["receita recebida"], real: true,
     texto: "MOVA, recebemos R$ 1.200,00 de vendas no balcão hoje na gama.",
@@ -76,8 +76,8 @@ export const CASOS = Object.freeze([
   { id: "C12", cobre: ["data e competência"], real: true,
     texto: "MOVA, boleto da contabilidade de setembro da alfa, R$ 600,00, vencimento 05/11/2026.",
     ideal: L({ intencao: "REGISTRAR_CONTA", valorCentavos: 60000, vencimento: "2026-11-05", competencia: "2026-09", categoriaSugerida: "CONTABILIDADE", natureza: "DESPESA", unidadeSugerida: "Unidade Teste Alfa" }),
-    esperado: { decisao: "PROPOSTA", intencao: "REGISTRAR_CONTA", valorCentavos: 60000, unidade: "ALFA", categoria: /CONTAB/, data: { campo: "competencia", valor: "2026-09" },
-      proposta: { tipo: "NOVA_OBRIGACAO", valorCentavos: 60000, unidade: "ALFA", datas: { competencia: "2026-09", vencimento: "2026-11-05" } } } },
+    // 27/11: competência DITA ("de setembro") lida e respeitada ⇒ resumo e pedido de confirmação pelo WhatsApp
+    esperado: { decisao: "PEDIR_INFORMACAO", motivo: "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", intencao: "REGISTRAR_CONTA", valorCentavos: 60000, unidade: "ALFA", categoria: /CONTAB/, data: { campo: "competencia", valor: "2026-09" } } },
   { id: "C13", cobre: ["categoria financeira"], real: true,
     texto: "MOVA, paguei R$ 420,00 de embalagens hoje, gama.",
     ideal: L({ intencao: "INFORMAR_PAGAMENTO", valorCentavos: 42000, dataPagamento: "2026-10-15", categoriaSugerida: "EMBALAGENS", natureza: "CUSTO", unidadeSugerida: "Unidade Teste Gama" }),

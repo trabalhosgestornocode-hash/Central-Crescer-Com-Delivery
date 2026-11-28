@@ -1,5 +1,5 @@
 // MOVA — IDENTIDADE FISCAL: o conhecimento fiscal que o MOVA adquire sozinho das notas que o Financeiro já guarda (28/11/2026).
-// Só LEITURA do Financeiro (porta de leitura); escrita só nas tabelas internas do MOVA (migração 0028), com auditoria. Sem formulário.
+// Só LEITURA do Financeiro (porta de leitura); escrita só nas tabelas internas do MOVA (migração 0029), com auditoria. Sem formulário.
 //   aprender({ entregador? })  lê as notas históricas (estruturadas, sem IA), aprende a empresa tomadora de cada unidade, consolida a
 //                              identidade de cada entregador por evidência inequívoca e deixa em revisão SÓ os casos conflitantes.
 // Idempotente: pode rodar quantas vezes for (cada nota é uma evidência por unidade; vínculos já consolidados só são confirmados).

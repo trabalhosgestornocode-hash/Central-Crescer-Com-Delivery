@@ -2,7 +2,7 @@
 // Cada fato econômico gera UM lançamento; pagar ou receber depois (liquidação) nunca gera outro.
 // A natureza de cada lançamento vem da CATEGORIA do plano de contas — nunca do fato de ter sido "descontado do repasse".
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
+import { ALVO_LIQUIDACAO, ESTADO_COMPETENCIA, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { ratear, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { CATEGORIA_DESPESA_A_CLASSIFICAR, CATEGORIA_TITULOS_ANTERIORES, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
@@ -10,7 +10,7 @@ import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
   validarAjuste, validarCancelamentoObrigacao, validarCancelamentoRecebivel, validarConta, validarContraparte, validarCorrecaoLancamento,
-  validarContaParcelada, validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
+  validarContaParcelada, validarCorrecaoDeContaAPagar, validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
 } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
@@ -44,6 +44,9 @@ export function operacoesEconomicas(b) {
     return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
   }
 
+  /** 27/11 (0035): a categoria do principal de empréstimo; aceita pelas estreitas só com `registrar_emprestimo` (conferida na transação). */
+  const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
+  const comEmprestimo = (ctx) => Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR_EMPRESTIMO);
   function registrarObrigacaoCom(acao, ctx, c, { soDespesa = false, aceitaImobilizado = false } = {}) {
       const impressao = JSON.stringify(c);
       return b.executar(ctx, acao, async (cx, tx) => {
@@ -73,9 +76,11 @@ export function operacoesEconomicas(b) {
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }
-        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA && !(aceitaImobilizado && categoria.codigo === "IMOBILIZADO")) {
+        const principalDeEmprestimo = soDespesa && categoria.codigo === CATEGORIA_EMPRESTIMO && categoria.natureza === "PATRIMONIAL" && comEmprestimo(ctx);
+        if (soDespesa && categoria.natureza !== NATUREZA_LANCAMENTO.DESPESA && !(aceitaImobilizado && categoria.codigo === "IMOBILIZADO") && !principalDeEmprestimo) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Conta a pagar por documento só em categoria de despesa.", { categoria: categoria.codigo });
         }
+        if (principalDeEmprestimo) await b.exigirConcessaoVigente(tx, cx, ACAO.REGISTRAR_EMPRESTIMO);
         const grupoId = b.gerarId();
         const lancamento = await b.lancar(tx, cx, categoria, {
           valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
@@ -90,12 +95,29 @@ export function operacoesEconomicas(b) {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
             competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: explicitas ? explicitas[i].vencimento : somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
-            ...(c.identificador ? { identificador: c.identificador } : {}),
+            ...(c.identificador ? { identificador: c.identificador } : {}), ...(c.observacao ? { observacao: c.observacao } : {}), ...(c.extrasDaObrigacao ?? {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
           }));
         }
         return { lancamento, obrigacoes, repetido: false };
       });
+  }
+
+  function contaParcelada(ctx, entrada) {
+    const v = validarContaParcelada(entrada);
+    if (v.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por relato.", { categoria: v.categoria });
+    const c = {
+      contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
+      competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
+      documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
+      // 27/11: forma de pagamento (já validada, antes descartada) e observações ficam em CADA parcela da conta (campos livres da obrigação)
+      extrasDaObrigacao: { ...(v.formaPagamento ? { formaPagamento: v.formaPagamento } : {}), ...(v.observacao ? { observacao: v.observacao } : {}) },
+    };
+    // 27/11: "só despesa (ou imobilizado)" é a regra da permissão ESTREITA (a do MOVA; o banco a impõe na 0033). Quem tem o registro
+    // AMPLO (`registrar`, o mesmo do formulário de conta a pagar, que já aceita patrimonial) aprova a conta relatada de empréstimo/
+    // parcelamento na Central sem virar despesa. Nenhuma permissão é ampliada: receita e títulos anteriores continuam recusados.
+    const amplo = Array.isArray(ctx?.permissoes) && ctx.permissoes.includes(ACAO.REGISTRAR);
+    return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: !amplo, aceitaImobilizado: true });
   }
 
   return {
@@ -147,16 +169,14 @@ export function operacoesEconomicas(b) {
      * `registrar_conta_parcelada` (0033). Um lançamento pelo total; categoria de DESPESA ou IMOBILIZADO (compra de equipamentos,
      * patrimonial); a conta nasce EM ABERTO (nunca paga). Mesma idempotência pela fonte (MOVA:<proposta>) das demais contas.
      */
-    registrarContaParcelada(ctx, entrada) {
-      const v = validarContaParcelada(entrada);
-      if (v.categoria === CATEGORIA_TITULOS_ANTERIORES) falhar(CODIGO.CATEGORIA_INVALIDA, "Título anterior à abertura não entra por relato.", { categoria: v.categoria });
-      const c = {
-        contraparteNova: v.contraparteNova, valorOriginalCentavos: v.valorOriginalCentavos, moeda: v.moeda, categoria: v.categoria, descricao: v.descricao,
-        competencia: v.competencia, dataEmissao: v.dataEmissao, vencimento: v.parcelas[0].vencimento, parcelas: v.parcelas.length, recorrencia: null,
-        documentoIds: [], fonte: v.fonte, parcelasExplicitas: v.parcelas,
-      };
-      return registrarObrigacaoCom(ACAO.REGISTRAR_CONTA_PARCELADA, ctx, c, { soDespesa: true, aceitaImobilizado: true });
+    /** 27/11 (0035) — conta de EMPRÉSTIMO ainda a pagar (1 a 24 parcelas, em aberto): a mesma conta relatada, só na categoria do principal. */
+    registrarContaParceladaDeEmprestimo(ctx, entrada) {
+      if (entrada?.categoria !== CATEGORIA_EMPRESTIMO) falhar(CODIGO.CATEGORIA_INVALIDA, "Esta operação é só para o principal de empréstimos e financiamentos.", { categoria: entrada?.categoria ?? null });
+      b.autorizarContexto(ctx, ACAO.REGISTRAR_EMPRESTIMO);
+      return contaParcelada(ctx, entrada);
     },
+
+    registrarContaParcelada(ctx, entrada) { return contaParcelada(ctx, entrada); },
 
     /**
      * Recebível avulso (ex.: demonstrativo de repasse). NÃO gera receita — a receita nasce da venda.
@@ -257,6 +277,67 @@ export function operacoesEconomicas(b) {
           if (l.descricao !== c.mudancas.descricao) await b.alterar(tx, cx, TIPO.LANCAMENTO, l, { descricao: c.mudancas.descricao }, EVENTO_HISTORICO.CORRECAO, c.justificativa);
         }
         return corrigida;
+      });
+    },
+
+    /**
+     * 28/11 (0036) — correção CADASTRAL ESTREITA de conta a pagar (MOVA Operador Financeiro): fornecedor, vencimento, descrição,
+     * observação e forma de pagamento — a MESMA correção auditada de `corrigirObrigacao` (histórico CORRECAO com antes/depois e
+     * justificativa), pela ação `corrigir_conta_a_pagar`. Só conta ABERTA, sem pagamento, de despesa (ou equipamento) e de período
+     * ABERTO ou em fechamento preliminar; versão conferida (a vista no resumo). PARCELA altera só a conta indicada; GRUPO, todas as
+     * parcelas da compra (todas precisam estar elegíveis). A descrição do lançamento só muda quando a correção alcança o grupo inteiro.
+     * Sem mudança efetiva ⇒ nada é gravado (`semMudanca`). O banco confere a mesma forma (0036).
+     */
+    corrigirContaAPagar(ctx, entrada) {
+      const c = validarCorrecaoDeContaAPagar(entrada);
+      return b.executar(ctx, ACAO.CORRIGIR_CONTA_A_PAGAR, async (cx, tx) => {
+        const alvo = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Conta a pagar");
+        if (alvo.versao !== c.versaoEsperada) falhar(CODIGO.CONFLITO_VERSAO, "A conta foi alterada depois do resumo. Confira de novo.", { versaoAtual: alvo.versao });
+        const grupo = (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: alvo.grupoId } })).sort((x, y) => x.parcela.numero - y.parcela.numero);
+        const alvos = c.abrangencia === "GRUPO" ? grupo.filter((o) => o.situacao !== SITUACAO_TITULO.CANCELADA) : [alvo];
+        // GRUPO: o conjunto de parcelas e a versão de CADA uma são os confirmados (nada entra, sai ou mudou depois do resumo)
+        if (c.abrangencia === "GRUPO") {
+          const ids = Object.keys(c.versoes);
+          if (ids.length !== alvos.length || alvos.some((o) => c.versoes[o.id] !== o.versao)) falhar(CODIGO.CONFLITO_VERSAO, "As parcelas mudaram depois do resumo. Confira de novo.", { confirmadas: ids.length, atuais: alvos.length });
+        }
+        const lancamento = await b.obterOuFalhar(tx, cx, TIPO.LANCAMENTO, alvo.lancamentoId, "Lançamento");
+        const elegivelNoLancamento = lancamento.situacao === SITUACAO_LANCAMENTO.ATIVO && lancamento.origem?.tipo === TIPO.OBRIGACAO
+          && (lancamento.natureza === NATUREZA_LANCAMENTO.DESPESA || (lancamento.natureza === NATUREZA_LANCAMENTO.PATRIMONIAL && lancamento.categoria === "IMOBILIZADO"));
+        if (!elegivelNoLancamento) falhar(CODIGO.OPERACAO_INVALIDA, "Esta conta tem proteção própria (empréstimo, parcelamento, entre empresas ou outra patrimonial): a correção é pela Central.", { categoria: lancamento.categoria });
+        for (const o of alvos) {
+          if (o.situacao !== SITUACAO_TITULO.ABERTA || o.liquidadoCentavos > 0) falhar(CODIGO.OPERACAO_INVALIDA, "Só se corrige conta aberta e sem pagamento.", { parcela: o.parcela.numero, situacao: o.situacao });
+        }
+        for (const comp of [...new Set(alvos.map((o) => o.competencia))].sort()) {
+          const atual = await b.competenciaAtual(tx, cx, comp);
+          if (atual && ![ESTADO_COMPETENCIA.ABERTA, ESTADO_COMPETENCIA.FECHAMENTO_PRELIMINAR].includes(atual.estado)) {
+            falhar(CODIGO.COMPETENCIA_HOMOLOGADA, "O período desta conta está em fechamento: a correção é pela Central.", { competencia: comp, estado: atual.estado });
+          }
+          await b.exigirCompetenciaEditavel(tx, cx, comp);
+        }
+        const m = { ...c.mudancas };
+        if (m.contraparteNova) m.contraparteId = (await contraparteDoFormulario(tx, cx, m.contraparteNova)).id; // mesma transação
+        else if (m.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, m.contraparteId, "Fornecedor");
+        if (m.vencimento && m.vencimento < alvo.dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.");
+        const antes = [];
+        const depois = [];
+        for (const o of alvos) {
+          const mud = {};
+          if (m.contraparteId && m.contraparteId !== o.contraparteId) mud.contraparteId = m.contraparteId;
+          if (m.vencimento && m.vencimento !== o.vencimento) mud.vencimento = m.vencimento;
+          if (m.descricao && m.descricao !== o.descricao) mud.descricao = m.descricao;
+          // observação e forma de pagamento são campos da conta (no banco, em `extras`: a 0036 só deixa ESTA ação mudá-los)
+          for (const k of ["observacao", "formaPagamento"]) if (m[k] !== undefined && (o[k] ?? null) !== m[k]) mud[k] = m[k];
+          if (!Object.keys(mud).length) continue;
+          antes.push(o);
+          depois.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mud, EVENTO_HISTORICO.CORRECAO, c.justificativa));
+        }
+        // a descrição do LANÇAMENTO é da compra inteira: só muda quando a correção alcança todas as parcelas
+        const grupoInteiro = c.abrangencia === "GRUPO" || grupo.length === 1;
+        let lancamentoDepois = null;
+        if (m.descricao && grupoInteiro && lancamento.descricao !== m.descricao) {
+          lancamentoDepois = await b.alterar(tx, cx, TIPO.LANCAMENTO, lancamento, { descricao: m.descricao }, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+        }
+        return { obrigacoes: depois, antes, lancamento: lancamentoDepois, semMudanca: depois.length === 0 && !lancamentoDepois, abrangencia: c.abrangencia };
       });
     },
 

@@ -8,7 +8,7 @@
 --   identidade_fiscal_tomador    a empresa tomadora de cada unidade (configurada ou aprendida das notas aprovadas)
 --   nota_leitura_fiscal          cache da leitura por hash: a mesma nota nunca é lida (nem paga em IA) duas vezes
 -- Uma nota continua pertencendo SÓ à empresa tomadora da sua obrigação; o vínculo é por unidade. Sem DELETE para o app.
--- Aditiva e reversível (recuperacao/reverter-0028.sql). Não altera nenhum dado existente.
+-- Aditiva e reversível (recuperacao/reverter-0029.sql). Não altera nenhum dado existente.
 
 create table mova.identidade_fiscal (
   id uuid primary key default gen_random_uuid(),

@@ -44,6 +44,23 @@ export function composicaoComprovada(saida) {
   return { principalCentavos: original, jurosCentavos: juros, multaCentavos: multa, encargoCentavos: juros + multa };
 }
 
+/**
+ * 28/11 (0035, revisão) — composição de pagamento/parcela de EMPRÉSTIMO conhecida como SÓ PRINCIPAL. A AUSÊNCIA de juros lidos NÃO
+ * comprova nada (a parcela de um empréstimo costuma embutir juros) — nem o "0" da leitura do comprovante, que a leitura também usa
+ * quando o campo NÃO EXISTE no documento. Só vale a pessoa DECLARAR que o valor é só principal/amortização, sem juros (e depois
+ * confirmar com "sim"). Fora disso ⇒ null (composição desconhecida ⇒ revisão humana no Centro Financeiro). `saida` não é usada.
+ */
+export function composicaoSoPrincipal(_saida, texto = "") {
+  const frases = String(texto ?? "").split(/[.;!?\n]+/).map(normalizar).filter(Boolean);
+  if (!frases.length) return null;
+  // negação ou encargo citado em qualquer frase ("não é só principal", "com juros", "tem encargos") ⇒ desconhecida
+  const contra = (f) => (/\bnao\b/.test(f) && /\b(principal|amortizac\w*|sem juros)\b/.test(f)) || /\b(com|tem|inclui|incluindo|mais)\s+(os\s+)?(juros|encargos?)\b/.test(f);
+  if (frases.some(contra)) return null;
+  const declara = (f) => /\b(so|somente|apenas|exclusivamente|integralmente)\s+(o\s+|de\s+|do\s+)?principal\b/.test(f) || /\bamortizac\w*\s+(do\s+|de\s+)?principal\b/.test(f)
+    || /\bsem\s+(nenhum\s+)?(juros|encargos?)\b/.test(f);
+  return frases.some(declara) ? { fonte: "DECLARADA" } : null;
+}
+
 const MESES = ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 const RE_MES_NOME = new RegExp(`\\b(${MESES.join("|")}|${MESES.map((m) => m.slice(0, 3)).join("|")})\\b`);
 /** Texto curto que parece um mês ("novembro", "11/2026", "mês 10") — para a memória curta reconhecer a resposta. */
@@ -156,6 +173,8 @@ export function parecerRespostaDeDivergencia(texto) {
   // palavra solta ("outra", "parcial", "juros", mês) só é RESPOSTA em frase curta: "mostre o faturamento de outra empresa" é PEDIDO
   // novo (e passa pelas próprias travas), nunca a resposta de uma pergunta pendente.
   const curta = t.split(" ").length <= 5;
+  // 27/11 (#245): resposta com o VENCIMENTO da conta relatada ("15/12/2026", "vencimento 15/12", "dia 15/12")
+  if (/^(vencimento |vence |venc |dia |vencimento dia )?\d{1,2}[ /]\d{1,2}([ /](\d{2}|\d{4}))?$/.test(t)) return true;
   return SIM.test(t) || NAO.test(t) || /^[0-9]$/.test(t) || /^(nao sei|deixa para o financeiro|deixa pro financeiro|classificar depois|deixa para depois)$/.test(t) || /^(e |o |no |de )?(total|valor total|cada|cada uma|cada parcela|por parcela|de cada parcela)$/.test(t) || (curta && (PALAVRA_JUROS.test(t) || PALAVRA_PARCIAL.test(t) || PALAVRA_NOVA.test(t) || pareceMes(t)));
 }
 

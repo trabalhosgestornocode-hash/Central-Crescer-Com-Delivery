@@ -264,7 +264,7 @@ export const CONSULTAS_MOVA = Object.freeze({
   "/mova/identidade-fiscal": async ({ ctx, mova }) => {
     exigirVer(ctx);
     const f = mova.armazenamento.identidadesFiscais;
-    if (!f || !(await f.disponivel())) return { disponivel: false, motivo: "SEM_MIGRACAO_0028" };
+    if (!f || !(await f.disponivel())) return { disponivel: false, motivo: "SEM_MIGRACAO_0029" };
     const escopo = { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId };
     const [contagens, itens, tomador] = await Promise.all([f.contagens(escopo), f.listar(escopo), f.tomadorDaUnidade(ctx.unidadeId)]);
     return { disponivel: true, contagens, tomadorDaUnidade: tomador ? { situacao: tomador.situacao, documento: mascararDocumento(tomador.documento) } : null,
@@ -273,7 +273,7 @@ export const CONSULTAS_MOVA = Object.freeze({
   "/mova/envio-painel": async ({ ctx, mova, params = {} }) => {
     exigirVer(ctx);
     const a = mova.armazenamento;
-    if (!a.limitesDeEnvio || typeof a.saida.usoDeEnvio !== "function") return { disponivel: false, motivo: "SEM_MIGRACAO_0027" };
+    if (!a.limitesDeEnvio || typeof a.saida.usoDeEnvio !== "function") return { disponivel: false, motivo: "SEM_MIGRACAO_0028" };
     const agora = new Date();
     const desde = new Date(Date.UTC(...(() => { const f = new Date(agora.getTime() - 3 * 3600_000); return [f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), 3]; })())).toISOString();
     const dia = new Date(agora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
@@ -359,13 +359,13 @@ export const ACOES_MOVA = Object.freeze({
       exigirConfigurar(ctx);
       if (typeof mova.entregadores?.aprenderIdentidadesFiscais !== "function") throw recusa(503, "ENTREGADORES_INDISPONIVEIS", "Entregadores indisponíveis.");
       const r = await mova.entregadores.aprenderIdentidadesFiscais({ unidadeId: ctx.unidadeId });
-      if (r.disponivel === false) throw recusa(503, "SEM_MIGRACAO_0028", "Identidade fiscal indisponível (migração 0028 não aplicada).");
+      if (r.disponivel === false) throw recusa(503, "SEM_MIGRACAO_0029", "Identidade fiscal indisponível (migração 0029 não aplicada).");
       return { documentosAnalisados: r.documentosAnalisados, consolidadas: r.consolidadas, emRevisao: r.emRevisao, semHistorico: r.semHistorico, divergencias: r.divergencias, evidenciasNovas: r.evidenciasNovas };
     } },
   "/mova/limite-envio": { campos: ["escopo", "chave", "campo", "valor", "ativo", "justificativa"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, b }) => {
       exigirConfigurar(ctx);
-      if (!mova.armazenamento.limitesDeEnvio) throw recusa(503, "LIMITES_INDISPONIVEIS", "Limites de envio indisponíveis (migração 0027 não aplicada).");
+      if (!mova.armazenamento.limitesDeEnvio) throw recusa(503, "LIMITES_INDISPONIVEIS", "Limites de envio indisponíveis (migração 0028 não aplicada).");
       const regra = { escopo: b.escopo, chave: b.escopo === "GLOBAL" ? "*" : b.chave, campo: b.campo, valor: b.campo === "alertaFaixas" ? String(b.valor) : Number(b.valor) };
       const v = validarRegra(regra);
       if (!v.ok) throw recusa(400, v.erro, "Limite inválido.");

@@ -61,7 +61,9 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
       if ((entrada.obrigacao.parcelas ?? 1) !== 1 || entrada.obrigacao.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Despesa paga por comprovante entra em uma parcela, sem repetição.", { campo: "parcelas" });
       // A conta nasce pela ação estreita quando o contexto a tem; senão pelo cadastro comum (quem aprova na Central).
       const permissoes = ctx?.permissoes ?? [];
-      const acaoDaConta = permissoes.includes(ACAO.REGISTRAR_OBRIGACAO) ? ACAO.REGISTRAR_OBRIGACAO : ACAO.REGISTRAR;
+      // 27/11: quem tem o registro AMPLO (pessoa que aprova na Central) usa o cadastro comum — o mesmo do formulário, que aceita a
+      // categoria patrimonial (ex.: principal de empréstimo pago por boleto). A identidade do MOVA (só a estreita) segue como antes.
+      const acaoDaConta = permissoes.includes(ACAO.REGISTRAR) ? ACAO.REGISTRAR : permissoes.includes(ACAO.REGISTRAR_OBRIGACAO) ? ACAO.REGISTRAR_OBRIGACAO : ACAO.REGISTRAR;
       for (const acao of [acaoDaConta, ACAO.ENVIAR_DOCUMENTO]) b.autorizarContexto(ctx, acao);
       const cx0 = b.autorizarContexto(ctx, ACAO.BAIXAR_POR_COMPROVANTE);
       if (!pagamento.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a despesa, o valor e o comprovante e confirme o registro.");
@@ -111,6 +113,16 @@ export function operacoesDeDespesaPagaPorComprovante(b, { cofre }) {
         };
       });
     },
+  };
+  /**
+   * 27/11 (0035) — pagamento de EMPRÉSTIMO comprovadamente realizado: conta + comprovante + pagamento na MESMA transação, quitada,
+   * só na categoria do principal (fora da DRE). Sem encargos: juros desconhecidos nunca viram principal (com juros, só a Central).
+   */
+  ops.registrarPagamentoDeEmprestimoPorComprovante = (ctx, entrada) => {
+    if (entrada?.obrigacao?.categoria !== "EMPRESTIMOS_E_FINANCIAMENTOS") falhar(CODIGO.CATEGORIA_INVALIDA, "Esta operação é só para o principal de empréstimos e financiamentos.", { categoria: entrada?.obrigacao?.categoria ?? null });
+    if (entrada?.encargos) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento de empréstimo com juros/multa vai para a aprovação no Centro Financeiro.", { campo: "encargos" });
+    b.autorizarContexto(ctx, ACAO.REGISTRAR_EMPRESTIMO);
+    return ops.registrarDespesaPagaPorComprovante(ctx, entrada);
   };
   /** 25/11 — operação ESTREITA da compra nova paga COM juros/multa discriminados (exige também `registrar_juros`). */
   ops.registrarDespesaPagaComEncargo = (ctx, entrada) => {

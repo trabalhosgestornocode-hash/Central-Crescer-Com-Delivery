@@ -15,6 +15,7 @@
 // unidade pelo histórico do participante. Comprovante de obrigação existente = proposta de BAIXA (nunca despesa nova).
 import { camposAlterados, podeConfirmarPendencia, versaoDaConta } from "../dominio/confirmacao.js";
 import { chaveDoDocumento } from "../dominio/documentos.js";
+import { esclarecerIncertezas } from "../dominio/esclarecimento.js";
 import { SITUACAO_COMPROVANTE, avaliarComprovante } from "../dominio/comprovante.js";
 import { grupoAutorizado, mascarar, normalizar, requisitosParaOperacao } from "../dominio/configuracao.js";
 import { RESULTADO_UNIDADE, resolverUnidade, unidadesCitadas } from "../dominio/unidade.js";
@@ -22,15 +23,16 @@ import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeRe
 import { ehSaudacaoOuAjuda, mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
+import { TIPO_CORRECAO, criarCorrecaoNaConversa, ehPendenciaDeCorrecao } from "./correcaoNaConversa.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
-import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe, identificarParticipante } from "../dominio/participantes.js";
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
-import { classificarContaRelatada, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
+import { categoriaPatrimonialDoRelato, observacaoDoTexto, classificarContaRelatada, competenciaDoRelato, complementoDaResposta, ehPatrimonialForaDaDre, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, composicaoSoPrincipal, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 /** 26/11: fuso da operação (Açaí e Subway Saci): data da mensagem, competência e ano das parcelas relatadas. */
@@ -96,6 +98,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const servico = cfg.identidadeServico.usuarioId;
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
+  // 28/11 (Operador Financeiro, fase 1): correção cadastral de conta a pagar pela conversa (operação oficial do núcleo; sem IA)
+  const correcoes = criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir: (...x) => concluir(...x), escopoDe, hoje, DECISAO,
+    // mesma regra de saída das demais operações financeiras; a correção mostra a CONTA e o FORNECEDOR ⇒ no grupo só com o "detalhe"
+    // (todos os membros FINANCEIRO nas unidades da conta); senão, no privado de quem fala
+    rotear: async (g, p, e, us) => {
+      const r = await roteamento(g, p, e, "DOCUMENTO_COM_VALOR", us);
+      if (!r?.noGrupo || r.detalhe === true || !us.length) return r;
+      const jid = destinoPrivado(p, e.participanteId);
+      return { destino: jid && cfg.gruposAutorizados.some((x) => x.derivada && x.grupoId === jid) ? jid : null, motivo: "DETALHE_SO_PARA_FINANCEIRO" };
+    } });
 
   async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, respostasExtras = [], propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
     if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
@@ -226,7 +238,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   async function retomarPendencia(evento, pend, motivo, extra = {}) {
     let r;
     try {
-      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, ...extra } });
+      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, ...extra } });
     } catch (e) {
       try {
         await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
@@ -253,6 +265,9 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     const conversa = typeof a.conversas?.obter === "function" ? await a.conversas.obter({ grupoId: evento.grupoId, participanteId: evento.participanteId }) : null;
     // 24/11: pergunta de divergência/descrição pendente DESTA pessoa (só lida), para a resposta LIVRE ser interpretada pela leitura.
     let pendenteSemantico = null;
+    let unidadeContexto = null; // 27/11: unidade da mensagem do MOVA que a pessoa citou (nunca a padrão do CORE)
+    // 28/11 (Operador Financeiro, fase 1): resposta a uma pergunta da CORREÇÃO de conta (escolha, valor novo, confirmação)
+    if (esclarecimento && ehPendenciaDeCorrecao(esclarecimento.divergencia)) return correcoes.continuar({ evento, grupo, esclarecimento });
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -309,6 +324,18 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           }
         }
         if (pend?.pendente) return retomarPendencia(evento, pend, motivoRelacao);
+        // 28/11: PEDIDO DE CORREÇÃO citando uma mensagem do MOVA ("adicione uma observação nessa conta: …"): a conta é a da mensagem citada
+        const correcaoCitada = evento.texto ? correcoes.interpretar(evento.texto) : null;
+        if (correcaoCitada) {
+          const doOrigem = origemCitada?.eventoId ? await unidadesDoEvento(origemCitada.eventoId, daPessoa) : [];
+          return correcoes.iniciar({ evento, grupo, participante, daPessoa, pedido: correcaoCitada, unidadeContexto: doOrigem.length === 1 ? doOrigem[0].unidadeId : null, origemCitada });
+        }
+        // 5a0. 27/11 — ESCLARECIMENTO de uma dúvida da leitura ("o 18.000 são os BTUs; o pagamento foi de R$ 260,00") citando a proposta:
+        // resolve ESSA dúvida (a original fica na auditoria) e reavalia a proposta pela política vigente. Mesma proposta, sem outra despesa.
+        if (origemCitada?.eventoId && evento.texto && !confirmacaoDeProposta(evento.texto)) {
+          const esc = await esclarecerProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
+          if (esc) return esc;
+        }
         // 5a. 25/11 — RETOMADA pela citação da resposta do MOVA sobre uma PROPOSTA (sem pergunta pendente): "registrar", "tenta de novo".
         // Nada novo é exigido (nem novo comprovante); a execução automática é refeita com TUDO revalidado (política, chaves, concessão,
         // competência aberta, duplicidade, fracionamento). Só vale para quem pode complementar a operação nesta unidade.
@@ -332,6 +359,17 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           const complemento = await complementarProposta(evento, origemCitada.eventoId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro });
           if (complemento) return complemento;
         }
+        // 5a-ctx. 27/11 — CONTEXTO da mensagem citada: as unidades da operação que gerou a resposta do MOVA citada. Uma só ⇒ a conversa
+        // continua nela (o CORE recebe a unidade; nunca a padrão nem a primeira do cadastro); mais de uma ⇒ pergunta qual empresa;
+        // confirmação sem nada pendente ⇒ diz isso, sem consultar outra unidade.
+        if (origemCitada?.eventoId && evento.texto) {
+          const doOrigem = await unidadesDoEvento(origemCitada.eventoId, daPessoa);
+          if (doOrigem.length === 1) unidadeContexto = doOrigem[0].unidadeId;
+          if (confirmacaoDeProposta(evento.texto)) {
+            if (doOrigem.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "CONFIRMACAO_EMPRESA_AMBIGUA", resposta: RESPOSTA.qualEmpresa(doOrigem.map((x) => x.nome)), extra: { retomou: null } });
+            return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "CONFIRMACAO_SEM_OPERACAO_PENDENTE", escopo: doOrigem[0] ? escopoDe(doOrigem[0]) : undefined, resposta: RESPOSTA.semOperacaoPendente(doOrigem[0]?.nome ?? null), extra: { retomou: null } });
+          }
+        }
       }
       // 5b. 15A — MEMÓRIA CURTA: esclarecimento SEM citar a pergunta ("Sanduíches Centro" logo depois de "de qual unidade?").
       // Só quando TODAS valem: mesma conversa e MESMO participante; pendência dos últimos 10 min (só a mais recente);
@@ -339,6 +377,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
       // 24/11: SÓ sem citação. Uma mensagem que CITA algo e não achou pendência exata (passo 5) nunca é ligada por aproximação
       // à pendência mais recente — citar uma consulta antiga com "sim" não pode confirmar outra operação.
+      // 28/11: PEDIDO DE CORREÇÃO sem citação ("MOVA, altere o vencimento da conta de energia para 15/12") — determinístico, sem IA
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia) {
+        const pedidoDeCorrecao = correcoes.interpretar(evento.texto);
+        if (pedidoDeCorrecao) return correcoes.iniciar({ evento, grupo, participante, daPessoa, pedido: pedidoDeCorrecao });
+      }
       const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
       const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
       if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
@@ -391,6 +434,18 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // Só SEM citação (mesma regra da memória curta): quem cita outra mensagem e não achou a pendência exata não é ligado à mais recente.
       if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia && String(evento.texto ?? "").length <= 300 && typeof a.mensagens.verPendenteRecente === "function") {
         const visto = await a.mensagens.verPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
+        // 27/11: resposta ao "falta o vencimento / o mês de referência" da conta relatada ("vence 10/12, referente a novembro"):
+        // lida sem IA; só retoma se preencher o que faltava (senão segue a leitura comum, com a pergunta como contexto).
+        // 28/11: resposta LIVRE com o valor novo da correção ("Gelo Norte", "paga pela sócia") — sem IA
+        if ([TIPO_CORRECAO.VALOR, TIPO_CORRECAO.JUSTIFICATIVA].includes(visto?.pendente?.divergencia?.tipo)) {
+          const pend = await a.mensagens.tomarPendente(visto.mensagemId);
+          if (pend?.pendente) return retomarPendencia(evento, pend, "VALOR_DA_CORRECAO");
+        }
+        const faltasDaConta = visto?.pendente?.divergencia?.tipo === "CONTA_RELATADA_COMPLEMENTO" ? visto.pendente.divergencia : null;
+        if (faltasDaConta && complementoDaResposta(evento.texto, { faltas: faltasDaConta.faltas ?? [], complemento: faltasDaConta.complemento ?? {}, dataMensagem: dataDaMensagem(visto.pendente.evento), hoje: hoje(), competenciaDe: competenciaDoRelato })) {
+          const pend = await a.mensagens.tomarPendente(visto.mensagemId);
+          if (pend?.pendente) return retomarPendencia(evento, pend, "COMPLEMENTO_DA_CONTA_RELATADA");
+        }
         if (visto?.pendente?.divergencia) {
           const descricao = visto.pendente.divergencia.tipo === TIPO_DIVERGENCIA.DESCRICAO ? descricaoDireta(evento.texto) : null;
           if (descricao) {
@@ -419,8 +474,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // MOVA CORE (desligado por padrão): TEXTO livre na conversa PRIVADA de quem está na lista, numa unidade do piloto. As guardas de
     // dado restrito e de pedido de execução acima continuam valendo. Sem resposta do núcleo (SOMBRA, fora do escopo, falha) ⇒ segue o
     // motor atual, que é também o rollback imediato (MOVA_CORE_CONVERSA=DESLIGADO).
-    if (conversaNova && evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && !pendenteSemantico) {
-      const nova = await conversaNova.atender({ evento, grupo, participante });
+    // 27/11 (caso real do empréstimo BNB): "registrar uma conta de R$ 2.911,08…" ia para o MOVA CORE, que só prepara rascunho
+    // ("escritas pela conversa não estão habilitadas"). Pedido de REGISTRAR conta com valor é do motor financeiro (conta relatada:
+    // resumo → confirmação → registro pela política e concessão). O núcleo continua só leitura — nada de escrita nova nele.
+    if (conversaNova && evento.tipo === "TEXTO" && !evento.midia && !esclarecimento && !pendenteSemantico && !pedidoDeRegistrarConta(evento.texto)) {
+      const nova = await conversaNova.atender({ evento: unidadeContexto ? { ...evento, unidadeContexto } : evento, grupo, participante });
       if (nova?.texto) return concluir(evento, { decisao: DECISAO.CONSULTA, motivo: `MOVA_CORE:${nova.motivo}`, escopo: { organizacaoId: nova.organizacaoId, unidadeId: nova.unidadeId }, resposta: nova.texto, respostasExtras: nova.blocos ?? [], injecao,
         extra: { nucleo: "MOVA_CORE", mensagensExtras: (nova.blocos ?? []).length, requisicaoCore: nova.requisicaoId, ferramentas: nova.ferramentas, custoMicrousd: nova.custoMicrousd, latenciaMs: nova.latenciaMs } });
     }
@@ -475,7 +533,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const pend = await a.mensagens.tomarPendente(pendenteSemantico.mensagemId);
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "RESPOSTA_DE_DIVERGENCIA_POR_INTERPRETACAO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, porEvento: evento.eventoId, participanteId: evento.participanteId,
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null,
             finalidade: saida.finalidadePagamento ?? null, descricao: saida.descricaoCompra ?? null, ia: { competencia: saida.competencia ?? null, descricaoCompra: saida.descricaoCompra ?? null, finalidadePagamento: saida.finalidadePagamento ?? null, categoriaSugerida: saida.categoriaSugerida ?? null, favorecido: saida.favorecido ?? null, jurosCentavos: saida.jurosCentavos ?? null, multaCentavos: saida.multaCentavos ?? null } } });
         }
       }
@@ -540,10 +598,21 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       }
       u = { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: u.evidencia };
     }
+    // 27/11 (caso real do empréstimo BNB): a resposta "Subway Saci" foi aceita, o MOVA perguntou o mês e, na resposta do mês, a unidade
+    // era recalculada SÓ do texto original ("Empréstimo BNB…", pago pela MP, empresa de várias lojas) ⇒ "indicações de unidades
+    // diferentes" e a operação morria. A unidade gravada na pendência (a estabelecida na pergunta anterior, com o esclarecimento de
+    // quem pode) continua valendo — só quando o texto original NÃO a contradiz (não identificada/conflitante), nunca contra evidência.
+    const unidadeDaPendencia = esclarecimento?.divergencia?.unidadeId && daPessoa.unidades.includes(esclarecimento.divergencia.unidadeId)
+      ? cfg.unidades.find((x) => x.unidadeId === esclarecimento.divergencia.unidadeId) ?? null : null;
+    if (unidadeDaPendencia && (u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE)) {
+      u = { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: unidadeDaPendencia, evidencia: "ESCLARECIDA_NA_CONVERSA" };
+    }
     if (u.resultado !== RESULTADO_UNIDADE.IDENTIFICADA) {
       const nomes = cfg.unidades.filter((x) => daPessoa.unidades.includes(x.unidadeId)).map((x) => x.nome);
-      if ((u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) && !esclarecimento) {
-        await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida } });
+      // 27/11: também depois de um esclarecimento a pergunta GUARDA a pendência (antes: "responda a esta mensagem" sem pendência =
+      // beco sem saída; a resposta caía na conversa comum/CORE). A nova pendência é a operação original, do zero (nada é presumido).
+      if (u.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA || u.resultado === RESULTADO_UNIDADE.CONFLITANTE) {
+        await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida: esclarecimento?.saida ?? saida, ...(esclarecimento?.observacoes?.length ? { observacoes: esclarecimento.observacoes } : {}) } });
         return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: u.resultado, resposta: RESPOSTA.unidadeNaoIdentificada(nomes), injecao, extra: { evidenciaUnidade: u.evidencia } });
       }
       const resposta = u.resultado === RESULTADO_UNIDADE.NAO_HABILITADA ? RESPOSTA.unidadeNaoHabilitada(u.unidadeDoDocumento, { documento: Boolean(evento.midia) })
@@ -786,6 +855,82 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       resposta: RESPOSTA.categoriaDefinida(nome, descricao, "A proposta segue aguardando a confirmação de quem aprova no Centro Financeiro. Nada foi lançado ainda.") });
   }
 
+  /** 27/11 — descrição da conta com a OBSERVAÇÃO dita; `cabe` = coube inteira nos 200 caracteres do núcleo (senão a proposta guarda o texto todo). */
+  function descricaoComObservacao(c) {
+    const obs = [c.observacao, ...c.parcelas.filter((p) => p.observacao).map((p) => `${p.numero}/${p.total} ${p.observacao}`)].filter(Boolean).join("; ") || null;
+    if (!obs) return { descricao: c.descricao.slice(0, 200), observacao: null, cabe: true };
+    const cheia = `${c.descricao} · ${obs}`;
+    return cheia.length <= 200 ? { descricao: cheia, observacao: obs, cabe: true } : { descricao: `${c.descricao} · obs. completa na proposta MOVA`.slice(0, 200), observacao: obs, cabe: false };
+  }
+
+  /** 27/11 — unidades (da pessoa, desta configuração) envolvidas num evento: propostas e decisões dele. */
+  async function unidadesDoEvento(eventoId, daPessoa) {
+    const ids = new Set();
+    if (typeof a.propostas.porEvento === "function") for (const p of await a.propostas.porEvento(eventoId)) if (p.unidadeId) ids.add(p.unidadeId);
+    if (typeof a.historico.porEvento === "function") for (const h of await a.historico.porEvento(eventoId)) if (h.unidadeId) ids.add(h.unidadeId);
+    return cfg.unidades.filter((u) => ids.has(u.unidadeId) && daPessoa.unidades.includes(u.unidadeId));
+  }
+
+  /**
+   * 27/11 — a pessoa ESCLARECE a dúvida da leitura de uma proposta DESPESA_PAGA em revisão (citando a proposta). Só vale para quem pode
+   * complementar a operação na unidade DELA. A dúvida esclarecida sai de `incertezas` (a original fica em `incertezasEsclarecidas`),
+   * o comprovante é reavaliado e a MESMA proposta é reexecutada pela política vigente (nada de outra proposta, nem de novo comprovante).
+   * Valor em reais diferente do comprovado = divergência real: protege e pergunta.
+   */
+  async function esclarecerProposta(evento, eventoOrigemId, ctxp) {
+    if (typeof a.propostas.porEvento !== "function") return null;
+    const { daPessoa } = ctxp;
+    const candidatas = (await a.propostas.porEvento(eventoOrigemId)).filter((p) => p.tipo === "DESPESA_PAGA" && p.estado === "AGUARDANDO_REVISAO" && (p.leitura?.incertezas ?? []).length
+      && daPessoa.unidades.includes(p.unidadeId) && cfg.unidades.some((x) => x.unidadeId === p.unidadeId));
+    if (candidatas.length !== 1) return null;
+    const p = candidatas[0];
+    const r = esclarecerIncertezas(evento.texto, p.leitura.incertezas, p.valorCentavos);
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (!r.ok) {
+      if (r.motivo !== "VALOR_DIVERGENTE") return null;
+      return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "ESCLARECIMENTO_VALOR_DIVERGENTE", escopo: escopoDe(unidade), propostaId: p.id, resposta: RESPOSTA.valorDivergenteNoEsclarecimento(r.informadoCentavos, p.valorCentavos), extra: { retomou: null } });
+    }
+    const ev = await a.eventos.obter(eventoOrigemId);
+    const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+    if (!ctxp.podeConfirmar(origem, { divergencia: { tipo: "COMPETENCIA", unidadeId: p.unidadeId }, saida: null })) return ctxp.recusarOutro();
+    const leitura = { ...p.leitura, incertezas: r.restantes,
+      incertezasEsclarecidas: [...(p.leitura.incertezasEsclarecidas ?? []), ...r.esclarecidas.map((texto) => ({ texto, esclarecidoPor: evento.participanteId, esclarecidoEm: relogio().toISOString(), resposta: mascararDadosSensiveis(String(evento.texto)).slice(0, 300) }))] };
+    leitura.comprovante = avaliarComprovante(leitura, { hoje: hoje() });
+    await a.propostas.anotar(escopoDe(unidade), p.id, { leitura });
+    await a.auditoria.registrar({ acao: "INCERTEZA_ESCLARECIDA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: p.id, dados: { esclarecidas: r.esclarecidas.length, restantes: r.restantes.length } });
+    return retomarProposta(evento, eventoOrigemId, ctxp, { propostaId: p.id, motivoRelacao: "INCERTEZA_ESCLARECIDA_POR_CITACAO", aviso: RESPOSTA.esclarecimentoRecebido(r.esclarecidas.length) });
+  }
+
+  /**
+   * 27/11 — resposta à CONFIRMAÇÃO natural de uma ou mais propostas DESPESA_PAGA em revisão. A unidade é SEMPRE a da proposta.
+   * Várias ⇒ pergunta qual. Uma que a política autorizou a aplicar sozinha e ficou parada ⇒ a MESMA retomada de sempre (tudo revalidado).
+   * Uma que só o Centro Financeiro aprova ⇒ explica (id, unidade, valor, motivo) sem executar nada.
+   */
+  async function responderConfirmacaoDeProposta(evento, propostas, ctxp) {
+    const { grupo, participante, daPessoa } = ctxp;
+    // Só quem pode COMPLEMENTAR a operação nesta unidade (perfil financeiro da unidade, no mesmo grupo) recebe os dados da proposta.
+    const visiveis = [];
+    for (const p of propostas) {
+      if (!daPessoa.unidades.includes(p.unidadeId) || !cfg.unidades.some((x) => x.unidadeId === p.unidadeId)) continue;
+      const ev = await a.eventos.obter(p.eventoId);
+      const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+      if (podeConfirmarPendencia(cfg, origem, evento, { unidadeId: p.unidadeId, tipo: "COMPETENCIA", unidadesExigidas: null }).pode) visiveis.push(p);
+    }
+    if (!visiveis.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+    const descrever = (p) => ({ idCurto: String(p.id).slice(0, 8), unidade: cfg.unidades.find((x) => x.unidadeId === p.unidadeId)?.nome ?? "unidade", valorCentavos: p.valorCentavos, favorecido: p.leitura?.favorecido ?? null });
+    if (visiveis.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_PROPOSTAS_PENDENTES", resposta: RESPOSTA.qualProposta(visiveis.map(descrever)), extra: { retomou: null, propostas: visiveis.map((p) => String(p.id).slice(0, 8)) } });
+    const p = visiveis[0];
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO") {
+      const r = await retomarProposta(evento, p.eventoId, ctxp);
+      if (r) return r;
+    }
+    const duvida = (p.leitura?.incertezas ?? []).find((x) => typeof x === "string") ?? null;
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "CONFIRMACAO_DE_PROPOSTA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: unidade.organizacaoId, unidadeId: unidade.unidadeId, retomou: p.eventoId });
+    return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", escopo: escopoDe(unidade), propostaId: p.id,
+      resposta: RESPOSTA.propostaExigeAprovacao({ ...descrever(p), motivos: p.autonomiaDocumental?.motivos ?? [], duvida: duvida ? mascararDadosSensiveis(duvida).slice(0, 120) : null }), extra: { retomou: null, nivel: p.autonomiaDocumental?.nivel ?? null } });
+  }
+
   /**
    * 27/11 — resposta à CONFIRMAÇÃO natural de uma ou mais propostas DESPESA_PAGA em revisão. A unidade é SEMPRE a da proposta.
    * Várias ⇒ pergunta qual. Uma que a política autorizou a aplicar sozinha e ficou parada ⇒ a MESMA retomada de sempre (tudo revalidado).
@@ -836,11 +981,37 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
    * concessão de agora; a duplicidade é barrada pela reserva idempotente e pela chave da fonte (MOVA:<proposta>).
    * @returns {Promise<object|null>} null = não é com este fluxo (segue a mensagem normal)
    */
-  async function retomarProposta(evento, eventoOrigemId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro }) {
+  /**
+   * 27/11 — retomada de uma CONTA RELATADA já confirmada no WhatsApp que ficou parada (caso real f8f15a27): a MESMA proposta é executada
+   * por aposContaRelatada, que revalida unidade, dados, política/limite vigentes e a concessão da identidade operacional. Quem retoma
+   * precisa ser FINANCEIRO na unidade (reconhecido por LID ou telefone); a retomada fica auditada com quem confirmou.
+   */
+  async function retomarContaRelatada(evento, proposta, { grupo, daPessoa, motivoRelacao, eventoOrigemId }) {
+    const unidade = cfg.unidades.find((x) => x.unidadeId === proposta.unidadeId) ?? null;
+    if (!unidade || !daPessoa.unidades.includes(proposta.unidadeId)) return null;
+    const escopo = escopoDe(unidade);
+    const base = { escopo, propostaId: proposta.id };
+    const quem = participanteAutorizado(grupo, { participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null });
+    if (perfilNa(quem, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "RETOMADA_SEM_PERFIL_FINANCEIRO", ...base, resposta: RESPOSTA.complementoSemPermissao() });
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    if (!execucao?.criarContas || typeof execucao.aposContaRelatada !== "function") return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PROPOSTA_NAO_RETOMAVEL", ...base, resposta: RESPOSTA.semExecucaoAutomatica(["CRIACAO_DE_CONTAS_DESLIGADA"]) });
+    const r = await execucao.aposContaRelatada(proposta, escopo);
+    await a.auditoria.registrar({ acao: "PROPOSTA_RETOMADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { tipo: "CONTA_RELATADA", situacao: r.situacao, motivos: r.motivos ?? [], confirmadoAntesPor: proposta.esclarecidoPor } });
+    const e = proposta.comando?.entrada ?? {};
+    const c = { descricao: e.descricao ?? "Conta", parcelas: e.parcelas ?? [], totalCentavos: proposta.valorCentavos };
+    if (r.situacao === "CONTA_REGISTRADA") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "CONTA_RELATADA_RETOMADA", ...base, resposta: RESPOSTA.contaRelatadaRegistrada(c, r.resultado), extra: { retomada: true } });
+    const motivos = [...new Set([...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])];
+    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: RESPOSTA.semExecucaoAutomatica(motivos), extra: { retomada: true, motivosExecucao: motivos } });
+  }
+
+  async function retomarProposta(evento, eventoOrigemId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro }, { propostaId = null, motivoRelacao = "PROPOSTA_RETOMADA_POR_CITACAO", aviso = null } = {}) {
     if (typeof a.propostas.porEvento !== "function") return null;
-    const propostas = (await a.propostas.porEvento(eventoOrigemId)).filter((p) => p.tipo === "DESPESA_PAGA");
+    const todas = await a.propostas.porEvento(eventoOrigemId);
+    const relatada = todas.find((p) => p.tipo === "CONTA_RELATADA" && p.estado === "AGUARDANDO_REVISAO" && p.esclarecidoPor && p.categoriaDefinida === true && (!propostaId || p.id === propostaId));
+    if (relatada) return retomarContaRelatada(evento, relatada, { grupo, daPessoa, motivoRelacao, eventoOrigemId });
+    const propostas = todas.filter((p) => p.tipo === "DESPESA_PAGA");
     // só é retomável a proposta que a POLÍTICA autorizou a aplicar sozinha e que ficou parada (motivo registrado, ou criada antes do registro do motivo)
-    const proposta = propostas.find((p) => p.estado === "AGUARDANDO_REVISAO" && (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO")) ?? null;
+    const proposta = propostas.find((p) => p.estado === "AGUARDANDO_REVISAO" && (propostaId ? p.id === propostaId : (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO"))) ?? null;
     if (!proposta) return null;
     const unidade = cfg.unidades.find((x) => x.unidadeId === proposta.unidadeId) ?? null;
     if (!unidade || !daPessoa.unidades.includes(proposta.unidadeId)) return null;
@@ -850,7 +1021,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (!podeConfirmar(origem, { divergencia: { tipo: "COMPETENCIA", unidadeId: proposta.unidadeId }, saida: null })) return recusarOutro();
     const base = { escopo, propostaId: proposta.id };
     const responder = (decisao, motivo, texto, extra = {}) => concluir(evento, { decisao, motivo, ...base, resposta: texto, extra });
-    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "PROPOSTA_RETOMADA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
     if (proposta.estado !== "AGUARDANDO_REVISAO" || !execucao?.criarDespesas) return responder(DECISAO.PEDIR_INFORMACAO, "PROPOSTA_NAO_RETOMAVEL", execucao?.criarDespesas ? RESPOSTA.propostaNaoRetomavel() : RESPOSTA.semExecucaoAutomatica(["SEM_IDENTIDADE_OPERACIONAL"]));
     const competencia = proposta.datas?.competencia ?? proposta.comando?.entrada?.competencia ?? null;
     if (proposta.competenciaPendente || !competencia) return responder(DECISAO.PEDIR_INFORMACAO, "COMPETENCIA_PENDENTE", RESPOSTA.perguntaCompetencia(proposta.valorCentavos, proposta.leitura?.favorecido ?? null));
@@ -862,22 +1033,51 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
     if (r.situacao === "PAGO_POR_COMPROVANTE") {
-      return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "DESPESA_PAGA_RETOMADA", ...base, resposta: RESPOSTA.despesaPagaPorComprovante(proposta, r.resultado, resumo), privado, extra: { conciliacao: r.situacao, retomada: true } });
+      return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "DESPESA_PAGA_RETOMADA", ...base, resposta: (aviso ? `${aviso}\n` : "") + RESPOSTA.despesaPagaPorComprovante(proposta, r.resultado, resumo), privado, extra: { conciliacao: r.situacao, retomada: true } });
     }
     const motivos = [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])];
-    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: RESPOSTA.semExecucaoAutomatica(motivos), privado, extra: { retomada: true, motivosExecucao: motivos } });
+    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: (aviso ? `${aviso}\n` : "") + RESPOSTA.semExecucaoAutomatica(motivos), privado, extra: { retomada: true, motivosExecucao: motivos } });
   }
 
   /**
    * 23/11 — PERGUNTA objetiva de divergência: guarda a pendência (a resposta continua a operação) e responde no grupo ou, com valor,
    * conforme a política de resposta (privado). Nada é gravado no Financeiro.
    */
-  async function perguntar({ evento, escopo, saida, injecao, unidade, grupo = null, participante = null }, divergencia, texto, motivo) {
+  async function perguntar({ evento, escopo, saida, injecao, unidade, grupo = null, participante = null, esclarecimento = null }, divergencia, texto, motivo) {
     const rota = await roteamento(grupo, participante, evento, "DOCUMENTO_COM_VALOR", [unidade.unidadeId]);
     const privado = rota && !rota.noGrupo ? { destino: rota.destino ?? null, aviso: RESPOSTA.documentoNoPrivado(), avisoSemPrivado: RESPOSTA.documentoSemPrivado() } : null;
     // A resposta vem na MESMA conversa em que a pergunta saiu (grupo ou privado): é por ela que a memória curta reencontra a pendência.
-    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia: { ...divergencia, unidadeId: unidade.unidadeId } } });
+    await a.mensagens.lembrar(evento.mensagemId, { grupoId: privado?.destino ?? evento.grupoId, pendente: { evento, saida, divergencia: { ...divergencia, unidadeId: unidade.unidadeId }, ...(esclarecimento?.observacoes?.length ? { observacoes: esclarecimento.observacoes } : {}) } });
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
+  }
+
+  /**
+   * 27/11 (0035) — "sim" ao pagamento de EMPRÉSTIMO já feito: a proposta guardada é executada (conta + pagamento juntos, quitada, fora da
+   * DRE) pela permissão estreita de empréstimo, se quem confirma é FINANCEIRO na unidade e a política/limite da unidade aceita. "não"
+   * deixa a proposta para a Central. Nada é relido: o documento e os dados são os da proposta.
+   */
+  async function confirmarEmprestimoPago(ctx) {
+    const { evento, escopo, esclarecimento, injecao, unidade } = ctx;
+    const div = esclarecimento.divergencia;
+    const p = await a.propostas.obter(escopo, div.propostaId);
+    if (!p || p.estado !== "AGUARDANDO_REVISAO") return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_PROPOSTA_JA_DECIDIDA", escopo, resposta: RESPOSTA.propostaNaoRetomavel(), injecao });
+    const sim = respostaSimNao(esclarecimento.texto);
+    if (sim === null) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.confirmarEmprestimoPago(p, {})}`, "EMPRESTIMO_RESPOSTA_NAO_ENTENDIDA");
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_NAO_CONFIRMADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoConfirmado(p), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    // 27/11: quem confirmou é reconhecido pelo identificador OU pelo telefone autenticado do Gateway (lista por telefone; WhatsApp manda LID)
+    // 28/11 (#250): identificador e telefone de PESSOAS DIFERENTES ⇒ bloqueia e audita (nunca escolhe uma das duas)
+    const quemConfirma = identificarParticipante(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null });
+    if (quemConfirma.conflito) {
+      await a.auditoria.registrar({ acao: "IDENTIDADE_CONFLITANTE", atorTipo: "PARTICIPANTE", atorRef: esclarecimento.participanteId ?? evento.participanteId, alvo: p.id, dados: { fluxo: "EMPRESTIMO_PAGO_CONFIRMACAO" } });
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IDENTIDADE_CONFLITANTE", escopo, propostaId: p.id, resposta: RESPOSTA.complementoSemPermissao(), injecao });
+    }
+    const confirmador = quemConfirma.participante;
+    // 28/11: composição (só principal) precisa estar COMPROVADA ou DECLARADA — desconhecida ⇒ revisão humana no Centro Financeiro
+    if (!p.comando?.composicaoEmprestimo) return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_COMPOSICAO_DESCONHECIDA", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, ["EMPRESTIMO_COMPOSICAO_DESCONHECIDA"]), injecao });
+    if (perfilNa(confirmador, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "EMPRESTIMO_CONFIRMACAO_SEM_PERFIL_FINANCEIRO", escopo, resposta: RESPOSTA.complementoSemPermissao(), injecao });
+    const r = await execucao.aposDespesaNova(p, escopo, { confirmadoPor: esclarecimento.participanteId ?? evento.participanteId });
+    if (r.situacao === "PAGO_POR_COMPROVANTE") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "EMPRESTIMO_PAGO_REGISTRADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoPagoRegistrado(p, r.resultado), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_NAO_EXECUTADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])]), injecao });
   }
 
   async function tratarPagamento(ctx0) {
@@ -886,6 +1086,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const recortado = Boolean(ctx0.saida?.idTransacao) && !idTransacaoConfiavel(ctx0.saida.idTransacao);
     const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } } : ctx0;
     const { evento, escopo, saida, injecao, esclarecimento } = ctx;
+    if (esclarecimento?.divergencia?.tipo === "EMPRESTIMO_PAGO_CONFIRMACAO") return confirmarEmprestimoPago(ctx);
     // 25/11 — resposta NATURAL a uma pergunta do MOVA: as regras curtas (determinísticas, custo zero) vêm primeiro; só se NÃO entenderem a
     // IA lê o texto e devolve campos estruturados, que o backend VALIDA (extracaoDaRespostaIA) antes de qualquer uso. No máximo UMA
     // leitura por mensagem (cache) e nenhuma quando a mensagem já foi lida (resposta sem citação traz `esclarecimento.ia`).
@@ -1093,8 +1294,18 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const textoDaCompra = [legenda, descricaoInformada].filter(Boolean).join(" ") || null;
     // só aproveita uma leitura que JÁ existe (a categoria nunca é motivo para chamar a IA)
     const lidaPelaIa = esclarecimento?.ia || leituraIa ? await lerRespostaPorIA() : null;
-    const categoria = await categoriaDaDespesa(escopo, lidaPelaIa?.categoria && !saida.categoriaSugerida ? { ...saida, categoriaSugerida: lidaPelaIa.categoria } : saida, textoDaCompra);
-    const descricao = descricaoInformada ?? legenda;
+    let categoria = await categoriaDaDespesa(escopo, lidaPelaIa?.categoria && !saida.categoriaSugerida ? { ...saida, categoriaSugerida: lidaPelaIa.categoria } : saida, textoDaCompra);
+    // 27/11 (caso real: boleto do empréstimo BNB já pago): o comprovante do PRINCIPAL de empréstimo/financiamento vai para a categoria
+    // PATRIMONIAL do plano (fora da DRE) — ela vence qualquer despesa de nome parecido. A permissão estreita do MOVA não registra
+    // patrimonial: a proposta (conta + pagamento juntos, nunca conta em aberto) fica para aprovação no Centro Financeiro.
+    const patrimonialDoPagamento = evento.midia ? categoriaPatrimonialDoRelato(`${textoDaCompra ?? legenda ?? ""} ${String(saida.categoriaSugerida ?? "").replace(/_/g, " ")}`, await planoDaUnidade(escopo)) : null;
+    if (patrimonialDoPagamento) categoria = patrimonialDoPagamento;
+    // valor original, desconto e valor pago IMPRESSOS no comprovante (original − desconto = pago, centavo a centavo): preservados na descrição
+    const comDesconto = Number.isSafeInteger(saida.valorOriginalCentavos) && Number.isSafeInteger(saida.descontoCentavos) && saida.descontoCentavos > 0
+      && saida.valorOriginalCentavos - saida.descontoCentavos === valor ? ` — original ${reaisCurto(saida.valorOriginalCentavos)}, desconto ${reaisCurto(saida.descontoCentavos)}, pago ${reaisCurto(valor)}` : "";
+    const descricao = (descricaoInformada ?? legenda) ? `${descricaoInformada ?? legenda}${comDesconto}` : null;
+    // 27/11: observações (#244) também no comprovante: as da LEGENDA e as informadas na conversa desta operação vão com a proposta até a conta
+    const observacaoDoPagamento = [observacaoDoTexto(legenda), ...(esclarecimento?.observacoes ?? [])].filter(Boolean).join("; ") || null;
     // Compra nova pelo comprovante sem descrição e sem categoria: pergunta SÓ o que foi comprado (uma vez), em vez de lançar às cegas.
     if (evento.midia && !descricao && !categoria && esclarecimento?.divergencia?.tipo !== TIPO_DIVERGENCIA.DESCRICAO) {
       return perguntar(ctx, { tipo: TIPO_DIVERGENCIA.DESCRICAO, valorCentavos: valor, candidatas: [] }, RESPOSTA.perguntaDescricao(valor), "DESCRICAO_DA_COMPRA_AUSENTE");
@@ -1107,12 +1318,16 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     // 25/11: com encargos comprovados, a conta nasce pelo valor ORIGINAL (o encargo é lançado à parte) e vence no vencimento impresso.
     const vencimentoDaConta = composicao && saida.vencimento ? saida.vencimento : saida.dataPagamento;
-    const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria });
+    const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria, observacao: observacaoDoPagamento });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
+    // 28/11 (0035, revisão): pagamento de EMPRÉSTIMO — composição "só principal" comprovada no documento ou declarada na conversa
+    const composicaoEmprestimo = patrimonialDoPagamento === "EMPRESTIMOS_E_FINANCIAMENTOS" && !composicao
+      ? composicaoSoPrincipal(saida, [legenda, esclarecimento?.texto, ...(esclarecimento?.observacoes ?? [])].filter(Boolean).join(". ")) : null;
     // Resumo consolidado: unidade, categoria e as contas em aberto do MESMO favorecido que este comprovante NÃO baixou.
     // A resposta NUNCA repete o texto recebido: só a descrição CURTA lida pela IA, mascarada e sem sinal de instrução, aparece.
     const descricaoExibivel = descricaoInformada && !sinaisDeInjecao(descricaoInformada) ? mascararDadosSensiveis(descricaoInformada).slice(0, 60) : null;
-    const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [], contaNova: true };
+    const resumo = { unidade: ctx.unidade?.nome ?? null, descricao: descricaoExibivel, categoriaDefinida: Boolean(categoria), intactas: forcarNova && saida.favorecido ? candidatas : [], contaNova: true,
+      ...(patrimonialDoPagamento ? { patrimonial: true, comDesconto: comDesconto || null } : {}), ...(observacaoDoPagamento ? { observacao: observacaoDoPagamento } : {}) };
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.DESPESA_PAGA, valorCentavos: valor, parcial: false,
       datas: { competencia, caixa: saida.dataPagamento, vencimento: vencimentoDaConta }, competenciaPendente: !competencia,
@@ -1120,15 +1335,32 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
       // 24/11: com comprovante, a conta e o pagamento entram numa ÚNICA operação atômica (registrarDespesaPagaPorComprovante).
       comando: { operacao: !evento.midia ? "registrarObrigacao+pagarContaAPagar" : composicao ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
-        ...(composicao ? { encargos: { principalCentavos: composicao.principalCentavos, jurosCentavos: composicao.jurosCentavos, multaCentavos: composicao.multaCentavos, encargoCentavos: composicao.encargoCentavos } } : {}) },
+        ...(composicao ? { encargos: { principalCentavos: composicao.principalCentavos, jurosCentavos: composicao.jurosCentavos, multaCentavos: composicao.multaCentavos, encargoCentavos: composicao.encargoCentavos } } : {}),
+        ...(composicaoEmprestimo ? { composicaoEmprestimo } : {}) },
       ...(novaDeclarada || esclarecimento?.divergencia ? { compraNovaDeclarada: true } : {}),
     }, comAvisoDeCompetencia((p) => RESPOSTA.propostaDespesaPaga(p, resumo), competencia), {
       // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.
-      posCriacao: execucao?.criarDespesas && evento.midia ? async (p) => {
+      // 28/11: só com a composição (só principal) COMPROVADA ou DECLARADA; ausência de juros lidos não basta ⇒ Central.
+      posCriacao: patrimonialDoPagamento === "EMPRESTIMOS_E_FINANCIAMENTOS" && execucao?.criarDespesas && evento.midia && !composicao && composicaoEmprestimo && typeof execucao?.podeRegistrarEmprestimo === "function"
+        ? async (p) => {
+          if (!(await execucao.podeRegistrarEmprestimo(escopo, "PAGAMENTO"))) return null; // sem a permissão de empréstimo: Central, como hoje
+          await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida, divergencia: { tipo: "EMPRESTIMO_PAGO_CONFIRMACAO", propostaId: p.id, unidadeId: escopo.unidadeId } } });
+          return { situacao: "AGUARDANDO_CONFIRMACAO", nivel: null, texto: RESPOSTA.confirmarEmprestimoPago(p, resumo) };
+        }
+        : execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
         const r = await execucao.aposDespesaNova(p, escopo);
         return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
       } : null,
     });
+  }
+
+  const reaisCurto = (c) => `R$ ${(c / 100).toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".")}`;
+
+  /** 27/11 — pedido de REGISTRAR conta (verbo de registro/cadastro + valor em reais): é do motor financeiro, nunca do MOVA CORE. */
+  function pedidoDeRegistrarConta(texto) {
+    const t = normalizar(texto);
+    return /\b(registr|lanc|cadastr|anot|inclu)[a-z]*\b/.test(t) && /\b(conta|contas|a pagar|obrigac[a-z]*|boletos?|parcelas?|emprestim[a-z]*|financiament[a-z]*|aluguel|despesas?|dividas?|faturas?|impostos?|honorarios?)\b/.test(t)
+      && /r\$\s*\d|\b\d+,\d{2}\b/i.test(String(texto ?? ""));
   }
 
   /** Data civil da MENSAGEM em America/Fortaleza (competência e ano das parcelas vêm dela, nunca do momento da confirmação). */
@@ -1149,24 +1381,46 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     if (div && !String(div.tipo ?? "").startsWith("CONTA_RELATADA")) return null;
     // 27/11: FOTO do produto com legenda ⇒ a LEGENDA é o relato (a foto não é documento fiscal nem comprovante)
     const textoDaConta = evento.midia ? (legendaDoDocumento(evento.texto) ?? "") : evento.texto;
-    const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv, porFoto: Boolean(evento.midia) });
-    // estado acumulado da conversa (cada pergunta carrega as respostas anteriores; nada é perguntado duas vezes)
+    // 27/11 (generalização): QUALQUER obrigação que a pessoa pede para registrar (empréstimo, aluguel, energia, água, internet, honorários,
+    // impostos, royalties, compras) usa este MESMO fluxo. "declarada" = a leitura da mensagem é um pedido de registrar conta.
+    const declarada = !evento.midia && ctx.saida?.intencao === "REGISTRAR_CONTA";
+    // competência DITA na mensagem (lida; nunca presumida pelo vencimento) — só para o que não é compra
+    const competenciaLida = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(ctx.saida?.competencia ?? "")) ? ctx.saida.competencia : null;
+    // estado acumulado da conversa (cada pergunta carrega as respostas anteriores; nada é perguntado duas vezes, nada se perde)
+    let complemento = div?.complemento ?? null;
+    const ler = (tv) => interpretarContaRelatada({ texto: textoDaConta, dataMensagem: dataDaMensagem(evento), unidades: cfg.unidades, tipoValor: tv, porFoto: Boolean(evento.midia), declarada, competenciaInformada: competenciaLida, complemento, vencimentoLido: declarada ? ctx.saida?.vencimento ?? null : null });
     let tipoValor = div?.tipoValor ?? null;
     let escolha = div?.categoriaEscolhida ?? null; // código do plano | "REVISAO" (a classificar no Centro Financeiro)
     const sugestaoDeCriacao = div?.sugestaoDeCriacao ?? null;
+    // 27/11: com o que JÁ foi respondido a conta fica completa (ex.: retomada depois de uma correção) ⇒ segue sem pedir de novo
+    if (div?.tipo === "CONTA_RELATADA_COMPLEMENTO" && !ler(tipoValor).faltas.length) complemento = complemento ?? {};
+    else if (div?.tipo === "CONTA_RELATADA_COMPLEMENTO") {
+      const novo = complementoDaResposta(esclarecimento.texto, { faltas: div.faltas ?? [], complemento: complemento ?? {}, dataMensagem: dataDaMensagem(evento), hoje: hoje(), competenciaDe: competenciaDoRelato });
+      if (!novo) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.contaRelatadaFaltas(ler(tipoValor), div.faltas ?? [], unidade.nome)}`, "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+      complemento = novo;
+    }
     if (div?.tipo === "CONTA_RELATADA_VALOR") {
       tipoValor = interpretarRespostaDoValor(esclarecimento.texto);
-      if (!tipoValor) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(ler(null)), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
+      if (!tipoValor) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha, complemento }, RESPOSTA.contaRelatadaValorAmbiguo(ler(null)), "CONTA_RELATADA_RESPOSTA_NAO_ENTENDIDA");
     }
     const c = ler(tipoValor);
     if (!c.ehConta) return null;
+    // 27/11: o que FALTA (vencimento, mês de referência, valor, descrição) é perguntado de uma vez, guardando o que já foi dito.
+    const PREENCHIVEIS = ["VENCIMENTO", "VENCIMENTOS_DAS_PARCELAS", "DATA_INVALIDA", "VENCIMENTO_ANTERIOR_A_COMPRA", "COMPETENCIA", "VALOR", "VALORES_DIFERENTES", "DESCRICAO"];
+    if (c.faltas.length && c.faltas.every((f) => PREENCHIVEIS.includes(f))) {
+      // #245: falta SÓ o vencimento (ex.: a única data dita era a do desconto da remuneração) ⇒ a pergunta objetiva do vencimento
+      const soVencimento = c.faltas.length === 1 && c.faltas[0] === "VENCIMENTO";
+      return perguntar(ctx, { tipo: "CONTA_RELATADA_COMPLEMENTO", faltas: c.faltas, complemento: complemento ?? {}, tipoValor, categoriaEscolhida: escolha },
+        soVencimento ? RESPOSTA.contaRelatadaVencimento(Boolean(c.observacao)) : RESPOSTA.contaRelatadaFaltas(c, c.faltas, unidade.nome),
+        soVencimento ? "CONTA_RELATADA_PERGUNTA_VENCIMENTO" : "CONTA_RELATADA_FALTA_INFORMACAO");
+    }
     // 27/11 (revisão do PR #236): conta ÚNICA e PARCELADA seguem o MESMO fluxo (resumo → confirmação → registro em aberto).
     if (c.faltas.length) {
       const nomes = { DATA_INVALIDA: "uma data válida (dia/mês)", VALOR: "valor", VALORES_DIFERENTES: "qual é o valor (a mensagem tem mais de um)", DESCRICAO: "o que foi comprado",
         PARCELAS: "quantidade de parcelas (1 a 24)", VENCIMENTO: "vencimento", VENCIMENTOS_DAS_PARCELAS: "o vencimento de cada parcela", VENCIMENTO_ANTERIOR_A_COMPRA: "vencimentos a partir da data da compra" };
       return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `CONTA_RELATADA_INCOMPLETA:${c.faltas.join(",")}`, escopo, resposta: RESPOSTA.faltaInformacao(c.faltas.map((f) => nomes[f] ?? f)), injecao });
     }
-    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
+    if (c.ambiguo) return perguntar(ctx, { tipo: "CONTA_RELATADA_VALOR", categoriaEscolhida: escolha, complemento }, RESPOSTA.contaRelatadaValorAmbiguo(c), "CONTA_RELATADA_VALOR_AMBIGUO");
     const bloqueio = await competenciaAberta(ctx, c.competencia);
     if (bloqueio) return bloqueio;
     // Duplicidade: mesma parcela (valor + vencimento) já registrada nesta unidade ⇒ nada novo.
@@ -1185,15 +1439,19 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     if (!escolha && cls.perguntar) {
       if (!plano.length) escolha = "REVISAO"; // plano indisponível: nada é inventado; fica a classificar
-      else return perguntar(ctx, { tipo: "CONTA_RELATADA_CATEGORIA", tipoValor: c.tipoValor, opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao },
+      else return perguntar(ctx, { tipo: "CONTA_RELATADA_CATEGORIA", tipoValor: c.tipoValor, opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao, complemento },
         RESPOSTA.contaRelatadaCategoria({ opcoes: cls.opcoes, motivo: cls.motivo, sugestaoDeCriacao: cls.sugestaoDeCriacao, descricao: c.descricao }), "CONTA_RELATADA_PERGUNTA_CATEGORIA");
     }
     const categoria = escolha === "REVISAO" ? null : escolha ? (plano.some((x) => x.codigo === escolha) ? escolha : null) : cls.codigo;
     const sugestao = categoria ? null : sugestaoDeCriacao ?? cls.sugestaoDeCriacao ?? null;
     const bruto = {
       contraparteNova: { tipo: "FORNECEDOR", nome: c.fornecedor ?? FORNECEDOR_NAO_INFORMADO }, categoria: categoria ?? porta.categoriaProvisoria,
-      descricao: c.descricao.slice(0, 120), competencia: c.competencia, dataEmissao: c.dataEmissao,
+      // 27/11: o núcleo não tem campo de observação (só a descrição, até 200 caracteres). A observação dita (composição do total, desconto,
+      // observações das parcelas) acompanha a descrição quando CABE; senão a descrição aponta para a proposta, que guarda o texto inteiro.
+      descricao: descricaoComObservacao(c).descricao, competencia: c.competencia, dataEmissao: c.dataEmissao,
       parcelas: c.parcelas.map((p) => ({ vencimento: p.vencimento, valorCentavos: p.valorCentavos })), ...(c.forma ? { formaPagamento: c.forma } : {}),
+      // #244: a observação também fica num campo próprio da conta (até 500 caracteres; a proposta guarda o texto inteiro)
+      ...(c.observacao ? { observacao: c.observacao.length > 500 ? `${c.observacao.slice(0, 497)}...` : c.observacao } : {}),
     };
     try { porta.validarComandoDeContaParcelada(bruto); } catch (e) {
       if (porta.ehErroDeRegra(e)) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${e.detalhes?.campo ?? "conta"}`, escopo, resposta: RESPOSTA.faltaInformacao([e.detalhes?.campo ?? "dados da conta"]), injecao });
@@ -1201,8 +1459,16 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     }
     const impressao = JSON.stringify(bruto);
     // a categoria do resumo fica gravada na pendência: o "sim" confirma ESTA (a leitura da resposta não traz a sugestão da original)
-    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao };
-    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo(c, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao })}`;
+    const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao, complemento };
+    // 27/11: categoria PATRIMONIAL (ex.: principal de empréstimo, fora da DRE). A permissão ESTREITA do MOVA registra só despesa e
+    // imobilizado (regra do banco, 0033): depois do "sim" vira proposta para APROVAÇÃO no Centro Financeiro — nunca vira despesa.
+    // 27/11 (0035): principal de EMPRÉSTIMO com a permissão estreita de empréstimo concedida ⇒ o "sim" registra (fora da DRE); senão, Central.
+    // 28/11 (revisão): parcela de empréstimo costuma embutir juros — só registra como principal com a composição DECLARADA no relato.
+    const composicaoEmprestimo = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" ? composicaoSoPrincipal(null, textoDaConta) : null;
+    const emprestimoDireto = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" && Boolean(composicaoEmprestimo) && Boolean(execucao?.criarContas) && typeof execucao?.podeRegistrarEmprestimo === "function"
+      && await execucao.podeRegistrarEmprestimo(escopo, "CONTA");
+    const patrimonial = Boolean(categoria) && ehPatrimonialForaDaDre(categoria, plano) && !emprestimoDireto;
+    const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao, patrimonial })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
     }
@@ -1212,7 +1478,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     // O que foi confirmado é exatamente o que vai para a proposta (plano/dados mudaram no meio ⇒ mostra de novo, nada é criado).
     if (div.impressao && div.impressao !== impressao) return perguntar(ctx, estado, resumo("Os dados mudaram desde o resumo. "), "CONTA_RELATADA_CONFIRMACAO_DESATUALIZADA");
     // Execução automática só quando QUEM CONFIRMOU é FINANCEIRO nesta unidade (operacional/consulta: fica a proposta para a Central).
-    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
+    // 27/11 (caso real f8f15a27): o WhatsApp manda o LID; a lista do grupo é por TELEFONE. Sem o telefone, quem confirmou não era
+    // encontrado ⇒ "não FINANCEIRO" ⇒ a execução nem era tentada. Mesma regra da entrada da mensagem: identificador OU telefone.
+    const confirmador = participanteAutorizado(ctx.grupo, esclarecimento
+      ? { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null }
+      : { participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null });
     const confirmadorFinanceiro = perfilNa(confirmador, unidade.unidadeId) === "FINANCEIRO";
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.CONTA_RELATADA, valorCentavos: c.totalCentavos, parcial: false,
@@ -1220,9 +1490,10 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // sem categoria do plano: a proposta fica para a classificação no Centro Financeiro (com a sugestão de criar a dita, se houver)
       ...(categoria ? {} : { classificacao: { pendente: true, motivo: cls.motivo, sugestaoDeCriacao: sugestao } }),
       ...(evento.midia ? { evidenciaNaoFiscal: "FOTO_DO_PRODUTO" } : {}),
-      comando: { operacao: "registrarContaParcelada", entrada: bruto },
-    }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria }), {
-      posCriacao: confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
+      ...(descricaoComObservacao(c).observacao ? { observacaoCompleta: descricaoComObservacao(c).observacao, observacaoNaDescricao: descricaoComObservacao(c).cabe } : {}),
+      comando: { operacao: "registrarContaParcelada", entrada: bruto, ...(composicaoEmprestimo ? { composicaoEmprestimo } : {}) },
+    }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria, patrimonial }), {
+      posCriacao: !patrimonial && confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
         const r = await execucao.aposContaRelatada(p, escopo);
         return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRelatadaRegistrada(c, r.resultado) } : r;
       } : null,
@@ -1360,11 +1631,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
   const comAvisoDeCompetencia = (texto, competencia) => (competencia ? texto : (p) => `${texto(p)} A competência ficou para confirmar na revisão.`);
 
   /** Comando no contrato REAL do Financeiro v2; categoria PROVISÓRIA (a sugestão da IA fica ao lado, para quem aprova). */
-  function comandoDeObrigacao(saida, { competencia, vencimento, descricao = null, categoria = null }) {
+  function comandoDeObrigacao(saida, { competencia, vencimento, descricao = null, categoria = null, observacao = null }) {
     // 15A: competência pendente — os DEMAIS campos são validados (com um mês provisório só para a validação) e o comando é
     // guardado SEM competência; quem revisa informa a competência e a aplicação recusa enquanto ela faltar.
     if (!competencia) {
-      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento, descricao, categoria });
+      const r = comandoDeObrigacao(saida, { competencia: mes(vencimento), vencimento, descricao, categoria, observacao });
       if (!r.ok) return r;
       const { competencia: _provisoria, ...semCompetencia } = r.valor;
       return { ok: true, valor: semCompetencia };
@@ -1376,6 +1647,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       descricao: descricao ?? `${saida.tipoDocumento === "BOLETO" ? "Boleto" : saida.tipoDocumento === "NOTA_FISCAL" ? "Nota fiscal" : "Comprovante"} recebido pelo MOVA`,
       competencia, dataEmissao: emissao, vencimento,
       ...(saida.identificadorDocumento ? { identificador: saida.identificadorDocumento } : {}),
+      ...(observacao ? { observacao: observacao.length > 500 ? `${observacao.slice(0, 497)}...` : observacao } : {}),
     };
     try {
       return { ok: true, valor: porta.validarComandoDeObrigacao(bruto) };

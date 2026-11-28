@@ -119,6 +119,8 @@ export function lerConfiguracaoMova(env) {
   if (sim(env.MOVA_OPERACAO_CRIAR_DESPESAS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) escritaRecusada.push("CRIAR_DESPESAS_SEM_PAGAMENTO_POR_COMPROVANTE");
   if (sim(env.MOVA_OPERACAO_REGISTRAR_JUROS) && !sim(env.MOVA_OPERACAO_PAGAMENTO_POR_COMPROVANTE)) escritaRecusada.push("REGISTRAR_JUROS_SEM_PAGAMENTO_POR_COMPROVANTE");
   if (sim(env.MOVA_OPERACAO_CRIAR_CONTAS) && !autonomia) escritaRecusada.push("CRIAR_CONTAS_SEM_AUTONOMIA");
+  if (sim(env.MOVA_OPERACAO_CORRIGIR_CONTAS) && !autonomia) escritaRecusada.push("CORRIGIR_CONTAS_SEM_AUTONOMIA");
+  if (sim(env.MOVA_OPERACAO_OPERAR_CONTAS) && !autonomia) escritaRecusada.push("OPERAR_CONTAS_SEM_AUTONOMIA");
   if (escrita && !UUID.test(env.MOVA_IDENTIDADE_OPERACIONAL ?? "")) escritaRecusada.push("ESCRITA_SEM_IDENTIDADE_OPERACIONAL");
   if (escrita && String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase() === String(env.MOVA_SERVICO_USUARIO_ID ?? "").toLowerCase()) escritaRecusada.push("IDENTIDADE_OPERACIONAL_IGUAL_A_LEITURA");
   if (escrita && IDENTIDADES_TECNICAS_RESERVADAS.includes(String(env.MOVA_IDENTIDADE_OPERACIONAL ?? "").toLowerCase())) escritaRecusada.push("IDENTIDADE_OPERACIONAL_RESERVADA");
@@ -166,6 +168,11 @@ export function lerConfiguracaoMova(env) {
       registrarJuros: chaveDeEscrita(env.MOVA_OPERACAO_REGISTRAR_JUROS),
       // 24/11: conta a pagar NOVA a partir de boleto/nota e vínculo da nota com a conta existente (padrão DESLIGADA; exige a autonomia).
       criarContas: chaveDeEscrita(env.MOVA_OPERACAO_CRIAR_CONTAS),
+      // 28/11 (0036): correção CADASTRAL de conta a pagar pelo WhatsApp (fornecedor, vencimento, descrição, observação, forma), sempre com
+      // confirmação de um FINANCEIRO e a ação estreita corrigir_conta_a_pagar (padrão DESLIGADA; exige a autonomia).
+      corrigirContas: chaveDeEscrita(env.MOVA_OPERACAO_CORRIGIR_CONTAS),
+      // 28/11 (0037): fase 2 — reclassificar, ajustar valor, mudar competência e cancelar conta a pagar (padrão DESLIGADA; exige a autonomia).
+      operarContas: chaveDeEscrita(env.MOVA_OPERACAO_OPERAR_CONTAS),
       // Piloto de leitura documental: com IA ligada, ela lê SÓ arquivos (texto solto nunca gasta orçamento). Padrão LIGADO;
       // desligar exige MOVA_IA_SOMENTE_DOCUMENTOS=0 explícito.
       iaSomenteDocumentos: env.MOVA_IA_SOMENTE_DOCUMENTOS === undefined || env.MOVA_IA_SOMENTE_DOCUMENTOS === "" ? true : sim(env.MOVA_IA_SOMENTE_DOCUMENTOS), entregadores, rotinaEntregadores,
@@ -178,7 +185,7 @@ export function lerConfiguracaoMova(env) {
     // Vazio = sem teto diário; inválido = 0 (nada sai). Só a configuração amplia; o código nunca.
     envioMaximoDia: env.MOVA_ENVIO_MAXIMO_DIA ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_DIA) : 0) : null,
     envioMaximoPorConversaDia: env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA ? (/^[0-9]{1,3}$/.test(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) : 0) : (env.MOVA_ENVIO_MAXIMO_DIA ? 10 : null),
-    // 28/11: fila de saída priorizada (limites configuráveis em mova.limite_envio, sem deploy). Exige a migração 0027; sem ela o código segue
+    // 28/11: fila de saída priorizada (limites configuráveis em mova.limite_envio, sem deploy). Exige a migração 0028; sem ela o código segue
     // com o enviador legado (a detecção é automática) e os tetos MOVA_ENVIO_MAXIMO_* abaixo continuam valendo. Com a flag, eles são ignorados.
     filaPrioridade: sim(env.MOVA_FILA_PRIORIDADE),
     respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
@@ -356,10 +363,10 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
       operacional = criarPortaOperacional({ nucleo: op.nucleo, concessoes: op.concessoes, financeiro: CONTRATO_FINANCEIRO, identidade: cfg.identidadeOperacional, identidadeLeitura: cfg.servicoUsuarioId });
     } else {
       if (!falhou) registrar({ tipo: "MOVA_ESCRITA_DESLIGADA", motivo: "IDENTIDADE_OPERACIONAL_NAO_IMPLANTADA" });
-      cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false };
+      cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false, corrigirContas: false, operarContas: false };
     }
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, leitorDeNota: leitorDeNotaPdf, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, corrigirContas: cfg.corrigirContas === true, operarContas: cfg.operarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, leitorDeNota: leitorDeNotaPdf, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
     try {
       // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta

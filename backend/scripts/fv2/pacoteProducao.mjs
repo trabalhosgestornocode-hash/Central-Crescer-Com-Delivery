@@ -289,10 +289,14 @@ select unidade_id, usuario_id, acoes, situacao, versao from fv2_concessao where 
 /** Ações que a identidade operacional pode receber (a lista do provedor fv2-integracao/operacionalMova.js). */
 export const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante",
   "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_juros", "financeiro_v2.vincular_pagamento", "financeiro_v2.prestar_sangria",
-  "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany"]);
+  "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_intercompany", "financeiro_v2.registrar_emprestimo", "financeiro_v2.corrigir_conta_a_pagar",
+  "financeiro_v2.reclassificar_conta_a_pagar", "financeiro_v2.ajustar_conta_a_pagar", "financeiro_v2.mover_competencia_conta_a_pagar", "financeiro_v2.cancelar_conta_a_pagar"]);
 const IDENTIDADES_RESERVADAS = Object.freeze([IDENTIDADE_DO_MOVA, EXECUTOR_BOOTSTRAP, "00000000-0000-4000-8000-00000000e7e9"]);
 const MIGRACAO_DA_ACAO = Object.freeze({ "financeiro_v2.registrar_obrigacao": "0030_registrar_obrigacao_documental.sql", "financeiro_v2.registrar_juros": "0031_registrar_juros_no_pagamento.sql", "financeiro_v2.prestar_sangria": "0032_prestar_sangria.sql",
-  "financeiro_v2.registrar_conta_parcelada": "0033_registrar_conta_parcelada.sql", "financeiro_v2.registrar_intercompany": "0034_operacoes_entre_empresas.sql" });
+  "financeiro_v2.registrar_conta_parcelada": "0033_registrar_conta_parcelada.sql", "financeiro_v2.registrar_intercompany": "0034_operacoes_entre_empresas.sql",
+  "financeiro_v2.registrar_emprestimo": "0035_registrar_emprestimo.sql", "financeiro_v2.corrigir_conta_a_pagar": "0036_corrigir_conta_a_pagar.sql",
+  "financeiro_v2.reclassificar_conta_a_pagar": "0037_operacoes_de_conta_a_pagar.sql", "financeiro_v2.ajustar_conta_a_pagar": "0037_operacoes_de_conta_a_pagar.sql",
+  "financeiro_v2.mover_competencia_conta_a_pagar": "0037_operacoes_de_conta_a_pagar.sql", "financeiro_v2.cancelar_conta_a_pagar": "0037_operacoes_de_conta_a_pagar.sql" });
 
 function exigirOperacional({ identidade, organizacaoId, unidadeId, autor, justificativa }) {
   if (![identidade, organizacaoId, unidadeId, autor].every((x) => UUID_MOVA.test(x ?? ""))) throw new Error("Identidade, empresa, unidade e autor precisam ser UUID.");
@@ -527,9 +531,10 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
  * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
  * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
  */
-export const BASE_INSTALADA = "0032"; // produção conferida em 27/11 (somente leitura): 32 migrações com o mesmo hash do Git (0032 aplicada em 25/11)
-export function atualizar(base = BASE_INSTALADA) {
-  const ms = listarMigracoes();
+export const BASE_INSTALADA = "0036"; // produção conferida em 28/11 (somente leitura): 36 migrações (0036 aplicada em 28/11 com o PR #251, hash dd66132c…); 0037 NÃO aplicada
+export function atualizar(base = BASE_INSTALADA, ate = null) {
+  // `ate` (só para ensaios de kits antigos): limita as novas até essa migração (ex.: ensaiar a 0035 sobre a 0034 sem a 0036)
+  const ms = listarMigracoes().filter((m) => !ate || m.nome.slice(0, 4) <= ate);
   const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);
   const novas = ms.filter((m) => m.nome.slice(0, 4) > base);
   if (!novas.length) return `-- Financeiro v2 — nada a atualizar além de ${base}.\n`;

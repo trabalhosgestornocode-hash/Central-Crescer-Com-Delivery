@@ -1,5 +1,5 @@
 // MOVA (28/11/2026): fila de saída com prioridade, categorias, capacidade reservada, adiamento (nunca descarte), expiração,
-// alertas de uso, circuit breaker e limites configuráveis com auditoria. Banco real (mesma migração 0027 da produção).
+// alertas de uso, circuit breaker e limites configuráveis com auditoria. Banco real (mesma migração 0028 da produção).
 import assert from "node:assert/strict";
 import { GRUPO, cenario, t } from "./helpers/operacao.js";
 import { criarEnviadorDeRespostas } from "../../src/modules/mova-financeiro/index.js";

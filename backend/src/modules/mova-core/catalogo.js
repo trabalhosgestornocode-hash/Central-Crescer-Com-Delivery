@@ -406,8 +406,14 @@ export const FERRAMENTAS = [
     valores: false, ops: ["consultarPlanoDeContas"],
     async executar({ porta, escopo }) {
       const r = await porta.ler("consultarPlanoDeContas", escopo, {});
-      const itens = (r?.itens ?? r?.categorias ?? r ?? []).map?.((c) => ({ codigo: c.codigo, nome: c.nome, classificacao: c.classificacao ?? null })) ?? [];
-      return { dados: { total: itens.length, itens: itens.slice(0, 80) }, fatos: [] };
+      // 27/11: o plano vem como ÁRVORE (grupos com `filhas`). Antes só os grupos da raiz eram lidos ("13 categorias", sem IMOBILIZADO).
+      // Agora a árvore toda é achatada: o que serve de categoria é o que ACEITA lançamento e está ativo (natureza receita fica de fora).
+      const raiz = Array.isArray(r) ? r : (r?.itens ?? r?.categorias ?? r?.contas ?? []);
+      const achatar = (xs) => (Array.isArray(xs) ? xs : []).flatMap((c) => [c, ...achatar(c.filhas)]);
+      const todas = achatar(raiz);
+      const itens = todas.filter((c) => c.aceitaLancamento !== false && c.ativa !== false && c.natureza !== "RECEITA" && !(c.filhas ?? []).length)
+        .map((c) => ({ codigo: c.codigo, nome: c.nome, classificacao: c.classificacao ?? null, natureza: c.natureza ?? null }));
+      return { dados: { total: itens.length, grupos: todas.filter((c) => (c.filhas ?? []).length).length, itens: itens.slice(0, 150) }, fatos: [] };
     },
   },
   {
