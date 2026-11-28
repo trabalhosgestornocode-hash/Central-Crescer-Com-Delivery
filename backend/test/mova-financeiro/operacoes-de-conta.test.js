@@ -27,13 +27,16 @@ async function conversa({ operarContas = true, concessao = OPERA, repositorio = 
   const freezer = await s.m.nucleo.registrarContaParcelada(cx(), { contraparteNova: { tipo: "FORNECEDOR", nome: "Loja Sintética F2" }, categoria: "IMOBILIZADO", descricao: "Freezer sintético",
     competencia: "2026-10", dataEmissao: "2026-10-15", parcelas: [{ vencimento: "2026-11-15", valorCentavos: 30000 }, { vencimento: "2026-12-15", valorCentavos: 30000 }, { vencimento: "2027-01-15", valorCentavos: 30000 }],
     fonte: { sistema: "MANUAL", idExterno: "MOVA:f2-freezer" } });
+  const energia = await s.m.nucleo.registrarContaParcelada(cx(), { contraparteNova: { tipo: "FORNECEDOR", nome: "Companhia Sintética de Energia" }, categoria: "ENERGIA", descricao: "Conta de energia sintética",
+    competencia: "2026-10", dataEmissao: "2026-10-05", parcelas: [{ vencimento: "2026-11-10", valorCentavos: 40000 }, { vencimento: "2026-12-10", valorCentavos: 40000 }], fonte: { sistema: "MANUAL", idExterno: "MOVA:f2-energia" } });
+  const parcelasDe = async (g) => (await s.m.nucleo.consultarRegistros(cx(), { tipo: "OBRIGACAO" })).filter((o) => o.grupoId === g.obrigacoes[0].grupoId).sort((a, b) => a.parcela.numero - b.parcela.numero);
   const parcelas = async () => (await s.m.nucleo.consultarRegistros(cx(), { tipo: "OBRIGACAO" })).filter((o) => o.grupoId === freezer.obrigacoes[0].grupoId).sort((a, b) => a.parcela.numero - b.parcela.numero);
   const lancamentos = async () => s.m.nucleo.consultarRegistros(cx(), { tipo: "LANCAMENTO" });
   const compra = async () => (await lancamentos()).find((l) => l.id === freezer.lancamento.id);
   const decisao = async () => (await s.mova.armazenamento.historico.todos()).filter((h) => h.decisao !== "RELACIONADA").at(-1);
   const texto = async () => (await s.saida()).at(-1)?.texto ?? "";
   const dizer = (x, de = FIN) => s.enviar({ ...gw({ texto: x, de }) });
-  return { ...s, freezer, parcelas, lancamentos, compra, decisao, texto, dizer, ia: () => ia };
+  return { ...s, freezer, energia, parcelasDe, parcelas, lancamentos, compra, decisao, texto, dizer, ia: () => ia };
 }
 
 t("OF2-1 categoria da COMPRA inteira com o efeito na DRE; uma confirmação; a classificação por parcela não é oferecida", async () => {
@@ -42,7 +45,8 @@ t("OF2-1 categoria da COMPRA inteira com o efeito na DRE; uma confirmação; a c
   assert.equal((await s.decisao()).motivo, "CORRECAO_CONFIRMAR", await s.texto());
   const r = await s.texto();
   assert.match(r, /Categoria da compra Freezer sintético \(R\$ 900,00 em 3 parcelas\): Compra de equipamentos e bens → Manutenção/);
-  assert.match(r, /Na DRE de 10\/2026: R\$ 900,00 entra no resultado como Manutenção/);
+  assert.match(r, /Na DRE de 10\/2026: R\$ 900,00 passa a ser despesa em Manutenção.* \(antes era equipamento, fora da DRE\)/);
+  assert.match(r, /Contas a pagar, vencimentos e fluxo de caixa previsto não mudam\. Caixa realizado e pagamentos feitos não mudam\./);
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
   assert.match(await s.texto(), /Categoria da compra Freezer sintético alterada de Compra de equipamentos e bens para Manutenção.*Conferido no Financeiro/);
@@ -56,18 +60,26 @@ t("OF2-2 valor de UMA parcela: anterior, correto e diferença; o original fica; 
   assert.equal((await s.decisao()).motivo, "CORRECAO_ESCOLHER_CONTA");
   assert.doesNotMatch(await s.texto(), /compra inteira|TODAS/, "valor é por parcela");
   await s.dizer("2");
-  assert.match(await s.texto(), /Valor anterior R\$ 300,00 → valor correto R\$ 325,00 \(diferença \+R\$ 25,00\)/);
-  assert.match(await s.texto(), /ajuste auditado na DRE de 10\/2026/);
+  assert.equal((await s.decisao()).motivo, "CORRECAO_PEDIR_JUSTIFICATIVA", "sem motivo dito: pergunta antes do resumo");
+  await s.dizer("o frete foi cobrado à parte");
+  const r = await s.texto();
+  assert.match(r, /Valor original: R\$ 300,00 · valor atual: R\$ 300,00 · novo valor: R\$ 325,00 \(diferença \+R\$ 25,00\)/);
+  assert.match(r, /Já pago: R\$ 0,00 · saldo anterior: R\$ 300,00 · novo saldo: R\$ 325,00/);
+  assert.match(r, /Justificativa: o frete foi cobrado à parte/);
+  assert.match(r, /Impacto: Não afeta a DRE: compra de equipamento \(patrimonial/, "equipamento não está na DRE");
+  assert.match(r, /fluxo de caixa previsto \(vencimento 15\/12\/2026\): \+R\$ 25,00\. Caixa realizado e pagamentos feitos não mudam/);
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
   const ps = await s.parcelas();
   assert.deepEqual(ps.map((o) => [o.valorBaseCentavos, o.ajustesCentavos, o.saldoCentavos]), [[30000, 0, 30000], [30000, 2500, 32500], [30000, 0, 30000]]);
+  const aj = (await s.m.nucleo.consultarRegistros(s.c(ORG, ALFA), { tipo: "AJUSTE" })).find((a) => a.alvoId === ps[1].id);
+  assert.equal(aj.motivo, "o frete foi cobrado à parte", "a justificativa REAL vai para o histórico");
 });
 
 t("OF2-3 competência da compra (lançamento + parcelas) com o efeito nos dois meses; vencimentos intactos", async () => {
   const s = await conversa();
   await s.dizer("MOVA, mude a competência do freezer para novembro/2026");
-  assert.match(await s.texto(), /Competência da compra Freezer sintético \(R\$ 900,00\): 10\/2026 → 11\/2026\.\nNa DRE: R\$ 900,00 sai de 10\/2026 e entra em 11\/2026/);
+  assert.match(await s.texto(), /Competência da compra Freezer sintético \(R\$ 900,00\): 10\/2026 → 11\/2026\.\nNão afeta a DRE \(compra de equipamento, patrimonial\)/);
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
   assert.equal((await s.compra()).competencia, "2026-11");
@@ -76,8 +88,9 @@ t("OF2-3 competência da compra (lançamento + parcelas) com o efeito nos dois m
 
 t("OF2-4 cancelar: a parcela pedida (só ela, ajuste auditado); sem dizer qual ⇒ opções com 'a compra inteira'; nunca presume todas", async () => {
   const s = await conversa();
-  await s.dizer("MOVA, cancele a terceira parcela do freezer");
-  assert.match(await s.texto(), /Cancelar a parcela 3\/3 de Freezer sintético \(R\$ 300,00, vence 15\/01\/2027\)\. As outras parcelas continuam\./);
+  await s.dizer("MOVA, cancele a terceira parcela do freezer, motivo: item devolvido");
+  assert.match(await s.texto(), /Cancelar a parcela 3\/3 de Freezer sintético \(R\$ 300,00, vence 15\/01\/2027\)\. As outras parcelas continuam\.\nJustificativa: item devolvido/);
+  assert.match(await s.texto(), /Nada é apagado: a compra original fica registrada/);
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
   assert.deepEqual((await s.parcelas()).map((o) => o.situacao), ["ABERTA", "ABERTA", "CANCELADA"]);
@@ -85,6 +98,7 @@ t("OF2-4 cancelar: a parcela pedida (só ela, ajuste auditado); sem dizer qual �
   assert.equal((await s.decisao()).motivo, "CORRECAO_ESCOLHER_CONTA", "sem dizer parcela ou compra: pergunta");
   assert.match(await s.texto(), /3\. Freezer sintético — a compra inteira/);
   await s.dizer("3");
+  await s.dizer("pedido cancelado com a loja");
   assert.match(await s.texto(), /Cancelar a compra inteira Freezer sintético: 2 parcela\(s\) em aberto \(R\$ 600,00\)/);
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
@@ -104,12 +118,12 @@ t("OF2-5 travas: chave desligada; parcela paga ⇒ Central; 'não' desiste; sem 
   assert.equal((await s.decisao()).motivo, "CORRECAO_PARCELA_NAO_ENCONTRADA", "a paga nem aparece como opção");
   await s.dizer("MOVA, mude a competência do freezer para novembro/2026");
   assert.match(await s.texto(), /pagamento, ajuste ou parcela cancelada\. A alteração é pela Central Financeira \(revisão humana\)/);
-  await s.dizer("MOVA, cancele a segunda parcela do freezer");
+  await s.dizer("MOVA, cancele a segunda parcela do freezer porque foi devolvida");
   await s.dizer("não");
   assert.equal((await s.decisao()).motivo, "CORRECAO_CANCELADA");
   assert.equal((await s.parcelas())[1].situacao, "ABERTA");
   const sem = await conversa({ concessao: ["financeiro_v2.ver", "financeiro_v2.corrigir_conta_a_pagar"] });
-  await sem.dizer("MOVA, cancele a segunda parcela do freezer");
+  await sem.dizer("MOVA, cancele a segunda parcela do freezer porque foi devolvida");
   await sem.dizer("sim");
   assert.match((await sem.decisao()).motivo, /SEM_CONCESSAO_OPERACIONAL/);
   assert.equal((await sem.parcelas())[1].situacao, "ABERTA");
@@ -128,10 +142,10 @@ test("OF2-PG pela conversa até o PostgreSQL: identidade estreita (kit oficial, 
   } finally { cl.release(); }
   const nucleoOperacional = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS, relogio: () => AGORA, exigirConcessaoPersistida: true });
   const s = await conversa({ repositorio, nucleoOperacional });
-  await s.dizer("MOVA, altere o valor da segunda parcela do freezer para R$ 325,00");
+  await s.dizer("MOVA, altere o valor da segunda parcela do freezer para R$ 325,00 porque o frete foi à parte");
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
-  await s.dizer("MOVA, cancele a terceira parcela do freezer");
+  await s.dizer("MOVA, cancele a terceira parcela do freezer porque o item foi devolvido");
   await s.dizer("sim");
   assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
   const ob = (await dono.query("select (parcela->>'numero')::int n, situacao, valor_base_centavos vb, ajustes_centavos aj, saldo_centavos sd, atualizado_por::text por from fv2_obrigacao where lancamento_id = $1 order by 1", [s.freezer.lancamento.id])).rows;
@@ -139,4 +153,46 @@ test("OF2-PG pela conversa até o PostgreSQL: identidade estreita (kit oficial, 
   assert.ok(ob.slice(1).every((o) => o.por === OPERADOR), "gravado pela identidade ESTREITA");
   const aj = (await dono.query("select count(*)::int n from fv2_ajuste a join fv2_lancamento l on l.id = a.lancamento_id where a.alvo_id = any($1::uuid[]) and l.categoria_codigo = 'IMOBILIZADO' and l.criado_por = $2", [ob.map(() => null).length ? (await dono.query("select array_agg(id) ids from fv2_obrigacao where lancamento_id = $1", [s.freezer.lancamento.id])).rows[0].ids : [], OPERADOR])).rows[0].n;
   assert.equal(aj, 2, "dois ajustes auditados (valor e cancelamento), na categoria da compra");
+});
+
+t("OF2-6 despesa (na DRE): valor, competência e cancelamento dizem o efeito na DRE do mês; equipamento não", async () => {
+  const s = await conversa();
+  await s.dizer("MOVA, altere o valor da segunda parcela da conta de energia para R$ 380,00 porque a leitura do medidor foi corrigida");
+  const r = await s.texto();
+  assert.match(r, /Impacto: Na DRE de 10\/2026: a despesa diminui R\$ 20,00 em Energia elétrica\./);
+  assert.match(r, /fluxo de caixa previsto \(vencimento 10\/12\/2026\): −R\$ 20,00/);
+  await s.dizer("não");
+  await s.dizer("MOVA, mude a competência da conta de energia para novembro/2026");
+  assert.match(await s.texto(), /Na DRE: R\$ 800,00 sai de 10\/2026 e entra em 11\/2026\./);
+});
+
+t("OF2-7 última parcela restante: explica e pede o cancelamento da compra (nunca converte sozinho); nada muda", async () => {
+  const s = await conversa();
+  await s.dizer("MOVA, cancele a primeira parcela da conta de energia porque foi cobrada em duplicidade");
+  await s.dizer("sim");
+  assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
+  await s.dizer("MOVA, cancele a segunda parcela da conta de energia porque o contrato foi encerrado");
+  assert.equal((await s.decisao()).motivo, "CORRECAO_ULTIMA_PARCELA", await s.texto());
+  assert.match(await s.texto(), /é a única que resta em aberto .* cancelar ela é cancelar a compra inteira\. Se é isso, peça "cancele a compra Conta de energia sintética"\. Nada foi alterado\./);
+  assert.deepEqual((await s.parcelasDe(s.energia)).map((o) => o.situacao), ["CANCELADA", "ABERTA"]);
+});
+
+t("OF2-8 integridade: a compra muda (categoria) entre o resumo do VALOR e o 'sim' ⇒ a confirmação antiga é invalidada, nada muda e um resumo ATUALIZADO é apresentado; o 'sim' seguinte executa o novo", async () => {
+  const s = await conversa();
+  await s.dizer("MOVA, altere o valor da segunda parcela do freezer para R$ 325,00 porque o frete foi à parte");
+  assert.match(await s.texto(), /Não afeta a DRE: compra de equipamento/);
+  // alguém reclassifica a compra pela Central (o lançamento muda de versão e de natureza)
+  const ps = await s.parcelas(); const l = await s.compra();
+  await s.m.nucleo.reclassificarContaAPagar({ ...s.c(ORG, ALFA) }, { obrigacaoId: ps[0].id, categoria: "MANUTENCAO", versoes: Object.fromEntries([...ps, l].map((x) => [x.id, x.versao])), justificativa: "Reclassificada pela Central (sintético)." });
+  await s.dizer("sim");
+  assert.equal((await s.decisao()).motivo, "CORRECAO_CONFIRMAR", await s.texto());
+  const r = await s.texto();
+  assert.match(r, /A conta mudou depois do resumo: a confirmação anterior foi cancelada e nada foi alterado\. Resumo atualizado:/);
+  assert.match(r, /Impacto: Na DRE de 10\/2026: a despesa aumenta R\$ 25,00 em Manutenção/, "o impacto agora é na DRE (despesa)");
+  assert.equal((await s.parcelas())[1].ajustesCentavos, 0, "nada foi alterado pela confirmação antiga");
+  await s.dizer("sim");
+  assert.equal((await s.decisao()).motivo, "CORRECAO_EXECUTADA", await s.texto());
+  assert.equal((await s.parcelas())[1].saldoCentavos, 32500);
+  const correcoes = (await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).filter((x) => x.tipo === "CORRECAO_DE_CONTA");
+  assert.deepEqual(correcoes.map((x) => x.estado).sort(), ["APLICADA", "REJEITADA"]);
 });

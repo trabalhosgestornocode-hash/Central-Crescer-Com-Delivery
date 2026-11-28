@@ -91,7 +91,17 @@ export function valorDoCampo(campo, bruto, hoje) {
  * Um campo por pedido (dois campos ⇒ null: a pessoa faz um de cada vez, sem adivinhação).
  */
 export function interpretarPedidoDeCorrecao(texto, hoje) {
-  const original = String(texto ?? "").replace(/^\s*mova[\s,:-]*/i, "").trim();
+  const r = interpretarSemJustificativa(texto, hoje);
+  return r ? { ...r, justificativa: justificativaDoTexto(texto) } : null;
+}
+/** O motivo DITO pela pessoa ("… porque o frete foi à parte", "… motivo: nota errada"): vai para o histórico como foi dito. */
+export function justificativaDoTexto(texto) {
+  const m = /[\s,.;]+(porque|pois|j[aá] que|motivo:?|justificativa:?)\s+(.{4,300})$/i.exec(String(texto ?? "").trim());
+  return m ? m[2].trim().replace(/[.!]+$/, "") : null;
+}
+const semJustificativa = (texto) => String(texto ?? "").replace(/[\s,.;]+(porque|pois|j[aá] que|motivo:?|justificativa:?)\s+.{4,300}$/i, "");
+function interpretarSemJustificativa(texto, hoje) {
+  const original = semJustificativa(texto).replace(/^\s*mova[\s,:-]*/i, "").trim();
   const t = sem(original);
   if (!t || t.length > 400) return null;
   const campos = CAMPOS.filter(([, re]) => re.test(t)).map(([c]) => c);

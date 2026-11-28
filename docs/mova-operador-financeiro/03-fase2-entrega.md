@@ -16,24 +16,29 @@ várias), contexto preservado, resumo ANTES → DEPOIS com o efeito na DRE, UMA 
 canônica), execução atômica com versões conferidas, conferência na leitura oficial, auditoria. Saída no grupo só quando todos os
 membros são FINANCEIRO nas unidades mostradas; senão, no privado. Chave própria: `MOVA_OPERACAO_OPERAR_CONTAS` (padrão desligada).
 
-## 2. Implicações financeiras (o que cada operação faz na DRE e no caixa)
+## 2. Implicações financeiras (DRE, patrimônio, contas a pagar, fluxo previsto)
 
-- **Reclassificação:** a categoria é do lançamento da compra — muda a linha da DRE da competência da compra pelo valor TOTAL
-  (despesa → despesa: troca de linha; equipamento ↔ despesa: sai/entra no resultado). Valor, parcelas, vencimentos, competência e
-  caixa não mudam. Compra com ajuste ou parcela cancelada ⇒ revisão humana (os ajustes ficariam na categoria antiga). Categoria
-  que exige documento sem evidência ⇒ Central. Por parcela: nunca (fato econômico único).
-- **Correção de valor:** sem teto fixo. O valor ORIGINAL nunca muda; a diferença (correto − anterior) vira AJUSTE documentado:
-  lançamento próprio, MESMA categoria e competência da compra, com justificativa. Mostra anterior, correto e diferença. Recusa: valor
-  correto ≤ já pago (ou igual — quitaria por ajuste), parcela quitada/cancelada, mudança de situação ⇒ revisão humana.
-- **Competência:** move o lançamento e TODAS as parcelas entre dois períodos ABERTOS (ou preliminares). Na DRE, o valor sai de um mês
-  e entra no outro; caixa realizado, datas bancárias, liquidações e vencimentos ficam iguais. Compra com pagamento, ajuste ou parcela
-  cancelada ⇒ revisão humana (o ajuste ficaria no mês antigo).
-- **Cancelamento da PARCELA:** a parcela fica CANCELADA com saldo zero por um AJUSTE negativo auditado do valor dela (mesma categoria e
-  competência): a compra original fica registrada e a DRE fica líquida. As outras parcelas continuam. Única parcela ⇒ "cancele a compra".
-- **Cancelamento da COMPRA:** parcelas vivas, lançamento e lançamentos de ajuste ficam CANCELADOS (nada é apagado). Com qualquer
-  pagamento ⇒ revisão humana (estorno é tratamento especializado).
-- Sempre: período homologado ou em fechamento com pendências ⇒ recusa; empréstimo, parcelamento tributário, entre empresas e outras
-  patrimoniais ⇒ fora (proteções próprias).
+Regra geral: a NATUREZA da compra decide o efeito. DESPESA está na DRE; compra de equipamento (IMOBILIZADO) é PATRIMONIAL e não
+entra na DRE — o MOVA nunca diz que ela "aumenta/reduz a DRE". Nenhuma operação muda o caixa realizado, datas bancárias ou pagamentos.
+
+- **Reclassificação (compra inteira):** despesa → despesa: troca de linha na DRE (o resultado total não muda); equipamento → despesa:
+  o valor passa a ser despesa na DRE do mês; despesa → equipamento: sai do resultado e vira patrimonial. Contas a pagar, vencimentos e
+  fluxo previsto não mudam. Compra com ajuste ou parcela cancelada ⇒ revisão humana. Por parcela: nunca (fato econômico único).
+- **Correção de valor (uma parcela):** sem teto fixo. O resumo mostra valor original, valor atual, novo valor, diferença, já pago,
+  saldo anterior, novo saldo, a JUSTIFICATIVA real (perguntada se não foi dita) e o impacto: despesa ⇒ a despesa do mês aumenta/diminui
+  a diferença; equipamento ⇒ "não afeta a DRE" (patrimonial); contas a pagar e fluxo previsto (no vencimento da parcela) ± diferença.
+  O valor original nunca muda: a diferença é ajuste auditado. Novo valor ≤ já pago ⇒ revisão humana.
+- **Competência (compra inteira, entre períodos abertos):** despesa ⇒ o valor sai de um mês e entra no outro na DRE; equipamento ⇒ não
+  afeta a DRE (muda o mês de referência). Contas a pagar, vencimentos e fluxo previsto não mudam. Pagamento/ajuste/parcela cancelada ⇒
+  revisão humana.
+- **Cancelamento de PARCELA:** só a pedida (com justificativa); ajuste negativo auditado do valor dela; despesa ⇒ a despesa do mês
+  diminui; equipamento ⇒ não afeta a DRE; contas a pagar e fluxo previsto −valor no vencimento dela. Se for a ÚLTIMA parcela restante,
+  o MOVA explica e pede o pedido específico de cancelar a compra — nunca converte sozinho.
+- **Cancelamento da COMPRA:** parcelas vivas, lançamento e ajustes cancelados (nada é apagado); com qualquer pagamento ⇒ revisão humana.
+- **Integridade da confirmação:** a confirmação guarda as versões da(s) parcela(s) E do lançamento da compra (categoria, competência,
+  valor). Se algo mudar entre o resumo e o "sim", a confirmação antiga é invalidada, nada é alterado e o MOVA apresenta um resumo
+  ATUALIZADO para nova confirmação — nunca executa uma operação diferente da autorizada.
+- Sempre: período homologado/com pendências ⇒ recusa; empréstimo, parcelamento tributário, entre empresas e outras patrimoniais ⇒ fora.
 
 ## 3. Segurança no banco (0037)
 
@@ -58,7 +63,7 @@ lançamento para quem só tem `corrigir_conta_a_pagar` — o teste CC-4 da fase 
   outra categoria, valor/competência/cancelamento do lançamento, empréstimo) recusado pela regra.
 - KIT-0037 — backup, reversão EXATA para a 0036 (ida e volta idêntica: políticas, funções, gatilhos, restrição), concessão protegida,
   isolamento, duplicidade, reversão que preserva alterações legítimas. KIT-0035/0036 adaptados (revertem a 0037 antes).
-- OF2-1..5 + OF2-PG — conversa: as quatro operações, nunca presume todas, chave, travas, "não", concessão; ponta a ponta no PostgreSQL.
+- OF2-1..8 + OF2-PG — conversa: as quatro operações, resumo completo do valor com justificativa real, despesa × equipamento, última parcela, confirmação invalidada e resumo atualizado, nunca presume todas, chave, travas; ponta a ponta no PostgreSQL.
 - Suítes com impacto: Financeiro v2 871/871 (3 pulados por desenho); MOVA afetados 30/30.
 
 ## 5. Publicação (só com autorização)
@@ -68,11 +73,13 @@ merge/deploy → 04 concessão (Açaí v6 e Subway v4: as 9 vigentes + as 4) →
 Sem migração do MOVA (as operações usam o tipo `CORRECAO_DE_CONTA` da 0027; a 0026 segue reservada aos entregadores).
 Reversão: 05 (A depois B).
 
-## 6. Homologação sugerida (contas reais escolhidas por você; nada do bebedouro nem do BNB)
+## 6. Homologação real (só operações reais que você escolher e autorizar, uma a uma)
 
-1. Cadastre uma compra de teste em 2–3 parcelas pela conversa (fluxo já homologado).
-2. "altere a categoria da compra <x> para <categoria>" → confira a linha da DRE no Dashboard.
-3. "altere o valor da 2ª parcela da compra <x> para R$ <valor>" → confira saldo e o ajuste no histórico.
-4. "mude a competência da compra <x> para <mês/ano>" → confira os dois meses da DRE.
-5. "cancele a 3ª parcela da compra <x>" e depois "cancele a compra <x>" → confira que nada sumiu (canceladas no histórico).
-Cada passo: resumo → "sim" → "Feito … Conferido no Financeiro".
+Nada de contas fictícias no Financeiro real. Para UMA compra real elegível (despesa ou equipamento, sem pagamento, período aberto), na
+ordem abaixo — a competência recusa compras com ajuste, por isso vem ANTES da correção de valor:
+1. **Reclassificar a categoria:** "MOVA, altere a categoria da compra <x> para <categoria>" → confira a categoria (e a linha da DRE, se for despesa).
+2. **Alterar a competência:** "MOVA, mude a competência da compra <x> para <mês/ano>" → confira o mês de referência (e os dois meses da DRE, se despesa).
+3. **Corrigir o valor:** "MOVA, altere o valor da <n>ª parcela da compra <x> para R$ <valor> porque <motivo>" → confira saldo e o ajuste no histórico.
+4. **Cancelar uma parcela:** "MOVA, cancele a <n>ª parcela da compra <x> porque <motivo>" → confira que as outras continuam.
+5. **Cancelar a compra inteira:** "MOVA, cancele a compra <x> porque <motivo>" → confira que nada sumiu (canceladas no histórico).
+Cada passo: resumo → conferência sua → "sim" → "Feito … Conferido no Financeiro". Não usar o bebedouro nem o BNB.

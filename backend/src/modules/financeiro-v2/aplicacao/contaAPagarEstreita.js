@@ -74,7 +74,8 @@ export function operacoesDeContaAPagarEstreita(b) {
       const c = validarAjusteDeContaAPagar(entrada);
       return b.executar(ctx, ACAO.AJUSTAR_CONTA_A_PAGAR, async (cx, tx) => {
         const { alvo, lancamento: l } = await carregar(tx, cx, c.obrigacaoId);
-        exigirVersoes({ [alvo.id]: c.versaoEsperada }, [alvo]);
+        // a parcela E o lançamento da compra (categoria, competência e valor da compra) como vistos no resumo
+        exigirVersoes({ [alvo.id]: c.versaoEsperada, [l.id]: c.versaoLancamento }, [alvo, l]);
         if (![SITUACAO_TITULO.ABERTA, SITUACAO_TITULO.PARCIAL].includes(alvo.situacao)) falhar(CODIGO.OPERACAO_INVALIDA, `${REVISAO_HUMANA}: a parcela está ${alvo.situacao.toLowerCase()}.`);
         const anterior = alvo.valorBaseCentavos + alvo.ajustesCentavos;
         const diferenca = c.valorCorretoCentavos - anterior;
@@ -129,7 +130,7 @@ export function operacoesDeContaAPagarEstreita(b) {
           return { abrangencia: "GRUPO", obrigacoes, lancamento, valorCentavos: vivas.reduce((s, o) => s + o.valorBaseCentavos + o.ajustesCentavos, 0) };
         }
         // PARCELA: só a escolhida; a compra continua (outras parcelas intactas)
-        exigirVersoes(c.versoes, [alvo]);
+        exigirVersoes(c.versoes, [alvo, l]); // a parcela E o lançamento da compra (impacto mostrado no resumo)
         if (!semPagamento(alvo)) falhar(CODIGO.OPERACAO_INVALIDA, `${REVISAO_HUMANA}: a parcela tem pagamento ou já está cancelada.`);
         if (vivas.length < 2) falhar(CODIGO.OPERACAO_INVALIDA, "É a única parcela da compra: cancele a compra inteira.");
         await exigirPeriodo(tx, cx, l.competencia);

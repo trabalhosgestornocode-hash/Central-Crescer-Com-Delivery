@@ -46,19 +46,19 @@ test("F2-1 reclassificar: a COMPRA inteira muda de categoria (um lançamento), s
 test("F2-2 ajustar valor: anterior, correto e diferença; ajuste documentado (o original fica); nunca abaixo do pago; parcela paga/quitada ⇒ revisão humana", async () => {
   const s = await cenario();
   let { os } = await s.ler();
-  const r = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[1].id, valorCorretoCentavos: 32500, versaoEsperada: os[1].versao, justificativa: just });
+  const r = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[1].id, valorCorretoCentavos: 32500, versaoEsperada: os[1].versao, versaoLancamento: (await s.ler()).l.versao, justificativa: just });
   assert.deepEqual([r.anteriorCentavos, r.corretoCentavos, r.diferencaCentavos, r.obrigacao.valorBaseCentavos, r.obrigacao.ajustesCentavos, r.obrigacao.saldoCentavos], [30000, 32500, 2500, 30000, 2500, 32500]);
   assert.deepEqual([r.lancamento.categoria, r.lancamento.valorCentavos, r.lancamento.competencia, r.lancamento.origem.tipo], ["IMOBILIZADO", 2500, "2026-10", "AJUSTE"]);
   ({ os } = await s.ler());
-  const red = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[1].id, valorCorretoCentavos: 29000, versaoEsperada: os[1].versao, justificativa: just });
+  const red = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[1].id, valorCorretoCentavos: 29000, versaoEsperada: os[1].versao, versaoLancamento: (await s.ler()).l.versao, justificativa: just });
   assert.deepEqual([red.anteriorCentavos, red.diferencaCentavos, red.obrigacao.saldoCentavos], [32500, -3500, 29000]);
   // com pagamento parcial: correto abaixo (ou igual) ao pago ⇒ revisão humana; acima ⇒ ajusta e continua PARCIAL
   await s.pagar(os[0]);
   ({ os } = await s.ler());
-  await rejeita(s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[0].id, valorCorretoCentavos: 10000, versaoEsperada: os[0].versao, justificativa: just }), CODIGO.OPERACAO_INVALIDA);
-  const parcial = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[0].id, valorCorretoCentavos: 31000, versaoEsperada: os[0].versao, justificativa: just });
+  await rejeita(s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[0].id, valorCorretoCentavos: 10000, versaoEsperada: os[0].versao, versaoLancamento: (await s.ler()).l.versao, justificativa: just }), CODIGO.OPERACAO_INVALIDA);
+  const parcial = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[0].id, valorCorretoCentavos: 31000, versaoEsperada: os[0].versao, versaoLancamento: (await s.ler()).l.versao, justificativa: just });
   assert.deepEqual([parcial.obrigacao.situacao, parcial.obrigacao.saldoCentavos], ["PARCIAL", 21000]);
-  const igual = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[2].id, valorCorretoCentavos: 30000, versaoEsperada: os[2].versao, justificativa: just });
+  const igual = await s.m.nucleo.ajustarValorDeContaAPagar(s.como(A), { obrigacaoId: os[2].id, valorCorretoCentavos: 30000, versaoEsperada: os[2].versao, versaoLancamento: (await s.ler()).l.versao, justificativa: just });
   assert.equal(igual.semMudanca, true);
 });
 
@@ -83,7 +83,7 @@ test("F2-3 mudar competência: lançamento e TODAS as parcelas juntos; venciment
 test("F2-4 cancelar: PARCELA (só ela, ajuste negativo auditado, a DRE fica líquida) e depois a COMPRA inteira; com pagamento ⇒ revisão humana; nada é apagado", async () => {
   const s = await cenario();
   let { os, l, ls } = await s.ler();
-  const p = await s.m.nucleo.cancelarContaAPagar(s.como(C), { obrigacaoId: os[2].id, abrangencia: "PARCELA", versoes: versoesDe([os[2]]), justificativa: just });
+  const p = await s.m.nucleo.cancelarContaAPagar(s.como(C), { obrigacaoId: os[2].id, abrangencia: "PARCELA", versoes: versoesDe([os[2], l]), justificativa: just });
   assert.deepEqual([p.obrigacoes[0].situacao, p.obrigacoes[0].saldoCentavos, p.ajuste.valorCentavos, p.lancamentoDoAjuste.valorCentavos], ["CANCELADA", 0, -30000, -30000]);
   ({ os, l, ls } = await s.ler());
   assert.deepEqual(os.map((o) => o.situacao), ["ABERTA", "ABERTA", "CANCELADA"], "as outras parcelas intactas");
@@ -101,10 +101,10 @@ test("F2-4 cancelar: PARCELA (só ela, ajuste negativo auditado, a DRE fica líq
   let y = await s2.ler();
   await s2.pagar(y.os[0]);
   y = await s2.ler();
-  await rejeita(s2.m.nucleo.cancelarContaAPagar(s2.como(C), { obrigacaoId: y.os[0].id, abrangencia: "PARCELA", versoes: versoesDe([y.os[0]]), justificativa: just }), CODIGO.OPERACAO_INVALIDA);
+  await rejeita(s2.m.nucleo.cancelarContaAPagar(s2.como(C), { obrigacaoId: y.os[0].id, abrangencia: "PARCELA", versoes: versoesDe([y.os[0], y.l]), justificativa: just }), CODIGO.OPERACAO_INVALIDA);
   await rejeita(s2.m.nucleo.cancelarContaAPagar(s2.como(C), { obrigacaoId: y.os[1].id, abrangencia: "GRUPO", versoes: versoesDe([...y.os, y.l]), justificativa: just }), CODIGO.OPERACAO_INVALIDA);
   // compra com UMA parcela: cancelar a parcela ⇒ "cancele a compra inteira"
   const s3 = await cenario();
   const uma = await s3.m.nucleo.registrarContaParcelada(s3.m.c, compra({ parcelas: [{ vencimento: "2026-11-15", valorCentavos: 5000 }] }));
-  await rejeita(s3.m.nucleo.cancelarContaAPagar(s3.como(C), { obrigacaoId: uma.obrigacoes[0].id, abrangencia: "PARCELA", versoes: versoesDe(uma.obrigacoes), justificativa: just }), CODIGO.OPERACAO_INVALIDA);
+  await rejeita(s3.m.nucleo.cancelarContaAPagar(s3.como(C), { obrigacaoId: uma.obrigacoes[0].id, abrangencia: "PARCELA", versoes: versoesDe([...uma.obrigacoes, uma.lancamento]), justificativa: just }), CODIGO.OPERACAO_INVALIDA);
 });

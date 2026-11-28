@@ -496,9 +496,9 @@ export function validarReclassificacaoDeConta(e) {
   return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), categoria: exigirTexto(e.categoria, "categoria", { max: 80 }), versoes: versoesConfirmadas(e.versoes), justificativa: justificativaDaConta(e) };
 }
 export function validarAjusteDeContaAPagar(e) {
-  semCamposDesconhecidos(e, ["obrigacaoId", "valorCorretoCentavos", "versaoEsperada", "justificativa"], "ajusteDeConta");
+  semCamposDesconhecidos(e, ["obrigacaoId", "valorCorretoCentavos", "versaoEsperada", "versaoLancamento", "justificativa"], "ajusteDeConta");
   return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), valorCorretoCentavos: exigirInteiro(e.valorCorretoCentavos, "valorCorretoCentavos", { min: 1 }),
-    versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }), justificativa: justificativaDaConta(e) };
+    versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }), versaoLancamento: exigirInteiro(e.versaoLancamento, "versaoLancamento", { min: 1 }), justificativa: justificativaDaConta(e) };
 }
 export function validarMudancaDeCompetencia(e) {
   semCamposDesconhecidos(e, ["obrigacaoId", "competencia", "versoes", "justificativa"], "competenciaDeConta");

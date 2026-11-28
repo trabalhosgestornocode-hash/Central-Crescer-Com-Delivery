@@ -75,13 +75,13 @@ test("P13 (banco) 9 ações de produção + 4 novas: nada do que já funcionava 
     assert.deepEqual([(await lanc(fr.lancamento.id)).cat, (await lanc(fr.lancamento.id)).natureza], ["MANUTENCAO", "DESPESA"]);
     // ajustar valor (aumento e redução) da 2ª parcela
     x = await doBanco(fr.lancamento.id);
-    await n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[1].id, valorCorretoCentavos: 32500, versaoEsperada: x.os[1].versao, justificativa: just });
+    await n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[1].id, valorCorretoCentavos: 32500, versaoEsperada: x.os[1].versao, versaoLancamento: x.l.versao, justificativa: just });
     x = await doBanco(fr.lancamento.id);
-    await n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[1].id, valorCorretoCentavos: 28000, versaoEsperada: x.os[1].versao, justificativa: just });
+    await n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[1].id, valorCorretoCentavos: 28000, versaoEsperada: x.os[1].versao, versaoLancamento: x.l.versao, justificativa: just });
     assert.deepEqual((await linhas(fr.lancamento.id)).map((o) => [o.n, Number(o.vb), Number(o.aj), Number(o.sd)]), [[1, 30000, 0, 30000], [2, 30000, -2000, 28000], [3, 30000, 0, 30000]], "o valor original fica; a diferença é ajuste");
     // cancelar a 3ª parcela (ajuste negativo) e depois a compra inteira
     x = await doBanco(fr.lancamento.id);
-    await n.cancelarContaAPagar(op([ACAO.CANCELAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[2].id, abrangencia: "PARCELA", versoes: versoesDe([x.os[2]]), justificativa: just });
+    await n.cancelarContaAPagar(op([ACAO.CANCELAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[2].id, abrangencia: "PARCELA", versoes: versoesDe([x.os[2], x.l]), justificativa: just });
     x = await doBanco(fr.lancamento.id);
     await n.cancelarContaAPagar(op([ACAO.CANCELAR_CONTA_A_PAGAR]), { obrigacaoId: x.os[0].id, abrangencia: "GRUPO", versoes: versoesDe([x.os[0], x.os[1], x.l]), justificativa: just });
     assert.ok((await linhas(fr.lancamento.id)).every((o) => o.situacao === "CANCELADA"));
@@ -117,8 +117,8 @@ test("P13 (banco) 9 ações de produção + 4 novas: nada do que já funcionava 
     await recusa(alterarCru("fv2_lancamento", "LANCAMENTO", emp.lancamento.id, "competencia = '2026-11'"), "empréstimo (competência)");
     const pelaOperacao = (p) => assert.rejects(p);
     let y = await doBanco(emp.lancamento.id);
-    await pelaOperacao(n.cancelarContaAPagar(op([ACAO.CANCELAR_CONTA_A_PAGAR]), { obrigacaoId: y.os[0].id, abrangencia: "PARCELA", versoes: versoesDe([y.os[0]]), justificativa: just }));
-    await pelaOperacao(n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: y.os[0].id, valorCorretoCentavos: 40000, versaoEsperada: y.os[0].versao, justificativa: just }));
+    await pelaOperacao(n.cancelarContaAPagar(op([ACAO.CANCELAR_CONTA_A_PAGAR]), { obrigacaoId: y.os[0].id, abrangencia: "PARCELA", versoes: versoesDe([y.os[0], y.l]), justificativa: just }));
+    await pelaOperacao(n.ajustarValorDeContaAPagar(op([ACAO.AJUSTAR_CONTA_A_PAGAR]), { obrigacaoId: y.os[0].id, valorCorretoCentavos: 40000, versaoEsperada: y.os[0].versao, versaoLancamento: y.l.versao, justificativa: just }));
     // ajuste sem lançamento, ou em OUTRA categoria: recusado na inclusão
     const ajCru = async (valor, categoria) => comoAplicacao(interno, null, async (cl) => {
       const aj = randomUUID();
