@@ -127,7 +127,7 @@ export function decidirEnvio({ item, uso, limites, agora, circuitoAbertoAte = nu
   if ((uso.ultimoMinutoDestino ?? 0) >= limites.porMinutoPorConversa) return adiar("RITMO_DA_CONVERSA", 20_000);
   const contada = CATEGORIAS_CONTADAS.includes(item.categoria);
   if (!contada) {
-    if (item.categoria === CATEGORIA.RESPOSTA && (uso.respostasHoraDestino ?? 0) >= limites.respostasPorConversaPorHora) return adiar("ABUSO_DE_RESPOSTAS_DA_CONVERSA", 5 * 60_000);
+    if ((item.categoria === CATEGORIA.RESPOSTA || item.categoria === CATEGORIA.ERRO) && (uso.respostasHoraDestino ?? 0) >= limites.respostasPorConversaPorHora) return adiar("ABUSO_DE_RESPOSTAS_DA_CONVERSA", 5 * 60_000);
     return { acao: "ENVIAR", contada: false };
   }
   const f = fracaoPermitida(item.prioridade, limites);

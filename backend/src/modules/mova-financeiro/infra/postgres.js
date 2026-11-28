@@ -804,7 +804,7 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
         const [dia, minuto, hora] = await Promise.all([
           q(`select grupo_jid, categoria, organizacao_id, unidade_id, count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and ${enviada} and ${contadas} group by 1,2,3,4`, [desde]),
           q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '60 seconds' and estado = 'ENVIADA' group by 1`, [agora.toISOString()]),
-          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '1 hour' and estado = 'ENVIADA' and categoria = 'RESPOSTA' group by 1`, [agora.toISOString()]),
+          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '1 hour' and estado = 'ENVIADA' and categoria in ('RESPOSTA','ERRO') group by 1`, [agora.toISOString()]),
         ]);
         const soma = (linhas, f) => { const m = new Map(); for (const l of linhas) m.set(f(l), (m.get(f(l)) ?? 0) + l.n); return m; };
         return { dia: dia.rows.reduce((t, l) => t + l.n, 0), porDestino: soma(dia.rows, (l) => l.grupo_jid), porCategoria: soma(dia.rows, (l) => l.categoria),
