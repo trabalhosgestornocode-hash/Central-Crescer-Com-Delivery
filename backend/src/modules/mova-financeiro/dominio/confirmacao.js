@@ -7,7 +7,7 @@
 // Quem responde também precisa estar AUTORIZADO na conversa em que responde e essa conversa precisa alcançar a UNIDADE da pendência.
 // Delegação formal de aprovação: o sistema ainda NÃO tem cadastro de delegação; quando existir, entra aqui (e só por ela).
 import { conversaAutorizada, mesmoCelularBr } from "./configuracao.js";
-import { PERFIL, participanteAutorizado, perfilNa } from "./participantes.js";
+import { PERFIL, identificarParticipante, participanteAutorizado, perfilNa } from "./participantes.js";
 
 // 25/11 — COMPLEMENTO de informação (não é confirmação de efeito financeiro): competência, descrição, unidade. Outro participante
 // FINANCEIRO autorizado NA UNIDADE da pendência, no MESMO grupo e citando a pergunta, pode completar. As perguntas que decidem o
@@ -22,6 +22,8 @@ const idsDa = (entrada) => [...(entrada?.ids ?? []), ...(entrada?.privado ? [ent
 // recebia "documento enviado por outra pessoa" mesmo sendo quem enviou. Nunca por nome.
 const porIdentificador = (conversa, participanteId, telefoneE164 = null) => {
   if (!conversa) return null;
+  // 27/11: identificador e telefone autenticado de PESSOAS DIFERENTES ⇒ ninguém (nem pelo celular com/sem o nono dígito)
+  if (identificarParticipante(conversa, { participanteId, telefoneE164 }).conflito) return null;
   const direto = participanteAutorizado(conversa, { participanteId, telefoneE164 });
   if (direto && !direto.aberto) return direto;
   const pelaLista = (conversa.participantes ?? []).find((p) => idsDa(p).some((j) => mesmoCelularBr(j, participanteId))) ?? null;
