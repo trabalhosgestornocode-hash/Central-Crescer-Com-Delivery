@@ -427,19 +427,21 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       /** O CPF/CNPJ já é de OUTRO entregador (em qualquer unidade)? Então não é candidato desta pessoa. */
       async documentoUsadoPorOutro({ documento, entregador }) {
         if (!(await fiscalNovaDe(pool))) return false;
-        const r = await q("select 1 from mova.identidade_fiscal_vinculo v join mova.identidade_fiscal i on i.id = v.identidade_id where i.documento = $1 and v.entregador <> $2 limit 1", [documento, entregador]);
+        const r = await q(`select 1 from mova.identidade_fiscal_vinculo v join mova.identidade_fiscal i on i.id = v.identidade_id where i.documento = $1 and v.entregador <> $2
+                           union all select 1 from mova.identidade_fiscal_evidencia e where e.prestador_documento = $1 and e.forca = 'FORTE' and e.entregador <> $2 limit 1`, [documento, entregador]);
         return r.rowCount > 0;
       },
       /** Consolida (ou confirma) a identidade de UM entregador numa unidade. Conflito com a identidade vigente: só este caso vai a revisão. */
       async consolidar({ organizacaoId, unidadeId, entregador, documento, tipo, nome = null, nomeFantasia = null, municipio = null, origem, motivo = null }) {
         return emTransacao(pool, async (tx) => {
           await tx("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.identidade_fiscal:${unidadeId}:${entregador}`]);
-          const atual = (await tx("select v.id, v.situacao, i.documento from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2", [unidadeId, entregador])).rows[0];
+          const atual = (await tx("select v.id, v.situacao, v.motivo, i.documento from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2", [unidadeId, entregador])).rows[0];
           if (atual?.situacao === "CONSOLIDADA" && atual.documento !== documento) {
             await tx("update mova.identidade_fiscal_vinculo set identidade_id = null, situacao = 'EM_REVISAO', motivo = 'DOCUMENTO_DIFERENTE_DA_IDENTIDADE', candidatos = $2, atualizada_em = now() where id = $1", [atual.id, [atual.documento, documento]]);
             return { resultado: "EM_REVISAO", motivo: "DOCUMENTO_DIFERENTE_DA_IDENTIDADE" };
           }
-          if (atual?.situacao === "EM_REVISAO" && origem !== "REVISAO_ADMINISTRATIVA") return { resultado: "EM_REVISAO", motivo: "AGUARDA_REVISAO" };
+          const reavaliavel = origem === "NOTA_RECEBIDA" && ["TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"].includes(atual?.motivo);
+          if (atual?.situacao === "EM_REVISAO" && origem !== "REVISAO_ADMINISTRATIVA" && !reavaliavel) return { resultado: "EM_REVISAO", motivo: "AGUARDA_REVISAO" };
           const i = (await tx(`insert into mova.identidade_fiscal (documento, tipo, razao_social, nome_fantasia, municipio) values ($1,$2,$3,$4,$5)
                                on conflict (documento) do update set razao_social = coalesce(mova.identidade_fiscal.razao_social, excluded.razao_social), nome_fantasia = coalesce(mova.identidade_fiscal.nome_fantasia, excluded.nome_fantasia),
                                  municipio = coalesce(mova.identidade_fiscal.municipio, excluded.municipio), atualizada_em = now() returning id`, [documento, tipo, nome, nomeFantasia, municipio])).rows[0];

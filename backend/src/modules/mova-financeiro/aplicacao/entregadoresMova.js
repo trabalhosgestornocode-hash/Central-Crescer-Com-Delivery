@@ -285,18 +285,20 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const norm = normalizarLeitura(leitura, leitura.fonte ?? FONTE.IA);
     const dup = norm?.chaveAcesso ? await fiscal.chaveJaVista({ chaveAcesso: norm.chaveAcesso, sha256: nota.sha256 }) : null;
     const obrigacao = { valorCentavos: fechamento.valorCentavos, semanaInicio: fechamento.semanaInicio, semanaFim: fechamento.semanaFim };
-    if (!identidade && norm?.prestadorDocumento && !dup) {
+    const MOTIVOS_REAVALIAVEIS = ["TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"];
+    const reavalia = identidade?.situacao === "EM_REVISAO" && MOTIVOS_REAVALIAVEIS.includes(identidade.motivo);
+    if ((!identidade || reavalia) && norm?.prestadorDocumento && !dup) {
       const usado = await fiscal.documentoUsadoPorOutro({ documento: norm.prestadorDocumento, entregador: nota.entregador });
       const p = avaliarPrimeiraNota({ leitura, obrigacao, tomadorDaUnidade: tomador, documentoJaUsadoPorOutro: usado });
       if (p.consolidar) {
         const vinculos = (cfg.entregadores ?? []).filter((e) => e.ativo && e.chave === nota.entregador);
         for (const v of vinculos.length ? vinculos : [{ unidadeId: nota.unidadeId }]) {
           const e2 = escopoDe(v.unidadeId);
-          await fiscal.consolidar({ organizacaoId: e2.organizacaoId, unidadeId: v.unidadeId, entregador: nota.entregador, documento: norm.prestadorDocumento, tipo: tipoDoDocumento(norm.prestadorDocumento), nome: norm.prestadorNome, nomeFantasia: norm.nomeFantasia, municipio: norm.municipio, origem: "PRIMEIRA_NOTA", motivo: p.motivo });
+          await fiscal.consolidar({ organizacaoId: e2.organizacaoId, unidadeId: v.unidadeId, entregador: nota.entregador, documento: norm.prestadorDocumento, tipo: tipoDoDocumento(norm.prestadorDocumento), nome: norm.prestadorNome, nomeFantasia: norm.nomeFantasia, municipio: norm.municipio, origem: reavalia ? "NOTA_RECEBIDA" : "PRIMEIRA_NOTA", motivo: p.motivo });
         }
         await identidadeFiscal.auditar("IDENTIDADE_FISCAL_CONSOLIDADA", nota.unidadeId, { entregador: nota.entregador, origem: "PRIMEIRA_NOTA", documento: mascararDocumento(norm.prestadorDocumento) });
         identidade = await fiscal.doEntregador(ent);
-      } else if (["DOCUMENTO_USADO_POR_OUTRO_ENTREGADOR", "TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"].includes(p.motivo)) {
+      } else if (!reavalia && ["DOCUMENTO_USADO_POR_OUTRO_ENTREGADOR", "TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"].includes(p.motivo)) {
         await fiscal.marcarRevisao({ organizacaoId: esc.organizacaoId, unidadeId: nota.unidadeId, entregador: nota.entregador, motivo: p.motivo, candidatos: [norm.prestadorDocumento], origem: "PRIMEIRA_NOTA" });
         await identidadeFiscal.auditar("IDENTIDADE_FISCAL_EM_REVISAO", nota.unidadeId, { entregador: nota.entregador, motivo: p.motivo, candidato: mascararDocumento(norm.prestadorDocumento) });
         identidade = await fiscal.doEntregador(ent);
