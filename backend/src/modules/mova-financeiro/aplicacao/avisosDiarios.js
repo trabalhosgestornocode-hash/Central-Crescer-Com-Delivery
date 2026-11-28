@@ -51,6 +51,10 @@ export function criarAvisosDiarios({ cfg, porta, armazenamento: a, relogio = () 
   const janelas = normalizarJanelas(avisos.janelas);
   const tolerancia = avisos.toleranciaMin ?? TOLERANCIA_MIN;
   const espera = avisos.esperaIndisponivelMin ?? ESPERA_INDISPONIVEL_MIN;
+  // 28/11 (pedido do proprietário): contas de competência ANTERIOR a `competenciaInicial` (ex.: "2026-10" ⇒ setembro e antes, da
+  // importação inicial) não entram no aviso. Continuam no Contas a Pagar; só o aviso as ignora. Sem a configuração, nada muda.
+  const desde = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(avisos.competenciaInicial ?? "")) ? avisos.competenciaInicial : null;
+  const noPeriodo = (t) => !desde || !t.competencia || t.competencia >= desde;
   const unidadeDe = (id) => cfg.unidades.find((u) => u.unidadeId === id) ?? null;
   const nomeDe = (id) => unidadeDe(id)?.nome ?? "Unidade";
   // Só grupos de LISTA autorizados (nunca conversa privada, de entregador ou derivada) — e só os indicados na configuração.
@@ -62,7 +66,7 @@ export function criarAvisosDiarios({ cfg, porta, armazenamento: a, relogio = () 
     const u = unidadeDe(unidadeId);
     const escopo = { organizacaoId: u.organizacaoId, unidadeId, usuarioId: servico };
     try {
-      const abertas = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.saldoCentavos > 0 && t.vencimento);
+      const abertas = (await porta.contasAPagarAbertas(escopo)).filter((t) => t.saldoCentavos > 0 && t.vencimento && noPeriodo(t));
       let entreEmpresas = [];
       try { entreEmpresas = (await porta.ler("consultarContasEntreEmpresas", escopo, { incluirLiquidadas: false })).itens ?? []; }
       catch (e) { if (!porta.ehErroDeRegra(e)) throw e; } // regra (ex.: sem o módulo ainda) ⇒ só a seção some; queda ⇒ unidade indisponível

@@ -193,6 +193,8 @@ export function lerConfiguracaoMova(env) {
     avisosDiarios: Object.freeze({
       grupos: String(env.MOVA_AVISO_CONTAS_GRUPOS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter((g) => /^[0-9]{10,30}@g\.us$/.test(g)),
       janelas: String(env.MOVA_AVISO_CONTAS_JANELAS ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+      // 28/11: MOVA_AVISO_CONTAS_DESDE = "AAAA-MM" — contas de competência anterior não entram no aviso (vazio/inválido = todas).
+      competenciaInicial: /^\d{4}-(0[1-9]|1[0-2])$/.test(String(env.MOVA_AVISO_CONTAS_DESDE ?? "").trim()) ? String(env.MOVA_AVISO_CONTAS_DESDE).trim() : null,
     }),
   };
 }

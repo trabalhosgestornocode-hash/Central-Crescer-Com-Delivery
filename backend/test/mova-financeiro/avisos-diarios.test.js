@@ -11,13 +11,13 @@ const CONFIG_GRUPO = { ...CONFIG, gruposAutorizados: CONFIG.gruposAutorizados.ma
 // Fortaleza = UTC−3: 10h local = 13h UTC
 const em = (hhmm, dia = "2026-10-15") => new Date(`${dia}T${String(Number(hhmm.slice(0, 2)) + 3).padStart(2, "0")}:${hhmm.slice(3)}:00.000Z`);
 
-async function cena({ membros = [FIN, SOCIO], indisponivel = null, janelas, atualizarMembros } = {}) {
+async function cena({ membros = [FIN, SOCIO], indisponivel = null, janelas, atualizarMembros, competenciaInicial } = {}) {
   const relogio = { agora: em("09:00") };
   const s = await cenario({
     config: CONFIG_GRUPO,
     extras: ({ nucleo }) => ({
       relogio: () => relogio.agora,
-      avisosDiarios: { grupos: [GRUPO], ...(janelas ? { janelas } : {}), ...(atualizarMembros ? { atualizarMembros: (g) => atualizarMembros(g, relogio.agora) } : {}) },
+      avisosDiarios: { grupos: [GRUPO], ...(janelas ? { janelas } : {}), ...(competenciaInicial ? { competenciaInicial } : {}), ...(atualizarMembros ? { atualizarMembros: (g) => atualizarMembros(g, relogio.agora) } : {}) },
       // Financeiro fora do ar numa unidade: erro técnico (não de regra) ⇒ a porta traduz em FINANCEIRO_INDISPONIVEL
       nucleo: Object.fromEntries(Object.entries(nucleo).map(([k, f]) => [k, async (cx, ...a) => {
         if (indisponivel?.ativo && cx?.unidadeId === indisponivel.unidadeId) throw Object.assign(new Error("conexão recusada"), { code: "ECONNREFUSED" });
@@ -201,4 +201,33 @@ t("AD-9 retrato recente (menos de 5 min): nenhum pedido ao Gateway", async () =>
   await s.passo("10:00"); // registra o retrato no próprio minuto
   assert.equal(pedidos, 0);
   assert.match((await s.textos())[0], /R\$\s?194,50/);
+});
+
+t("AD-10 competência inicial (pedido do proprietário, 28/11): contas de competência ANTERIOR (setembro) não entram no aviso — nem vencidas nem de hoje; as demais saem normalmente", async () => {
+  const s = await cena({ competenciaInicial: "2026-10" });
+  const setembro = (vencimento, valor) => s.m.nucleo.registrarObrigacao(s.cxA, { contraparteId: s.forn.id, valorOriginalCentavos: valor, categoria: "INSUMOS",
+    descricao: "Conta importada de setembro", competencia: "2026-09", dataEmissao: "2026-09-01", vencimento });
+  await setembro("2026-09-20", 33300); // vencida, competência 09
+  await setembro("2026-10-15", 44400); // vence hoje, competência 09
+  await s.conta("2026-10-10", 5000); // vencida, competência 10: entra
+  await s.conta("2026-10-15", 19450); // hoje, competência 10: entra
+  const [r] = await s.passo("10:05");
+  assert.equal(r.enviado, true);
+  const [texto] = await s.textos();
+  assert.match(texto, /venceu 10\/10 — R\$ 50,00/);
+  assert.match(texto, /Compra sintética — R\$ 194,50/);
+  assert.doesNotMatch(texto, /importada de setembro|R\$ 333,00|R\$ 444,00/, "competência anterior não aparece");
+  const [a] = await s.avisos();
+  assert.deepEqual([a.resumo.porUnidade[ALFA].hoje, a.resumo.porUnidade[ALFA].vencidas], [1, 1]);
+  // continuam no Contas a Pagar oficial: só o aviso as ignora
+  const cap = await s.m.nucleo.consultarContasAPagar(s.cxA, { competencia: "2026-09" });
+  assert.equal(cap.itens.length, 2);
+});
+
+t("AD-10b sem a configuração (ou inválida) nada muda: a conta de setembro aparece como antes", async () => {
+  const s = await cena({ competenciaInicial: "setembro" });
+  await s.m.nucleo.registrarObrigacao(s.cxA, { contraparteId: s.forn.id, valorOriginalCentavos: 33300, categoria: "INSUMOS",
+    descricao: "Conta importada de setembro", competencia: "2026-09", dataEmissao: "2026-09-01", vencimento: "2026-09-20" });
+  await s.passo("10:05");
+  assert.match((await s.textos())[0], /importada de setembro[\s\S]*R\$ 333,00/);
 });
