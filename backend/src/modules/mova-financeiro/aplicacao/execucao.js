@@ -566,6 +566,19 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
   }
 
+  /** 28/11 — confere o arquivo da proposta (boleto/nota) pelo hash, SEM guardá-lo no Financeiro. Nada é escrito aqui. */
+  async function conferirDocumentoDaProposta(proposta) {
+    const ev = proposta.evidencia;
+    if (!ev?.referencia || !ev?.sha256) return { ok: false, motivo: "SEM_DOCUMENTO" };
+    let bytes = null;
+    try { bytes = await obterEvidencia(ev.referencia); } catch { bytes = null; }
+    if (!bytes) return { ok: false, motivo: "SEM_EVIDENCIA_DO_DOCUMENTO" };
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (hash !== ev.sha256) return { ok: false, motivo: "DOCUMENTO_NAO_CONFERE" };
+    const tipo = proposta.leitura?.tipoDocumento === "NOTA_FISCAL" ? "NOTA_FISCAL" : "BOLETO";
+    return { ok: true, ficha: { tipo, sha256: hash, tipoMime: ev.mime ?? null, tamanhoBytes: bytes.length, identificador: proposta.leitura?.identificadorDocumento ?? null, guardadoNoFinanceiro: false } };
+  }
+
   /** Anexa o documento da proposta (boleto/nota) ao cofre do Financeiro, ligado à conta a pagar (idempotente pelo conteúdo). */
   async function anexarDocumento({ proposta, escopo, obrigacaoId, executor = operacional }) {
     const bytes = proposta.evidencia?.referencia ? await obterEvidencia(proposta.evidencia.referencia) : null;
@@ -611,12 +624,17 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     if (!operacional) return { ...r0, motivos: [...decisao.motivos, "SEM_IDENTIDADE_OPERACIONAL"] };
     for (const op of ["registrarObrigacaoDocumental", "enviarEvidencia"]) if (!(await operacional.pode(op, escopo))) return { ...r0, motivos: [...decisao.motivos, "SEM_CONCESSAO_OPERACIONAL"] };
     if (comConfirmacao && !confirmadoPor) return { ...r0, situacao: "AGUARDANDO_CONFIRMACAO" };
+    // 28/11 (produção): o núcleo operacional do MOVA não tem cofre de arquivos — anexar a nota DEPOIS de criar a conta falhava
+    // (FV2_COFRE_INDISPONIVEL) e deixava a conta criada com a operação "falhou". Agora segue o padrão da despesa paga: o arquivo é
+    // CONFERIDO pelo hash ANTES de qualquer escrita e a conta nasce num passo só, com o número do documento; o arquivo fica no MOVA
+    // (impressão digital na proposta e no resultado), não é guardado no Financeiro.
+    const documento = await conferirDocumentoDaProposta(proposta);
+    if (!documento.ok) return { ...r0, motivos: [...decisao.motivos, documento.motivo] };
     const nivel = comConfirmacao ? NIVEL.APLICAR_COM_CONFIRMACAO : NIVEL.APLICAR_AUTOMATICO;
     const r = await executarComReserva({ operacao: OPERACAO.CONTA_A_PAGAR, proposta, escopo, politicaId: decisao.politicaId, nivel, passos: async () => {
       const ob = await operacional.chamar("registrarObrigacaoDocumental", escopo, { ...e, fonte: { sistema: "MANUAL", idExterno: `MOVA:${proposta.id}` } });
       const obrigacao = ob.obrigacoes[0];
-      const doc = await anexarDocumento({ proposta, escopo, obrigacaoId: obrigacao.id });
-      return { obrigacaoId: obrigacao.id, documentoId: doc.documento.id, contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: e.categoria ?? null,
+      return { obrigacaoId: obrigacao.id, documentoId: null, documento: documento.ficha, contaCriada: !ob.repetido, lancamentoId: ob.lancamento?.id ?? null, categoria: e.categoria ?? null,
         vencimento: e.vencimento, competencia: e.competencia, favorecido: proposta.leitura?.favorecido ?? null, situacaoConta: "ABERTA", ...(comConfirmacao ? { confirmadoPor } : {}) };
     } });
     return r.ok ? { ...r0, situacao: "CONTA_REGISTRADA", resultado: r.resultado } : { ...r0, motivos: [...decisao.motivos, r.motivo], motivo: r.motivo };
