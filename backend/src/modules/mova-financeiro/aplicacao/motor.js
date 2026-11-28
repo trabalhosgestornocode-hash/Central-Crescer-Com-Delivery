@@ -23,6 +23,7 @@ import { CANAIS_SO_PELA_PLATAFORMA, fontesOficiais } from "../dominio/fontesDeRe
 import { ehSaudacaoOuAjuda, mascararDadosSensiveis, pedidoForaDoEscopo, pedidoRestrito } from "../dominio/privacidade.js";
 import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjecao, validarSaidaDaIa } from "../ia/contratos.js";
 import { RESPOSTA, reais } from "./respostas.js";
+import { TIPO_CORRECAO, criarCorrecaoNaConversa, ehPendenciaDeCorrecao } from "./correcaoNaConversa.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe, identificarParticipante } from "../dominio/participantes.js";
@@ -97,6 +98,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   const servico = cfg.identidadeServico.usuarioId;
   const escopoDe = (u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, usuarioId: servico });
   const ferramentas = criarFerramentas({ porta, armazenamento: a });
+  // 28/11 (Operador Financeiro, fase 1): correção cadastral de conta a pagar pela conversa (operação oficial do núcleo; sem IA)
+  const correcoes = criarCorrecaoNaConversa({ cfg, porta, armazenamento: a, execucao, concluir: (...x) => concluir(...x), escopoDe, hoje, DECISAO,
+    // mesma regra de saída das demais operações financeiras; a correção mostra a CONTA e o FORNECEDOR ⇒ no grupo só com o "detalhe"
+    // (todos os membros FINANCEIRO nas unidades da conta); senão, no privado de quem fala
+    rotear: async (g, p, e, us) => {
+      const r = await roteamento(g, p, e, "DOCUMENTO_COM_VALOR", us);
+      if (!r?.noGrupo || r.detalhe === true || !us.length) return r;
+      const jid = destinoPrivado(p, e.participanteId);
+      return { destino: jid && cfg.gruposAutorizados.some((x) => x.derivada && x.grupoId === jid) ? jid : null, motivo: "DETALHE_SO_PARA_FINANCEIRO" };
+    } });
 
   async function concluir(evento, { decisao, motivo, escopo = null, resposta = null, respostasExtras = [], propostaId = null, injecao = false, extra = {}, privado = null, consulta = null, contextoConversa = null }) {
     if (privado) extra = { ...extra, respostaPrivada: privado.destino ? "ENVIADA_NO_PRIVADO" : "SEM_CONVERSA_PRIVADA" };
@@ -255,6 +266,8 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
     // 24/11: pergunta de divergência/descrição pendente DESTA pessoa (só lida), para a resposta LIVRE ser interpretada pela leitura.
     let pendenteSemantico = null;
     let unidadeContexto = null; // 27/11: unidade da mensagem do MOVA que a pessoa citou (nunca a padrão do CORE)
+    // 28/11 (Operador Financeiro, fase 1): resposta a uma pergunta da CORREÇÃO de conta (escolha, valor novo, confirmação)
+    if (esclarecimento && ehPendenciaDeCorrecao(esclarecimento.divergencia)) return correcoes.continuar({ evento, grupo, esclarecimento });
 
     if (!esclarecimento) {
       // 3. Evento repetido (reconexão do Baileys, reenvio do Gateway) — segunda barreira depois da fila.
@@ -311,6 +324,12 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
           }
         }
         if (pend?.pendente) return retomarPendencia(evento, pend, motivoRelacao);
+        // 28/11: PEDIDO DE CORREÇÃO citando uma mensagem do MOVA ("adicione uma observação nessa conta: …"): a conta é a da mensagem citada
+        const correcaoCitada = evento.texto ? correcoes.interpretar(evento.texto) : null;
+        if (correcaoCitada) {
+          const doOrigem = origemCitada?.eventoId ? await unidadesDoEvento(origemCitada.eventoId, daPessoa) : [];
+          return correcoes.iniciar({ evento, grupo, participante, daPessoa, pedido: correcaoCitada, unidadeContexto: doOrigem.length === 1 ? doOrigem[0].unidadeId : null, origemCitada });
+        }
         // 5a0. 27/11 — ESCLARECIMENTO de uma dúvida da leitura ("o 18.000 são os BTUs; o pagamento foi de R$ 260,00") citando a proposta:
         // resolve ESSA dúvida (a original fica na auditoria) e reavalia a proposta pela política vigente. Mesma proposta, sem outra despesa.
         if (origemCitada?.eventoId && evento.texto && !confirmacaoDeProposta(evento.texto)) {
@@ -358,6 +377,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       // 23/11: também a resposta CURTA a uma pergunta de divergência (sim / não / número / juros / parcial / outra compra).
       // 24/11: SÓ sem citação. Uma mensagem que CITA algo e não achou pendência exata (passo 5) nunca é ligada por aproximação
       // à pendência mais recente — citar uma consulta antiga com "sim" não pode confirmar outra operação.
+      // 28/11: PEDIDO DE CORREÇÃO sem citação ("MOVA, altere o vencimento da conta de energia para 15/12") — determinístico, sem IA
+      if (!evento.respostaA && evento.tipo === "TEXTO" && !evento.midia) {
+        const pedidoDeCorrecao = correcoes.interpretar(evento.texto);
+        if (pedidoDeCorrecao) return correcoes.iniciar({ evento, grupo, participante, daPessoa, pedido: pedidoDeCorrecao });
+      }
       const ehUnidade = !evento.respostaA && evento.tipo === "TEXTO" && ehEsclarecimentoDeUnidade(evento.texto, daPessoa);
       const ehRespostaCurta = !evento.respostaA && evento.tipo === "TEXTO" && parecerRespostaDeDivergencia(evento.texto);
       if ((ehUnidade || ehRespostaCurta) && typeof a.mensagens.tomarPendenteRecente === "function") {
@@ -412,6 +436,11 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const visto = await a.mensagens.verPendenteRecente({ grupoId: evento.grupoId, participanteId: evento.participanteId, validadeMs: MEMORIA_CURTA_MS });
         // 27/11: resposta ao "falta o vencimento / o mês de referência" da conta relatada ("vence 10/12, referente a novembro"):
         // lida sem IA; só retoma se preencher o que faltava (senão segue a leitura comum, com a pergunta como contexto).
+        // 28/11: resposta LIVRE com o valor novo da correção ("Gelo Norte", "paga pela sócia") — sem IA
+        if (visto?.pendente?.divergencia?.tipo === TIPO_CORRECAO.VALOR) {
+          const pend = await a.mensagens.tomarPendente(visto.mensagemId);
+          if (pend?.pendente) return retomarPendencia(evento, pend, "VALOR_DA_CORRECAO");
+        }
         const faltasDaConta = visto?.pendente?.divergencia?.tipo === "CONTA_RELATADA_COMPLEMENTO" ? visto.pendente.divergencia : null;
         if (faltasDaConta && complementoDaResposta(evento.texto, { faltas: faltasDaConta.faltas ?? [], complemento: faltasDaConta.complemento ?? {}, dataMensagem: dataDaMensagem(visto.pendente.evento), hoje: hoje(), competenciaDe: competenciaDoRelato })) {
           const pend = await a.mensagens.tomarPendente(visto.mensagemId);

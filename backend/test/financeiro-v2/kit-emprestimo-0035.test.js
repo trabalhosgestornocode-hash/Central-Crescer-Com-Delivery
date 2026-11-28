@@ -9,7 +9,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 import { ESCOPOS_PADRAO } from "./helpers/cenario.js";
-import { gerarKit, hashDa0035, PRODUCAO } from "../../scripts/fv2/kitEmprestimo0035.mjs";
+import { atualizarAte0035, gerarKit, hashDa0035, PRODUCAO } from "../../scripts/fv2/kitEmprestimo0035.mjs";
+import { gerarKit as gerarKit0036, PRODUCAO as PRODUCAO_0036 } from "../../scripts/fv2/kitCorrecao0036.mjs";
+import { atualizar } from "../../scripts/fv2/pacoteProducao.mjs";
 import { sqlConcessaoOperacionalDoMova, sqlRevogarConcessaoOperacionalDoMova } from "../../scripts/fv2/pacoteProducao.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -47,7 +49,10 @@ test("KIT-0035 ensaio completo: backup verificado, reversão, atualizar.sql, has
     const concessao = async (u, usuario = MOVA) => (await q(`select versao, situacao, acoes from financeiro_v2.fv2_concessao where organizacao_id = '${u.organizacaoId}' and unidade_id = '${u.unidadeId}' and usuario_id = '${usuario}'`)).rows[0];
     const conferir = async (kit) => (await q(kit["03-conferencia.sql"])).rows[0];
 
-    assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 }, "banco de teste com a 0035");
+    // 28/11: o banco de teste já tem a 0036 (aplicada por cima da 0035); o ensaio da 0035 começa revertendo a 0036 pelo PRÓPRIO kit dela
+    const kit36 = gerarKit0036({ ...PRODUCAO_0036, identidade: MOVA, proprietario: DONO, unidades: [], data: "20990101" });
+    await comoMigrador(parte(kit36["05-reversao.sql"], "B"));
+    assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 }, "banco de teste com a 0035 (sem a 0036)");
     const kit = gerarKit({ identidade: MOVA, proprietario: DONO, unidades: [{ nome: "Unidade Um", ...U1, versao: 1 }, { nome: "Unidade Dois", ...U2, versao: 1 }], vigentes: PRODUCAO.vigentes, data: "20990101" });
 
     // 01 backup VERIFICADO (cópia conferida por hash; pelo dono, como o postgres em produção)
@@ -57,7 +62,7 @@ test("KIT-0035 ensaio completo: backup verificado, reversão, atualizar.sql, has
     await comoMigrador(parte(kit["05-reversao.sql"], "B"));
     assert.deepEqual(await estado(), { n: 34, acao: false, funcao: 0 }, "reversão: volta exatamente à 0034");
     // 02: atualizar.sql de produção (confere as 34 por nome+hash; aplica SÓ a 0035)
-    await comoMigrador(ler("atualizar.sql"));
+    await comoMigrador(atualizarAte0035());
     assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 });
     let c = await conferir(kit);
     assert.deepEqual([Number(c.migracoes), c.tem_0035, c.hash_confere, c.acao_na_lista, Number(c.funcao_nova), Number(c.concessoes_com_a_acao)], [35, true, true, true, 1, 0]);
@@ -101,6 +106,8 @@ test("KIT-0035 ensaio completo: backup verificado, reversão, atualizar.sql, has
     // 05-B volta o banco à 0034; o atualizar.sql reaplica (banco de teste fica como estava)
     await comoMigrador(parte(kit["05-reversao.sql"], "B"));
     assert.deepEqual(await estado(), { n: 34, acao: false, funcao: 0 });
-    await comoMigrador(ler("atualizar.sql"));
+    await comoMigrador(atualizarAte0035());
     assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 });
+    await comoMigrador(atualizar("0035")); // devolve a 0036 (banco de teste fica como estava)
+    assert.equal(Number((await q("select count(*) n from financeiro_v2.fv2_migracao")).rows[0].n), 36);
   });

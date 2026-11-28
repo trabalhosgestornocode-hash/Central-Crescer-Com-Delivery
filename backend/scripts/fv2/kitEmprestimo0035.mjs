@@ -13,7 +13,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { ACOES_OPERACIONAIS_DO_MOVA } from "./pacoteProducao.mjs";
+import { ACOES_OPERACIONAIS_DO_MOVA as ACOES_ATUAIS, atualizar } from "./pacoteProducao.mjs";
+
+/** A lista estreita como era quando este kit foi EXECUTADO (28/11): o kit fica idêntico ao que rodou em produção. */
+const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(ACOES_ATUAIS.filter((a) => a !== "financeiro_v2.corrigir_conta_a_pagar"));
+
+/** A atualização de produção de 28/11 (base 0034, só a 0035) — a que foi aplicada; usada no ensaio deste kit. */
+export const atualizarAte0035 = () => atualizar("0034", "0035");
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "../../..");
@@ -38,13 +44,13 @@ const lit = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const jsonLit = (v) => `${lit(JSON.stringify(v))}::jsonb`;
 const sha = (t) => createHash("sha256").update(t).digest("hex");
 
-/** Hash da 0035 (o mesmo que o atualizar.sql grava) — conferido contra o arquivo. */
+/** Hash da 0035 (o mesmo que a atualização 0034→0035 grava) — conferido contra o arquivo. 28/11: a 0035 já está em produção e o
+ *  atualizar.sql do pacote passou a ter base 0035; o ensaio usa a atualização LIMITADA à 0035 (mesmo gerador). */
 export function hashDa0035() {
   const arquivo = sha(fs.readFileSync(path.join(RAIZ, "database/financeiro-v2/migracoes", MIGRACAO)));
-  const atualizar = fs.readFileSync(path.join(RAIZ, "database/financeiro-v2/producao/atualizar.sql"), "utf8");
-  const m = new RegExp(`values \\('${MIGRACAO.replace(/\./g, "\\.")}', '([0-9a-f]{64})'`).exec(atualizar);
-  if (!m) throw new Error("atualizar.sql não aplica a 0035 — gerar o pacote de produção antes");
-  if (m[1] !== arquivo) throw new Error("hash da 0035 no atualizar.sql difere do arquivo da migração");
+  const m = new RegExp(`values \\('${MIGRACAO.replace(/\./g, "\\.")}', '([0-9a-f]{64})'`).exec(atualizarAte0035());
+  if (!m) throw new Error("a atualização 0034→0035 não aplica a 0035");
+  if (m[1] !== arquivo) throw new Error("hash da 0035 na atualização difere do arquivo da migração");
   return arquivo;
 }
 

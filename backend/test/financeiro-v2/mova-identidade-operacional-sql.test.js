@@ -38,7 +38,7 @@ test("OP-0 gerador: recusa identidade de leitura/técnica, ação ampla, lista s
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, acoes: [ACAO.VER] }), /LEITURA/);
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, concedidoPor: OPERADOR }), /própria identidade/);
   assert.throws(() => sqlConcessaoOperacionalDoMova({ ...base, justificativa: "curta" }), /Justificativa/);
-  assert.deepEqual([...ACOES_OPERACIONAIS_DO_MOVA].sort(), [ACAO.VER, ACAO.ENVIAR_DOCUMENTO, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.REGISTRAR_OBRIGACAO, ACAO.REGISTRAR_JUROS, ACAO.VINCULAR_PAGAMENTO, ACAO.PRESTAR_SANGRIA, ACAO.REGISTRAR_CONTA_PARCELADA, ACAO.REGISTRAR_INTERCOMPANY, ACAO.REGISTRAR_EMPRESTIMO].sort(), "26-27/11: + conta parcelada, intercompany e empréstimo (0033/0034/0035), todas estreitas");
+  assert.deepEqual([...ACOES_OPERACIONAIS_DO_MOVA].sort(), [ACAO.VER, ACAO.ENVIAR_DOCUMENTO, ACAO.BAIXAR_POR_COMPROVANTE, ACAO.REGISTRAR_OBRIGACAO, ACAO.REGISTRAR_JUROS, ACAO.VINCULAR_PAGAMENTO, ACAO.PRESTAR_SANGRIA, ACAO.REGISTRAR_CONTA_PARCELADA, ACAO.REGISTRAR_INTERCOMPANY, ACAO.REGISTRAR_EMPRESTIMO, ACAO.CORRIGIR_CONTA_A_PAGAR].sort(), "26-28/11: + conta parcelada, intercompany, empréstimo e correção cadastral (0033–0036), todas estreitas");
   const sql = sqlConcessaoOperacionalDoMova({ ...base, acoes: [...ESTREITAS] });
   assert.match(sql, /0030_registrar_obrigacao_documental\.sql/);
   assert.match(sql, /0031_registrar_juros_no_pagamento\.sql/);

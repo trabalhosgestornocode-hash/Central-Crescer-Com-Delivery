@@ -446,6 +446,39 @@ export function validarCorrecaoObrigacao(e) {
   };
 }
 
+/**
+ * 28/11 (0036) — correção CADASTRAL estreita de conta a pagar. `abrangencia`: PARCELA (só a conta indicada) ou GRUPO (todas as
+ * parcelas da compra). Vencimento só por PARCELA (cada parcela tem o seu). `versaoEsperada` OBRIGATÓRIA (a versão vista no resumo:
+ * uma confirmação antiga nunca altera conta que mudou). Valor, competência e categoria NÃO entram aqui.
+ */
+export function validarCorrecaoDeContaAPagar(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "abrangencia", "mudancas", "justificativa", "versaoEsperada", "versoes"], "correcaoDeConta");
+  semCamposDesconhecidos(e.mudancas, ["contraparteId", "contraparteNova", "vencimento", "descricao", "observacao", "formaPagamento"], "mudancas");
+  const m = e.mudancas;
+  if (m.contraparteId !== undefined && m.contraparteNova !== undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o fornecedor existente OU o novo.", { campo: "mudancas.contraparteId" });
+  const mudancas = {};
+  if (m.contraparteId !== undefined) mudancas.contraparteId = exigirUuid(m.contraparteId, "mudancas.contraparteId");
+  if (m.contraparteNova !== undefined) mudancas.contraparteNova = validarContraparte(m.contraparteNova);
+  if (m.vencimento !== undefined) mudancas.vencimento = exigirData(m.vencimento, "mudancas.vencimento");
+  if (m.descricao !== undefined) mudancas.descricao = exigirTexto(m.descricao, "mudancas.descricao", { max: 300 });
+  if (m.observacao !== undefined) mudancas.observacao = m.observacao === null ? null : exigirTexto(m.observacao, "mudancas.observacao", { max: 500 });
+  if (m.formaPagamento !== undefined) mudancas.formaPagamento = m.formaPagamento === null ? null : exigirUmDe(m.formaPagamento, ["CARTAO", "BOLETO", "PIX", "DINHEIRO", "TRANSFERENCIA"], "mudancas.formaPagamento");
+  if (!Object.keys(mudancas).length) falhar(CODIGO.ENTRADA_INVALIDA, "Nenhuma mudança informada.");
+  const abrangencia = exigirUmDe(e.abrangencia ?? "PARCELA", ["PARCELA", "GRUPO"], "abrangencia");
+  if (abrangencia === "GRUPO" && mudancas.vencimento) falhar(CODIGO.ENTRADA_INVALIDA, "Vencimento se corrige parcela por parcela.", { campo: "mudancas.vencimento" });
+  // GRUPO: a versão de CADA parcela vista no resumo (id → versão). O conjunto confirmado é exatamente esse — nem mais, nem menos.
+  let versoes = null;
+  if (abrangencia === "GRUPO") {
+    if (!e.versoes || typeof e.versoes !== "object" || Array.isArray(e.versoes) || !Object.keys(e.versoes).length) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a versão de cada parcela confirmada.", { campo: "versoes" });
+    versoes = Object.fromEntries(Object.entries(e.versoes).map(([id, v]) => [exigirUuid(id, "versoes"), exigirInteiro(v, "versoes", { min: 1 })]));
+  } else if (e.versoes !== undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Versões por parcela só na correção de todas as parcelas.", { campo: "versoes" });
+  return {
+    obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), abrangencia, mudancas, versoes,
+    justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
+    versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }),
+  };
+}
+
 export function validarCancelamentoObrigacao(e) {
   semCamposDesconhecidos(e, ["obrigacaoId", "justificativa"], "cancelamento");
   return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }) };

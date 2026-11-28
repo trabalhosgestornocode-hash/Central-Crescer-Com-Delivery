@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql, 0027_mova_correcao_de_conta.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -1083,6 +1083,20 @@ grant select, insert on mova.aviso_diario to mova_app;
 grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
 -- sem DELETE para o app (histórico do que foi avisado)
 
+-- ------------------------------------------------------------------------- 0027_mova_correcao_de_conta.sql (arquivo 8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35)
+-- MOVA 0027 (28/11/2026; a 0026 é da frente dos entregadores, conteúdo independente): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
+-- descrição, observação e forma de pagamento, pela ação ESTREITA `corrigir_conta_a_pagar` do Financeiro (migração 0036).
+-- Só acrescenta CORRECAO_DE_CONTA às listas fechadas de PROPOSTAS e EXECUÇÕES (a proposta guarda o antes/depois mostrado e a versão
+-- da conta; a execução é única por proposta). NÃO entra na lista de POLÍTICAS: correção cadastral não tem limite monetário e sempre
+-- exige a confirmação explícita de um FINANCEIRO da unidade no WhatsApp.
+alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
+alter table mova.operacao_executada add constraint operacao_executada_operacao_check
+  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS','CORRECAO_DE_CONTA'));
+alter table mova.proposta drop constraint proposta_tipo_check;
+alter table mova.proposta add constraint proposta_tipo_check
+  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY','CORRECAO_DE_CONTA'));
+
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
 insert into mova.mova_migracao (nome, sha256) values
@@ -1110,7 +1124,8 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0022_mova_orcamento_uso.sql', '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9'),
   ('0023_mova_politica_sangria.sql', '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631'),
   ('0024_mova_grupo_multiempresa.sql', '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47'),
-  ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a');
+  ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a'),
+  ('0027_mova_correcao_de_conta.sql', '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin

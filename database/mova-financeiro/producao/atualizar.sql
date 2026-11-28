@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
--- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql
--- Novas: 0025_mova_contas_relatadas_intercompany_avisos.sql
+-- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
+-- Novas: 0027_mova_correcao_de_conta.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -30,46 +30,21 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0022_mova_orcamento_uso.sql' and sha256 = '5bb150ede6656e4da81669299e1bc8dd61c0409cf53617f125498e4e71f758b9') then raise exception 'MOVA atualização: 0022_mova_orcamento_uso.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0023_mova_politica_sangria.sql' and sha256 = '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631') then raise exception 'MOVA atualização: 0023_mova_politica_sangria.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if not exists (select 1 from mova.mova_migracao where nome = '0024_mova_grupo_multiempresa.sql' and sha256 = '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47') then raise exception 'MOVA atualização: 0024_mova_grupo_multiempresa.sql ausente ou com outro conteúdo — nada foi feito'; end if;
-  if exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql já aplicada — nada foi feito'; end if;
+  if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql' and sha256 = '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql ausente ou com outro conteúdo — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0027_mova_correcao_de_conta.sql') then raise exception 'MOVA atualização: 0027_mova_correcao_de_conta.sql já aplicada — nada foi feito'; end if;
 end $$;
 
--- ------------------------------------------------------------------------- 0025_mova_contas_relatadas_intercompany_avisos.sql (arquivo 3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a)
--- MOVA (26/11/2026; revisada 27/11): (1) operações CONTA_A_PAGAR_RELATADA (conta ÚNICA relatada, sem documento), CONTA_PARCELADA_RELATADA
--- (2 a 24 parcelas; limite sobre a compra inteira) — ambas pela ação estreita
--- `registrar_conta_parcelada` do Financeiro, migração 0033) e OPERACAO_ENTRE_EMPRESAS (pagamento feito por outra empresa do grupo;
--- ação `registrar_intercompany`, migração 0034) nas listas fechadas das POLÍTICAS e das EXECUÇÕES. Nenhuma política é semeada: sem
--- política o MOVA só PROPÕE (as políticas existentes — conta por boleto/nota, despesa paga — NÃO cobrem estas operações).
--- (2) AVISO DIÁRIO de contas a pagar no grupo (10h/15h, America/Fortaleza): UMA linha por grupo + data + janela (chave única) — a
--- idempotência sobrevive a reinício e a mais de uma instância. Só metadados (contagens/totais por unidade); nada de texto livre.
-alter table mova.politica_autonomia drop constraint politica_autonomia_operacao_check;
-alter table mova.politica_autonomia add constraint politica_autonomia_operacao_check
-  check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+-- ------------------------------------------------------------------------- 0027_mova_correcao_de_conta.sql (arquivo 8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35)
+-- MOVA 0027 (28/11/2026; a 0026 é da frente dos entregadores, conteúdo independente): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
+-- descrição, observação e forma de pagamento, pela ação ESTREITA `corrigir_conta_a_pagar` do Financeiro (migração 0036).
+-- Só acrescenta CORRECAO_DE_CONTA às listas fechadas de PROPOSTAS e EXECUÇÕES (a proposta guarda o antes/depois mostrado e a versão
+-- da conta; a execução é única por proposta). NÃO entra na lista de POLÍTICAS: correção cadastral não tem limite monetário e sempre
+-- exige a confirmação explícita de um FINANCEIRO da unidade no WhatsApp.
 alter table mova.operacao_executada drop constraint operacao_executada_operacao_check;
 alter table mova.operacao_executada add constraint operacao_executada_operacao_check
   check (operacao in ('BAIXA_POR_EXTRATO','DESPESA_PAGA','CONTA_A_PAGAR','ANEXAR_DOCUMENTO','BAIXA_DOCUMENTAL','DESPESA_DOCUMENTAL','JUROS_DOCUMENTAL','PRESTACAO_DE_SANGRIA',
-                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS'));
+                      'CONTA_A_PAGAR_RELATADA','CONTA_PARCELADA_RELATADA','OPERACAO_ENTRE_EMPRESAS','CORRECAO_DE_CONTA'));
 alter table mova.proposta drop constraint proposta_tipo_check;
 alter table mova.proposta add constraint proposta_tipo_check
-  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY'));
-
-create table mova.aviso_diario (
-  id uuid primary key default gen_random_uuid(),
-  grupo_jid text not null references mova.grupo_autorizado (grupo_jid),
-  data date not null,
-  janela text not null check (janela ~ '^[0-2][0-9]:[0-5][0-9]$'),
-  -- ENVIADO = mensagem na fila de saída (mesma transação); SEM_MENSAGEM = janela conferida sem nada a dizer (ex.: 15h sem contas)
-  situacao text not null default 'RESERVADO' check (situacao in ('RESERVADO', 'ENVIADO', 'SEM_MENSAGEM', 'FALHOU')),
-  check ((situacao = 'ENVIADO') = (resposta_id is not null)),
-  resumo jsonb not null default '{}'::jsonb check (jsonb_typeof(resumo) = 'object'),
-  resposta_id uuid references mova.resposta (id),
-  tentativas integer not null default 1 check (tentativas between 1 and 20),
-  criado_em timestamptz not null default now(),
-  atualizado_em timestamptz not null default now(),
-  unique (grupo_jid, data, janela)
-);
-comment on table mova.aviso_diario is 'Aviso diário de contas a pagar no grupo: uma linha por grupo/data/janela (idempotência). Sem texto livre.';
-grant select, insert on mova.aviso_diario to mova_app;
-grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
--- sem DELETE para o app (histórico do que foi avisado)
-insert into mova.mova_migracao (nome, sha256) values ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a');
+  check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY','CORRECAO_DE_CONTA'));
+insert into mova.mova_migracao (nome, sha256) values ('0027_mova_correcao_de_conta.sql', '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35');
