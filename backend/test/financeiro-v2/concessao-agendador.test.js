@@ -3,6 +3,7 @@
 // removido ao final). Valida: só `ver` e `registrar`, escopo da unidade, idempotência, concessão já existente preservada, recusa de
 // quem não é postgres, auditoria/histórico e que a identidade passa a abrir sessão APENAS na unidade concedida.
 import { test, after } from "node:test";
+import pg from "pg";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -18,7 +19,8 @@ const sqlDe = (org, uni) => MODELO.replaceAll("@ORG@", org).replaceAll("@UNI@", 
 const pular = motivoParaPular();
 
 let criouPapel = false, admGlobal = null;
-after(async () => { if (criouPapel && admGlobal) { await admGlobal.query("drop role if exists postgres").catch(() => {}); } });
+// o papel só existe durante o teste (o helper fecha os pools antes deste gancho, então abre uma conexão própria)
+after(async () => { if (!criouPapel) return; const c = new pg.Client({ connectionString: ambiente().urlAdmin }); await c.connect(); try { await c.query("drop role if exists postgres"); } finally { await c.end(); } });
 
 async function ambienteIsolado() {
   const b = await criarBancoDeTeste([{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_B, unidadeId: UNI_B }]);
