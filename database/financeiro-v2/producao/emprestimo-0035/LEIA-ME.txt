@@ -1,2 +1,4 @@
-Ordem: 01-backup.sql → ../atualizar.sql (aplica SÓ a 0035; base 0034) → 03-conferencia.sql → 04-concessao.sql. Reversão: 05-reversao.sql.
-Cada passo só com autorização própria. Gerado por backend/scripts/fv2/kitEmprestimo0035.mjs.
+Ordem: 00-previa.sql (só leitura) → 01-backup.sql (verificado) → ../atualizar.sql (aplica SÓ a 0035; confere nome+hash das 34) →
+03-conferencia.sql (hash da 0035) → deploy → 04-concessao.sql → 03-conferencia.sql. Reversão: 05-reversao.sql (A depois B).
+Cada passo só com autorização própria. 04 e 05-A são alterações PROTEGIDAS (ver o topo de cada arquivo). Hash da 0035: 3a02c8fa1079abe762a1267027c0ff36cf9478b03b69358dfec49d525b982509.
+Gerado por backend/scripts/fv2/kitEmprestimo0035.mjs.
