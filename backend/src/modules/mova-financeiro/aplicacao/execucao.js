@@ -32,8 +32,10 @@ const EXTENSAO = { "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "
  */
 /** 27/11 (0035): categoria do principal de empréstimos e financiamentos (fora da DRE). */
 const CATEGORIA_EMPRESTIMO = "EMPRESTIMOS_E_FINANCIAMENTOS";
+/** 28/11 (0036): correção cadastral — registrada nas EXECUÇÕES (idempotência/auditoria), fora das POLÍTICAS (sem limite monetário). */
+export const OPERACAO_CORRECAO_DE_CONTA = "CORRECAO_DE_CONTA";
 
-export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
+export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, operacional = null, pagamentoPorComprovante = false, criarDespesas = false, registrarJuros = false, criarContas = false, corrigirContas = false, obterEvidencia, descartarEvidencia = null, relogio = () => new Date(), registrar = () => {}, cfg = null }) {
   /**
    * 27/11: a unidade da proposta é REVALIDADA com a configuração ATUAL (cadastro de lojas, regras de marca) antes de qualquer
    * execução — automática, retomada ou confirmada pelo participante. Sem confirmação: nada é gravado; fica como proposta.
@@ -477,8 +479,8 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
   }
 
   /** Executa UMA operação de escrita da proposta com reserva idempotente, trava da proposta e auditoria (padrão das demais). */
-  async function executarComReserva({ operacao, proposta, escopo, politicaId, passos }) {
-    const { reserva, repetida } = await reservar(operacao, proposta, escopo, NIVEL.APLICAR_AUTOMATICO, politicaId, operacional);
+  async function executarComReserva({ operacao, proposta, escopo, politicaId, passos, nivel = NIVEL.APLICAR_AUTOMATICO, dadosDaAuditoria = null }) {
+    const { reserva, repetida } = await reservar(operacao, proposta, escopo, nivel, politicaId, operacional);
     if (repetida) return repetida.ok ? { ok: true, repetida: true, resultado: repetida.operacao?.resultado } : { ok: false, motivo: repetida.motivo };
     const tomada = await a.propostas.transicionar(escopo, proposta.id, "AGUARDANDO_REVISAO", "APLICANDO");
     if (!tomada) { await a.operacoes.falhar(reserva.id, "PROPOSTA_JA_DECIDIDA"); return { ok: false, motivo: "PROPOSTA_JA_DECIDIDA" }; }
@@ -487,7 +489,7 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       await a.propostas.transicionar(escopo, proposta.id, "APLICANDO", "APLICADA", resultado);
       const op = await a.operacoes.concluir(reserva.id, resultado);
       await a.auditoria.registrar({ acao: "OPERACAO_EXECUTADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: proposta.id,
-        dados: { operacao, nivel: NIVEL.APLICAR_AUTOMATICO, politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId: resultado.obrigacaoId ?? null, movimentacaoId: null } });
+        dados: { operacao, nivel, politicaId, valorCentavos: proposta.valorCentavos, obrigacaoId: resultado.obrigacaoId ?? null, movimentacaoId: null, ...(dadosDaAuditoria ? dadosDaAuditoria(resultado) : {}) } });
       return { ok: true, resultado, operacao: op };
     } catch (erro) {
       const codigo = erro?.codigo ?? (erro instanceof ErroTransitorio ? "FINANCEIRO_INDISPONIVEL" : "FALHA_NA_EXECUCAO");
@@ -497,6 +499,40 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
       registrar({ tipo: "MOVA_OPERACAO_FALHOU", codigo });
       return { ok: false, motivo: codigo, detalhes: erro?.detalhes ?? null };
     }
+  }
+
+  /**
+   * 28/11 (0036) — CORREÇÃO CADASTRAL de conta a pagar confirmada no WhatsApp (fornecedor, vencimento, descrição, observação, forma de
+   * pagamento). Sem política nem limite monetário (só informação cadastral), mas SEMPRE com a confirmação de um FINANCEIRO da unidade
+   * (`confirmadoPor`), a chave MOVA_OPERACAO_CORRIGIR_CONTAS e a ação estreita `corrigir_conta_a_pagar` na concessão. Uma execução
+   * por proposta (reserva); o Financeiro revalida a conta NA HORA (aberta, sem pagamento, período editável, versão vista no resumo).
+   * Depois de gravar, CONFERE pela leitura oficial que cada parcela alterada tem o valor novo (`conferido`).
+   */
+  async function aposCorrecaoDeConta(proposta, escopo, { confirmadoPor = null } = {}) {
+    const base = { situacao: "PROPOSTA", nivel: NIVEL.APLICAR_COM_CONFIRMACAO, motivos: [] };
+    const cmd = proposta.comando;
+    if (proposta.tipo !== "CORRECAO_DE_CONTA" || cmd?.operacao !== "corrigirContaAPagar" || !cmd.entrada?.obrigacaoId) return { ...base, motivos: ["PROPOSTA_INCOMPATIVEL"] };
+    if (!corrigirContas) return { ...base, motivos: ["CORRECAO_DE_CONTAS_DESLIGADA"] };
+    if (!confirmadoPor) return { ...base, motivos: ["SEM_CONFIRMACAO"] };
+    if (!operacional) return { ...base, motivos: ["SEM_IDENTIDADE_OPERACIONAL"] };
+    if (!(await operacional.pode("corrigirContaAPagar", escopo))) return { ...base, motivos: ["SEM_CONCESSAO_OPERACIONAL"] };
+    const m = cmd.entrada.mudancas;
+    const r = await executarComReserva({ operacao: OPERACAO_CORRECAO_DE_CONTA, proposta, escopo, politicaId: null, nivel: NIVEL.APLICAR_COM_CONFIRMACAO,
+      dadosDaAuditoria: (x) => ({ campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, obrigacaoIds: x.obrigacaoIds, antes: cmd.antes ?? null, depois: cmd.depois ?? null, confirmadoPor, conferido: x.conferido }),
+      passos: async () => {
+        const x = await operacional.chamar("corrigirContaAPagar", escopo, cmd.entrada);
+        const ids = (x.obrigacoes ?? []).map((o) => o.id);
+        // conferência pela leitura OFICIAL (o que o Dashboard mostra), parcela por parcela
+        const confere = (t) => (!m.vencimento || t.vencimento === m.vencimento) && (!m.descricao || t.descricao === m.descricao)
+          && (m.observacao === undefined || (t.observacao ?? null) === m.observacao) && (m.formaPagamento === undefined || (t.formaPagamentoInformada ?? null) === m.formaPagamento)
+          && (!m.contraparteId || t.fornecedor?.id === m.contraparteId) && (!m.contraparteNova || String(t.fornecedor?.nome ?? "").trim().toLowerCase() === m.contraparteNova.nome.trim().toLowerCase());
+        let conferido = true;
+        for (const id of ids) { const d = await porta.ler("detalharContaAPagar", lendo(escopo), { id }); if (!confere(d.titulo)) conferido = false; }
+        return { obrigacaoId: cmd.entrada.obrigacaoId, obrigacaoIds: ids, alteradas: ids.length, semMudanca: x.semMudanca === true, lancamentoAlterado: Boolean(x.lancamento),
+          conferido, campo: cmd.campo, abrangencia: cmd.entrada.abrangencia, confirmadoPor };
+      } });
+    if (r.ok) return { ...base, situacao: "CORRIGIDA", repetida: r.repetida === true, resultado: r.resultado };
+    return { ...base, motivos: [r.motivo], motivo: r.motivo, detalhes: r.detalhes ?? null };
   }
 
   /** Anexa o documento da proposta (boleto/nota) ao cofre do Financeiro, ligado à conta a pagar (idempotente pelo conteúdo). */
@@ -658,5 +694,5 @@ export function criarExecucao({ armazenamento: a, porta, identidadeLeitura, oper
     return resultados;
   }
 
-  return Object.freeze({ podeRegistrarEmprestimo, descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
+  return Object.freeze({ podeRegistrarEmprestimo, aposCorrecaoDeConta, corrigirContas: Boolean(corrigirContas), descartarArquivo, pagamentoPorComprovante: Boolean(pagamentoPorComprovante), criarDespesas: despesasLigadas, registrarJuros: jurosLigados, conferir, liquidar, pagarPorComprovante, anexarEPagar, registrarDespesaPaga, aposBaixa, aposDespesaNova, aposJuros, aposContaNova, aposContaRelatada, aposIntercompany, aposVinculoDeDocumento, anexarDocumento, criarContas: contasLigadas, reconferirPendentes, conciliarPendentes, operacional });
 }
