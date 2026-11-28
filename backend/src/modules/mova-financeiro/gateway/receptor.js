@@ -10,7 +10,7 @@
 import { normalizarGatewayMova } from "../adaptadores/gatewayBaileys.js";
 import { normalizarBaileys } from "../adaptadores/baileys.js";
 import { createHash } from "node:crypto";
-import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIDIA_RECUSADA, MIMES_ACEITOS, validarEvento } from "../contratos/evento.js";
+import { CONTRATO_EVENTO_VERSAO, MIDIA_MAX_BYTES, MIDIA_RECUSADA, MIMES_ACEITOS, mimeEfetivo, validarEvento } from "../contratos/evento.js";
 import { referenciaDoConteudo } from "./evidencias.js";
 import { MIMES_SEM_LEITURA } from "../aplicacao/recebimentoDocumental.js";
 import { conversaAutorizada, grupoAutorizado, mascarar } from "../dominio/configuracao.js";
@@ -38,8 +38,9 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
     const entregador = Boolean(grupo.entregador); // conversa de entregador: cadastro próprio, conferido pelo fluxo dele (desligado em produção)
     const p = entregador ? null : participanteAutorizado(grupo, bruto);
     if (!entregador && (!p || (recebimentoDocumental && p.aberto) || !algumaUnidadePermite(p, (c) => c.documentos))) return MIDIA_RECUSADA.PERFIL_SEM_DOCUMENTOS;
-    const mime = String(bruto.midia.mime ?? "").split(";")[0].trim();
+    const mime = mimeEfetivo(bruto.midia.mime, bruto.midia.nomeArquivo);
     if (!MIMES_ACEITOS.includes(mime)) return MIDIA_RECUSADA.FORMATO_NAO_ACEITO;
+    if (mime === "application/xml" && !entregador) return MIDIA_RECUSADA.FORMATO_NAO_ACEITO; // XML só vale como NFS-e do entregador
     if (recebimentoDocumental && !entregador && !MIMES_SEM_LEITURA.includes(mime)) return MIDIA_RECUSADA.FORMATO_NAO_ACEITO_SEM_LEITURA;
     const tamanho = bruto.midia.base64 ? bytesDoBase64(bruto.midia.base64) : Number(bruto.midia.tamanhoBytes ?? 0);
     if (tamanho > MIDIA_MAX_BYTES) return MIDIA_RECUSADA.ARQUIVO_GRANDE;
@@ -130,7 +131,7 @@ export function criarReceptor({ cfg, motor, fila, evidencias, armazenamento, obt
     let midiaLocal = null;
     let tipo = bruto.tipo;
     if (bruto.midia) {
-      const mime = String(bruto.midia.mime ?? "").split(";")[0].trim();
+      const mime = mimeEfetivo(bruto.midia.mime, bruto.midia.nomeArquivo);
       if (!MIMES_ACEITOS.includes(mime)) { tipo = "OUTRO"; }
       else {
         let bytes;

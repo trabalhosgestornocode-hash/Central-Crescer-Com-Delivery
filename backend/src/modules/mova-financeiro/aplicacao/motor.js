@@ -932,6 +932,36 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
   }
 
   /**
+   * 27/11 — resposta à CONFIRMAÇÃO natural de uma ou mais propostas DESPESA_PAGA em revisão. A unidade é SEMPRE a da proposta.
+   * Várias ⇒ pergunta qual. Uma que a política autorizou a aplicar sozinha e ficou parada ⇒ a MESMA retomada de sempre (tudo revalidado).
+   * Uma que só o Centro Financeiro aprova ⇒ explica (id, unidade, valor, motivo) sem executar nada.
+   */
+  async function responderConfirmacaoDeProposta(evento, propostas, ctxp) {
+    const { grupo, participante, daPessoa } = ctxp;
+    // Só quem pode COMPLEMENTAR a operação nesta unidade (perfil financeiro da unidade, no mesmo grupo) recebe os dados da proposta.
+    const visiveis = [];
+    for (const p of propostas) {
+      if (!daPessoa.unidades.includes(p.unidadeId) || !cfg.unidades.some((x) => x.unidadeId === p.unidadeId)) continue;
+      const ev = await a.eventos.obter(p.eventoId);
+      const origem = { participanteId: ev?.participanteId ?? ev?.participante_jid ?? p.participanteId ?? null, telefoneE164: ev?.telefoneE164 ?? ev?.telefone_e164 ?? null, grupoId: ev?.grupoId ?? ev?.grupo_jid ?? evento.grupoId };
+      if (podeConfirmarPendencia(cfg, origem, evento, { unidadeId: p.unidadeId, tipo: "COMPETENCIA", unidadesExigidas: null }).pode) visiveis.push(p);
+    }
+    if (!visiveis.length) return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "CONFIRMACAO_SEM_PERMISSAO_FINANCEIRA", resposta: RESPOSTA.complementoSemPermissao(), extra: { retomou: null } });
+    const descrever = (p) => ({ idCurto: String(p.id).slice(0, 8), unidade: cfg.unidades.find((x) => x.unidadeId === p.unidadeId)?.nome ?? "unidade", valorCentavos: p.valorCentavos, favorecido: p.leitura?.favorecido ?? null });
+    if (visiveis.length > 1) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "VARIAS_PROPOSTAS_PENDENTES", resposta: RESPOSTA.qualProposta(visiveis.map(descrever)), extra: { retomou: null, propostas: visiveis.map((p) => String(p.id).slice(0, 8)) } });
+    const p = visiveis[0];
+    const unidade = cfg.unidades.find((x) => x.unidadeId === p.unidadeId);
+    if (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO") {
+      const r = await retomarProposta(evento, p.eventoId, ctxp);
+      if (r) return r;
+    }
+    const duvida = (p.leitura?.incertezas ?? []).find((x) => typeof x === "string") ?? null;
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "CONFIRMACAO_DE_PROPOSTA_POR_CITACAO", participanteId: evento.participanteId, organizacaoId: unidade.organizacaoId, unidadeId: unidade.unidadeId, retomou: p.eventoId });
+    return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "PROPOSTA_EXIGE_APROVACAO_NO_CENTRO", escopo: escopoDe(unidade), propostaId: p.id,
+      resposta: RESPOSTA.propostaExigeAprovacao({ ...descrever(p), motivos: p.autonomiaDocumental?.motivos ?? [], duvida: duvida ? mascararDadosSensiveis(duvida).slice(0, 120) : null }), extra: { retomou: null, nivel: p.autonomiaDocumental?.nivel ?? null } });
+  }
+
+  /**
    * 26/11 — um documento novo pode ser DA MESMA COMPRA de uma proposta em revisão (cupom, nota, boleto, comprovante, recibo). Igualdade de
    * valor e favorecido é só um SINAL: com sinal, o MOVA pergunta (nunca presume duplicidade nem cria outra despesa sozinho).
    * @returns {Promise<object|null>} a proposta candidata, ou null

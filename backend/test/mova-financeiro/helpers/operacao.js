@@ -58,13 +58,13 @@ export const base = (extra) => ({
 });
 
 let seq = 0;
-export const gw = ({ texto = null, de = FIN, grupo = GRUPO, respostaA = null, doc = null, imagem = null, telefone = null } = {}) => {
+export const gw = ({ texto = null, de = FIN, grupo = GRUPO, respostaA = null, doc = null, imagem = null, telefone = null, mime = "application/pdf", nomeArquivo = null } = {}) => {
   const id = `EA2${String(++seq).padStart(6, "0")}`;
   return {
     contratoMova: 1, eventoId: `bly:${id}`, mensagemId: id, grupoId: grupo, participanteId: de, telefoneE164: telefone, nomeExibicao: "Pessoa Sintética", fromMe: false,
     // 27/11: `imagem` = foto (JPEG) com legenda em `texto` — ex.: foto do produto comprado
     tipo: doc ? "DOCUMENTO" : imagem ? "IMAGEM" : "TEXTO", texto, respostaA,
-    midia: doc ? { mime: "application/pdf", nomeArquivo: null, tamanhoBytes: doc.length, base64: Buffer.from(doc).toString("base64") }
+    midia: doc ? { mime, nomeArquivo, tamanhoBytes: doc.length, base64: Buffer.from(doc).toString("base64") }
       : imagem ? { mime: "image/jpeg", nomeArquivo: null, tamanhoBytes: imagem.length, base64: Buffer.from(imagem).toString("base64") } : null,
     recebidoEm: AGORA.toISOString(), origemTipo: "LIVE",
   };

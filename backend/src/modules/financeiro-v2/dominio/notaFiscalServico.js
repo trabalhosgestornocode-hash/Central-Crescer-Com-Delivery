@@ -77,3 +77,59 @@ export function lerNotaDeServico(linhas) {
 
 /** Texto curto para os campos da nota ("NOME (CNPJ)"). */
 export const parteComoTexto = (p) => (p?.nome ? `${p.nome}${p.documento ? ` (${p.documento})` : ""}` : p?.documento ?? null);
+
+// ── NFS-e em XML (padrão nacional) ──────────────────────────────────────────────────────────────────────────────
+// O XML é conteúdo NÃO CONFIÁVEL: nunca passa por um interpretador de XML. Aceita-se só texto sem DTD, entidade, CDATA, folha de
+// estilo ou instrução de processamento; a leitura é por busca textual de marcadores (sem expansão, sem rede, sem arquivos).
+export const XML_LIMITE_BYTES = 2_000_000;
+const XML_PROIBIDO = [[/<!DOCTYPE/i, "XML_COM_DTD"], [/<!ENTITY/i, "XML_COM_ENTIDADE"], [/<!ELEMENT|<!ATTLIST|<!NOTATION/i, "XML_COM_DTD"], [/<\?xml-stylesheet/i, "XML_COM_FOLHA_DE_ESTILO"],
+  [/<!\[CDATA\[/i, "XML_COM_CDATA"], [/<\?(?!xml\s)/i, "XML_COM_INSTRUCAO"], [/&(?!(?:amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-f]{1,6});)/i, "XML_COM_ENTIDADE_DESCONHECIDA"]];
+
+/** @returns {{ ok: true, texto: string } | { ok: false, motivo: string }} */
+export function validarXmlDeNota(bytes) {
+  if (!bytes || !bytes.length) return { ok: false, motivo: "XML_VAZIO" };
+  if (bytes.length > XML_LIMITE_BYTES) return { ok: false, motivo: "XML_GRANDE" };
+  if (bytes.includes(0)) return { ok: false, motivo: "XML_NAO_E_TEXTO" };
+  let texto;
+  try { texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return { ok: false, motivo: "XML_NAO_E_TEXTO" }; }
+  texto = texto.replace(/^﻿/, "");
+  for (const [r, motivo] of XML_PROIBIDO) if (r.test(texto)) return { ok: false, motivo };
+  if (!/^\s*(?:<\?xml\s[^>]*\?>\s*)?<[A-Za-z_]/.test(texto)) return { ok: false, motivo: "XML_NAO_CONFERE" };
+  const raiz = /<([A-Za-z_][\w.:-]*)[\s>/]/.exec(texto.replace(/^\s*<\?xml[^>]*\?>/, ""))?.[1];
+  if (!raiz || !texto.trimEnd().endsWith(`</${raiz}>`)) return { ok: false, motivo: "XML_INCOMPLETO" };
+  return { ok: true, texto };
+}
+
+const xmlTag = (xml, nome) => {
+  const m = new RegExp(String.raw`<(?:\w+:)?${nome}(?:\s[^>]*)?>([\s\S]*?)</(?:\w+:)?${nome}>`, "i").exec(xml);
+  return m ? m[1].trim().replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&") : null;
+};
+const xmlCentavos = (t) => { const m = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(String(t ?? "").trim()); return m ? Number(`${m[1]}${(m[2] ?? "").padEnd(2, "0")}`) : null; };
+const xmlData = (t) => /^(\d{4}-\d{2}-\d{2})/.exec(String(t ?? ""))?.[1] ?? null;
+
+/** Lê a NFS-e nacional em XML no MESMO formato de `lerNotaDeServico` (PDF); layout irreconhecível ⇒ null. */
+export function lerNotaDeXml(bytes) {
+  const v = validarXmlDeNota(bytes);
+  if (!v.ok) return null;
+  const xml = v.texto;
+  if (!/<(?:\w+:)?(?:NFSe|infNFSe|CompNfse|Nfse)\b/i.test(xml)) return null;
+  const emit = xmlTag(xml, "emit");
+  if (!emit) return null;
+  const toma = xmlTag(xml, "toma");
+  const doc = (b) => { const x = xmlTag(b ?? "", "CNPJ") ?? xmlTag(b ?? "", "CPF"); const d = somenteDigitos(x); return d ? formatarCnpj(d) : null; };
+  const valores = xmlTag(xml, "valores") ?? xml;
+  const competencia = xmlData(xmlTag(xml, "dCompet"));
+  return {
+    modelo: "NFSE_XML",
+    chaveAcesso: /<(?:\w+:)?infNFSe\b[^>]*\bId="NFS(\d{50})"/i.exec(xml)?.[1] ?? null,
+    numero: xmlTag(xml, "nNFS") ?? xmlTag(xml, "Numero"),
+    competencia,
+    emissao: xmlData(xmlTag(xml, "dhEmi") ?? xmlTag(xml, "dhProc")),
+    prestador: { documento: doc(emit), nome: xmlTag(emit, "xNome") },
+    tomador: toma ? { documento: doc(toma), nome: xmlTag(toma, "xNome") } : { documento: null, nome: null, naoIdentificado: true },
+    valorCentavos: xmlCentavos(xmlTag(valores, "vServ") ?? xmlTag(valores, "vLiq")),
+    valorLiquidoCentavos: xmlCentavos(xmlTag(valores, "vLiq")),
+    periodo: null,
+    descricao: xmlTag(xml, "xDescServ"),
+  };
+}

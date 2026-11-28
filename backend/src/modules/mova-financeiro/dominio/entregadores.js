@@ -15,8 +15,8 @@ const PRIVADO = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 const AGUARDANDO = ["AGUARDANDO_NF", "NF_REJEITADA"];
 const LID = /^[0-9]{5,30}@lid$/;
 /** 23/11: a nota pode chegar em PDF ou em imagem (foto/print legível); o anexo oficial do Financeiro aceita os três. */
-export const MIMES_DA_NOTA = Object.freeze(["application/pdf", "image/jpeg", "image/png"]);
-export const EXTENSAO_DA_NOTA = Object.freeze({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" });
+export const MIMES_DA_NOTA = Object.freeze(["application/pdf", "image/jpeg", "image/png", "application/xml"]);
+export const EXTENSAO_DA_NOTA = Object.freeze({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "application/xml": "xml" });
 export const PERFIL_ENTREGADOR = "ENTREGADOR";
 
 /** Lista fechada: { unidadeId, chave (do fechamento), telefoneE164, privado (jid), nome? }. Telefone único POR UNIDADE. */
@@ -166,7 +166,7 @@ const soDigitos = (s) => String(s ?? "").replace(/\D/g, "");
  *   emitente: nome do entregador; tomador: CNPJ da unidade (quando cadastrado) ou nome da empresa/unidade.
  * A situação fiscal NÃO é consultada (sem fonte oficial integrada): o resultado diz isso, e a validação final é humana.
  */
-export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, empresa = null, cnpjTomador = null }) {
+export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, empresa = null, cnpjTomador = null, identidade = null, tomadorAprendido = null, chaveDuplicada = false }) {
   const motivos = [];
   const incertos = [];
   if (!leitura || leitura.legivel === false || leitura.tipoDocumento !== "NOTA_FISCAL") return Object.freeze({ resultado: "INCONCLUSIVA", motivos: Object.freeze(["NAO_E_NOTA_FISCAL_LEGIVEL"]), situacaoFiscal: "NAO_CONSULTADA" });
@@ -177,11 +177,19 @@ export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, 
   if (leitura.competencia) { if (![mesDaSemana, mesDoFim].includes(leitura.competencia)) motivos.push("PERIODO_DIFERENTE"); }
   else if (leitura.dataEmissao) { if (leitura.dataEmissao < fechamento.semanaInicio) motivos.push("EMITIDA_ANTES_DA_SEMANA"); }
   else incertos.push("PERIODO_NAO_LIDO");
-  const emitente = leitura.favorecido ?? null;
-  if (!emitente) incertos.push("EMITENTE_NAO_LIDO");
-  else if (!nomesConferem(emitente, fechamento.entregador?.nome)) motivos.push("EMITENTE_NAO_E_O_ENTREGADOR");
+  // 28/11: com identidade fiscal, o CPF/CNPJ do prestador é a evidência principal; razão social/fantasia diferentes do nome operacional NÃO divergem.
+  const emitente = leitura.favorecido ?? null, docPrestador = soDigitos(leitura.prestadorDocumento);
+  const nomeConfere = (x) => nomesConferem(emitente, x);
+  if (identidade?.situacao === "CONSOLIDADA" && docPrestador) { if (docPrestador !== soDigitos(identidade.documento)) motivos.push("PRESTADOR_DIFERENTE_DO_HISTORICO"); }
+  else if (identidade?.situacao === "EM_REVISAO") incertos.push("IDENTIDADE_FISCAL_EM_REVISAO");
+  else if (identidade?.situacao === "CONSOLIDADA") { if (!emitente) incertos.push("EMITENTE_NAO_LIDO"); else if (![fechamento.entregador?.nome, identidade.nome, identidade.nomeFantasia].some(nomeConfere)) incertos.push("EMITENTE_NAO_CONFIRMADO"); }
+  else if (!emitente) incertos.push("EMITENTE_NAO_LIDO");
+  else if (!nomeConfere(fechamento.entregador?.nome)) { if (docPrestador) incertos.push("EMITENTE_PENDENTE_DE_VALIDACAO"); else motivos.push("EMITENTE_NAO_E_O_ENTREGADOR"); }
+  if (leitura.periodo?.inicio && fechamento.semanaFim && (leitura.periodo.inicio !== fechamento.semanaInicio || leitura.periodo.fim !== fechamento.semanaFim)) motivos.push("PERIODO_DIFERENTE");
+  if (chaveDuplicada) motivos.push("NOTA_FISCAL_JA_RECEBIDA");
   const tomador = leitura.pagador ?? null, docTomador = soDigitos(leitura.documentoDestinatario);
-  if (cnpjTomador && docTomador.length === 14) { if (docTomador !== soDigitos(cnpjTomador)) motivos.push("TOMADOR_DIFERENTE"); }
+  const cnpjDoTomador = cnpjTomador ?? tomadorAprendido;
+  if (cnpjDoTomador && docTomador.length === 14) { if (docTomador !== soDigitos(cnpjDoTomador)) motivos.push("TOMADOR_DIFERENTE"); }
   else if (!tomador) incertos.push("TOMADOR_NAO_LIDO");
   else if (!nomesConferem(tomador, empresa) && !nomesConferem(tomador, unidade)) incertos.push("TOMADOR_NAO_CONFIRMADO");
   const resultado = motivos.length ? "DIVERGENTE" : incertos.length ? "INCONCLUSIVA" : "CONFERE";
@@ -190,7 +198,7 @@ export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, 
 
 const MOTIVO_NOTA = Object.freeze({
   VALOR_DIFERENTE_DO_FECHAMENTO: "valor diferente do fechamento", PERIODO_DIFERENTE: "período diferente da semana", EMITIDA_ANTES_DA_SEMANA: "emitida antes da semana",
-  EMITENTE_NAO_E_O_ENTREGADOR: "o emitente não é você", TOMADOR_DIFERENTE: "o tomador não é a empresa", NAO_E_NOTA_FISCAL_LEGIVEL: "não deu para ler como nota fiscal",
+  EMITENTE_NAO_E_O_ENTREGADOR: "o emitente não é você", PRESTADOR_DIFERENTE_DO_HISTORICO: "o CPF/CNPJ do emitente é diferente do que consta no seu histórico de notas", NOTA_FISCAL_JA_RECEBIDA: "essa nota fiscal já foi recebida antes", TOMADOR_DIFERENTE: "o tomador não é a empresa", NAO_E_NOTA_FISCAL_LEGIVEL: "não deu para ler como nota fiscal",
 });
 /** Resposta ao entregador depois da leitura da nota (a liberação continua sendo do financeiro). */
 export function respostaDaConferencia(f, conferencia) {
@@ -201,6 +209,21 @@ export function respostaDaConferencia(f, conferencia) {
   }
   if (conferencia?.resultado === "CONFERE") return `Recebi sua ${base}: os dados conferem com o fechamento. Ela segue para a validação do financeiro; aviso quando o pagamento for liberado.`;
   return `Recebi sua ${base}. Ela ficou em análise pelo financeiro; aviso quando o pagamento for liberado. ${FRASE_NOTA_FISCAL}`;
+}
+
+/**
+ * 28/11: confirmação ao entregador quando a nota foi RECEBIDA, CONFERIDA (dados compatíveis) e ANEXADA ao Financeiro. Modelo do proprietário.
+ * Não afirma validação fiscal oficial: só que os dados conferem com o fechamento (a situação fiscal não é consultada).
+ */
+export function mensagemNotaConferida(f, { empresa, nome = null } = {}) {
+  const n = primeiroNome(nome ?? f.entregador?.nome);
+  // 29/11: se o pagamento desta semana JÁ está registrado, nunca manda "aguardar o pagamento"
+  if (f.situacaoPagamento === "PAGO") return [`Olá${n ? `, ${n}` : ""}! 👋`, "✅ Sua nota fiscal foi recebida e conferida com sucesso!", `🏢 Empresa: ${empresa}`, `📅 Período: ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`,
+    `🛵 Quantidade de entregas: ${f.entregas}`, `💰 Valor: ${reais(f.valorCentavos)}`, "📄 Nota fiscal: Conferida e anexada", "O pagamento desta semana já está registrado; nada mais a fazer por aqui.", "MOVA | Crescer com Delivery"].join(String.fromCharCode(10));
+  return [`Olá${n ? `, ${n}` : ""}! 👋`, "✅ Sua nota fiscal foi recebida e conferida com sucesso!", `🏢 Empresa: ${empresa}`,
+    `📅 Período: ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}`, `🛵 Quantidade de entregas: ${f.entregas}`, `💰 Valor: ${reais(f.valorCentavos)}`,
+    "📄 Nota fiscal: Conferida e anexada", ...(f.vencimento ? [`🗓️ Previsão de pagamento: ${dataBr(f.vencimento)}`] : []),
+    "As informações estão de acordo com o fechamento. Agora, basta aguardar o pagamento.", "Assim que ele for registrado, você receberá uma notificação por aqui.", "MOVA | Crescer com Delivery"].join(String.fromCharCode(10));
 }
 
 /** Aviso no GRUPO financeiro da unidade quando a obrigação é LIBERADA (liberação documental não é pagamento bancário). */
@@ -311,6 +334,22 @@ const RESULTADO_NO_GRUPO = Object.freeze({
   DIVERGENTE: "Conferência com divergência: pendente de revisão do financeiro.",
   INCONCLUSIVA: "Conferência inconclusiva: pendente de revisão do financeiro.",
 });
+/** 29/11: situação FINAL da nota no aviso ao grupo (só depois do desfecho real — "anexada" nunca é dito antes de o anexo existir). */
+const SITUACAO_DA_NOTA = Object.freeze({
+  CONFERIDA_ANEXADA: "Conferida e anexada ao Financeiro.",
+  CONFERIDA_AGUARDANDO_ANEXO: "Conferida; aguardando o anexo ao Financeiro.",
+  DIVERGENTE: "Divergência encontrada; pendente de revisão do financeiro.",
+  DIVERGENTE_ANEXADA: "Anexada ao Financeiro com divergência; pendente de revisão do financeiro.",
+  AGUARDANDO_REVISAO: "Recebida; aguardando revisão do financeiro.",
+  AGUARDANDO_REVISAO_ANEXADA: "Anexada ao Financeiro; aguardando revisão do financeiro.",
+  FALHA: "Falha ao processar ou anexar; o financeiro vai conferir.",
+  DUPLICADA: "Nota já recebida antes (duplicada); nada novo foi registrado.",
+});
+export const SITUACOES_DA_NOTA = Object.freeze(Object.keys(SITUACAO_DA_NOTA));
+export function avisoDeNotaNoGrupo(f, situacao, { empresa = null, unidade = null } = {}) {
+  return [`📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}.`,
+    `🛵 Entregas: ${f.entregas ?? 0} · 💰 Valor: ${reais(f.valorCentavos)}`, `Situação da nota: ${SITUACAO_DA_NOTA[situacao] ?? SITUACAO_DA_NOTA.AGUARDANDO_REVISAO}`].join(String.fromCharCode(10));
+}
 export function avisoDeNotaRecebida(f, resultado, { empresa = null, unidade = null } = {}) {
   return `📄 ${empresa ?? unidade ?? "Unidade"} — Nota fiscal recebida de ${primeiroNome(f.entregador?.nome) || "entregador"}, semana ${dataBr(f.semanaInicio)} a ${dataBr(f.semanaFim)}. ${RESULTADO_NO_GRUPO[resultado] ?? "Aguardando conferência do financeiro."}`;
 }

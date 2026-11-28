@@ -7,6 +7,7 @@
 // Falha de conexão (banco fora, rede) vira ErroTransitorio: o receptor responde "indisponível" (o Gateway reenvia) e a fila
 // tenta de novo. Erro de regra do banco (gatilhos MV00x, violação de chave) NÃO é transitório.
 import { createHash, randomUUID } from "node:crypto";
+import { classificarPadrao } from "../dominio/politicaEnvio.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { linhaDoRecebido } from "../dominio/documentos.js";
 
@@ -28,6 +29,18 @@ function consultar(pool) {
 const linhaCadastro = (r) => ({ id: r.id, chave: r.chave, telefone: `…${r.telefone_e164.slice(-4)}`, nome: r.nome, observacoes: r.observacoes ?? null, ativo: r.ativo,
   criadoEm: r.criado_em.toISOString(), cadastradoPor: r.cadastrado_por ?? null, verificadoEm: r.verificado_em?.toISOString() ?? null,
   revogadoEm: r.revogado_em?.toISOString() ?? null, revogadoPor: r.revogado_por ?? null, motivoRevogacao: r.motivo_revogacao ?? null });
+/** 28/11: a fila com prioridade só é usada depois da migração 0028 (detecção única por pool); antes dela tudo segue como era. */
+const filaNovaPorPool = new WeakMap();
+const fiscalNovaPorPool = new WeakMap();
+/** Migração 0029 (identidade fiscal) aplicada? Sem ela o MOVA segue com a conferência por nome, como antes. */
+function fiscalNovaDe(pool) {
+  if (!fiscalNovaPorPool.has(pool)) fiscalNovaPorPool.set(pool, pool.query("select 1 from information_schema.tables where table_schema = 'mova' and table_name = 'identidade_fiscal_vinculo'").then((r) => r.rowCount > 0).catch(() => false));
+  return fiscalNovaPorPool.get(pool);
+}
+function filaNovaDe(pool) {
+  if (!filaNovaPorPool.has(pool)) filaNovaPorPool.set(pool, pool.query("select 1 from information_schema.columns where table_schema = 'mova' and table_name = 'resposta' and column_name = 'prioridade'").then((r) => r.rowCount > 0, () => false));
+  return filaNovaPorPool.get(pool);
+}
 async function emTransacao(pool, fn) {
   let cliente;
   try { cliente = await pool.connect(); } catch (e) { if (ehFalhaDeConexao(e)) throw new ErroTransitorio("BANCO_INDISPONIVEL"); throw e; }
@@ -50,6 +63,9 @@ const linhaProposta = (r) => r && Object.freeze({
 
 const linhaNota = (r) => r && Object.freeze({ id: r.id, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, semanaInicio: dia(r.semana_inicio), sha256: r.sha256,
   eventoId: r.evento_id, estado: r.estado, motivo: r.motivo, documentoId: r.documento_id, situacaoDocumental: r.situacao_documental, conferencia: r.conferencia ?? null, leitura: r.leitura ?? null, criadaEm: r.criada_em.toISOString() });
+const linhaNotificacao = (r) => r && Object.freeze({ id: r.id, chave: r.chave, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, entregador: r.entregador, destino: r.destino, tipo: r.tipo,
+  estado: r.estado, eventoPaiId: r.evento_pai_id ?? null, dados: r.dados, respostaId: r.resposta_id ?? null, tentativasEnvio: r.tentativas_envio, reenvios: r.reenvios, ultimoErro: r.ultimo_erro ?? null,
+  enviadoEm: r.enviado_em?.toISOString() ?? null, criadoEm: r.criado_em.toISOString(), atualizadoEm: r.atualizado_em.toISOString() });
 const linhaAutomacao = (r) => r ? Object.freeze({ nome: r.nome, organizacaoId: r.organizacao_id, unidadeId: r.unidade_id, ativa: r.ativa, horario: r.horario,
   pausadaEm: r.pausada_em?.toISOString() ?? null, pausadaPor: r.pausada_por, motivo: r.motivo, ultimaExecucao: r.ultima_execucao?.toISOString() ?? null }) : null;
 /**
@@ -62,6 +78,7 @@ const linhaOperacao = (x) => (x ? Object.freeze({ id: x.id, chave: x.chave, prop
 
 export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
   const q = consultar(pool);
+  const filaNova = () => filaNovaDe(pool);
   // Sonda da coluna `conversa_ativa.contexto` (migração 0017): ausente ⇒ formato antigo; reavalia a cada 60 s.
   const colunaContexto = (() => { let ate = 0; return {
     ok: () => Date.now() >= ate,
@@ -392,8 +409,105 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async registrarLeitura(id, { leitura, conferencia }) {
         await q("update mova.nota_entregador set leitura = $2, conferencia = $3, atualizada_em = now() where id = $1", [id, leitura ? JSON.stringify(leitura) : null, conferencia]);
       },
+      /** A MESMA nota fiscal (chave de acesso) já recebida DESTE entregador em outro arquivo/formato (PDF × XML × foto), ainda viva (não recusada)? */
+      async porChave({ unidadeId, entregador, chaveAcesso, sha256 }) {
+        if (!chaveAcesso) return null;
+        const r = await q("select id, semana_inicio::text as semana_inicio, estado from mova.nota_entregador where unidade_id = $1 and entregador = $2 and sha256 <> $3 and estado in ('PENDENTE_ANEXO','ANEXADA') and leitura->>'chaveAcesso' = $4 order by criada_em limit 1", [unidadeId, entregador, sha256, chaveAcesso]);
+        return r.rows[0] ? { id: r.rows[0].id, semanaInicio: r.rows[0].semana_inicio, estado: r.rows[0].estado } : null;
+      },
       async listar(escopo) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
+      },
+    }),
+    // 28/11: IDENTIDADE FISCAL aprendida das notas (migração 0029). Sem a migração, `disponivel()` é falso e o fluxo antigo segue igual.
+    identidadesFiscais: Object.freeze({
+      async disponivel() { return fiscalNovaDe(pool); },
+      async doEntregador({ unidadeId, entregador }) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q(`select v.situacao, v.motivo, v.origem, v.candidatos, i.documento, i.razao_social, i.nome_fantasia, i.municipio from mova.identidade_fiscal_vinculo v
+                           left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2`, [unidadeId, entregador]);
+        const l = r.rows[0];
+        return l ? { situacao: l.situacao, motivo: l.motivo, origem: l.origem, documento: l.documento ?? null, candidatos: l.candidatos ?? [], nome: l.razao_social ?? null, nomeFantasia: l.nome_fantasia ?? null, municipio: l.municipio ?? null } : null;
+      },
+      /** O CPF/CNPJ já é de OUTRO entregador (em qualquer unidade)? Então não é candidato desta pessoa. */
+      async documentoUsadoPorOutro({ documento, entregador }) {
+        if (!(await fiscalNovaDe(pool))) return false;
+        const r = await q(`select 1 from mova.identidade_fiscal_vinculo v join mova.identidade_fiscal i on i.id = v.identidade_id where i.documento = $1 and v.entregador <> $2
+                           union all select 1 from mova.identidade_fiscal_evidencia e where e.prestador_documento = $1 and e.forca = 'FORTE' and e.entregador <> $2 limit 1`, [documento, entregador]);
+        return r.rowCount > 0;
+      },
+      /** Consolida (ou confirma) a identidade de UM entregador numa unidade. Conflito com a identidade vigente: só este caso vai a revisão. */
+      async consolidar({ organizacaoId, unidadeId, entregador, documento, tipo, nome = null, nomeFantasia = null, municipio = null, origem, motivo = null }) {
+        return emTransacao(pool, async (tx) => {
+          await tx("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.identidade_fiscal:${unidadeId}:${entregador}`]);
+          const atual = (await tx("select v.id, v.situacao, v.motivo, i.documento from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2", [unidadeId, entregador])).rows[0];
+          if (atual?.situacao === "CONSOLIDADA" && atual.documento !== documento) {
+            await tx("update mova.identidade_fiscal_vinculo set identidade_id = null, situacao = 'EM_REVISAO', motivo = 'DOCUMENTO_DIFERENTE_DA_IDENTIDADE', candidatos = $2, atualizada_em = now() where id = $1", [atual.id, [atual.documento, documento]]);
+            return { resultado: "EM_REVISAO", motivo: "DOCUMENTO_DIFERENTE_DA_IDENTIDADE" };
+          }
+          const reavaliavel = origem === "NOTA_RECEBIDA" && ["TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"].includes(atual?.motivo);
+          if (atual?.situacao === "EM_REVISAO" && origem !== "REVISAO_ADMINISTRATIVA" && !reavaliavel) return { resultado: "EM_REVISAO", motivo: "AGUARDA_REVISAO" };
+          const i = (await tx(`insert into mova.identidade_fiscal (documento, tipo, razao_social, nome_fantasia, municipio) values ($1,$2,$3,$4,$5)
+                               on conflict (documento) do update set razao_social = coalesce(mova.identidade_fiscal.razao_social, excluded.razao_social), nome_fantasia = coalesce(mova.identidade_fiscal.nome_fantasia, excluded.nome_fantasia),
+                                 municipio = coalesce(mova.identidade_fiscal.municipio, excluded.municipio), atualizada_em = now() returning id`, [documento, tipo, nome, nomeFantasia, municipio])).rows[0];
+          if (atual) {
+            await tx("update mova.identidade_fiscal_vinculo set identidade_id = $2, situacao = 'CONSOLIDADA', motivo = $3, origem = $4, candidatos = '{}', atualizada_em = now() where id = $1", [atual.id, i.id, motivo, origem]);
+            return { resultado: "CONSOLIDADA", motivo: "CONFIRMADA", nova: false };
+          }
+          await tx("insert into mova.identidade_fiscal_vinculo (identidade_id, organizacao_id, unidade_id, entregador, situacao, motivo, origem) values ($1,$2,$3,$4,'CONSOLIDADA',$5,$6)", [i.id, organizacaoId, unidadeId, entregador, motivo, origem]);
+          return { resultado: "CONSOLIDADA", motivo: "CRIADA", nova: true };
+        });
+      },
+      async marcarRevisao({ organizacaoId, unidadeId, entregador, motivo, candidatos = [], origem }) {
+        await q(`insert into mova.identidade_fiscal_vinculo (organizacao_id, unidade_id, entregador, situacao, motivo, origem, candidatos) values ($1,$2,$3,'EM_REVISAO',$4,$5,$6)
+                 on conflict (unidade_id, entregador) do update set identidade_id = null, situacao = 'EM_REVISAO', motivo = excluded.motivo, candidatos = excluded.candidatos, atualizada_em = now()`, [organizacaoId, unidadeId, entregador, motivo, origem, candidatos]);
+      },
+      async registrarEvidencia(e) {
+        const r = await q(`insert into mova.identidade_fiscal_evidencia (organizacao_id, unidade_id, entregador, semana_inicio, sha256, documento_id, chave_dedupe, numero, chave_acesso, prestador_documento, tomador_documento, valor_centavos, competencia, fonte, forca, motivos)
+                           values ($1,$2,$3,$4,$5,$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15) on conflict (unidade_id, chave_dedupe) do nothing`,
+          [e.organizacaoId, e.unidadeId, e.entregador, e.semanaInicio ?? null, e.sha256 ?? null, e.documentoId ?? null, e.numero ?? null, e.chaveAcesso ?? null, e.prestadorDocumento ?? null, e.tomadorDocumento ?? null, e.valorCentavos ?? null, e.competencia ?? null, e.fonte, e.forca, JSON.stringify(e.motivos ?? []), e.sha256 ?? `doc:${e.documentoId}`]);
+        return r.rowCount === 1;
+      },
+      /** A MESMA chave de acesso já foi vista em outra nota (qualquer entregador/unidade)? Duplicidade fiscal, não só de arquivo. */
+      async chaveJaVista({ chaveAcesso, sha256 }) {
+        if (!chaveAcesso || !(await fiscalNovaDe(pool))) return null;
+        const r = await q("select unidade_id, entregador from mova.identidade_fiscal_evidencia where chave_acesso = $1 and chave_dedupe <> $2 limit 1", [chaveAcesso, sha256]);
+        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, entregador: r.rows[0].entregador } : null;
+      },
+      async tomadorDaUnidade(unidadeId) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q("select documento, situacao from mova.identidade_fiscal_tomador where unidade_id = $1", [unidadeId]);
+        return r.rows[0]?.documento ? { documento: r.rows[0].documento, situacao: r.rows[0].situacao } : null;
+      },
+      async definirTomador({ organizacaoId, unidadeId, documento, situacao, notas = 0, entregadores = 0 }) {
+        await q(`insert into mova.identidade_fiscal_tomador (unidade_id, organizacao_id, documento, situacao, notas, entregadores) values ($1,$2,$3,$4,$5,$6)
+                 on conflict (unidade_id) do update set documento = excluded.documento, situacao = excluded.situacao, notas = excluded.notas, entregadores = excluded.entregadores, atualizada_em = now()`, [unidadeId, organizacaoId, documento, situacao, notas, entregadores]);
+      },
+      async listar(escopo) {
+        if (!(await fiscalNovaDe(pool))) return [];
+        const r = await q(`select v.entregador, v.situacao, v.motivo, v.origem, v.atualizada_em, i.documento, i.razao_social from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id
+                           where v.organizacao_id = $1 and v.unidade_id = $2 order by v.situacao desc, v.atualizada_em desc limit 500`, [escopo.organizacaoId, escopo.unidadeId]);
+        return r.rows.map((x) => ({ entregador: x.entregador, situacao: x.situacao, motivo: x.motivo, origem: x.origem, documento: x.documento ?? null, razaoSocial: x.razao_social ?? null, atualizadaEm: x.atualizada_em }));
+      },
+      /** Contagens da unidade para o painel (sem documentos). */
+      async contagens(escopo) {
+        if (!(await fiscalNovaDe(pool))) return { disponivel: false };
+        const v = (await q("select situacao, count(*)::int n from mova.identidade_fiscal_vinculo where organizacao_id = $1 and unidade_id = $2 group by 1", [escopo.organizacaoId, escopo.unidadeId])).rows;
+        const e = (await q("select forca, count(*)::int n from mova.identidade_fiscal_evidencia where organizacao_id = $1 and unidade_id = $2 group by 1", [escopo.organizacaoId, escopo.unidadeId])).rows;
+        const l = (await q("select coalesce(sum(chamadas_ia),0)::int ia, coalesce(sum(tokens_entrada),0)::int te, coalesce(sum(tokens_saida),0)::int ts, count(*)::int lidas from mova.nota_leitura_fiscal")).rows[0];
+        return { disponivel: true, consolidadas: v.find((x) => x.situacao === "CONSOLIDADA")?.n ?? 0, emRevisao: v.find((x) => x.situacao === "EM_REVISAO")?.n ?? 0,
+          evidenciasFortes: e.find((x) => x.forca === "FORTE")?.n ?? 0, evidenciasFracas: e.find((x) => x.forca === "FRACA")?.n ?? 0, leituras: { arquivosLidos: l.lidas, chamadasIa: l.ia, tokensEntrada: l.te, tokensSaida: l.ts } };
+      },
+    }),
+    leiturasFiscais: Object.freeze({
+      async obter(sha256) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q("select fonte, dados from mova.nota_leitura_fiscal where sha256 = $1", [sha256]);
+        return r.rows[0] ? { fonte: r.rows[0].fonte, dados: r.rows[0].dados } : null;
+      },
+      async gravar({ sha256, fonte, dados, chamadasIa = 0, tokensEntrada = 0, tokensSaida = 0 }) {
+        if (!(await fiscalNovaDe(pool))) return false;
+        return (await q("insert into mova.nota_leitura_fiscal (sha256, fonte, dados, chamadas_ia, tokens_entrada, tokens_saida) values ($1,$2,$3,$4,$5,$6) on conflict (sha256) do nothing", [sha256, fonte, JSON.stringify(dados), chamadasIa, tokensEntrada, tokensSaida])).rowCount === 1;
       },
     }),
     // 23/11: cadastro pelo gestor (a chave já foi conferida no Financeiro pela rota). FONTE ÚNICA dos contatos (Financeiro e MOVA).
@@ -443,6 +557,68 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async listar(escopo) {
         return (await q("select * from mova.entregador_autorizado where organizacao_id = $1 and unidade_id = $2 order by criado_em desc limit 500", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaCadastro);
+      },
+    }),
+    /**
+     * 27/11 - NOTIFICACOES DE PAGAMENTO (caixa de saida persistente). Um evento por fato + destinatario (chave unica); cada
+     * liquidacao/fato entra em UM evento so (itens com chave primaria). Registrar = evento + itens na MESMA transacao: se um item
+     * ja pertence a outro evento (outra instancia, leitura repetida), nada e gravado e o resultado e "duplicado".
+     */
+    pagamentos: Object.freeze({
+      /** Marco da unidade: fixado na 1a passada (nada anterior vira mensagem). */
+      async marco({ organizacaoId, unidadeId, em = null }) {
+        const ins = await q("insert into mova.pagamento_marco (unidade_id, organizacao_id, marco_em) values ($1,$2,coalesce($3::timestamptz, now())) on conflict (unidade_id) do nothing returning marco_em", [unidadeId, organizacaoId, em]);
+        if (ins.rows[0]) return { marcoEm: ins.rows[0].marco_em.toISOString(), novo: true };
+        return { marcoEm: (await q("select marco_em from mova.pagamento_marco where unidade_id = $1 and organizacao_id = $2", [unidadeId, organizacaoId])).rows[0].marco_em.toISOString(), novo: false };
+      },
+      /** Desligada/pausada: o marco acompanha o tempo (religar nao dispara o que foi pago nesse intervalo). */
+      async avancarMarco(unidadeId, em = null) { await q("update mova.pagamento_marco set marco_em = coalesce($2::timestamptz, now()) where unidade_id = $1", [unidadeId, em]); },
+      async itensRegistrados(unidadeId, liquidacaoIds) {
+        if (!liquidacaoIds.length) return new Set();
+        return new Set((await q("select liquidacao_id, fato from mova.notificacao_pagamento_item where unidade_id = $1 and liquidacao_id = any($2::uuid[])", [unidadeId, liquidacaoIds])).rows.map((r) => `${r.liquidacao_id}|${r.fato}`));
+      },
+      async registrar({ chave, organizacaoId, unidadeId, entregador, destino, tipo, estado = "PENDENTE", eventoPaiId = null, dados, itens = [] }) {
+        const r = await emTransacao(pool, async (tx) => {
+          const ins = await tx(`insert into mova.notificacao_pagamento (chave, organizacao_id, unidade_id, entregador, destino, tipo, estado, evento_pai_id, dados)
+                                values ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) on conflict (chave) do nothing returning *`, [chave, organizacaoId, unidadeId, entregador, destino, tipo, estado, eventoPaiId, JSON.stringify(dados)]);
+          if (!ins.rows[0]) return null;
+          for (const i of itens) {
+            const it = await tx("insert into mova.notificacao_pagamento_item (liquidacao_id, fato, unidade_id, evento_id) values ($1,$2,$3,$4) on conflict do nothing returning 1", [i.liquidacaoId, i.fato, unidadeId, ins.rows[0].id]);
+            if (!it.rows[0]) throw Object.assign(new Error("ITEM_JA_REGISTRADO"), { desfazer: true });
+          }
+          return ins.rows[0];
+        }).catch((e) => { if (e?.desfazer) return null; throw e; });
+        if (r) return { evento: linhaNotificacao(r), novo: true };
+        const existente = (await q("select * from mova.notificacao_pagamento where chave = $1 and unidade_id = $2", [chave, unidadeId])).rows[0];
+        return { evento: linhaNotificacao(existente ?? null), novo: false };
+      },
+      async obter(id, escopo) { return linhaNotificacao((await q("select * from mova.notificacao_pagamento where id = $1 and organizacao_id = $2 and unidade_id = $3", [id, escopo.organizacaoId, escopo.unidadeId])).rows[0]); },
+      async listar(escopo, { limite = 200, entregador = null } = {}) {
+        return (await q("select * from mova.notificacao_pagamento where organizacao_id = $1 and unidade_id = $2 and ($4::text is null or entregador = $4) order by criado_em desc, id limit $3", [escopo.organizacaoId, escopo.unidadeId, Math.min(limite, 500), entregador])).rows.map(linhaNotificacao);
+      },
+      async emAndamento(unidadeId) {
+        return (await q("select * from mova.notificacao_pagamento where unidade_id = $1 and estado in ('PENDENTE','AGUARDANDO_ENTREGADOR','ENFILEIRADO') order by criado_em, id limit 500", [unidadeId])).rows.map(linhaNotificacao);
+      },
+      /** Transicao CONDICIONAL: so se o estado atual estiver em `de` (duas instancias nunca enfileiram a mesma notificacao). */
+      async atualizar(id, { de, estado, respostaId, ultimoErro, enviadoEm, tentativasEnvio, reenvios }) {
+        const r = await q(`update mova.notificacao_pagamento set estado = coalesce($3, estado), resposta_id = coalesce($4::uuid, resposta_id), ultimo_erro = $5,
+                             enviado_em = case when $3::text is not null and $3::text <> 'ENVIADO' then null else coalesce($6::timestamptz, enviado_em) end, tentativas_envio = coalesce($7, tentativas_envio), reenvios = coalesce($8, reenvios), atualizado_em = now()
+                           where id = $1 and estado = any($2::text[]) returning *`, [id, de, estado ?? null, respostaId ?? null, ultimoErro ?? null, enviadoEm ?? null, tentativasEnvio ?? null, reenvios ?? null]);
+        return linhaNotificacao(r.rows[0] ?? null);
+      },
+      async filhos(paiId) { return (await q("select * from mova.notificacao_pagamento where evento_pai_id = $1 order by criado_em", [paiId])).rows.map(linhaNotificacao); },
+    }),
+    /** 27/11 - metricas de atendimento (contagens; sem texto de conversa nem dado financeiro). */
+    metricas: Object.freeze({
+      async registrar({ dia: d, unidadeId, via, intencao, chamadasIa = 0, tokensEntrada = 0, tokensSaida = 0 }) {
+        await q(`insert into mova.atendimento_metrica (dia, unidade_id, via, intencao, respostas, chamadas_ia, tokens_entrada, tokens_saida) values ($1,$2,$3,$4,1,$5,$6,$7)
+                 on conflict (dia, unidade_id, via, intencao) do update set respostas = mova.atendimento_metrica.respostas + 1, chamadas_ia = mova.atendimento_metrica.chamadas_ia + excluded.chamadas_ia,
+                   tokens_entrada = mova.atendimento_metrica.tokens_entrada + excluded.tokens_entrada, tokens_saida = mova.atendimento_metrica.tokens_saida + excluded.tokens_saida, atualizado_em = now()`,
+          [d, unidadeId, via, intencao, chamadasIa, tokensEntrada, tokensSaida]);
+      },
+      async resumo({ unidadeId, desde }) {
+        return (await q("select via, intencao, sum(respostas)::int as respostas, sum(chamadas_ia)::int as chamadas_ia, sum(tokens_entrada)::bigint as tokens_entrada, sum(tokens_saida)::bigint as tokens_saida from mova.atendimento_metrica where unidade_id = $1 and dia >= $2::date group by via, intencao order by via, intencao", [unidadeId, desde]))
+          .rows.map((r) => ({ via: r.via, intencao: r.intencao, respostas: r.respostas, chamadasIa: r.chamadas_ia, tokensEntrada: Number(r.tokens_entrada), tokensSaida: Number(r.tokens_saida) }));
       },
     }),
     enviosEntregador: Object.freeze({
@@ -523,8 +699,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
     }),
     saida: Object.freeze({
-      async enfileirar({ grupoId, respostaA, texto, eventoId = null }) {
-        return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
+      /** 28/11: categoria, prioridade, validade e escopo (empresa/unidade) acompanham a mensagem; sem eles valem os padrões da política. */
+      async enfileirar({ grupoId, respostaA, texto, eventoId = null, categoria = null, prioridade = null, validaAte = null, organizacaoId = null, unidadeId = null }) {
+        if (!(await filaNova())) return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto) values ($1,$2,$3,$4) returning id", [grupoId, respostaA, eventoId, texto])).rows[0]?.id ?? null;
+        const c = classificarPadrao({ eventoId, respostaA, categoria, prioridade });
+        return (await q("insert into mova.resposta (grupo_jid, resposta_a, evento_id, texto, categoria, prioridade, valida_ate, organizacao_id, unidade_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id",
+          [grupoId, respostaA, eventoId, texto, c.categoria, c.prioridade, validaAte, organizacaoId, unidadeId])).rows[0]?.id ?? null;
       },
       /** 23/11 (0016): situação de entrega de mensagens (id → { estado, erro }) e a mensagem para um destino numa janela de tempo. */
       async situacoes(ids) {
@@ -570,18 +750,30 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       // 15A: `naoAntesDe` (marco de ativação do envio) e `destinos` (conversas autorizadas) filtram NO BANCO — resposta antiga ou
       // para destino fora da lista nunca é sequer reservada (proteção contra envio retroativo, independente do descarte).
       async tomarParaEnvio({ limite = 10, leaseMs = 60_000, agora = new Date(), naoAntesDe = null, destinos = null } = {}) {
-        return emTransacao(pool, async (tx) => (await tx(`
+        if (!(await filaNova())) return emTransacao(pool, async (tx) => (await tx(`
           update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
            where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
                            and ($4::timestamptz is null or criada_em >= $4::timestamptz)
                            and ($5::text[] is null or grupo_jid = any($5::text[]))
                          order by seq limit $3 for update skip locked)
           returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
+          [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows.sort((a, b) => Number(a.seq) - Number(b.seq)));
+        return emTransacao(pool, async (tx) => (await tx(`
+          update mova.resposta set estado = 'ENVIANDO', tentativas = tentativas + 1, lease_ate = $2
+           where id in (select id from mova.resposta where (estado = 'PENDENTE' or (estado = 'ENVIANDO' and lease_ate < $1))
+                           and ($4::timestamptz is null or criada_em >= $4::timestamptz)
+                           and ($5::text[] is null or grupo_jid = any($5::text[]))
+                           and (liberar_em is null or liberar_em <= $1::timestamptz)   -- 28/11: adiada (limite, ritmo, circuito, espera) ainda não sai
+                           and (valida_ate is null or valida_ate > $1::timestamptz)    -- vencida é expirada à parte (nunca sai velha)
+                         order by prioridade, seq limit $3 for update skip locked)
+          returning id, seq, grupo_jid as "grupoId", resposta_a as "respostaA", evento_id as "eventoId", texto, tentativas,
+                    categoria, prioridade, adiamentos, organizacao_id as "organizacaoId", unidade_id as "unidadeId",
                     -- 15H: o JID com que o WhatsApp entregou a mensagem respondida (o endereço que o Gateway reconhece)
                     (select e.participante_jid from mova.evento e where e.evento_id = mova.resposta.evento_id) as "participanteOriginal"`,
         [agora.toISOString(), new Date(agora.getTime() + leaseMs).toISOString(), limite, naoAntesDe, destinos])).rows
-          // 15A: UPDATE … RETURNING não garante ordem — as respostas saem na ordem em que foram criadas.
-          .sort((a, b) => Number(a.seq) - Number(b.seq)));
+          // 28/11: UPDATE … RETURNING não garante ordem — saem por prioridade e, dentro dela, na ordem em que foram criadas.
+          .sort((a, b) => a.prioridade - b.prioridade || Number(a.seq) - Number(b.seq)));
       },
       /**
        * 15A: DESCARTE auditável de respostas PENDENTES (nunca DELETE): estado SUPRIMIDA + motivo; uma linha de auditoria com
@@ -598,12 +790,76 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
           return { suprimidas: r.length, ids: r };
         });
       },
-      async marcarFalhaDeEnvio(id, codigo, { final }) {
-        await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo]);
+      async marcarFalhaDeEnvio(id, codigo, { final, liberarEm = null }) {
+        await q("update mova.resposta set estado = $2, ultimo_erro = $3, lease_ate = null, liberar_em = case when $2 = 'PENDENTE' then $4::timestamptz else liberar_em end where id = $1", [id, final ? "FALHOU" : "PENDENTE", codigo, liberarEm]);
+      },
+      /** 28/11: ADIA (nunca descarta): volta a PENDENTE com liberação futura; a tentativa reservada não conta como tentativa de envio. */
+      async adiar(id, { ate, motivo }) {
+        await q("update mova.resposta set estado = 'PENDENTE', lease_ate = null, tentativas = greatest(tentativas - 1, 0), liberar_em = $2::timestamptz, motivo_adiamento = $3, adiamentos = adiamentos + 1 where id = $1", [id, ate, String(motivo).slice(0, 60)]);
+      },
+      /** 28/11: pendentes cuja validade venceu viram EXPIRADA (visível, auditável); devolve as linhas para alerta. */
+      async expirarVencidas(agora = new Date()) {
+        return (await q("update mova.resposta set estado = 'EXPIRADA', ultimo_erro = 'VALIDADE_VENCIDA', lease_ate = null where estado = 'PENDENTE' and valida_ate is not null and valida_ate <= $1::timestamptz returning id, categoria, prioridade, unidade_id as \"unidadeId\"", [agora.toISOString()])).rows;
+      },
+      /**
+       * 28/11: uso do dia numa só leitura — contadas (categorias que consomem o teto proativo) por total/destino/categoria, e o ritmo
+       * do último minuto (TODAS as categorias) e as respostas por conversa na última hora.
+       */
+      async usoDeEnvio({ desde, agora = new Date() }) {
+        const enviada = "(estado = 'ENVIADA' or (estado = 'ENVIANDO' and ultimo_erro = 'AGUARDANDO_RELE'))";
+        const contadas = "categoria in ('TRANSACIONAL','PROATIVA','ADMINISTRATIVA','ACOMPANHAMENTO','REENVIO')";
+        const [dia, minuto, hora] = await Promise.all([
+          q(`select grupo_jid, categoria, organizacao_id, unidade_id, count(*)::int as n from mova.resposta where criada_em >= $1::timestamptz and ${enviada} and ${contadas} group by 1,2,3,4`, [desde]),
+          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '60 seconds' and estado = 'ENVIADA' group by 1`, [agora.toISOString()]),
+          q(`select grupo_jid, count(*)::int as n from mova.resposta where enviada_em >= $1::timestamptz - interval '1 hour' and estado = 'ENVIADA' and categoria in ('RESPOSTA','ERRO') group by 1`, [agora.toISOString()]),
+        ]);
+        const soma = (linhas, f) => { const m = new Map(); for (const l of linhas) m.set(f(l), (m.get(f(l)) ?? 0) + l.n); return m; };
+        return { dia: dia.rows.reduce((t, l) => t + l.n, 0), porDestino: soma(dia.rows, (l) => l.grupo_jid), porCategoria: soma(dia.rows, (l) => l.categoria),
+                 porUnidade: soma(dia.rows, (l) => l.unidade_id ?? "SEM_UNIDADE"), ultimoMinuto: minuto.rows.reduce((t, l) => t + l.n, 0), ultimoMinutoPorDestino: soma(minuto.rows, (l) => l.grupo_jid),
+                 respostasHoraPorDestino: soma(hora.rows, (l) => l.grupo_jid) };
+      },
+      /** 28/11: represamento — pendentes adiadas por prioridade e o motivo mais frequente (painel e alerta). */
+      async represamento(agora = new Date()) {
+        const r = await q("select prioridade, count(*)::int as n, min(criada_em) as mais_antiga from mova.resposta where estado = 'PENDENTE' and liberar_em is not null and liberar_em > $1::timestamptz group by 1 order by 1", [agora.toISOString()]);
+        const m = await q("select motivo_adiamento as motivo, count(*)::int as n from mova.resposta where estado = 'PENDENTE' and motivo_adiamento is not null and liberar_em > $1::timestamptz group by 1 order by 2 desc limit 5", [agora.toISOString()]);
+        return { porPrioridade: r.rows.map((x) => ({ prioridade: x.prioridade, quantidade: x.n, maisAntiga: x.mais_antiga })), motivos: m.rows };
       },
       async contagem() {
         return Object.fromEntries((await q("select estado, count(*)::int as n from mova.resposta group by estado")).rows.map((x) => [x.estado, x.n]));
       },
+    }),
+    /** 28/11: limites de envio configuráveis (sem deploy) e alertas de uso. Cada mudança grava o histórico na mesma transação. */
+    limitesDeEnvio: Object.freeze({
+      async listar() {
+        return (await q("select escopo, chave, campo, valor, ativo, atualizado_por as \"atualizadoPor\", atualizado_em as \"atualizadoEm\" from mova.limite_envio order by escopo, chave, campo")).rows;
+      },
+      async regrasAtivas() {
+        return (await q("select escopo, chave, campo, valor from mova.limite_envio where ativo")).rows.map((r) => ({ ...r, valor: r.campo === "alertaFaixas" ? r.valor : Number(r.valor) }));
+      },
+      async definir({ escopo, chave, campo, valor, ativo = true, ator, justificativa }) {
+        if (!ator || String(justificativa ?? "").trim().length < 10) throw new TypeError("alterar limite exige ator e justificativa (10+ caracteres)");
+        return emTransacao(pool, async (tx) => {
+          const antes = (await tx("select valor, ativo from mova.limite_envio where escopo = $1 and chave = $2 and campo = $3 for update", [escopo, chave, campo])).rows[0] ?? null;
+          await tx(`insert into mova.limite_envio (escopo, chave, campo, valor, ativo, atualizado_por) values ($1,$2,$3,$4,$5,$6)
+                    on conflict (escopo, chave, campo) do update set valor = excluded.valor, ativo = excluded.ativo, atualizado_por = excluded.atualizado_por, atualizado_em = now()`,
+            [escopo, chave, campo, String(valor), ativo, String(ator).slice(0, 80)]);
+          await tx("insert into mova.limite_envio_historico (escopo, chave, campo, valor_antes, valor_depois, ativo_depois, ator, justificativa) values ($1,$2,$3,$4,$5,$6,$7,$8)",
+            [escopo, chave, campo, antes?.valor ?? null, String(valor), ativo, String(ator).slice(0, 80), String(justificativa).trim().slice(0, 500)]);
+          await tx("insert into mova.auditoria (acao, ator_tipo, ator_ref, alvo, dados) values ('LIMITE_DE_ENVIO_ALTERADO', 'USUARIO', $1, 'limite_envio', $2)",
+            [String(ator).slice(0, 80), JSON.stringify({ escopo, chave, campo, antes: antes?.valor ?? null, depois: String(valor), ativo })]);
+          return { antes: antes?.valor ?? null };
+        });
+      },
+      async historico(limite = 50) {
+        return (await q("select escopo, chave, campo, valor_antes as \"valorAntes\", valor_depois as \"valorDepois\", ativo_depois as \"ativoDepois\", ator, justificativa, em from mova.limite_envio_historico order by seq desc limit $1", [Math.min(Math.max(Number(limite) || 50, 1), 200)])).rows;
+      },
+    }),
+    alertasDeEnvio: Object.freeze({
+      /** Um alerta por dia/tipo/chave/faixa: devolve true só na primeira vez (quem alerta o grupo/painel). */
+      async registrar({ dia, tipo, chave, faixa = 0, detalhe = {} }) {
+        return (await q("insert into mova.alerta_envio (dia, tipo, chave, faixa, detalhe) values ($1::date,$2,$3,$4,$5) on conflict do nothing returning 1", [dia, tipo, String(chave).slice(0, 160), faixa, JSON.stringify(detalhe)])).rowCount > 0;
+      },
+      async listar(dia) { return (await q("select tipo, chave, faixa, detalhe, criado_em as \"criadoEm\" from mova.alerta_envio where dia = $1::date order by criado_em desc limit 100", [dia])).rows; },
     }),
     aprovacoes: Object.freeze({
       async registrar({ propostaId, acao, usuarioId, motivo = null, resultado = null }) {

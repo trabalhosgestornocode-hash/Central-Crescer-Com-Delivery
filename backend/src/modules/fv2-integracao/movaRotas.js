@@ -38,6 +38,8 @@
 //   GET  /api/mova/linha-do-tempo?proposta=  etapas do documento: recebimento → … → pagamento → extrato → conciliação (ver)
 //   POST /acoes/mova/conciliar-comprovante  responsável liga a saída do extrato à MESMA baixa (vincular_pagamento; nunca 2ª baixa)
 import { ACAO, ErroFinanceiro } from "../financeiro-v2/index.js";
+import { faixaDeUso, resolverLimites, validarRegra } from "../mova-financeiro/dominio/politicaEnvio.js";
+import { mascararDocumento } from "../mova-financeiro/dominio/identidadeFiscal.js";
 import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, linhaDoTempo, montarConferencia } from "../mova-financeiro/index.js";
 import { normalizarTelefoneBr } from "../mova-financeiro/dominio/entregadores.js";
 
@@ -232,6 +234,66 @@ export const CONSULTAS_MOVA = Object.freeze({
       envios: a.enviosEntregador ? await a.enviosEntregador.listar(escopo(ctx)) : [],
     };
   },
+  // 27/11: HISTÓRICO das notificações automáticas de pagamento (entregador + aviso ao grupo), indicadores e consumo do atendimento privado.
+  // Só desta unidade. Telefone sempre mascarado; o texto enviado não é devolvido (só estado, valores e datas).
+  "/mova/notificacoes-pagamento": async ({ ctx, mova, params = {} }) => {
+    exigirVer(ctx);
+    if (!mova.pagamentos) return { ligado: false, itens: [], indicadores: null, atendimento: [] };
+    const entregador = typeof params.entregador === "string" && params.entregador.length <= 200 ? params.entregador : null;
+    const desde = /^\d{4}-\d{2}-\d{2}$/.test(params.desde ?? "") ? params.desde : new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const lista = (await mova.pagamentos.listar(escopo(ctx), { limite: 200, entregador })).filter((n) => (n.criadoEm ?? "").slice(0, 10) >= desde);
+    const porEstado = {};
+    for (const n of lista) porEstado[n.estado] = (porEstado[n.estado] ?? 0) + 1;
+    const itens = lista.map((n) => ({
+      id: n.id, entregador: n.entregador, destino: n.destino, tipo: n.tipo, estado: n.estado, tentativas: n.tentativasEnvio, reenvios: n.reenvios, erro: n.ultimoErro ?? null,
+      criadoEm: n.criadoEm, enviadoEm: n.enviadoEm ?? null, eventoPaiId: n.eventoPaiId ?? null,
+      valorCentavos: n.dados?.valorCentavos ?? n.dados?.totalCentavos ?? null, dataPagamento: n.dados?.dataPagamento ?? n.dados?.dataEfetiva ?? null, periodos: (n.dados?.periodos ?? []).length || null,
+      podeReenviar: ["FALHOU", "SEM_TELEFONE", "SEM_GRUPO"].includes(n.estado) && n.reenvios < 3,
+    }));
+    const metricas = mova.armazenamento.metricas ? await mova.armazenamento.metricas.resumo({ unidadeId: ctx.unidadeId, desde }) : [];
+    const total = metricas.reduce((t, m) => t + m.respostas, 0);
+    return {
+      ligado: true, desde, itens,
+      indicadores: { total: lista.length, porEstado, entregadoresNotificados: lista.filter((n) => n.destino === "ENTREGADOR" && n.estado === "ENVIADO").length, falhas: (porEstado.FALHOU ?? 0) + (porEstado.SEM_TELEFONE ?? 0) + (porEstado.SEM_GRUPO ?? 0) },
+      atendimento: metricas, atendimentoResumo: { respostas: total, deterministicas: metricas.filter((m) => m.via === "DETERMINISTICA").reduce((t, m) => t + m.respostas, 0), ia: metricas.filter((m) => m.via === "IA").reduce((t, m) => t + m.respostas, 0), bloqueadas: metricas.filter((m) => m.via === "BLOQUEADA").reduce((t, m) => t + m.respostas, 0), tokens: metricas.reduce((t, m) => t + m.tokensEntrada + m.tokensSaida, 0) },
+    };
+  },
+  // 28/11: PAINEL DE ENVIO — uso do dia, limites efetivos, represamento, alertas, falhas e consumo de IA. Escopo da unidade da sessão; os totais
+  // gerais (todas as empresas) só com a permissão de configurar. Nunca devolve texto de mensagem nem telefone (só contagens e identificadores mascarados).
+  // 28/11: IDENTIDADE FISCAL aprendida das notas — contagens da unidade, casos em revisão (documento sempre mascarado) e consumo de leitura (arquivos, IA, tokens).
+  "/mova/identidade-fiscal": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const f = mova.armazenamento.identidadesFiscais;
+    if (!f || !(await f.disponivel())) return { disponivel: false, motivo: "SEM_MIGRACAO_0029" };
+    const escopo = { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId };
+    const [contagens, itens, tomador] = await Promise.all([f.contagens(escopo), f.listar(escopo), f.tomadorDaUnidade(ctx.unidadeId)]);
+    return { disponivel: true, contagens, tomadorDaUnidade: tomador ? { situacao: tomador.situacao, documento: mascararDocumento(tomador.documento) } : null,
+      itens: itens.map((x) => ({ entregador: x.entregador, situacao: x.situacao, motivo: x.motivo, origem: x.origem, documento: mascararDocumento(x.documento), atualizadaEm: x.atualizadaEm })), podeAprender: ctx.permissoes?.includes("financeiro_v2.configurar") === true };
+  },
+  "/mova/envio-painel": async ({ ctx, mova, params = {} }) => {
+    exigirVer(ctx);
+    const a = mova.armazenamento;
+    if (!a.limitesDeEnvio || typeof a.saida.usoDeEnvio !== "function") return { disponivel: false, motivo: "SEM_MIGRACAO_0028" };
+    const agora = new Date();
+    const desde = new Date(Date.UTC(...(() => { const f = new Date(agora.getTime() - 3 * 3600_000); return [f.getUTCFullYear(), f.getUTCMonth(), f.getUTCDate(), 3]; })())).toISOString();
+    const dia = new Date(agora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+    const geral = Boolean(ctx.permissoes?.includes(ACAO.CONFIGURAR));
+    const [uso, regras, alertas, represamento, historico] = await Promise.all([a.saida.usoDeEnvio({ desde, agora }), a.limitesDeEnvio.regrasAtivas(), a.alertasDeEnvio.listar(dia), a.saida.represamento(agora), geral ? a.limitesDeEnvio.historico(30) : []]);
+    const efetivo = resolverLimites({ regras, empresaId: ctx.organizacaoId, unidadeId: ctx.unidadeId });
+    const mascarar = (j) => { const d = String(j ?? "").split("@")[0].replace(/D/g, ""); return d ? `…${d.slice(-4)}` : "—"; };
+    const daUnidade = uso.porUnidade.get(ctx.unidadeId) ?? 0;
+    const metricas = a.metricas ? await a.metricas.resumo({ unidadeId: ctx.unidadeId, desde: dia }).catch(() => []) : [];
+    const estados = await a.saida.contagem();
+    return {
+      disponivel: true, dia, limites: efetivo, regras: regras.filter((r) => geral || r.escopo === "GLOBAL" || r.chave === ctx.unidadeId || r.chave === ctx.organizacaoId),
+      uso: { unidade: daUnidade, pctDaUnidade: faixaDeUso(daUnidade, efetivo.proativasDia).pct, porCategoria: Object.fromEntries(uso.porCategoria), ...(geral ? { total: uso.dia, pctTotal: faixaDeUso(uso.dia, efetivo.proativasDia).pct, porUnidade: Object.fromEntries(uso.porUnidade),
+        porConversa: [...uso.porDestino].sort((x, y) => y[1] - x[1]).slice(0, 20).map(([j, n]) => ({ conversa: mascarar(j), tipo: String(j).endsWith("@g.us") ? "GRUPO" : "PRIVADO", enviadas: n })) } : {}) },
+      fila: { ...(geral ? { estados } : {}), represamento: geral ? represamento : { porPrioridade: [], motivos: [] } },
+      alertas: geral ? alertas : [], historicoDeLimites: historico,
+      ia: { respostas: metricas.reduce((t, m) => t + m.respostas, 0), deterministicas: metricas.filter((m) => m.via === "DETERMINISTICA").reduce((t, m) => t + m.respostas, 0), chamadasIa: metricas.reduce((t, m) => t + m.chamadasIa, 0), tokensEntrada: metricas.reduce((t, m) => t + m.tokensEntrada, 0), tokensSaida: metricas.reduce((t, m) => t + m.tokensSaida, 0) },
+      podeConfigurar: geral, filaPrioritariaLigada: Boolean(mova.cfg?.filaPrioridade),
+    };
+  },
   "/mova/entregadores-oficiais": async ({ ctx, nucleo }) => {
     exigirVer(ctx);
     return { itens: await entregadoresConhecidos({ ctx, nucleo }) };
@@ -289,6 +351,43 @@ export const CONSULTAS_MOVA = Object.freeze({
 });
 
 export const ACOES_MOVA = Object.freeze({
+  // 28/11: ajuste administrativo de UM limite de envio (sem deploy). Exige configurar; escopo EMPRESA/UNIDADE só da própria sessão; GLOBAL e
+  // GRUPO/FINALIDADE só com a permissão de configurar. Valida faixa, exige justificativa, grava histórico + auditoria (na mesma transação).
+  // 28/11: aprende (de novo) a identidade fiscal dos entregadores DESTA unidade a partir das notas do Financeiro. Só leitura do Financeiro; idempotente.
+  "/mova/identidade-fiscal-aprender": { campos: [], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova }) => {
+      exigirConfigurar(ctx);
+      if (typeof mova.entregadores?.aprenderIdentidadesFiscais !== "function") throw recusa(503, "ENTREGADORES_INDISPONIVEIS", "Entregadores indisponíveis.");
+      const r = await mova.entregadores.aprenderIdentidadesFiscais({ unidadeId: ctx.unidadeId });
+      if (r.disponivel === false) throw recusa(503, "SEM_MIGRACAO_0029", "Identidade fiscal indisponível (migração 0029 não aplicada).");
+      return { documentosAnalisados: r.documentosAnalisados, consolidadas: r.consolidadas, emRevisao: r.emRevisao, semHistorico: r.semHistorico, divergencias: r.divergencias, evidenciasNovas: r.evidenciasNovas };
+    } },
+  "/mova/limite-envio": { campos: ["escopo", "chave", "campo", "valor", "ativo", "justificativa"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!mova.armazenamento.limitesDeEnvio) throw recusa(503, "LIMITES_INDISPONIVEIS", "Limites de envio indisponíveis (migração 0028 não aplicada).");
+      const regra = { escopo: b.escopo, chave: b.escopo === "GLOBAL" ? "*" : b.chave, campo: b.campo, valor: b.campo === "alertaFaixas" ? String(b.valor) : Number(b.valor) };
+      const v = validarRegra(regra);
+      if (!v.ok) throw recusa(400, v.erro, "Limite inválido.");
+      if (regra.escopo === "EMPRESA" && regra.chave !== ctx.organizacaoId) throw recusa(403, "ESCOPO_FORA_DA_SESSAO", "Só é possível alterar limites da própria empresa.");
+      if (regra.escopo === "UNIDADE" && regra.chave !== ctx.unidadeId) throw recusa(403, "ESCOPO_FORA_DA_SESSAO", "Só é possível alterar limites da própria unidade.");
+      if (typeof b.justificativa !== "string" || b.justificativa.trim().length < 10) throw recusa(400, "JUSTIFICATIVA_OBRIGATORIA", "Informe a justificativa (10+ caracteres).");
+      const r = await mova.armazenamento.limitesDeEnvio.definir({ ...regra, valor: regra.valor, ativo: b.ativo !== false, ator: String(ctx.usuarioId ?? "usuario"), justificativa: b.justificativa });
+      return { escopo: regra.escopo, chave: regra.chave, campo: regra.campo, valor: regra.valor, antes: r.antes };
+    } },
+
+  // 27/11: reenvio MANUAL de uma notificação de pagamento que falhou (Gateway recusou, sem telefone, sem grupo). Máx. 3, auditado, sem
+  // tocar no Financeiro. Quem pode: configurar. O reenvio refaz o texto a partir do que foi gravado no evento.
+  "/mova/notificacao-reenviar": { campos: ["eventoId"], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova, b }) => {
+      exigirConfigurar(ctx);
+      if (!mova.pagamentos) throw recusa(503, "NOTIFICACOES_INDISPONIVEIS", "Notificações de pagamento indisponíveis.");
+      if (typeof b.eventoId !== "string" || !/^[0-9a-f-]{36}$/i.test(b.eventoId)) throw recusa(400, "PARAMETRO_INVALIDO", "Notificação inválida.");
+      const r = await mova.pagamentos.reenviar({ organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId, eventoId: b.eventoId, por: ctx.usuarioId ?? null });
+      if (!r.ok) throw recusa(409, r.motivo, r.motivo === "LIMITE_DE_REENVIOS" ? "Limite de reenvios atingido; fale com o entregador por outro meio." : "Esta notificação não pode ser reenviada agora.");
+      return { id: r.evento.id, estado: r.evento.estado, reenvios: r.evento.reenvios };
+    } },
+
   // Conferência humana de um documento recebido sem IA: trilha só de inclusão no banco do MOVA. Revisado ≠ pago ≠ conciliado.
   "/mova/documento-conferir": { campos: ["sha256", "versao", "estado", "tipo", "obrigacaoId", "observacao"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, nucleo, b }) => {

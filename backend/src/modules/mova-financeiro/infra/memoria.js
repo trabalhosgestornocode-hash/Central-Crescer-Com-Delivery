@@ -27,6 +27,10 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
   const operacoes = new Map();
   const notas = new Map();
   const envios = new Map();
+  const marcos = new Map();
+  const notificacoes = new Map();
+  const itensNotificacao = new Map();
+  const metricasAtendimento = new Map();
   const automacoes = new Map();
   const cadastrados = [];
 
@@ -213,6 +217,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         Object.assign(n, { estado, motivo, documentoId, situacaoDocumental }); return true;
       },
       async registrarLeitura(id, { leitura, conferencia }) { const n = [...notas.values()].find((x) => x.id === id); if (n) Object.assign(n, { leitura, conferencia }); },
+      async porChave({ unidadeId, entregador, chaveAcesso, sha256 }) { const n = chaveAcesso ? [...notas.values()].find((x) => x.unidadeId === unidadeId && x.entregador === entregador && x.sha256 !== sha256 && ["PENDENTE_ANEXO", "ANEXADA"].includes(x.estado) && x.leitura?.chaveAcesso === chaveAcesso) : null; return n ? { id: n.id, semanaInicio: n.semanaInicio, estado: n.estado } : null; },
       async listar(escopo) { return [...notas.values()].filter((n) => n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId).map((n) => Object.freeze({ ...n })).reverse(); },
     }),
     entregadores: Object.freeze({
@@ -245,6 +250,49 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
       async listar(escopo) {
         return cadastrados.filter((x) => x.organizacaoId === escopo.organizacaoId && x.unidadeId === escopo.unidadeId).map((x) => ({ id: x.id, chave: x.chave, telefone: `…${x.telefoneE164.slice(-4)}`, nome: x.nome ?? null,
           observacoes: x.observacoes ?? null, ativo: x.ativo, criadoEm: x.criadoEm, cadastradoPor: x.cadastradoPor ?? null, verificadoEm: null, revogadoEm: x.revogadoEm, revogadoPor: x.revogadoPor ?? null, motivoRevogacao: x.motivoRevogacao ?? null })).reverse();
+      },
+    }),
+    // 27/11 - notificacoes de pagamento (mesmo contrato do Postgres: evento por chave unica; item por fato em UM evento so).
+    pagamentos: Object.freeze({
+      async marco({ unidadeId, em = null }) { if (marcos.has(unidadeId)) return { marcoEm: marcos.get(unidadeId), novo: false }; const m = em ?? relogio().toISOString(); marcos.set(unidadeId, m); return { marcoEm: m, novo: true }; },
+      async avancarMarco(unidadeId, em = null) { if (marcos.has(unidadeId)) marcos.set(unidadeId, em ?? relogio().toISOString()); },
+      async itensRegistrados(unidadeId, liquidacaoIds) { return new Set([...itensNotificacao.keys()].filter((k) => liquidacaoIds.includes(k.split("|")[0]))); },
+      async registrar({ chave: ch, organizacaoId, unidadeId, entregador, destino, tipo, estado = "PENDENTE", eventoPaiId = null, dados, itens = [] }) {
+        const existente = [...notificacoes.values()].find((n) => n.chave === ch);
+        if (existente) return { evento: structuredClone(existente), novo: false };
+        if (itens.some((i) => itensNotificacao.has(`${i.liquidacaoId}|${i.fato}`))) return { evento: null, novo: false };
+        const agora = relogio().toISOString();
+        const evento = { id: randomUUID(), chave: ch, organizacaoId, unidadeId, entregador, destino, tipo, estado, eventoPaiId, dados: structuredClone(dados), respostaId: null, tentativasEnvio: 0, reenvios: 0, ultimoErro: null, enviadoEm: null, criadoEm: agora, atualizadoEm: agora };
+        notificacoes.set(evento.id, evento);
+        for (const i of itens) itensNotificacao.set(`${i.liquidacaoId}|${i.fato}`, evento.id);
+        return { evento: structuredClone(evento), novo: true };
+      },
+      async obter(id, escopo) { const n = notificacoes.get(id); return n && n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId ? structuredClone(n) : null; },
+      async listar(escopo, { limite = 200, entregador = null } = {}) {
+        return [...notificacoes.values()].filter((n) => n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId && (!entregador || n.entregador === entregador)).reverse().slice(0, Math.min(limite, 500)).map((n) => structuredClone(n));
+      },
+      async emAndamento(unidadeId) { return [...notificacoes.values()].filter((n) => n.unidadeId === unidadeId && ["PENDENTE", "AGUARDANDO_ENTREGADOR", "ENFILEIRADO"].includes(n.estado)).map((n) => structuredClone(n)); },
+      async atualizar(id, { de, estado, respostaId, ultimoErro, enviadoEm, tentativasEnvio, reenvios }) {
+        const n = notificacoes.get(id);
+        if (!n || !de.includes(n.estado)) return null;
+        Object.assign(n, { estado: estado ?? n.estado, respostaId: respostaId ?? n.respostaId, ultimoErro: ultimoErro ?? null, enviadoEm: estado && estado !== "ENVIADO" ? null : enviadoEm ?? n.enviadoEm, tentativasEnvio: tentativasEnvio ?? n.tentativasEnvio, reenvios: reenvios ?? n.reenvios, atualizadoEm: relogio().toISOString() });
+        return structuredClone(n);
+      },
+      async filhos(paiId) { return [...notificacoes.values()].filter((n) => n.eventoPaiId === paiId).map((n) => structuredClone(n)); },
+    }),
+    metricas: Object.freeze({
+      async registrar({ dia, unidadeId, via, intencao, chamadasIa = 0, tokensEntrada = 0, tokensSaida = 0 }) {
+        const k = `${dia}|${unidadeId}|${via}|${intencao}`; const m = metricasAtendimento.get(k) ?? { dia, via, intencao, unidadeId, respostas: 0, chamadasIa: 0, tokensEntrada: 0, tokensSaida: 0 };
+        metricasAtendimento.set(k, { ...m, respostas: m.respostas + 1, chamadasIa: m.chamadasIa + chamadasIa, tokensEntrada: m.tokensEntrada + tokensEntrada, tokensSaida: m.tokensSaida + tokensSaida });
+      },
+      async resumo({ unidadeId, desde }) {
+        const por = new Map();
+        for (const m of metricasAtendimento.values()) {
+          if (m.unidadeId !== unidadeId || m.dia < desde) continue;
+          const k = `${m.via}|${m.intencao}`; const a = por.get(k) ?? { via: m.via, intencao: m.intencao, respostas: 0, chamadasIa: 0, tokensEntrada: 0, tokensSaida: 0 };
+          por.set(k, { ...a, respostas: a.respostas + m.respostas, chamadasIa: a.chamadasIa + m.chamadasIa, tokensEntrada: a.tokensEntrada + m.tokensEntrada, tokensSaida: a.tokensSaida + m.tokensSaida });
+        }
+        return [...por.values()].sort((x, y) => `${x.via}${x.intencao}`.localeCompare(`${y.via}${y.intencao}`));
       },
     }),
     enviosEntregador: Object.freeze({

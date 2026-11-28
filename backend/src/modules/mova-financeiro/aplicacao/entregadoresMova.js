@@ -11,10 +11,16 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
+import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaNoGrupo, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, MIMES_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
+import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
 import { validarSaidaDaIa } from "../ia/contratos.js";
+import { criarIdentidadeFiscal } from "./identidadeFiscalMova.js";
+import { avaliarNota, avaliarPrimeiraNota, FONTE, mascararDocumento, normalizarLeitura, tipoDoDocumento } from "../dominio/identidadeFiscal.js";
+import { lerNotaSemIa } from "../dominio/leituraNotaFiscal.js";
+import { validarXmlSeguro } from "../dominio/xmlSeguro.js";
+import { INTENCAO, INTENCOES_PARA_IA, TEXTO_FIXO, interpretarPergunta, nomesDeOutros, redigirConsulta, validarInterpretacao } from "../dominio/consultaEntregador.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
 // AVISO_GRUPO = aviso de cada obrigação LIBERADA no grupo da unidade (a 1ª passada só registra o que já estava liberado).
@@ -32,7 +38,8 @@ export const RESPOSTA_ENTREGADOR = Object.freeze({
   notaJaRecebida: () => "Essa nota já tinha sido recebida. Se precisar trocar, envie o PDF novo.",
   notaRecusadaNoFinanceiro: () => "Recebi o arquivo, mas ele não pôde ser anexado automaticamente. O financeiro vai conferir e te retorna por aqui.",
   notaRecusada: (motivo) => ({
-    NOTA_PRECISA_SER_PDF: "Para a nota fiscal, envie o PDF da NFS-e ou uma foto/print legível da nota.",
+    NOTA_PRECISA_SER_PDF: "Para a nota fiscal, envie o PDF da NFS-e, o arquivo XML ou uma foto/print legível da nota.",
+    NOTA_XML_INVALIDA: "Não consegui aceitar esse XML (ele não é uma NFS-e íntegra e segura). Envie o PDF da nota ou o XML original da prefeitura.",
     PAGAMENTO_JA_LIBERADO: "O pagamento dessa semana já foi liberado; não é preciso enviar nota de novo.",
     SEMANA_COM_DUPLICIDADE: "Essa semana está em revisão pelo financeiro. Aguarde o retorno antes de enviar a nota.",
   })[motivo] ?? "Não achei uma semana sua aguardando nota. O financeiro confere e te retorna por aqui.",
@@ -48,8 +55,9 @@ const somarDias = (d, n) => new Date(Date.parse(`${d}T12:00:00Z`) + n * 86400000
 /**
  * @param {{cfg:object, porta:object, armazenamento:object, operacional?:object|null, obterEvidencia:Function, relogio?:Function, registrar?:Function}} deps
  */
-export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
+export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operacional = null, extrator = null, interpretador = null, leitorDeNota = null, obterEvidencia, relogio = () => new Date(), registrar = () => {}, avisosNoGrupo = {} }) {
   const { unidadeDe, rotuloDe, cnpjDe, grupoDaUnidade, escopoDe } = criarAuxiliaresDeUnidade({ cfg, avisosNoGrupo });
+  const identidadeFiscal = criarIdentidadeFiscal({ cfg, porta, armazenamento: a, escopoDe, cnpjDe, registrar });
   const lerFechamentos = async (ent) => {
     try { return (await porta.ler("consultarEntregador", escopoDe(ent.unidadeId), { entregador: ent.chave })).fechamentos.filter((f) => f.entregador?.chave === ent.chave); }
     catch (e) { if (naoEncontrado(e)) return []; throw e; }
@@ -65,10 +73,23 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       if (e instanceof ErroTransitorio) throw e; // a fila tenta de novo
       return { decisao: "CONSULTA", motivo: "FECHAMENTO_INDISPONIVEL", resposta: RESPOSTA_ENTREGADOR.indisponivel(), escopo: escopoDe(vinculos[0].unidadeId) };
     }
-    if (!evento.midia) {
-      // Uma seção por empresa, cada uma com o próprio fechamento (nunca somadas).
-      const secoes = porVinculo.map(({ ent, fechamentos }) => fechamentos[0] && mensagemSemanal(fechamentos[0], vinculos.length > 1 ? rotuloDe(ent.unidadeId) : {})).filter(Boolean);
-      return { decisao: "CONSULTA", motivo: secoes.length ? "FECHAMENTO_DO_ENTREGADOR" : "ENTREGADOR_SEM_FECHAMENTO", resposta: secoes.join("\n\n— — —\n\n") || RESPOSTA_ENTREGADOR.semFechamento(), escopo: escopoDe(vinculos[0].unidadeId) };
+    if (!evento.midia) return consultar(evento, grupo, vinculos, porVinculo);
+    // ARQUIVO NÃO CONFIÁVEL: o XML é validado (sem DTD/entidade/instrução, tamanho) ANTES de qualquer leitura, gravação ou escolha de empresa
+    const escopoBase = escopoDe(vinculos[0].unidadeId);
+    if (evento.midia.mime === "application/xml") {
+      const xml = await obterEvidencia(evento.midia.referencia).catch(() => null);
+      const vx = validarXmlSeguro(xml);
+      if (!vx.ok) { await a.auditoria.registrar({ acao: "NOTA_XML_RECUSADA", atorTipo: "SISTEMA", alvo: vinculos[0].chave, dados: { motivo: vx.motivo } }).catch(() => {}); return { decisao: "BLOQUEADO", motivo: vx.motivo, resposta: RESPOSTA_ENTREGADOR.notaRecusada("NOTA_XML_INVALIDA"), escopo: escopoBase }; }
+    }
+    // a MESMA nota já recebida em outro formato (PDF × XML × foto): nenhum registro novo, nenhum anexo, nenhuma obrigação
+    if (MIMES_DA_NOTA.includes(evento.midia.mime) && /^[0-9a-f]{64}$/.test(evento.midia.sha256 ?? "") && typeof a.notasEntregador.porChave === "function") {
+      const chaveLida = await chaveDaNota(evento);
+      if (chaveLida) for (const v of vinculos) {
+        const ja = await a.notasEntregador.porChave({ unidadeId: v.unidadeId, entregador: v.chave, chaveAcesso: chaveLida, sha256: evento.midia.sha256 });
+        if (!ja) continue;
+        await a.auditoria.registrar({ acao: "NOTA_DUPLICADA_OUTRO_FORMATO", atorTipo: "SISTEMA", alvo: ja.id, dados: { semana: ja.semanaInicio, formato: evento.midia.mime } }).catch(() => {});
+        return { decisao: "DUPLICADO", motivo: "NOTA_FISCAL_JA_RECEBIDA", resposta: RESPOSTA_ENTREGADOR.notaJaRecebida(), escopo: escopoDe(v.unidadeId) };
+      }
     }
     // Nota: em cada empresa, a semana mais antiga que ainda aguarda nota (sem duplicidade).
     const aguardando = porVinculo.map(({ ent, fechamentos }) => ({ ent, fechamento: [...fechamentos].reverse().find((f) => AGUARDANDO.includes(f.situacaoDocumental) && !f.duplicidade) ?? null })).filter((x) => x.fechamento);
@@ -88,7 +109,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     else if (vinculos.length > 1) {
       const candidatos = aguardando.map((x) => ({ ...x, unidade: { ...unidadeDe(x.ent.unidadeId) }, cnpj: cnpjDe(x.ent.unidadeId) }));
       let escolha = escolherObrigacaoDaNota({ candidatos, legenda: evento.texto ?? "" });
-      if (escolha.ambigua && extrator) {
+      if (escolha.ambigua && (extrator || leitorDeNota || evento.midia.mime === "application/xml")) {
         leituraPronta = await lerNota(evento, candidatos.map((c) => c.unidade.nome));
         escolha = escolherObrigacaoDaNota({ candidatos, legenda: evento.texto ?? "", leitura: leituraPronta?.leitura ?? null });
       }
@@ -110,14 +131,17 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const esc = { organizacaoId: escopo.organizacaoId, unidadeId: ent.unidadeId };
     // 23/11: leitura e conferência da nota (emitente, tomador, valor, período) — uma vez por nota; nunca libera nada sozinha.
     const conferencia = nota.conferencia ? { resultado: nota.conferencia, motivos: [] } : await lerEConferir(nota, alvo, evento, leituraPronta);
-    if (nova) await avisarNoGrupo({ unidadeId: ent.unidadeId, tipo: "AVISO_NOTA_RECEBIDA", semanaInicio: alvo.semanaInicio, entregador: ent.chave, chave: `AVISO_NOTA|${ent.unidadeId}|${ent.chave}|${alvo.semanaInicio}|${evento.midia.sha256}`, texto: avisoDeNotaRecebida(alvo, conferencia?.resultado ?? null, rotuloDe(ent.unidadeId)) });
+    // 29/11: UM aviso ao grupo por desfecho real da nota (sha + situação), depois que o desfecho existe: nunca "anexada" antes do anexo
+    const noGrupo = (situacao) => avisarNoGrupo({ unidadeId: ent.unidadeId, tipo: "AVISO_NOTA_RECEBIDA", semanaInicio: alvo.semanaInicio, entregador: ent.chave, chave: `AVISO_NOTA|${ent.unidadeId}|${ent.chave}|${alvo.semanaInicio}|${evento.midia.sha256}|${situacao}`, texto: avisoDeNotaNoGrupo(alvo, situacao, rotuloDe(ent.unidadeId)) });
+    const resultado = conferencia?.resultado ?? null;
     const respostaLida = conferencia ? respostaDaConferencia(alvo, conferencia) : null;
     if (!operacional || !(await operacional.pode("anexarDocumentoDoEntregador", esc))) {
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_PENDENTE", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: alvo.semanaInicio, conferencia: conferencia?.resultado ?? null, motivo: operacional ? "SEM_CONCESSAO_OPERACIONAL" : "SEM_IDENTIDADE_OPERACIONAL" } });
+      await noGrupo(resultado === "CONFERE" ? "CONFERIDA_AGUARDANDO_ANEXO" : resultado === "DIVERGENTE" ? "DIVERGENTE" : "AGUARDANDO_REVISAO");
       return { decisao: "PROPOSTA", motivo: "NOTA_PENDENTE_ANEXO", resposta: respostaLida ?? pend.resposta, escopo };
     }
     const bytes = await obterEvidencia(evento.midia.referencia);
-    if (!bytes) return { decisao: "BLOQUEADO", motivo: "SEM_EVIDENCIA", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
+    if (!bytes) { await noGrupo("FALHA"); return { decisao: "BLOQUEADO", motivo: "SEM_EVIDENCIA", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo }; }
     try {
       const r = await operacional.chamar("anexarDocumentoDoEntregador", esc, {
         inicio: alvo.semanaInicio, entregador: ent.chave, tipoAnexo: "NOTA_FISCAL",
@@ -126,37 +150,195 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       const situacao = r.situacaoDocumental ?? r.fechamento?.situacaoDocumental ?? null;
       await a.notasEntregador.concluir(nota.id, { estado: "ANEXADA", documentoId: r.documento?.id ?? null, situacaoDocumental: situacao });
       await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_ANEXADA", atorTipo: "SISTEMA", atorRef: operacional.identidade, alvo: nota.id, dados: { semana: alvo.semanaInicio, situacao } });
-      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
+      await noGrupo(resultado === "CONFERE" ? "CONFERIDA_ANEXADA" : resultado === "DIVERGENTE" ? "DIVERGENTE_ANEXADA" : "AGUARDANDO_REVISAO_ANEXADA");
+      return { decisao: "EXECUTADO", motivo: "NOTA_ANEXADA", resposta: conferencia?.resultado === "CONFERE" ? mensagemNotaConferida({ ...alvo, vencimento: alvo.vencimento ?? null }, { empresa: rotuloDe(ent.unidadeId).empresa ?? rotuloDe(ent.unidadeId).unidade }) : conferencia?.resultado === "DIVERGENTE" && situacao !== "LIBERADO_PAGAMENTO" ? respostaLida : RESPOSTA_ENTREGADOR.notaAnexada(alvo, situacao), escopo };
     } catch (e) {
       if (e instanceof ErroTransitorio) throw e; // fica PENDENTE_ANEXO; a nova tentativa da fila anexa
       await a.notasEntregador.concluir(nota.id, { estado: "RECUSADA", motivo: String(e?.detalhes?.motivo ?? e?.codigo ?? "RECUSADA").slice(0, 120) });
       registrar({ tipo: "MOVA_NOTA_ENTREGADOR_RECUSADA", codigo: e?.codigo ?? "ERRO" });
+      await noGrupo("FALHA");
       return { decisao: "BLOQUEADO", motivo: "NOTA_RECUSADA_NO_FINANCEIRO", resposta: RESPOSTA_ENTREGADOR.notaRecusadaNoFinanceiro(), escopo };
     }
   }
 
-  /** Lê a NFS-e (IA, mesmo orçamento e teto). Devolve { leitura } ou { erro } — nunca lança. Uma leitura por nota. */
+  const registrarMetrica = (unidadeId, via, intencao, extra = {}) => (typeof a.metricas?.registrar === "function"
+    ? a.metricas.registrar({ dia: local(relogio()).dia, unidadeId, via, intencao: /^[A-Z_]{2,40}$/.test(intencao) ? intencao : "DESCONHECIDA", ...extra }).catch(() => {}) : Promise.resolve());
+
+  /**
+   * 27/11 — pergunta de TEXTO no privado: regras determinísticas (sem IA) sobre os dados do PRÓPRIO entregador, por empresa.
+   * Só leitura. Pedido de dado de terceiros ou de ação administrativa é recusado com texto fixo. Com `interpretador` injetado, a IA
+   * só pode escolher uma intenção da lista fechada quando as regras não entendem (e só então).
+   */
+  async function consultar(evento, grupo, vinculos, porVinculo) {
+    const hoje = local(relogio()).dia;
+    const conversaId = { grupoId: grupo.grupoId, participanteId: grupo.grupoId };
+    const ctxAnterior = await a.conversas?.obter?.(conversaId).catch(() => null);
+    const anterior = ctxAnterior?.consulta ? { intencao: ctxAnterior.consulta, periodo: ctxAnterior.contexto?.p ?? null, empresa: ctxAnterior.contexto?.e ?? null } : null;
+    const rotulados = porVinculo.map(({ ent, fechamentos }) => ({ unidadeId: ent.unidadeId, ent, fechamentos, rotulo: rotuloDe(ent.unidadeId) }));
+    const meuNome = vinculos[0]?.nome ?? porVinculo[0]?.fechamentos[0]?.entregador?.nome ?? "";
+    const outrosNomes = nomesDeOutros({ meuNome, lista: (cfg.entregadores ?? []).filter((e) => e.ativo && vinculos.some((v) => v.unidadeId === e.unidadeId) && !vinculos.some((v) => v.chave === e.chave && v.unidadeId === e.unidadeId)) });
+    let it = interpretarPergunta(evento.texto ?? "", { hoje, vinculos: rotulados, outrosNomes, anterior });
+    let via = "DETERMINISTICA";
+    if (it.intencao === INTENCAO.DESCONHECIDA && interpretador) {
+      try {
+        const v = validarInterpretacao(await interpretador({ texto: evento.texto ?? "", intencoes: INTENCOES_PARA_IA, anterior: anterior?.intencao ?? null }));
+        if (v.ok) { it = { ...it, intencao: v.intencao }; via = "IA"; }
+      } catch (e) { if (e instanceof ErroTransitorio) throw e; via = "FALHA"; }
+    }
+    const primeira = vinculos[0].unidadeId;
+    if (it.intencao === INTENCAO.TERCEIRO || it.intencao === INTENCAO.ACAO_ADMINISTRATIVA) {
+      await registrarMetrica(primeira, "BLOQUEADA", it.intencao);
+      await a.auditoria.registrar({ acao: it.intencao === INTENCAO.TERCEIRO ? "ENTREGADOR_PEDIU_DADO_DE_TERCEIRO" : "ENTREGADOR_PEDIU_ACAO_ADMINISTRATIVA", atorTipo: "SISTEMA", alvo: evento.eventoId ?? null, dados: { unidade: primeira } }).catch(() => {});
+      return { decisao: "BLOQUEADO", motivo: it.intencao === INTENCAO.TERCEIRO ? "ENTREGADOR_PEDIU_DADO_DE_TERCEIRO" : "ENTREGADOR_PEDIU_ACAO_ADMINISTRATIVA", resposta: TEXTO_FIXO[it.intencao], escopo: escopoDe(primeira) };
+    }
+    if (it.intencao === INTENCAO.AJUDA) {
+      await registrarMetrica(primeira, via, it.intencao);
+      return { decisao: "CONSULTA", motivo: "ENTREGADOR_AJUDA", resposta: TEXTO_FIXO.AJUDA, escopo: escopoDe(primeira) };
+    }
+    const escolhidos = it.empresa ? rotulados.filter((v) => v.unidadeId === it.empresa) : rotulados;
+    const legado = it.intencao === INTENCAO.DESCONHECIDA || (it.intencao === INTENCAO.VALOR && !it.periodo);
+    let respostaTexto;
+    try {
+      if (legado) {
+        // Comportamento anterior, preservado: uma seção por empresa, cada uma com o próprio fechamento (nunca somadas).
+        const secoes = escolhidos.map(({ ent, fechamentos }) => fechamentos[0] && mensagemSemanal(fechamentos[0], vinculos.length > 1 ? rotuloDe(ent.unidadeId) : {})).filter(Boolean);
+        respostaTexto = secoes.join("\n\n— — —\n\n") || null;
+      } else {
+        const precisaBaixas = [INTENCAO.PAGAMENTOS, INTENCAO.PREVISAO, INTENCAO.COMPROVANTE].includes(it.intencao);
+        const precisaNotas = [INTENCAO.NOTA, INTENCAO.DIVERGENCIA].includes(it.intencao);
+        const dados = [];
+        for (const v of escolhidos) {
+          const baixas = precisaBaixas ? ((await porta.ler("consultarBaixasDeEntregadores", escopoDe(v.unidadeId), { entregador: v.ent.chave }).catch((e) => { if (naoEncontrado(e)) return { itens: [] }; throw e; })).itens ?? []).filter((b) => b.entregador?.chave === v.ent.chave) : [];
+          const notas = precisaNotas ? (await a.notasEntregador.listar(escopoDe(v.unidadeId))).filter((n) => n.entregador === v.ent.chave) : [];
+          dados.push({ rotulo: v.rotulo, fechamentos: v.fechamentos, baixas, notas });
+        }
+        respostaTexto = redigirConsulta({ intencao: it.intencao, periodo: it.periodo, vinculos: dados, hoje });
+      }
+    } catch (e) {
+      if (e instanceof ErroTransitorio) throw e;
+      await registrarMetrica(primeira, "FALHA", it.intencao);
+      return { decisao: "CONSULTA", motivo: "FECHAMENTO_INDISPONIVEL", resposta: RESPOSTA_ENTREGADOR.indisponivel(), escopo: escopoDe(primeira) };
+    }
+    await registrarMetrica(primeira, via === "FALHA" ? "DETERMINISTICA" : via, it.intencao);
+    await a.conversas?.registrar?.({ ...conversaId, unidadeId: primeira, consulta: legado && it.intencao === INTENCAO.DESCONHECIDA ? INTENCAO.VALOR : it.intencao, contexto: { p: it.periodo, e: it.empresa }, validadeMs: 20 * 60 * 1000 }).catch(() => {});
+    const motivo = legado ? (respostaTexto ? "FECHAMENTO_DO_ENTREGADOR" : "ENTREGADOR_SEM_FECHAMENTO") : `ENTREGADOR_CONSULTA_${it.intencao}`;
+    return { decisao: "CONSULTA", motivo, resposta: respostaTexto ?? RESPOSTA_ENTREGADOR.semFechamento(), escopo: escopoDe(primeira) };
+  }
+
+  /**
+   * 28/11 — Lê a nota na ORDEM que poupa tokens: (1) o que já foi lido para o MESMO arquivo (hash), (2) XML / texto do PDF (determinístico),
+   * (3) IA em texto/visão — só se as anteriores não resolverem. Devolve { leitura, fonte, reaproveitada? } ou { erro }; nunca lança.
+   */
+  /** Chave de acesso da nota SEM IA (cache por hash, XML ou texto do PDF): serve só para reconhecer a mesma nota em outro formato. */
+  async function chaveDaNota(evento) {
+    const sha = evento.midia?.sha256;
+    const cache = /^[0-9a-f]{64}$/.test(sha ?? "") && a.leiturasFiscais ? await a.leiturasFiscais.obter(sha).catch(() => null) : null;
+    if (cache?.dados?.chaveAcesso) return cache.dados.chaveAcesso;
+    const bytes = await obterEvidencia(evento.midia.referencia).catch(() => null);
+    return bytes ? (lerNotaSemIa({ bytes, mime: evento.midia.mime, leitorPdf: leitorDeNota })?.leitura?.chaveAcesso ?? null) : null;
+  }
+
   async function lerNota(evento, unidades) {
+    const sha = evento.midia?.sha256;
+    const temSha = /^[0-9a-f]{64}$/.test(sha ?? "");
+    const cache = temSha && a.leiturasFiscais ? await a.leiturasFiscais.obter(sha).catch(() => null) : null;
+    if (cache?.dados) return { leitura: cache.dados, fonte: cache.fonte, reaproveitada: true };
+    if (leitorDeNota || /xml/i.test(String(evento.midia?.mime ?? ""))) {
+      const bytes = await obterEvidencia(evento.midia.referencia).catch(() => null);
+      const r = bytes ? lerNotaSemIa({ bytes, mime: evento.midia.mime, leitorPdf: leitorDeNota }) : null;
+      if (r) {
+        if (temSha && a.leiturasFiscais) await a.leiturasFiscais.gravar({ sha256: sha, fonte: r.fonte, dados: r.leitura }).catch(() => {});
+        return { leitura: r.leitura, fonte: r.fonte };
+      }
+    }
+    if (!extrator) return { erro: "LEITURA_INDISPONIVEL:SEM_EXTRATOR" };
     try {
       const bruta = await extrator.extrair({ texto: evento.texto ?? "", tipo: evento.tipo ?? "documento", midia: { mime: evento.midia.mime, referencia: evento.midia.referencia }, contexto: { unidades: unidades.filter(Boolean), mensagemCitada: null } });
       const v = validarSaidaDaIa(bruta);
       if (!v.ok) return { erro: `LEITURA_INVALIDA:${v.erro}` };
       const x = v.saida;
-      return { leitura: { tipoDocumento: x.tipoDocumento, legivel: x.legivel, valorCentavos: x.valorCentavos, competencia: x.competencia, dataEmissao: x.dataEmissao, favorecido: x.favorecido,
-        pagador: x.pagador ?? null, documentoDestinatario: x.documentoDestinatario, identificadorDocumento: x.identificadorDocumento, confianca: x.confianca } };
+      const leitura = { tipoDocumento: x.tipoDocumento, legivel: x.legivel, valorCentavos: x.valorCentavos, competencia: x.competencia, dataEmissao: x.dataEmissao, favorecido: x.favorecido,
+        pagador: x.pagador ?? null, documentoDestinatario: x.documentoDestinatario, identificadorDocumento: x.identificadorDocumento, confianca: x.confianca, fonte: FONTE.IA };
+      if (temSha && a.leiturasFiscais) await a.leiturasFiscais.gravar({ sha256: sha, fonte: FONTE.IA, dados: leitura, chamadasIa: 1 }).catch(() => {});
+      return { leitura, fonte: FONTE.IA };
     } catch (e) {
       return { erro: `LEITURA_INDISPONIVEL:${e?.codigo ?? "ERRO"}` };
     }
   }
 
+  /**
+   * 28/11 — O que o MOVA já sabe do prestador desta nota: identidade fiscal do entregador (aprendida do Financeiro), empresa tomadora da
+   * unidade, chave de acesso repetida. A 1ª nota de quem ainda não tem histórico é candidata e consolida sozinha com evidência inequívoca.
+   * Sem a migração 0029 devolve o "vazio" e a conferência segue só pelo nome, como antes.
+   */
+  async function contextoFiscal(nota, fechamento, leitura) {
+    const vazio = { identidade: null, tomador: null, chaveDuplicada: false, concluir: async () => {} };
+    if (!leitura || !(await identidadeFiscal.disponivel())) return vazio;
+    const fiscal = a.identidadesFiscais, ent = { unidadeId: nota.unidadeId, entregador: nota.entregador };
+    const esc = escopoDe(nota.unidadeId);
+    let identidade = await fiscal.doEntregador(ent);
+    if (!identidade) {
+      await identidadeFiscal.aprender({ entregador: nota.entregador }).catch((e) => { if (e instanceof ErroTransitorio) throw e; });
+      identidade = await fiscal.doEntregador(ent);
+    }
+    const tomador = cnpjDe(nota.unidadeId) ?? (await fiscal.tomadorDaUnidade(nota.unidadeId))?.documento ?? null;
+    const norm = normalizarLeitura(leitura, leitura.fonte ?? FONTE.IA);
+    const dup = norm?.chaveAcesso ? await fiscal.chaveJaVista({ chaveAcesso: norm.chaveAcesso, sha256: nota.sha256 }) : null;
+    const obrigacao = { valorCentavos: fechamento.valorCentavos, semanaInicio: fechamento.semanaInicio, semanaFim: fechamento.semanaFim };
+    const MOTIVOS_REAVALIAVEIS = ["TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"];
+    const reavalia = identidade?.situacao === "EM_REVISAO" && MOTIVOS_REAVALIAVEIS.includes(identidade.motivo);
+    if ((!identidade || reavalia) && norm?.prestadorDocumento && !dup) {
+      const usado = await fiscal.documentoUsadoPorOutro({ documento: norm.prestadorDocumento, entregador: nota.entregador });
+      const p = avaliarPrimeiraNota({ leitura, obrigacao, tomadorDaUnidade: tomador, documentoJaUsadoPorOutro: usado });
+      if (p.consolidar) {
+        const vinculos = (cfg.entregadores ?? []).filter((e) => e.ativo && e.chave === nota.entregador);
+        for (const v of vinculos.length ? vinculos : [{ unidadeId: nota.unidadeId }]) {
+          const e2 = escopoDe(v.unidadeId);
+          await fiscal.consolidar({ organizacaoId: e2.organizacaoId, unidadeId: v.unidadeId, entregador: nota.entregador, documento: norm.prestadorDocumento, tipo: tipoDoDocumento(norm.prestadorDocumento), nome: norm.prestadorNome, nomeFantasia: norm.nomeFantasia, municipio: norm.municipio, origem: reavalia ? "NOTA_RECEBIDA" : "PRIMEIRA_NOTA", motivo: p.motivo });
+        }
+        await identidadeFiscal.auditar("IDENTIDADE_FISCAL_CONSOLIDADA", nota.unidadeId, { entregador: nota.entregador, origem: "PRIMEIRA_NOTA", documento: mascararDocumento(norm.prestadorDocumento) });
+        identidade = await fiscal.doEntregador(ent);
+      } else if (!reavalia && ["DOCUMENTO_USADO_POR_OUTRO_ENTREGADOR", "TOMADOR_NAO_CONFIRMADO", "EVIDENCIA_INSUFICIENTE"].includes(p.motivo)) {
+        await fiscal.marcarRevisao({ organizacaoId: esc.organizacaoId, unidadeId: nota.unidadeId, entregador: nota.entregador, motivo: p.motivo, candidatos: [norm.prestadorDocumento], origem: "PRIMEIRA_NOTA" });
+        await identidadeFiscal.auditar("IDENTIDADE_FISCAL_EM_REVISAO", nota.unidadeId, { entregador: nota.entregador, motivo: p.motivo, candidato: mascararDocumento(norm.prestadorDocumento) });
+        identidade = await fiscal.doEntregador(ent);
+      }
+    }
+    return {
+      identidade, tomador, chaveDuplicada: Boolean(dup),
+      /** Depois da conferência: guarda a nota como evidência (FORTE só se confere, vigente e sem sinal contrário). */
+      async concluir(conferencia) {
+        if (!nota.sha256 || !norm) return;
+        const av = avaliarNota({ nota: { leitura, situacao: conferencia.resultado === "CONFERE" ? "APROVADA" : "RECEBIDA", vigente: true }, obrigacao, tomadorDaUnidade: tomador });
+        const forte = av.forca === "FORTE" && conferencia.resultado === "CONFERE" && !dup;
+        await fiscal.registrarEvidencia({ organizacaoId: esc.organizacaoId, unidadeId: nota.unidadeId, entregador: nota.entregador, semanaInicio: fechamento.semanaInicio, sha256: nota.sha256, documentoId: null, numero: norm.numero, chaveAcesso: norm.chaveAcesso,
+          prestadorDocumento: norm.prestadorDocumento, tomadorDocumento: norm.tomadorDocumento, valorCentavos: norm.valorCentavos, competencia: /^\d{4}-\d{2}-\d{2}$/.test(norm.competencia ?? "") ? norm.competencia : null,
+          fonte: leitura.fonte ?? FONTE.IA, forca: forte ? "FORTE" : "FRACA", motivos: [...av.motivos, ...conferencia.motivos].slice(0, 12) }).catch(() => {});
+      },
+    };
+  }
+
   /** Confere a nota lida com o fechamento. Falha ou orçamento esgotado ⇒ INCONCLUSIVA (revisão humana). */
   async function lerEConferir(nota, fechamento, evento, pronta = null) {
-    if (!extrator || typeof a.notasEntregador.registrarLeitura !== "function") return null;
+    if ((!extrator && !leitorDeNota) || typeof a.notasEntregador.registrarLeitura !== "function") return null;
     const lida = pronta ?? await lerNota(evento, [rotuloDe(nota.unidadeId).unidade]);
     const leitura = lida.leitura ?? null;
-    const conferencia = leitura ? conferirNotaDoEntregador({ leitura, fechamento, ...rotuloDe(nota.unidadeId), cnpjTomador: cnpjDe(nota.unidadeId) }) : { resultado: "INCONCLUSIVA", motivos: [lida.erro] };
-    await a.notasEntregador.registrarLeitura(nota.id, { leitura: leitura ? { ...leitura, motivos: conferencia.motivos, situacaoFiscal: "NAO_CONSULTADA" } : { motivos: conferencia.motivos }, conferencia: conferencia.resultado });
-    await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_CONFERIDA", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: fechamento.semanaInicio, resultado: conferencia.resultado, motivos: conferencia.motivos } });
+    const fisc = await contextoFiscal(nota, fechamento, leitura);
+    const conferencia = leitura
+      ? conferirNotaDoEntregador({ leitura, fechamento, ...rotuloDe(nota.unidadeId), cnpjTomador: cnpjDe(nota.unidadeId), identidade: fisc.identidade, tomadorAprendido: fisc.tomador, chaveDuplicada: fisc.chaveDuplicada })
+      : { resultado: "INCONCLUSIVA", motivos: [lida.erro] };
+    // o CPF/CNPJ completo fica só nas tabelas fiscais protegidas; a leitura gravada na nota leva o documento mascarado
+    const gravada = leitura
+      ? { ...leitura, prestadorDocumento: undefined, prestadorDocumentoFinal: leitura.prestadorDocumento ? mascararDocumento(leitura.prestadorDocumento) : null, motivos: conferencia.motivos, situacaoFiscal: "NAO_CONSULTADA", fonteDaLeitura: lida.fonte ?? null, reaproveitada: Boolean(lida.reaproveitada) }
+      : { motivos: conferencia.motivos };
+    await a.notasEntregador.registrarLeitura(nota.id, { leitura: gravada, conferencia: conferencia.resultado });
+    await a.auditoria.registrar({ acao: "NOTA_ENTREGADOR_CONFERIDA", atorTipo: "SISTEMA", alvo: nota.id, dados: { semana: fechamento.semanaInicio, resultado: conferencia.resultado, motivos: conferencia.motivos, fonte: lida.fonte ?? null, reaproveitada: Boolean(lida.reaproveitada) } });
+    if (leitura) await fisc.concluir(conferencia);
+    // consumo: leitura determinística × IA (documentos analisados, reaproveitados, chamadas à IA)
+    if (typeof a.metricas?.registrar === "function") {
+      const via = lida.fonte === FONTE.IA ? "IA" : "DETERMINISTICA";
+      await a.metricas.registrar({ dia: local(relogio()).dia, unidadeId: nota.unidadeId, via, intencao: lida.reaproveitada ? "NOTA_REAPROVEITADA" : "NOTA_LEITURA", ...(via === "IA" && !lida.reaproveitada ? { chamadasIa: 1 } : {}) }).catch(() => {});
+    }
     return conferencia;
   }
 
@@ -191,7 +373,9 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     const u = unidadeDe(unidadeId ?? ent.unidadeId);
     if (!(await a.enviosEntregador.registrar({ chave, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, entregador: entregador ?? ent?.chave ?? "-", tipo, semanaInicio }))) return false;
     if (texto !== null) {
-      const respostaId = await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true });
+      // 28/11: cada tipo tem categoria, prioridade e validade próprias (fila priorizada do enviador; ver dominio/politicaEnvio.js).
+      const respostaId = await a.saida.enfileirar({ grupoId: destino ?? ent.privado, respostaA: null, eventoId: null, texto, simulada: true,
+        ...enfileiramentoDoTipo(tipo, { agora: relogio(), organizacaoId: u.organizacaoId, unidadeId: u.unidadeId }) });
       // 23/11: o aviso à gerência espera o retorno do WhatsApp desta mensagem (ENVIADA ou FALHOU) — ver confirmarEnvios.
       if (tipo === "SEMANAL" && respostaId && typeof a.enviosEntregador.vincularResposta === "function") await a.enviosEntregador.vincularResposta(chave, respostaId);
     }
@@ -377,5 +561,5 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     }
   }
 
-  return Object.freeze({ atender, rotina });
+  return Object.freeze({ atender, rotina, aprenderIdentidadesFiscais: (o) => identidadeFiscal.aprender(o) });
 }

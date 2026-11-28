@@ -11,9 +11,10 @@ export const ABAS_CENTRAL = Object.freeze([
   { id: "operacoes", rotulo: "Operações Financeiras" },
   { id: "entregadores", rotulo: "Entregadores" },
   { id: "automacoes", rotulo: "Automações" },
+  { id: "envio", rotulo: "Envio e Limites" },
   { id: "seguranca", rotulo: "Segurança e Autonomia" },
 ]);
-const ROTAS = { central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores", "entregadores-oficiais"], automacoes: ["automacoes"], seguranca: ["politicas"] };
+const ROTAS = { envio: ["envio-painel"], central: ["visao-geral"], conferencia: ["conferencia"], documentos: ["documentos-recebidos"], grupos: ["grupos"], operacoes: ["operacoes", "politicas", "pagamentos-a-conciliar"], entregadores: ["entregadores", "entregadores-oficiais", "identidade-fiscal"], automacoes: ["automacoes"], seguranca: ["politicas"] };
 const AUTOMACOES = { ENTREGADORES_SEMANAL: "Mensagem de segunda aos entregadores", ENTREGADORES_COBRANCA: "Lembrete de terça (nota pendente)",
   ENTREGADORES_RELATORIO: "Relatório de quarta no grupo da unidade", ENTREGADORES_AVISO_GRUPO: "Aviso de liberação no grupo da unidade" };
 // Horários padrão (decisão do proprietário, 23/11/2026; fuso America/Fortaleza): segunda 10h, quarta 8h.
@@ -126,7 +127,22 @@ export function criarCentral({ ui, ler, enviar }) {
     ];
   }
 
-  function entregadores({ entregadores: e, "entregadores-oficiais": of }, pode) {
+  const SITUACAO_FISCAL = { CONSOLIDADA: ["Reconhecida", "ok"], EM_REVISAO: ["Em revisão", "alerta"] };
+  const MOTIVO_FISCAL = { EVIDENCIA_INEQUIVOCA: "notas históricas conferem", EVIDENCIA_INEQUIVOCA_DA_PRIMEIRA_NOTA: "primeira nota confere", DOCUMENTO_USADO_POR_OUTRO_ENTREGADOR: "CPF/CNPJ já usado por outro entregador", DOCUMENTOS_DIFERENTES_ENTRE_NOTAS_FORTES: "notas com CPF/CNPJ diferentes", DOCUMENTO_DIFERENTE_DA_IDENTIDADE: "nota com CPF/CNPJ diferente do histórico", TOMADOR_NAO_CONFIRMADO: "empresa tomadora ainda não confirmada", EVIDENCIA_INSUFICIENTE: "evidência insuficiente" };
+  /** 28/11 — Identidade fiscal aprendida das notas do Financeiro (sem cadastro manual); só os casos excepcionais pedem atenção. */
+  function identidadeFiscal(v, pode) {
+    if (!v?.disponivel) return null;
+    const c = v.contagens, l = c.leituras;
+    const excecoes = v.itens.filter((x) => x.situacao === "EM_REVISAO");
+    return cartao("Identidade fiscal dos entregadores",
+      el("div", { classe: "cf-kpis" }, kpi("Reconhecidos automaticamente", c.consolidadas, "pelo CPF/CNPJ das notas já anexadas"), kpi("Em revisão", c.emRevisao, "só os casos conflitantes"),
+        kpi("Leitura de notas", `${l.arquivosLidos} arquivo(s)`, `${l.chamadasIa} chamada(s) de IA · ${l.tokensEntrada + l.tokensSaida} tokens`)),
+      el("p", { classe: "cf-dica", texto: "O MOVA aprende quem é o prestador de cada entregador (CPF/CNPJ) a partir das notas que o Financeiro já guarda. Razão social ou nome fantasia diferentes do nome do entregador não causam divergência. Nada é cadastrado à mão." }),
+      excecoes.length ? tabela(["Entregador", "Situação", "Motivo", "CPF/CNPJ"], excecoes.map((x) => ({ id: x.entregador, celulas: [x.entregador, selo(SITUACAO_FISCAL[x.situacao] ?? [x.situacao, "neutro"]), MOTIVO_FISCAL[x.motivo] ?? x.motivo ?? "—", el("code", { texto: x.documento })] })), "") : el("p", { texto: "Nenhum caso em revisão." }),
+      v.podeAprender && pode?.configurar ? botao("Reaprender das notas do Financeiro", { "data-acao": "central-identidade-aprender" }) : null);
+  }
+
+  function entregadores({ entregadores: e, "entregadores-oficiais": of, "identidade-fiscal": idf }, pode) {
     const ativos = new Set((e.cadastros ?? []).filter((x) => x.ativo).map((x) => x.chave));
     const livres = (of?.itens ?? []).filter((x) => !ativos.has(x.chave));
     const cadastro = pode?.configurar ? cartao("Cadastrar entregador",
@@ -145,6 +161,7 @@ export function criarCentral({ ui, ler, enviar }) {
       cartao("Notas recebidas", e.notas.length ? tabela(["Recebida", "Entregador", "Semana", "Conferência", "Situação", "Motivo"], e.notas.map((n) => ({ id: n.id, celulas: [horaBr(n.criadaEm), n.entregador, dataBr(n.semanaInicio),
         n.conferencia ? selo(CONFERENCIA_NOTA[n.conferencia] ?? [n.conferencia, "neutro"]) : "—",
         selo(n.estado === "ANEXADA" ? ["Anexada", "ok"] : n.estado === "RECUSADA" ? ["Recusada", "erro"] : ["Pendente de anexo", "alerta"]), n.motivo ? el("code", { texto: n.motivo }) : "—"] })), "Notas") : vazio("Nenhuma nota recebida.")),
+      identidadeFiscal(idf, pode),
       cartao("Mensagens enviadas pela rotina", e.envios.length ? tabela(["Quando", "Entregador", "Tipo", "Semana"], e.envios.map((x) => ({ id: x.chave, celulas: [horaBr(x.criadoEm), x.entregador, x.tipo === "SEMANAL" ? "Fechamento da semana" : x.tipo === "COBRANCA_NOTA" ? "Cobrança da nota" : x.tipo, dataBr(x.semanaInicio)] })), "Envios") : vazio("Nenhuma mensagem enviada.")),
     ].filter(Boolean);
   }
@@ -265,7 +282,37 @@ export function criarCentral({ ui, ler, enviar }) {
           botao("Encaminhar ao Financeiro", { "data-acao": "central-doc-conferir", "data-sha": x.sha256, "data-versao": String(x.conferencia.versao), "data-estado": "ENCAMINHADO" })) : el("p", { classe: "cf-dica", texto: "Conferir exige permissão de documentos." }))))];
   }
 
-  const DESENHOS = { central: visaoGeral, conferencia, documentos, grupos, operacoes, entregadores, automacoes, seguranca };
+  const CATEGORIA_ENVIO = { TRANSACIONAL: "Transacionais (pagamento, nota, estorno)", PROATIVA: "Proativas (demonstrativo, pedido de nota)", ADMINISTRATIVA: "Avisos administrativos", ACOMPANHAMENTO: "Acompanhamento e lembretes", REENVIO: "Reenvios" };
+  const CAMPO_ENVIO = { proativasDia: "Proativas por dia (todas as conversas)", proativasPorPrivadoDia: "Proativas por conversa privada/dia", proativasPorGrupoDia: "Proativas por grupo financeiro/dia", reservaCriticaPct: "Reserva para prioridade crítica (%)", reservaAltaPct: "Reserva para prioridade alta (%)", porMinutoTotal: "Ritmo geral (mensagens/minuto)", porMinutoPorConversa: "Ritmo por conversa (mensagens/minuto)", respostasPorConversaPorHora: "Respostas por conversa/hora (anti-abuso)" };
+  /** 28/11 — Envio e Limites: uso do dia, fila, limites efetivos (configuráveis sem deploy), alertas e consumo de IA. Só números do servidor. */
+  function envio({ "envio-painel": v }, pode) {
+    if (!v?.disponivel) return [cartao("Envio e Limites", el("p", { texto: "Disponível depois da migração 0027 do MOVA (fila com prioridade e limites configuráveis)." }))];
+    const L = v.limites, u = v.uso;
+    const pct = (x) => `${x}%`;
+    const kpis = el("div", { classe: "cf-kpis" },
+      kpi("Enviadas hoje (esta unidade)", u.unidade, `${pct(u.pctDaUnidade)} do limite diário de proativas (${L.proativasDia})`),
+      ...(u.total !== undefined ? [kpi("Enviadas hoje (todas as empresas)", u.total, `${pct(u.pctTotal)} do limite diário`)] : []),
+      kpi("IA × determinístico", `${v.ia.chamadasIa} × ${v.ia.deterministicas}`, `${v.ia.tokensEntrada + v.ia.tokensSaida} tokens hoje`));
+    const fila = v.fila ?? {};
+    return [kpis,
+      cartao("Limites em vigor (esta unidade)", dl(Object.entries(CAMPO_ENVIO).map(([k, r]) => [r, String(L[k])])),
+        el("p", { classe: "cf-dica", texto: "Respostas pedidas por pessoas e mensagens de erro não consomem o limite de proativas. Ao atingir um limite, as mensagens ficam na fila por prioridade (nunca são descartadas) e o grupo é avisado. O ritmo por minuto protege o WhatsApp." })),
+      cartao("Uso por categoria hoje", tabela(["Categoria", "Enviadas"], Object.entries(u.porCategoria ?? {}).map(([k, n]) => ({ id: k, celulas: [CATEGORIA_ENVIO[k] ?? k, String(n)] })), "Nenhuma mensagem proativa enviada hoje.")),
+      ...(fila.estados ? [cartao("Fila de saída", dl(Object.entries(fila.estados).map(([k, n]) => [k, String(n)])),
+        el("p", { classe: "cf-dica", texto: (fila.represamento?.porPrioridade ?? []).length ? `Adiadas: ${fila.represamento.porPrioridade.map((x) => `prioridade ${x.prioridade} = ${x.quantidade}`).join(" · ")} (motivo mais comum: ${fila.represamento.motivos?.[0]?.motivo ?? "—"}).` : "Nada represado agora." }))] : []),
+      ...(v.alertas?.length ? [cartao("Alertas de hoje", tabela(["Tipo", "Faixa", "Quando"], v.alertas.map((a, i) => ({ id: String(i), celulas: [a.tipo, a.faixa ? `${a.faixa}%` : "—", horaBr(a.criadoEm)] })), "Sem alertas."))] : []),
+      pode.configurar ? cartao("Ajustar um limite (vale para esta unidade, sem novo deploy)",
+        el("form", { classe: "cf-form", "data-form": "limite-envio", "data-unidade": pode.unidadeId },
+          el("label", {}, "Limite ", el("select", { name: "campo" }, Object.entries(CAMPO_ENVIO).map(([k, r]) => el("option", { value: k, texto: r })))),
+          el("label", {}, "Novo valor ", el("input", { name: "valor", inputmode: "numeric", required: "" })),
+          el("label", {}, "Justificativa ", el("input", { name: "justificativa", minlength: "10", maxlength: "500", required: "" })),
+          botao("Salvar limite", { "data-acao": "central-limite-envio" })),
+        el("p", { classe: "cf-dica", texto: "Quem altera, o valor anterior e a justificativa ficam no histórico auditável." })) : null,
+      ...(v.historicoDeLimites?.length ? [cartao("Últimas alterações de limite", tabela(["Quando", "Limite", "Antes", "Depois", "Por quê"], v.historicoDeLimites.map((h, i) => ({ id: String(i), celulas: [horaBr(h.em), `${h.escopo}: ${CAMPO_ENVIO[h.campo] ?? h.campo}`, h.valorAntes ?? "padrão", h.valorDepois, h.justificativa] })), "Nenhuma alteração."))] : []),
+    ].filter(Boolean);
+  }
+
+  const DESENHOS = { envio, central: visaoGeral, conferencia, documentos, grupos, operacoes, entregadores, automacoes, seguranca };
 
   /** Desenho da aba: sem API real ⇒ diz isso (nada simulado); carregando ⇒ aviso; erro ⇒ mensagem do servidor. */
   function desenhar(aba, { fonte, permissoes, unidadeId, redesenhar }) {
@@ -344,6 +391,16 @@ export function criarCentral({ ui, ler, enviar }) {
       if (!f.dataset.unidade) return { ok: false, texto: "Unidade da sessão indisponível." };
       if (!["BAIXA_POR_EXTRATO", "BAIXA_DOCUMENTAL", "CONTA_A_PAGAR", "ANEXAR_DOCUMENTO", "DESPESA_DOCUMENTAL", "JUROS_DOCUMENTAL"].includes(v.operacao)) return { ok: false, texto: "Operação inválida." };
       r = await enviar("/api/fv2/acoes/mova/politica", { operacao: v.operacao, unidadeId: f.dataset.unidade, nivel: v.nivel, limiteCentavos: limite, responsavel: v.responsavel, motivo: v.motivo, vigenteDe: v.vigenteDe });
+    } else if (acao === "central-identidade-aprender") {
+      r = await enviar("/api/fv2/acoes/mova/identidade-fiscal-aprender", {});
+    } else if (acao === "central-limite-envio") {
+      const f = b.closest("form");
+      const v = Object.fromEntries(new FormData(f).entries());
+      if (!f.dataset.unidade) return { ok: false, texto: "Unidade da sessão indisponível." };
+      const valor = Number(String(v.valor).trim());
+      if (!Number.isInteger(valor) || valor < 0) return { ok: false, texto: "Informe um número inteiro." };
+      if (String(v.justificativa ?? "").trim().length < 10) return { ok: false, texto: "Informe a justificativa (10+ caracteres)." };
+      r = await enviar("/api/fv2/acoes/mova/limite-envio", { escopo: "UNIDADE", chave: f.dataset.unidade, campo: v.campo, valor, justificativa: v.justificativa.trim() });
     } else if (acao === "central-confirmar-baixa") {
       r = await enviar("/api/fv2/acoes/mova/confirmar-baixa-extrato", { propostaId: b.dataset.proposta });
     } else return null;

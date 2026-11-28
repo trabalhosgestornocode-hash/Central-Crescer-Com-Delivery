@@ -1,7 +1,7 @@
 -- MOVA — INSTALAÇÃO do schema PRÓPRIO `mova` no banco de PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação (psql -v ON_ERROR_STOP=1 -1 -f instalar.sql). Qualquer falha desfaz tudo.
 -- Aditivo: só cria o schema mova, o papel mova_app (sem login) e as tabelas do MOVA. Não toca em public nem no financeiro_v2.
--- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql, 0027_mova_correcao_de_conta.sql
+-- Migrações: 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0019_mova_core_identidade_memoria.sql, 0020_mova_core_propostas.sql, 0021_mova_core_conhecimento.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql, 0026_mova_entregador_notificacoes_pagamento.sql, 0027_mova_correcao_de_conta.sql, 0028_mova_fila_prioridade_limites.sql, 0029_mova_identidade_fiscal.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -1083,6 +1083,88 @@ grant select, insert on mova.aviso_diario to mova_app;
 grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
 -- sem DELETE para o app (histórico do que foi avisado)
 
+-- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee)
+-- MOVA (27/11/2026): NOTIFICAÇÃO AUTOMÁTICA DE PAGAMENTO ao entregador + aviso consolidado no grupo financeiro + métricas de atendimento.
+--
+-- Arquitetura (Transactional Outbox "por leitura confirmada"): o fato é a LIQUIDAÇÃO persistida no Financeiro v2 (qualquer origem:
+-- tela, comprovante no grupo, extrato, baixa agrupada, integração futura). O MOVA só lê fatos já confirmados (transação revertida
+-- não deixa liquidação), grava aqui UM evento por baixa/destinatário (chave única) e só depois enfileira a mensagem. O estado
+-- financeiro nunca depende do WhatsApp; o estado da mensagem (PENDENTE, ENFILEIRADO, ENVIADO, FALHOU...) é só deste módulo.
+-- Nada é semeado e nenhuma automação é ligada aqui: sem ENTREGADORES_PAGAMENTO ativa na unidade nada é criado nem enviado.
+-- Sem DELETE para o app (histórico auditável).
+
+-- 1) Nova automação por unidade (liga/desliga e pausa individuais, como as demais).
+alter table mova.automacao drop constraint automacao_nome_check;
+alter table mova.automacao add constraint automacao_nome_check check (nome in ('ENTREGADORES_SEMANAL', 'ENTREGADORES_COBRANCA', 'RECONFERENCIA_EXTRATO', 'ENTREGADORES_RELATORIO', 'ENTREGADORES_AVISO_GRUPO', 'ENTREGADORES_PAGAMENTO'));
+
+-- 2) Marco: a PRIMEIRA passada de uma unidade só fixa o instante; nada anterior vira mensagem (sem disparo retroativo).
+create table mova.pagamento_marco (
+  unidade_id      uuid primary key,
+  organizacao_id  uuid not null,
+  marco_em        timestamptz not null default now(),
+  criado_em       timestamptz not null default now()
+);
+grant select, insert on mova.pagamento_marco to mova_app;
+grant update (marco_em) on mova.pagamento_marco to mova_app; -- desligada/pausada: o marco acompanha o tempo (religar nao dispara o intervalo)
+
+-- 3) Eventos de notificação (a "caixa de saída" persistente).
+create table mova.notificacao_pagamento (
+  id               uuid primary key default gen_random_uuid(),
+  chave            text not null unique check (length(chave) between 10 and 300),   -- idempotência: fato + destinatário + tipo
+  organizacao_id   uuid not null,
+  unidade_id       uuid not null,
+  entregador       text not null check (length(btrim(entregador)) between 1 and 200),
+  destino          text not null check (destino in ('ENTREGADOR', 'GRUPO')),
+  tipo             text not null check (tipo in ('PAGAMENTO', 'PAGAMENTO_PARCIAL', 'ESTORNO', 'AVISO_GRUPO')),
+  -- PENDENTE: criado, ainda não enfileirado (pagamento com data futura nem chega a ser criado: espera a data) · AGUARDANDO_ENTREGADOR (só o aviso
+  -- do grupo): espera o desfecho da mensagem do entregador · ENFILEIRADO: na fila de saída do MOVA · ENVIADO: o Gateway/WhatsApp
+  -- aceitou a mensagem · FALHOU: desistência após as tentativas da fila · SEM_TELEFONE / SEM_GRUPO: sem destino cadastrado/autorizado.
+  -- Não existe "ENTREGUE": o MOVA ainda não recebe o recibo de entrega do Gateway (ver docs).
+  estado           text not null default 'PENDENTE' check (estado in ('PENDENTE', 'AGUARDANDO_ENTREGADOR', 'ENFILEIRADO', 'ENVIADO', 'FALHOU', 'SEM_TELEFONE', 'SEM_GRUPO', 'CANCELADO')),
+  evento_pai_id    uuid references mova.notificacao_pagamento (id),     -- aviso do grupo → evento do entregador
+  dados            jsonb not null check (jsonb_typeof(dados) = 'object'),  -- retrato persistido do pagamento (a mensagem sai SÓ daqui)
+  resposta_id      uuid references mova.resposta (id),                   -- mensagem atual na fila de saída
+  tentativas_envio integer not null default 0 check (tentativas_envio between 0 and 20),
+  reenvios         integer not null default 0 check (reenvios between 0 and 5),
+  ultimo_erro      text check (ultimo_erro is null or length(ultimo_erro) <= 120),
+  enviado_em       timestamptz,
+  criado_em        timestamptz not null default now(),
+  atualizado_em    timestamptz not null default now(),
+  check ((estado = 'ENVIADO') = (enviado_em is not null))
+);
+create index notificacao_pagamento_unidade on mova.notificacao_pagamento (unidade_id, criado_em desc);
+create index notificacao_pagamento_pendentes on mova.notificacao_pagamento (estado) where estado in ('PENDENTE', 'AGUARDANDO_ENTREGADOR', 'ENFILEIRADO');
+comment on table mova.notificacao_pagamento is 'Caixa de saída das notificações financeiras: uma linha por fato de pagamento e destinatário (chave única). Texto composto só de dados persistidos.';
+
+-- 4) Cada FATO (liquidação + natureza) entra em UM evento só — mesmo que a leitura rode duas vezes ou em duas instâncias.
+create table mova.notificacao_pagamento_item (
+  liquidacao_id    uuid not null,
+  fato             text not null check (fato ~ '^(BAIXA|ESTORNO:[0-9]{1,12})$'),
+  unidade_id       uuid not null,
+  evento_id        uuid not null references mova.notificacao_pagamento (id),
+  criado_em        timestamptz not null default now(),
+  primary key (liquidacao_id, fato)
+);
+create index notificacao_pagamento_item_evento on mova.notificacao_pagamento_item (evento_id);
+
+-- 5) Métricas de atendimento (sem texto de conversa, sem dado financeiro): quanto foi resolvido sem IA.
+create table mova.atendimento_metrica (
+  dia              date not null,
+  unidade_id       uuid not null,
+  via              text not null check (via in ('DETERMINISTICA', 'IA', 'FALHA', 'BLOQUEADA')),
+  intencao         text not null check (intencao ~ '^[A-Z_]{2,40}$'),
+  respostas        integer not null default 0 check (respostas >= 0),
+  chamadas_ia      integer not null default 0 check (chamadas_ia >= 0),
+  tokens_entrada   bigint not null default 0 check (tokens_entrada >= 0),
+  tokens_saida     bigint not null default 0 check (tokens_saida >= 0),
+  atualizado_em    timestamptz not null default now(),
+  primary key (dia, unidade_id, via, intencao)
+);
+
+grant select, insert on mova.notificacao_pagamento, mova.notificacao_pagamento_item, mova.atendimento_metrica to mova_app;
+grant update (estado, resposta_id, tentativas_envio, reenvios, ultimo_erro, enviado_em, atualizado_em) on mova.notificacao_pagamento to mova_app;
+grant update (respostas, chamadas_ia, tokens_entrada, tokens_saida, atualizado_em) on mova.atendimento_metrica to mova_app;
+
 -- ------------------------------------------------------------------------- 0027_mova_correcao_de_conta.sql (arquivo 8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35)
 -- MOVA 0027 (28/11/2026; a 0026 é da frente dos entregadores, conteúdo independente): CORREÇÃO CADASTRAL DE CONTA A PAGAR pelo WhatsApp (Operador Financeiro, fase 1) — fornecedor, vencimento,
 -- descrição, observação e forma de pagamento, pela ação ESTREITA `corrigir_conta_a_pagar` do Financeiro (migração 0036).
@@ -1096,6 +1178,168 @@ alter table mova.operacao_executada add constraint operacao_executada_operacao_c
 alter table mova.proposta drop constraint proposta_tipo_check;
 alter table mova.proposta add constraint proposta_tipo_check
   check (tipo in ('BAIXA_DE_OBRIGACAO','DESPESA_PAGA','NOVA_OBRIGACAO','SOLICITACAO_DE_REVISAO','VINCULO_DE_DOCUMENTO','CONTA_RELATADA','INTERCOMPANY','CORRECAO_DE_CONTA'));
+
+-- ------------------------------------------------------------------------- 0028_mova_fila_prioridade_limites.sql (arquivo c397d9bae61f1c66eb69220371d349754f3e61bd6fef5688746064af7cf39eae)
+-- MOVA (28/11/2026): FILA DE SAÍDA COM PRIORIDADE, CATEGORIAS, VALIDADE, ADIAMENTO E LIMITES CONFIGURÁVEIS (sem deploy).
+--
+-- Reaproveita a fila persistente que já existe (mova.resposta é a caixa de saída: estado, tentativas, lease, id do provedor).
+-- Não cria uma segunda fila. Acrescenta, por mensagem: categoria, prioridade, validade, liberação (adiamento) e escopo (empresa/unidade).
+-- Atingir um limite NÃO descarta: a mensagem continua PENDENTE com `liberar_em` no futuro; só expira (EXPIRADA, visível e auditável)
+-- depois da validade da sua prioridade. Os limites ficam em tabela (por empresa, unidade, grupo e finalidade) e cada mudança é auditada.
+-- Nada é semeado: sem regras na tabela valem os limites padrão do código (2.000 / 100 / 500, reserva para a prioridade crítica).
+-- Sem DELETE para o app. Aditiva e reversível (recuperacao/reverter-0028.sql).
+
+-- 1) Colunas da fila (defaults compatíveis com o que já existia).
+alter table mova.resposta add column categoria text not null default 'PROATIVA'
+  check (categoria in ('RESPOSTA', 'ERRO', 'TRANSACIONAL', 'PROATIVA', 'ADMINISTRATIVA', 'ACOMPANHAMENTO', 'REENVIO'));
+alter table mova.resposta add column prioridade smallint not null default 1 check (prioridade between 0 and 2);   -- 0 crítica · 1 alta · 2 normal
+alter table mova.resposta add column valida_ate timestamptz;                                                      -- após isto: EXPIRADA (nunca some em silêncio)
+alter table mova.resposta add column liberar_em timestamptz;                                                      -- adiada até este instante (limite, ritmo, circuito, backoff)
+alter table mova.resposta add column motivo_adiamento text check (motivo_adiamento is null or length(motivo_adiamento) <= 60);
+alter table mova.resposta add column adiamentos integer not null default 0 check (adiamentos >= 0);
+alter table mova.resposta add column organizacao_id uuid;
+alter table mova.resposta add column unidade_id uuid;
+
+alter table mova.resposta drop constraint resposta_estado_check;
+alter table mova.resposta add constraint resposta_estado_check check (estado in ('PENDENTE', 'ENVIANDO', 'ENVIADA', 'FALHOU', 'SUPRIMIDA', 'EXPIRADA'));
+
+-- A fila é lida por prioridade e depois por ordem de criação, só do que já pode sair.
+create index resposta_fila_prioridade on mova.resposta (prioridade, seq) where estado = 'PENDENTE';
+create index resposta_envio_dia on mova.resposta (criada_em, categoria) where estado in ('ENVIADA', 'ENVIANDO');
+
+grant update (categoria, prioridade, valida_ate, liberar_em, motivo_adiamento, adiamentos, organizacao_id, unidade_id) on mova.resposta to mova_app;
+
+-- 2) Limites configuráveis. Escopos: GLOBAL ('*'), EMPRESA (organizacao_id), UNIDADE (unidade_id), GRUPO (jid do destino), FINALIDADE (categoria).
+create table mova.limite_envio (
+  id             uuid primary key default gen_random_uuid(),
+  escopo         text not null check (escopo in ('GLOBAL', 'EMPRESA', 'UNIDADE', 'GRUPO', 'FINALIDADE')),
+  chave          text not null check (length(chave) between 1 and 120 and (escopo <> 'GLOBAL' or chave = '*')),
+  campo          text not null check (campo ~ '^[A-Za-z]{3,40}$'),
+  valor          text not null check (length(valor) between 1 and 40),
+  ativo          boolean not null default true,
+  atualizado_por text not null check (length(atualizado_por) between 1 and 80),
+  atualizado_em  timestamptz not null default now(),
+  unique (escopo, chave, campo)
+);
+create table mova.limite_envio_historico (
+  seq            bigint generated always as identity primary key,
+  escopo         text not null,
+  chave          text not null,
+  campo          text not null,
+  valor_antes    text,
+  valor_depois   text,
+  ativo_depois   boolean not null,
+  ator           text not null,
+  justificativa  text not null check (length(btrim(justificativa)) >= 10),
+  em             timestamptz not null default now()
+);
+-- 3) Alertas de uso (70/85/95%) e de represamento: um por faixa/escopo/dia.
+create table mova.alerta_envio (
+  dia            date not null,
+  tipo           text not null check (tipo in ('USO_DIARIO', 'USO_CONVERSA', 'REPRESAMENTO', 'CIRCUITO', 'EXPIRADA')),
+  chave          text not null check (length(chave) between 1 and 160),
+  faixa          integer not null default 0,
+  detalhe        jsonb not null default '{}'::jsonb,
+  criado_em      timestamptz not null default now(),
+  primary key (dia, tipo, chave, faixa)
+);
+
+grant select, insert on mova.limite_envio, mova.limite_envio_historico, mova.alerta_envio to mova_app;
+grant update (valor, ativo, atualizado_por, atualizado_em) on mova.limite_envio to mova_app;
+grant usage on all sequences in schema mova to mova_app;
+comment on table mova.limite_envio is 'Limites de envio do WhatsApp por escopo. Sem linhas valem os padrões do código. Cada alteração grava mova.limite_envio_historico.';
+
+-- ------------------------------------------------------------------------- 0029_mova_identidade_fiscal.sql (arquivo 0332e3af98d7c7cd48ae96936383fc1b31c67c728ab08caa3419386cb05323d5)
+-- MOVA (28/11/2026): IDENTIDADE FISCAL APRENDIDA DAS NOTAS (sem cadastro manual).
+--
+-- O MOVA passa a guardar, internamente, quem é o prestador (CPF/CNPJ) de cada entregador, deduzido das notas que o Financeiro já tem
+-- ligadas às obrigações. Nada é digitado por gestor ou entregador; cada informação guarda a NOTA que a fundamentou (evidência).
+--   identidade_fiscal            o prestador (CPF/CNPJ único) e o que se sabe dele (razão social, fantasia, município)
+--   identidade_fiscal_vinculo    quem (unidade + entregador) usa esse prestador e em que situação (CONSOLIDADA | EM_REVISAO)
+--   identidade_fiscal_evidencia  cada nota analisada: hash, número, chave, valor, tomador, avaliação FORTE/FRACA e motivos
+--   identidade_fiscal_tomador    a empresa tomadora de cada unidade (configurada ou aprendida das notas aprovadas)
+--   nota_leitura_fiscal          cache da leitura por hash: a mesma nota nunca é lida (nem paga em IA) duas vezes
+-- Uma nota continua pertencendo SÓ à empresa tomadora da sua obrigação; o vínculo é por unidade. Sem DELETE para o app.
+-- Aditiva e reversível (recuperacao/reverter-0029.sql). Não altera nenhum dado existente.
+
+create table mova.identidade_fiscal (
+  id uuid primary key default gen_random_uuid(),
+  documento text not null unique check (documento ~ '^[0-9]{11}$' or documento ~ '^[0-9]{14}$'),
+  tipo text not null check (tipo in ('CPF', 'CNPJ')),
+  razao_social text check (razao_social is null or length(razao_social) <= 200),
+  nome_fantasia text check (nome_fantasia is null or length(nome_fantasia) <= 200),
+  municipio text check (municipio is null or length(municipio) <= 120),
+  criada_em timestamptz not null default now(),
+  atualizada_em timestamptz not null default now()
+);
+
+create table mova.identidade_fiscal_vinculo (
+  id uuid primary key default gen_random_uuid(),
+  identidade_id uuid references mova.identidade_fiscal (id),
+  organizacao_id uuid not null,
+  unidade_id uuid not null,
+  entregador text not null check (length(entregador) between 1 and 200),
+  situacao text not null check (situacao in ('CONSOLIDADA', 'EM_REVISAO')),
+  motivo text check (motivo is null or length(motivo) <= 80),
+  origem text not null check (origem in ('HISTORICO', 'PRIMEIRA_NOTA', 'NOTA_RECEBIDA', 'REVISAO_ADMINISTRATIVA')),
+  candidatos text[] not null default '{}',   -- documentos em disputa (só quando EM_REVISAO)
+  criada_em timestamptz not null default now(),
+  atualizada_em timestamptz not null default now(),
+  unique (unidade_id, entregador),
+  check ((situacao = 'CONSOLIDADA') = (identidade_id is not null))
+);
+create index identidade_fiscal_vinculo_identidade on mova.identidade_fiscal_vinculo (identidade_id);
+create index identidade_fiscal_vinculo_revisao on mova.identidade_fiscal_vinculo (organizacao_id) where situacao = 'EM_REVISAO';
+
+create table mova.identidade_fiscal_evidencia (
+  id uuid primary key default gen_random_uuid(),
+  organizacao_id uuid not null,
+  unidade_id uuid not null,
+  entregador text not null,
+  semana_inicio date,
+  sha256 text check (sha256 is null or sha256 ~ '^[0-9a-f]{64}$'),           -- a nota do Financeiro (histórico) pode não ter o hash do arquivo aqui
+  documento_id uuid,
+  chave_dedupe text not null check (length(chave_dedupe) between 5 and 100),   -- sha256 do arquivo ou 'doc:<id do documento>': uma nota, uma evidência por unidade
+  numero text,
+  chave_acesso text,
+  prestador_documento text check (prestador_documento is null or prestador_documento ~ '^([0-9]{11}|[0-9]{14})$'),
+  tomador_documento text check (tomador_documento is null or tomador_documento ~ '^([0-9]{11}|[0-9]{14})$'),
+  valor_centavos bigint,
+  competencia date,
+  fonte text not null check (fonte in ('FINANCEIRO', 'XML', 'PDF_TEXTO', 'IA')),
+  forca text not null check (forca in ('FORTE', 'FRACA')),
+  motivos jsonb not null default '[]'::jsonb,
+  criada_em timestamptz not null default now(),
+  unique (unidade_id, chave_dedupe),
+  check (sha256 is not null or documento_id is not null)
+);
+create index identidade_fiscal_evidencia_entregador on mova.identidade_fiscal_evidencia (unidade_id, entregador);
+create index identidade_fiscal_evidencia_chave on mova.identidade_fiscal_evidencia (chave_acesso) where chave_acesso is not null;
+
+create table mova.identidade_fiscal_tomador (
+  unidade_id uuid primary key,
+  organizacao_id uuid not null,
+  documento text check (documento is null or documento ~ '^[0-9]{14}$'),
+  situacao text not null check (situacao in ('CONFIGURADO', 'APRENDIDO', 'CONFLITO', 'EVIDENCIA_INSUFICIENTE')),
+  notas integer not null default 0,
+  entregadores integer not null default 0,
+  atualizada_em timestamptz not null default now()
+);
+
+create table mova.nota_leitura_fiscal (
+  sha256 text primary key check (sha256 ~ '^[0-9a-f]{64}$'),
+  fonte text not null check (fonte in ('FINANCEIRO', 'XML', 'PDF_TEXTO', 'IA')),
+  dados jsonb not null,
+  chamadas_ia integer not null default 0,
+  tokens_entrada integer not null default 0,
+  tokens_saida integer not null default 0,
+  criada_em timestamptz not null default now()
+);
+
+grant select, insert on mova.identidade_fiscal, mova.identidade_fiscal_vinculo, mova.identidade_fiscal_evidencia, mova.identidade_fiscal_tomador, mova.nota_leitura_fiscal to mova_app;
+grant update (razao_social, nome_fantasia, municipio, atualizada_em) on mova.identidade_fiscal to mova_app;
+grant update (identidade_id, situacao, motivo, origem, candidatos, atualizada_em) on mova.identidade_fiscal_vinculo to mova_app;
+grant update (documento, situacao, notas, entregadores, atualizada_em) on mova.identidade_fiscal_tomador to mova_app;
 
 -- ================================================================================ registro, isolamento e conferência
 create table mova.mova_migracao (nome text primary key, sha256 text not null check (sha256 ~ '^[0-9a-f]{64}$'), aplicada_em timestamptz not null default now());
@@ -1125,7 +1369,10 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0023_mova_politica_sangria.sql', '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631'),
   ('0024_mova_grupo_multiempresa.sql', '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47'),
   ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a'),
-  ('0027_mova_correcao_de_conta.sql', '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35');
+  ('0026_mova_entregador_notificacoes_pagamento.sql', '287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee'),
+  ('0027_mova_correcao_de_conta.sql', '8ddbc8f660fc14f7753b1eb1bf45f4675e8cc35d1161109a5ffe109a074e7f35'),
+  ('0028_mova_fila_prioridade_limites.sql', 'c397d9bae61f1c66eb69220371d349754f3e61bd6fef5688746064af7cf39eae'),
+  ('0029_mova_identidade_fiscal.sql', '0332e3af98d7c7cd48ae96936383fc1b31c67c728ab08caa3419386cb05323d5');
 grant select on mova.mova_migracao to mova_app;
 revoke all on schema mova from public;
 do $$ begin
@@ -1134,7 +1381,7 @@ do $$ begin
   if exists (select 1 from pg_roles where rolname = 'authenticated') then execute 'revoke all on schema mova from authenticated'; execute 'revoke all on all tables in schema mova from authenticated'; end if;
 end $$;
 do $$ declare faltando text; begin
-  select string_agg(t, ', ') into faltando from unnest(array['aprovacao', 'auditoria', 'aviso_diario', 'core_conhecimento', 'core_conhecimento_evento', 'core_desafio_vinculo', 'core_memoria_conversa', 'core_proposta', 'core_tentativa_vinculo', 'core_vinculo', 'automacao', 'consumo_ia', 'controle', 'conversa_ativa', 'decisao', 'documento', 'entregador_autorizado', 'entregador_envio', 'evento', 'evidencia', 'fila', 'grupo_autorizado', 'grupo_membros', 'grupo_unidade', 'instancia_gateway', 'mensagem_pendente', 'nota_entregador', 'operacao_executada', 'orcamento_ia', 'orcamento_ia_alerta', 'orcamento_ia_politica', 'participante', 'participante_autorizado', 'politica_autonomia', 'proposta', 'resposta', 'unidade_sem_grupo', 'mova_migracao']) t
+  select string_agg(t, ', ') into faltando from unnest(array['aprovacao', 'auditoria', 'aviso_diario', 'core_conhecimento', 'core_conhecimento_evento', 'core_desafio_vinculo', 'core_memoria_conversa', 'core_proposta', 'core_tentativa_vinculo', 'core_vinculo', 'automacao', 'consumo_ia', 'controle', 'conversa_ativa', 'decisao', 'documento', 'entregador_autorizado', 'entregador_envio', 'evento', 'evidencia', 'fila', 'grupo_autorizado', 'grupo_membros', 'grupo_unidade', 'instancia_gateway', 'mensagem_pendente', 'nota_entregador', 'operacao_executada', 'orcamento_ia', 'orcamento_ia_alerta', 'orcamento_ia_politica', 'participante', 'participante_autorizado', 'politica_autonomia', 'proposta', 'resposta', 'unidade_sem_grupo', 'mova_migracao', 'pagamento_marco', 'notificacao_pagamento', 'notificacao_pagamento_item', 'atendimento_metrica', 'limite_envio', 'limite_envio_historico', 'alerta_envio', 'identidade_fiscal', 'identidade_fiscal_vinculo', 'identidade_fiscal_evidencia', 'identidade_fiscal_tomador', 'nota_leitura_fiscal']) t
    where not exists (select 1 from pg_tables where schemaname = 'mova' and tablename = t);
   if faltando is not null then raise exception 'MOVA instalação: tabelas ausentes: %', faltando; end if;
   -- Única exclusão permitida: mova.conversa_ativa (estado efêmero da conversa; 0005). Nada financeiro, nenhum histórico.

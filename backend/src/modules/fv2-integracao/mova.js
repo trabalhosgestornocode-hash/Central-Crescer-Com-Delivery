@@ -46,6 +46,11 @@ import {
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
 import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
+import { lerPdf } from "../financeiro-v2/importacao/formatos/pdf.js";
+import { lerNotaDeServico } from "../financeiro-v2/dominio/notaFiscalServico.js";
+
+/** 28/11: leitura DETERMINÍSTICA do PDF da NFS-e (layout nacional) para o MOVA — sem IA; layout desconhecido ou PDF digitalizado ⇒ null (cai na IA). */
+const leitorDeNotaPdf = (bytes) => lerNotaDeServico(lerPdf(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).paginas.flatMap((p) => p.linhas));
 import { configuracaoDaConversa } from "../mova-core/conversaWhatsapp.js";
 import { montarConversaCore } from "./movaCoreConversa.js";
 import { criarRepositorioDePropostasPostgres } from "../mova-core/persistenciaPropostas.js";
@@ -180,6 +185,9 @@ export function lerConfiguracaoMova(env) {
     // Vazio = sem teto diário; inválido = 0 (nada sai). Só a configuração amplia; o código nunca.
     envioMaximoDia: env.MOVA_ENVIO_MAXIMO_DIA ? (/^[0-9]{1,4}$/.test(env.MOVA_ENVIO_MAXIMO_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_DIA) : 0) : null,
     envioMaximoPorConversaDia: env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA ? (/^[0-9]{1,3}$/.test(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) ? Number(env.MOVA_ENVIO_MAXIMO_POR_CONVERSA_DIA) : 0) : (env.MOVA_ENVIO_MAXIMO_DIA ? 10 : null),
+    // 28/11: fila de saída priorizada (limites configuráveis em mova.limite_envio, sem deploy). Exige a migração 0028; sem ela o código segue
+    // com o enviador legado (a detecção é automática) e os tetos MOVA_ENVIO_MAXIMO_* abaixo continuam valendo. Com a flag, eles são ignorados.
+    filaPrioridade: sim(env.MOVA_FILA_PRIORIDADE),
     respostasNaturais: ia && sim(env.MOVA_RESPOSTAS_NATURAIS),
     // MOVA CORE: conversa natural (SOMBRA | RESPOSTA) só com a IA do MOVA ligada e só nas unidades de MOVA_CORE_CONVERSA_UNIDADES.
     conversaCore: ia ? configuracaoDaConversa(env) : Object.freeze({ modo: "DESLIGADO", motivo: "SEM_IA", unidades: [] }),
@@ -358,7 +366,7 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
       cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false, corrigirContas: false, operarContas: false };
     }
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, corrigirContas: cfg.corrigirContas === true, operarContas: cfg.operarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, corrigirContas: cfg.corrigirContas === true, operarContas: cfg.operarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, leitorDeNota: leitorDeNotaPdf, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
     try {
       // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta
@@ -372,7 +380,15 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
   const enviadorBase = criarEnviadorDeRespostas({ armazenamento: mova.armazenamento, controle, registrar,
     enviar: enviarAoGateway ?? (async () => { throw Object.assign(new Error("sem gateway"), { codigo: "GATEWAY_NAO_CONFIGURADO" }); }),
     habilitado: Boolean(cfg.envio && (enviarAoGateway || releSaida)), naoAntesDe: cfg.envioNaoAntesDe ?? null, rele: releSaida, maximoDeEnvios: cfg.envioMaximo ?? null,
-    maximoPorDia: cfg.envioMaximoDia ?? null, maximoPorConversaDia: cfg.envioMaximoPorConversaDia ?? null,
+    maximoPorDia: cfg.filaPrioridade ? null : cfg.envioMaximoDia ?? null, maximoPorConversaDia: cfg.filaPrioridade ? null : cfg.envioMaximoPorConversaDia ?? null,
+    politica: cfg.filaPrioridade ? {
+      regras: () => mova.armazenamento.limitesDeEnvio.regrasAtivas(),
+      // Alerta de uso/represamento: vai ao grupo financeiro da unidade (ou ao primeiro grupo financeiro autorizado), como aviso administrativo crítico.
+      avisarAdministracao: async ({ texto, unidadeId }) => {
+        const gs = configuracao.gruposAutorizados.filter((g) => !g.privada && !g.entregador && g.politicaResposta === "GRUPO_FINANCEIRO");
+        const g = gs.find((x) => unidadeId && x.unidades?.includes(unidadeId)) ?? gs[0];
+        if (g) await mova.armazenamento.saida.enfileirar({ grupoId: g.grupoId, respostaA: null, eventoId: null, texto, categoria: "ADMINISTRATIVA", prioridade: 0 });
+      } } : null,
     // Homologação/piloto: só conversas PRIVADAS autorizadas. OPERACAO: os grupos por LISTA e as privadas DERIVADAS da lista.
     destinosPermitidos: () => configuracao.gruposAutorizados.map((g) => g.grupoId).filter((j) => cfg.modo === "OPERACAO" || ehConversaPrivada(j)) });
   const recarregar = async () => {
@@ -384,7 +400,10 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
   const rotina = cfg.rotinaEntregadores && mova.entregadores ? criarRotinaPeriodica(async () => { await recarregar(); return mova.entregadores.rotina(); }, { registrar }) : null;
   // 26/11: aviso diário de contas a pagar — a MESMA rotina periódica (um passo a cada 5 min; idempotente por grupo/data/janela).
   const rotinaAvisos = mova.avisos ? criarRotinaPeriodica(() => mova.avisos.passo(), { registrar }) : null;
-  return { mova, worker, enviador, configuracao, controle, orcamento, rotina, rotinaAvisos };
+  // 27/11: notificação de pagamento ao entregador — passo a cada 60 s (idempotente; sem a automação ENTREGADORES_PAGAMENTO ligada na
+  // unidade não cria nem envia nada). Lê só as baixas já gravadas no Financeiro; a mensagem sai pelo mesmo enviador de sempre.
+  const rotinaPagamentos = cfg.rotinaEntregadores && mova.pagamentos ? criarRotinaPeriodica(async () => { await recarregar(); return mova.pagamentos.passada(); }, { registrar, intervaloMs: 60_000 }) : null;
+  return { mova, worker, enviador, configuracao, controle, orcamento, rotina, rotinaAvisos, rotinaPagamentos };
 }
 
 /** Cliente de envio pelo canal isolado do Gateway (rota /internal/mova/messages, segredo MOVA). */
@@ -638,7 +657,7 @@ export async function pararMovaEmbutido({ env }) {
   if (laco) { clearInterval(laco); laco = null; }
   const m = instanciaAtiva ?? (instancia ? await instancia : null);
   m?.worker?.parar();
-  m?.rotina?.parar(); m?.rotinaAvisos?.parar(); // 26/11: as rotinas periódicas também param (a idempotência no banco cobre o resto)
+  m?.rotina?.parar(); m?.rotinaAvisos?.parar(); m?.rotinaPagamentos?.parar(); // 26/11: as rotinas periódicas também param (a idempotência no banco cobre o resto)
   instanciaAtiva = null;
   marcar("PARADO", { proximaEm: null });
   void env;

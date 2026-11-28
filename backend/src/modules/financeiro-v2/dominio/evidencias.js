@@ -4,11 +4,13 @@
 // o conteúdo comprova (assinatura binária) e que bate com o tipo e a extensão declarados. O nome nunca vira caminho:
 // o cofre endereça pelo SHA-256; o nome higienizado serve só para a pessoa reconhecer o documento.
 import { CODIGO, falhar } from "./erros.js";
+import { validarXmlDeNota } from "./notaFiscalServico.js";
 
 /** Formatos aceitos como evidência. Executáveis, scripts, HTML, SVG e compactados nunca entram. */
 export const FORMATOS_DE_EVIDENCIA = Object.freeze({
   "application/pdf": Object.freeze({ nome: "PDF", extensoes: Object.freeze([".pdf"]), assinatura: Object.freeze([0x25, 0x50, 0x44, 0x46, 0x2d]) }),
   "image/png": Object.freeze({ nome: "Imagem PNG", extensoes: Object.freeze([".png"]), assinatura: Object.freeze([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) }),
+  "application/xml": Object.freeze({ nome: "XML (NFS-e)", extensoes: Object.freeze([".xml"]), assinatura: Object.freeze([]) }),
   "image/jpeg": Object.freeze({ nome: "Imagem JPEG", extensoes: Object.freeze([".jpg", ".jpeg"]), assinatura: Object.freeze([0xff, 0xd8, 0xff]) }),
 });
 export const TAMANHO_MAXIMO_DE_EVIDENCIA = 10 * 1024 * 1024; // 10 MiB por arquivo enviado pela tela
@@ -33,6 +35,10 @@ export function exigirFormatoDeEvidencia({ conteudo, tipoMime, nomeArquivo }) {
   if (!formato.extensoes.includes(extensao)) falhar(CODIGO.DOCUMENTO_INVALIDO, "A extensão do arquivo não corresponde ao tipo informado.", { extensao });
   if (formato.assinatura.some((byte, i) => conteudo[i] !== byte)) {
     falhar(CODIGO.DOCUMENTO_INVALIDO, "O conteúdo do arquivo não corresponde ao tipo informado (assinatura do formato ausente).");
+  }
+  if (tipoMime === "application/xml") { // texto sem DTD/entidade/CDATA/instrução; o que não passar nunca é guardado
+    const x = validarXmlDeNota(conteudo);
+    if (!x.ok) falhar(CODIGO.DOCUMENTO_INVALIDO, "XML recusado: precisa ser a NFS-e íntegra, sem DTD, entidades ou instruções.", { motivo: x.motivo });
   }
   let conteudoAtivo = false;
   if (tipoMime === "application/pdf") {
