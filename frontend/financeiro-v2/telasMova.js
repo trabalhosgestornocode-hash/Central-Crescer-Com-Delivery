@@ -166,7 +166,10 @@ export function montarMova(alvo, { secao, ler, enviar, sessao, aoContador = () =
   const cache = new Map(); // chave → { carregando:Promise } | { ok, dados } | { erro }
 
   // ---------- leitura
-  const ROTA = { estado: "/api/fv2/mova/estado", caixa: "/api/fv2/mova/caixa", contas: "/api/fv2/caixa-e-bancos", erros: "/api/fv2/mova/erros", "falhas-gerais": "/api/fv2/mova/falhas-gerais" };
+  // Caixa e Bancos exige um período (inicio/fim): o mês corrente até hoje, em São Paulo. Só a lista de contas é usada.
+  const hojeSp = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const ROTA = { estado: "/api/fv2/mova/estado", caixa: "/api/fv2/mova/caixa", contas: `/api/fv2/caixa-e-bancos?inicio=${hojeSp.slice(0, 8)}01&fim=${hojeSp}`,
+    erros: "/api/fv2/mova/erros", "falhas-gerais": "/api/fv2/mova/falhas-gerais" };
   const urlDe = (k) => ROTA[k] ?? `/api/fv2/mova/${k}`;
   const OPCIONAIS = new Set(["entregadores-oficiais", "contas", "erros", "falhas-gerais", "pagamentos-a-conciliar"]);
   function obter(k) {
@@ -412,8 +415,12 @@ export function montarMova(alvo, { secao, ler, enviar, sessao, aoContador = () =
         el("label", { classe: "mova-campo" }, el("span", { texto: "Categoria definitiva" }), el("input", { "data-mova-categoria": p.id, value: p.categoriaRevisada ?? p.categoriaSugerida ?? "", placeholder: "CODIGO_DA_CATEGORIA", "aria-describedby": "mova-dica-cat" })),
         botao("Salvar categoria", { "data-mova": "classificar", "data-proposta": p.id })) : null,
       pode.decidir && p.tipo !== "BAIXA_DE_OBRIGACAO" ? el("small", { id: "mova-dica-cat", classe: "nota", texto: p.categoriaSugerida ? `Sugestão do MOVA: ${p.categoriaSugerida}. A sugestão nunca é aplicada sozinha.` : "O MOVA não sugeriu categoria." }) : null,
-      pagamento && !confirmarBaixa && !motivo ? el("label", { classe: "mova-campo" }, el("span", { texto: "Conta de onde saiu o pagamento" }),
-        el("select", { "data-mova-conta": p.id }, el("option", { value: "", texto: "Escolha a conta…" }), contas.map((c) => el("option", { value: c.id, texto: c.nome })))) : null,
+      pagamento && !confirmarBaixa && !motivo ? (contas.length
+        ? el("label", { classe: "mova-campo" }, el("span", { texto: "Conta de onde saiu o pagamento" }),
+          el("select", { "data-mova-conta": p.id }, el("option", { value: "", texto: "Escolha a conta…" }), contas.map((c) => el("option", { value: c.id, texto: c.nome }))))
+        : el("p", { classe: "mova-alerta mova-alerta--alerta" }, cache.get("contas")?.ok
+          ? ["Nenhuma conta ativa nesta unidade. Cadastre a conta em ", el("a", { href: "#/caixa-e-bancos", texto: "Caixa e Bancos" }), " para aprovar."]
+          : ["Não foi possível carregar as contas da unidade. ", el("button", { type: "button", classe: "botao-link", "data-mova": "recarregar-contas", texto: "Tentar de novo" })])) : null,
       el("div", { classe: "mova-acoes" },
         competenciaAConfirmar(p) && pode.decidir ? botao("Informar competência", { "data-mova": "competencia", "data-proposta": p.id }, "primario") : null,
         confirmarBaixa ? botao("Confirmar baixa pelo extrato", { "data-mova": "confirmar-baixa", "data-proposta": p.id, disabled: !pode.decidir, title: "Vincula o pagamento à saída do extrato já conferida" }, "primario")
@@ -722,6 +729,7 @@ export function montarMova(alvo, { secao, ler, enviar, sessao, aoContador = () =
     switch (a) {
       case "fechar-gaveta": return fecharGaveta();
       case "tentar": recarregar(); return desenhar({ animar: true });
+      case "recarregar-contas": recarregar("contas"); await obter("contas"); return desenharGaveta();
       case "filtro": st.filtro = b.dataset.filtro; fecharGaveta(); return desenhar();
       case "sub": st.sub = b.dataset.sub; return desenhar({ animar: true });
       case "conf-motivo": st.conf.motivo = b.dataset.motivo || null; return desenhar();
@@ -736,6 +744,8 @@ export function montarMova(alvo, { secao, ler, enviar, sessao, aoContador = () =
       case "aplicar": {
         const id = b.dataset.proposta;
         const conta = gaveta.querySelector(`[data-mova-conta="${id}"]`);
+        const p = todosDaCaixa().find((x) => x.proposta?.id === id)?.proposta;
+        if (!conta && p && ["BAIXA_DE_OBRIGACAO", "DESPESA_PAGA"].includes(p.tipo)) return avisar("Sem a conta do pagamento não dá para aprovar.", false);
         if (conta && !conta.value) { conta.focus(); conta.setAttribute("aria-invalid", "true"); return avisar("Escolha a conta de onde saiu o pagamento.", false); }
         const r = await acaoNoServidor(b, () => enviar("/api/fv2/acoes/mova/aplicar", { propostaId: id, ...(conta?.value ? { contaId: conta.value } : {}) }), { sucesso: "Proposta aprovada e lançada no Financeiro.", recarregar: ["caixa", "visao-geral", "operacoes"] });
         if (r.ok) fecharGaveta();
