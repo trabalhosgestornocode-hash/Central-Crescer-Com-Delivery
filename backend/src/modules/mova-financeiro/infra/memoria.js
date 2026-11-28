@@ -215,6 +215,7 @@ export function criarArmazenamentoMemoria({ gerarId = randomUUID, relogio = () =
         Object.assign(n, { estado, motivo, documentoId, situacaoDocumental }); return true;
       },
       async registrarLeitura(id, { leitura, conferencia }) { const n = [...notas.values()].find((x) => x.id === id); if (n) Object.assign(n, { leitura, conferencia }); },
+      async porChave({ unidadeId, entregador, chaveAcesso, sha256 }) { const n = chaveAcesso ? [...notas.values()].find((x) => x.unidadeId === unidadeId && x.entregador === entregador && x.sha256 !== sha256 && ["PENDENTE_ANEXO", "ANEXADA"].includes(x.estado) && x.leitura?.chaveAcesso === chaveAcesso) : null; return n ? { id: n.id, semanaInicio: n.semanaInicio, estado: n.estado } : null; },
       async listar(escopo) { return [...notas.values()].filter((n) => n.organizacaoId === escopo.organizacaoId && n.unidadeId === escopo.unidadeId).map((n) => Object.freeze({ ...n })).reverse(); },
     }),
     entregadores: Object.freeze({

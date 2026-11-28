@@ -21,7 +21,7 @@ import { exigirCentavos } from "../dominio/dinheiro.js";
 import { exigirFormatoDeEvidencia } from "../dominio/evidencias.js";
 import { baseNaTransacao } from "./base.js";
 import { lerPdf } from "../importacao/formatos/pdf.js";
-import { lerNotaDeServico, parteComoTexto } from "../dominio/notaFiscalServico.js";
+import { lerNotaDeServico, lerNotaDeXml, parteComoTexto } from "../dominio/notaFiscalServico.js";
 import { operacoesDeCofreDocumental } from "./cofreDocumental.js";
 import { operacoesEconomicas } from "./economico.js";
 import { resumoDaSemana, visaoDoExtra } from "./extrasEntregadores.js";
@@ -35,7 +35,10 @@ const textoOpcional = (v, campo, max = 160) => (v === undefined || v === null ||
 
 /** Texto do PDF → dados da NFS-e (layout nacional). Qualquer falha de leitura vira "não lida": nunca impede o anexo. */
 function lerNotaDoArquivo(arquivo) {
-  if (!arquivo?.conteudo || !/pdf/i.test(String(arquivo.tipoMime ?? arquivo.nome ?? ""))) return null;
+  if (!arquivo?.conteudo) return null;
+  const tipo = String(arquivo.tipoMime ?? arquivo.nome ?? "");
+  if (/xml/i.test(tipo)) { try { return lerNotaDeXml(arquivo.conteudo instanceof Uint8Array ? arquivo.conteudo : new Uint8Array(arquivo.conteudo)); } catch { return null; } }
+  if (!/pdf/i.test(tipo)) return null;
   try {
     const pdf = lerPdf(arquivo.conteudo instanceof Uint8Array ? arquivo.conteudo : new Uint8Array(arquivo.conteudo));
     return lerNotaDeServico(pdf.paginas.flatMap((p) => p.linhas));

@@ -13,7 +13,14 @@
 export const CONTRATO_EVENTO_VERSAO = 1;
 export const PROVEDORES = Object.freeze(["BAILEYS", "SIMULADO"]);
 export const TIPOS_MENSAGEM = Object.freeze(["TEXTO", "IMAGEM", "DOCUMENTO", "AUDIO", "OUTRO"]);
-export const MIMES_ACEITOS = Object.freeze(["image/jpeg", "image/png", "image/webp", "application/pdf", "audio/ogg", "audio/mpeg", "audio/mp4"]);
+export const MIMES_ACEITOS = Object.freeze(["image/jpeg", "image/png", "image/webp", "application/pdf", "application/xml", "audio/ogg", "audio/mpeg", "audio/mp4"]);
+/** Tipo EFETIVO do arquivo: o WhatsApp costuma mandar XML como text/xml, application/octet-stream ou text/plain com nome .xml. */
+export function mimeEfetivo(mime, nomeArquivo = null) {
+  const m = String(mime ?? "").split(";")[0].trim().toLowerCase();
+  if (m === "text/xml" || m === "application/xml") return "application/xml";
+  if ((m === "" || m === "application/octet-stream" || m === "text/plain") && /.xml$/i.test(String(nomeArquivo ?? ""))) return "application/xml";
+  return m;
+}
 export const TEXTO_MAX = 4096;
 export const MIDIA_MAX_BYTES = 15 * 1024 * 1024;
 

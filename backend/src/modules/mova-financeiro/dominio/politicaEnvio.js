@@ -169,5 +169,8 @@ export const CLASSE_POR_TIPO = Object.freeze({
 export function enfileiramentoDoTipo(tipo, { agora = new Date(), organizacaoId = null, unidadeId = null, reenvio = false, limites = LIMITES_PADRAO } = {}) {
   const base = CLASSE_POR_TIPO[tipo] ?? { categoria: CATEGORIA.PROATIVA, prioridade: PRIORIDADE.ALTA };
   const categoria = reenvio ? CATEGORIA.REENVIO : base.categoria;
-  return { categoria, prioridade: base.prioridade, validaAte: new Date(agora.getTime() + validadeEmMs(base.prioridade, limites)).toISOString(), organizacaoId, unidadeId };
+  // Notificação FINANCEIRA crítica (pagamento, pagamento parcial, estorno) NUNCA expira por tempo (29/11): esgotadas as tentativas automáticas
+  // ela fica como falha pendente de resolução administrativa, com reenvio controlado. Lembretes e avisos comuns continuam com validade.
+  const semValidade = base.categoria === CATEGORIA.TRANSACIONAL && base.prioridade === PRIORIDADE.CRITICA;
+  return { categoria, prioridade: base.prioridade, validaAte: semValidade ? null : new Date(agora.getTime() + validadeEmMs(base.prioridade, limites)).toISOString(), organizacaoId, unidadeId };
 }

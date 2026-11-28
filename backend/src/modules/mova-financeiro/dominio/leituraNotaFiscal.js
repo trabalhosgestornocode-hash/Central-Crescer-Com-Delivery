@@ -3,6 +3,7 @@
 // (2) XML da NFS-e/NF-e, (3) texto do PDF do emissor nacional (leitor injetado), (4) IA em texto, (5) visão — só se as anteriores falharem.
 // Aqui ficam o leitor de XML e a conversão de qualquer leitura para o formato que a conferência do MOVA entende.
 import { FONTE, normalizarLeitura } from "./identidadeFiscal.js";
+import { validarXmlSeguro } from "./xmlSeguro.js";
 
 const tag = (xml, nome, de = 0) => {
   const m = new RegExp(`<(?:\\w+:)?${nome}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:\\w+:)?${nome}>`, "i").exec(xml.slice(de));
@@ -63,7 +64,9 @@ export function leituraParaConferencia(bruta, fonte) {
 export function lerNotaSemIa({ bytes, mime, leitorPdf = null }) {
   try {
     if (/xml/i.test(String(mime ?? ""))) {
-      const b = lerNotaXml(Buffer.from(bytes).toString("utf8"));
+      const seguro = validarXmlSeguro(bytes);
+      if (!seguro.ok) return null; // XML com DTD/entidade/instrução nunca é lido
+      const b = lerNotaXml(seguro.texto);
       const l = b ? leituraParaConferencia(b, FONTE.XML) : null;
       return l ? { leitura: l, fonte: FONTE.XML } : null;
     }

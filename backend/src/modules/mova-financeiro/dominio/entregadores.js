@@ -15,8 +15,8 @@ const PRIVADO = /^[1-9]\d{7,14}@s\.whatsapp\.net$/;
 const AGUARDANDO = ["AGUARDANDO_NF", "NF_REJEITADA"];
 const LID = /^[0-9]{5,30}@lid$/;
 /** 23/11: a nota pode chegar em PDF ou em imagem (foto/print legível); o anexo oficial do Financeiro aceita os três. */
-export const MIMES_DA_NOTA = Object.freeze(["application/pdf", "image/jpeg", "image/png"]);
-export const EXTENSAO_DA_NOTA = Object.freeze({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png" });
+export const MIMES_DA_NOTA = Object.freeze(["application/pdf", "image/jpeg", "image/png", "application/xml"]);
+export const EXTENSAO_DA_NOTA = Object.freeze({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "application/xml": "xml" });
 export const PERFIL_ENTREGADOR = "ENTREGADOR";
 
 /** Lista fechada: { unidadeId, chave (do fechamento), telefoneE164, privado (jid), nome? }. Telefone único POR UNIDADE. */

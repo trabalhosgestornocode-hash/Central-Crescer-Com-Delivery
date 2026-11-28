@@ -167,11 +167,22 @@ export function criarNotificacoesPagamento({ cfg, porta, armazenamento: a, relog
     const orfa = e.estado === E.ENFILEIRADO && !e.respostaId;
     const elegivel = [E.FALHOU, E.SEM_TELEFONE, E.SEM_GRUPO].includes(e.estado) || (forcar && (e.estado === E.ENVIADO || orfa));
     if (!elegivel) return { ok: false, motivo: e.estado === E.ENVIADO ? "JA_ENVIADA" : "NAO_ELEGIVEL" };
-    let destino, texto;
+    let destino, texto, dadosAtuais = null;
     if (e.destino === "ENTREGADOR") {
       const ent = entregadorDe(unidadeId, e.entregador);
       if (!ent) return { ok: false, motivo: "SEM_TELEFONE" };
-      destino = ent.privado; texto = mensagemDePagamento(e.dados, { empresa: empresaDe(unidadeId), nome: ent.nome ?? e.dados.entregador?.nome });
+      // 29/11: ANTES de reenviar, relê o estado financeiro ATUAL (nunca reenvia informação velha): estorno, valor ou saldo mudaram?
+      let atuais;
+      try { atuais = await porta.ler("consultarBaixasDeEntregadores", escopoDe(unidadeId), {}); } catch { return { ok: false, motivo: "FINANCEIRO_INDISPONIVEL" }; }
+      const ids = new Set((e.dados?.periodos ?? []).map((p) => p.liquidacaoId));
+      const grupos = agruparBaixas(fatosDeBaixa((atuais.itens ?? []).filter((q) => ids.has(q.liquidacaoId)), { marcoEm: "1970-01-01T00:00:00.000Z", hoje: hoje() }).baixas);
+      const atual = ids.size > 0 && grupos.length === 1 && grupos[0].itens.length === ids.size ? grupos[0] : null;
+      if (!atual) {
+        await a.auditoria.registrar({ acao: "NOTIFICACAO_PAGAMENTO_REENVIO_BARRADO", atorTipo: "USUARIO", atorRef: por ?? null, alvo: e.id, dados: { motivo: "ESTADO_FINANCEIRO_MUDOU" } }).catch(() => {});
+        return { ok: false, motivo: "ESTADO_FINANCEIRO_MUDOU" };
+      }
+      dadosAtuais = atual.dados;
+      destino = ent.privado; texto = mensagemDePagamento(dadosAtuais, { empresa: empresaDe(unidadeId), nome: ent.nome ?? e.dados.entregador?.nome });
     } else {
       const grupo = grupoDaUnidade(unidadeId);
       if (!grupo) return { ok: false, motivo: "SEM_GRUPO" };
@@ -182,12 +193,22 @@ export function criarNotificacoesPagamento({ cfg, porta, armazenamento: a, relog
     if (!reservado) return { ok: false, motivo: "CONCORRENCIA" };
     try { const respostaId = await enfileirar(destino, texto, e, { reenvio: true }); await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: E.ENFILEIRADO, respostaId }); }
     catch (erro) { await a.pagamentos.atualizar(e.id, { de: [E.ENFILEIRADO], estado: e.estado, ultimoErro: "ENFILEIRAR_FALHOU" }); throw erro; }
-    await a.auditoria.registrar({ acao: "NOTIFICACAO_PAGAMENTO_REENVIADA", atorTipo: "USUARIO", atorRef: por ?? null, alvo: e.id, dados: { de: e.estado, reenvio: e.reenvios + 1, forcado: Boolean(forcar) } });
+    await a.auditoria.registrar({ acao: "NOTIFICACAO_PAGAMENTO_REENVIADA", atorTipo: "USUARIO", atorRef: por ?? null, alvo: e.id, dados: { de: e.estado, reenvio: e.reenvios + 1, forcado: Boolean(forcar), reconsultado: Boolean(dadosAtuais), valorAtualCentavos: dadosAtuais?.totalCentavos ?? null } });
     return { ok: true, evento: await a.pagamentos.obter(e.id, { organizacaoId, unidadeId }) };
   }
 
   /** Histórico para a Central (só desta unidade); `entregador` filtra pela chave cadastrada. */
   const listar = (escopo, o = {}) => a.pagamentos.listar(escopo, o);
 
-  return Object.freeze({ passada, reenviar, listar });
+  /**
+   * 29/11: falhas de notificação CRÍTICA (pagamento/parcial/estorno) que esgotaram as tentativas automáticas e AGUARDAM resolução
+   * administrativa. Nunca expiram: ficam aqui até serem reenviadas (reenvio controlado) ou resolvidas.
+   */
+  async function pendentesDeResolucao(escopo, { limite = 200 } = {}) {
+    const todas = await a.pagamentos.listar(escopo, { limite });
+    return todas.filter((e) => [E.FALHOU, E.SEM_TELEFONE, E.SEM_GRUPO].includes(e.estado) && [T.PAGAMENTO, T.PARCIAL, T.ESTORNO].includes(e.tipo))
+      .map((e) => ({ id: e.id, tipo: e.tipo, entregador: e.entregador, destino: e.destino, estado: e.estado, situacao: "FALHA_PENDENTE_DE_RESOLUCAO_ADMINISTRATIVA", reenvios: e.reenvios, ultimoErro: e.ultimoErro ?? null, reenviavel: e.reenvios < LIMITE_DE_REENVIOS }));
+  }
+
+  return Object.freeze({ passada, reenviar, listar, pendentesDeResolucao });
 }

@@ -23,6 +23,7 @@ export const FINALIDADE_DOCUMENTO = Object.freeze({ VISUALIZAR: "VISUALIZAR", BA
 /** Tipos de arquivo que o cofre entrega (sempre como anexo, exceto PDF limpo, que pode ser visualizado). */
 export const TIPOS_SUPORTADOS = Object.freeze({
   "application/pdf": { extensao: "pdf", visualizavel: true },
+  "application/xml": { extensao: "xml", visualizavel: false },
   "text/csv": { extensao: "csv", visualizavel: false },
   "text/plain": { extensao: "txt", visualizavel: false },
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": { extensao: "xlsx", visualizavel: false },

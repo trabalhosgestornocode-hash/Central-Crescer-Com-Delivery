@@ -404,6 +404,12 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       async registrarLeitura(id, { leitura, conferencia }) {
         await q("update mova.nota_entregador set leitura = $2, conferencia = $3, atualizada_em = now() where id = $1", [id, leitura ? JSON.stringify(leitura) : null, conferencia]);
       },
+      /** A MESMA nota fiscal (chave de acesso) já recebida DESTE entregador em outro arquivo/formato (PDF × XML × foto), ainda viva (não recusada)? */
+      async porChave({ unidadeId, entregador, chaveAcesso, sha256 }) {
+        if (!chaveAcesso) return null;
+        const r = await q("select id, semana_inicio::text as semana_inicio, estado from mova.nota_entregador where unidade_id = $1 and entregador = $2 and sha256 <> $3 and estado in ('PENDENTE_ANEXO','ANEXADA') and leitura->>'chaveAcesso' = $4 order by criada_em limit 1", [unidadeId, entregador, sha256, chaveAcesso]);
+        return r.rows[0] ? { id: r.rows[0].id, semanaInicio: r.rows[0].semana_inicio, estado: r.rows[0].estado } : null;
+      },
       async listar(escopo) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
       },

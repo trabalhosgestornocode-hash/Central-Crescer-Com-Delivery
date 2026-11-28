@@ -2,12 +2,13 @@
 // Duas empresas (Alfa = Acai, Beta = Subway), semanas 02/11 e 09/11 fechadas, entregadores sinteticos. Nada sai para o WhatsApp.
 import assert from "node:assert/strict";
 import { after } from "node:test";
-import { criarCofreMemoria, criarConcessoesMemoria, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
+import { ACAO, criarCofreMemoria, criarConcessoesMemoria, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
 import { TODAS, ctx } from "../../financeiro-v2/helpers/cenario.js";
-import { AUTOMACAO_PAGAMENTO, criarMova, validarConfiguracao, instalarConfiguracao } from "../../../src/modules/mova-financeiro/index.js";
+import { AUTOMACAO_PAGAMENTO, criarMova, criarPortaOperacional, validarConfiguracao, instalarConfiguracao } from "../../../src/modules/mova-financeiro/index.js";
 import { ALFA, BETA, CONFIG, ESCOPOS, FIN, FINANCEIRO, ORG } from "./operacao.js";
 import { criarBancoMova, descartarBancoMova } from "./banco.js";
 
+export const OPERADOR = "eeeeeeee-0000-4000-8000-0000000000c2"; // identidade técnica (ver + enviar documento) quando `operacional: true`
 export const SEG = "2026-11-02", S2 = "2026-11-09";
 export const AGORA = "2026-11-18T15:00:00.000Z"; // quarta 12:00 em Fortaleza (vencimento da semana 2)
 export const ADM = "eeeeeeee-0000-4000-8000-000000000001";
@@ -35,7 +36,7 @@ const apurar = async ({ unidadeId, inicio, fim }) => ({ disponivel: true, dias: 
 const criados = [];
 after(async () => { for (const b of criados.splice(0)) await descartarBancoMova(b).catch(() => {}); });
 
-export async function cenario({ entregadores = ENTREGADORES, interpretador = null, semanas = [SEG, S2], agora = AGORA, leitorDeNota = null, documentos = {} } = {}) {
+export async function cenario({ entregadores = ENTREGADORES, interpretador = null, semanas = [SEG, S2], agora = AGORA, leitorDeNota = null, documentos = {}, operacional = false } = {}) {
   const estado = { agora };
   const relogio = () => new Date(estado.agora);
   const cofre = criarCofreMemoria();
@@ -55,8 +56,12 @@ export async function cenario({ entregadores = ENTREGADORES, interpretador = nul
       { grupoId: GRUPO_BETA, unidades: [BETA], acesso: "LISTA", politicaResposta: "GRUPO_FINANCEIRO", participantes: [{ ids: [FIN], perfil: "FINANCEIRO" }] }] };
   await instalarConfiguracao(banco.pool, validarConfiguracao(config));
   const ia = { beta: { messages: { async create() { throw new Error("IA nao pode ser chamada na notificacao de pagamento"); } } } };
-  const montarMova = () => criarMova({ configuracao: config, nucleo: real, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true,
-    extrator: { extrair: ia.beta.messages.create }, entregadores: true, interpretadorEntregador: interpretador, leitorDeNota });
+  // `estado.financeiroFora = true` simula o Financeiro indisponível para a LEITURA de baixas (o resto do núcleo segue)
+  const nucleoMova = Object.fromEntries(Object.entries(real).map(([n, op]) => [n, n === "consultarBaixasDeEntregadores" && typeof op === "function" ? (...x) => { if (estado.financeiroFora) throw new Error("financeiro fora"); return op(...x); } : op]));
+  const montarMova = () => criarMova({ configuracao: config, nucleo: nucleoMova, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true,
+    extrator: { extrair: ia.beta.messages.create }, entregadores: true, interpretadorEntregador: interpretador, leitorDeNota,
+    ...(operacional ? { operacional: criarPortaOperacional({ nucleo: real, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: CONFIG.identidadeServico.usuarioId,
+      concessoes: criarConcessoesMemoria([ALFA, BETA].map((u) => ({ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: u, acoes: [ACAO.VER, ACAO.ENVIAR_DOCUMENTO] }))) }) } : {}) });
   let mova = montarMova();
   const s = { estado, real, adm, contas, banco, get mova() { return mova; }, reiniciar() { mova = montarMova(); return mova; } };
   s.passada = () => s.mova.pagamentos.passada();

@@ -11,7 +11,7 @@
 //     Cada envio tem chave única (nunca repete); automação ausente ou pausada não envia nada. A saída passa pelo enviador de
 //     sempre (mova.controle, marco de envio, destinos permitidos).
 import { reais, dataBr } from "./respostas.js";
-import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
+import { relatorioSemanalNoGrupo, avisoDeDemonstrativo, avisoDeLiberacao, avisoDeNotaRecebida, mensagemNotaConferida, conferirNotaDoEntregador, escolherObrigacaoDaNota, EXTENSAO_DA_NOTA, MIMES_DA_NOTA, mensagemCobrancaNota, mensagemSemanal, pendenciaDeNota, perguntaDeEmpresaDaNota, precisaCobrarNota, relatorioDeQuarta, respostaDaConferencia } from "../dominio/entregadores.js";
 import { ErroTransitorio } from "../gateway/fila.js";
 import { criarAuxiliaresDeUnidade } from "./unidadesDoMova.js";
 import { enfileiramentoDoTipo } from "../dominio/politicaEnvio.js";
@@ -19,6 +19,7 @@ import { validarSaidaDaIa } from "../ia/contratos.js";
 import { criarIdentidadeFiscal } from "./identidadeFiscalMova.js";
 import { avaliarNota, avaliarPrimeiraNota, FONTE, mascararDocumento, normalizarLeitura, tipoDoDocumento } from "../dominio/identidadeFiscal.js";
 import { lerNotaSemIa } from "../dominio/leituraNotaFiscal.js";
+import { validarXmlSeguro } from "../dominio/xmlSeguro.js";
 import { INTENCAO, INTENCOES_PARA_IA, TEXTO_FIXO, interpretarPergunta, nomesDeOutros, redigirConsulta, validarInterpretacao } from "../dominio/consultaEntregador.js";
 
 // 23/11: RELATORIO = quarta-feira (horário da automação; 08:00 pela decisão do proprietário) no grupo financeiro da unidade;
@@ -37,7 +38,8 @@ export const RESPOSTA_ENTREGADOR = Object.freeze({
   notaJaRecebida: () => "Essa nota já tinha sido recebida. Se precisar trocar, envie o PDF novo.",
   notaRecusadaNoFinanceiro: () => "Recebi o arquivo, mas ele não pôde ser anexado automaticamente. O financeiro vai conferir e te retorna por aqui.",
   notaRecusada: (motivo) => ({
-    NOTA_PRECISA_SER_PDF: "Para a nota fiscal, envie o PDF da NFS-e ou uma foto/print legível da nota.",
+    NOTA_PRECISA_SER_PDF: "Para a nota fiscal, envie o PDF da NFS-e, o arquivo XML ou uma foto/print legível da nota.",
+    NOTA_XML_INVALIDA: "Não consegui aceitar esse XML (ele não é uma NFS-e íntegra e segura). Envie o PDF da nota ou o XML original da prefeitura.",
     PAGAMENTO_JA_LIBERADO: "O pagamento dessa semana já foi liberado; não é preciso enviar nota de novo.",
     SEMANA_COM_DUPLICIDADE: "Essa semana está em revisão pelo financeiro. Aguarde o retorno antes de enviar a nota.",
   })[motivo] ?? "Não achei uma semana sua aguardando nota. O financeiro confere e te retorna por aqui.",
@@ -72,6 +74,23 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
       return { decisao: "CONSULTA", motivo: "FECHAMENTO_INDISPONIVEL", resposta: RESPOSTA_ENTREGADOR.indisponivel(), escopo: escopoDe(vinculos[0].unidadeId) };
     }
     if (!evento.midia) return consultar(evento, grupo, vinculos, porVinculo);
+    // ARQUIVO NÃO CONFIÁVEL: o XML é validado (sem DTD/entidade/instrução, tamanho) ANTES de qualquer leitura, gravação ou escolha de empresa
+    const escopoBase = escopoDe(vinculos[0].unidadeId);
+    if (evento.midia.mime === "application/xml") {
+      const xml = await obterEvidencia(evento.midia.referencia).catch(() => null);
+      const vx = validarXmlSeguro(xml);
+      if (!vx.ok) { await a.auditoria.registrar({ acao: "NOTA_XML_RECUSADA", atorTipo: "SISTEMA", alvo: vinculos[0].chave, dados: { motivo: vx.motivo } }).catch(() => {}); return { decisao: "BLOQUEADO", motivo: vx.motivo, resposta: RESPOSTA_ENTREGADOR.notaRecusada("NOTA_XML_INVALIDA"), escopo: escopoBase }; }
+    }
+    // a MESMA nota já recebida em outro formato (PDF × XML × foto): nenhum registro novo, nenhum anexo, nenhuma obrigação
+    if (MIMES_DA_NOTA.includes(evento.midia.mime) && /^[0-9a-f]{64}$/.test(evento.midia.sha256 ?? "") && typeof a.notasEntregador.porChave === "function") {
+      const chaveLida = await chaveDaNota(evento);
+      if (chaveLida) for (const v of vinculos) {
+        const ja = await a.notasEntregador.porChave({ unidadeId: v.unidadeId, entregador: v.chave, chaveAcesso: chaveLida, sha256: evento.midia.sha256 });
+        if (!ja) continue;
+        await a.auditoria.registrar({ acao: "NOTA_DUPLICADA_OUTRO_FORMATO", atorTipo: "SISTEMA", alvo: ja.id, dados: { semana: ja.semanaInicio, formato: evento.midia.mime } }).catch(() => {});
+        return { decisao: "DUPLICADO", motivo: "NOTA_FISCAL_JA_RECEBIDA", resposta: RESPOSTA_ENTREGADOR.notaJaRecebida(), escopo: escopoDe(v.unidadeId) };
+      }
+    }
     // Nota: em cada empresa, a semana mais antiga que ainda aguarda nota (sem duplicidade).
     const aguardando = porVinculo.map(({ ent, fechamentos }) => ({ ent, fechamento: [...fechamentos].reverse().find((f) => AGUARDANDO.includes(f.situacaoDocumental) && !f.duplicidade) ?? null })).filter((x) => x.fechamento);
     let ent = porVinculo[0].ent, alvo = porVinculo[0].fechamentos[0] ?? null, leituraPronta = null, retomada = null;
@@ -90,7 +109,7 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
     else if (vinculos.length > 1) {
       const candidatos = aguardando.map((x) => ({ ...x, unidade: { ...unidadeDe(x.ent.unidadeId) }, cnpj: cnpjDe(x.ent.unidadeId) }));
       let escolha = escolherObrigacaoDaNota({ candidatos, legenda: evento.texto ?? "" });
-      if (escolha.ambigua && extrator) {
+      if (escolha.ambigua && (extrator || leitorDeNota || evento.midia.mime === "application/xml")) {
         leituraPronta = await lerNota(evento, candidatos.map((c) => c.unidade.nome));
         escolha = escolherObrigacaoDaNota({ candidatos, legenda: evento.texto ?? "", leitura: leituraPronta?.leitura ?? null });
       }
@@ -205,6 +224,15 @@ export function criarEntregadoresMova({ cfg, porta, armazenamento: a, operaciona
    * 28/11 — Lê a nota na ORDEM que poupa tokens: (1) o que já foi lido para o MESMO arquivo (hash), (2) XML / texto do PDF (determinístico),
    * (3) IA em texto/visão — só se as anteriores não resolverem. Devolve { leitura, fonte, reaproveitada? } ou { erro }; nunca lança.
    */
+  /** Chave de acesso da nota SEM IA (cache por hash, XML ou texto do PDF): serve só para reconhecer a mesma nota em outro formato. */
+  async function chaveDaNota(evento) {
+    const sha = evento.midia?.sha256;
+    const cache = /^[0-9a-f]{64}$/.test(sha ?? "") && a.leiturasFiscais ? await a.leiturasFiscais.obter(sha).catch(() => null) : null;
+    if (cache?.dados?.chaveAcesso) return cache.dados.chaveAcesso;
+    const bytes = await obterEvidencia(evento.midia.referencia).catch(() => null);
+    return bytes ? (lerNotaSemIa({ bytes, mime: evento.midia.mime, leitorPdf: leitorDeNota })?.leitura?.chaveAcesso ?? null) : null;
+  }
+
   async function lerNota(evento, unidades) {
     const sha = evento.midia?.sha256;
     const temSha = /^[0-9a-f]{64}$/.test(sha ?? "");
