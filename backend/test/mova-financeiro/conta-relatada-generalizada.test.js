@@ -33,10 +33,10 @@ const SUGESTAO = [[/honorários/i, "CONTABILIDADE"], [/aluguel/i, "ALUGUEL"], [/
 const LEITURA = (req) => { const j = JSON.stringify(req.messages ?? ""); const s = SUGESTAO.find(([re]) => re.test(j));
   return RELATOS.test(j) ? base({ intencao: "REGISTRAR_CONTA", valorCentavos: 291108, categoriaSugerida: s?.[1] ?? null }) : base({}); };
 
-async function relatada({ politicas = [], concessao = null, criarContas = false, criarDespesas = false, responder = LEITURA, comCore = false } = {}) {
+async function relatada({ politicas = [], concessao = null, criarContas = false, criarDespesas = false, responder = LEITURA, comCore = false, config = CONFIG_GRUPO } = {}) {
   const core = [];
   const s = await cenario({
-    responder, config: CONFIG_GRUPO,
+    responder, config,
     extras: ({ nucleo }) => ({
       autonomia: true, criarContas, criarDespesas, pagamentoPorComprovante: criarDespesas,
       ...(concessao ? { operacional: criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: "eeeeeeee-0000-4000-8000-0000000000a2",
@@ -286,4 +286,130 @@ t("CG-10 legenda do comprovante com composição e desconto em folha: a observa�
   const [p] = (await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).filter((x) => x.tipo === "DESPESA_PAGA");
   assert.match(p.comando.entrada.observacao, /Um R\$ 395,34 \+ Dois R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração de novembro\/2026 em 07\/12\/2026/);
   assert.equal(p.comando.pagamento.dataEfetiva, "2026-10-15", "a data do desconto em folha não muda a data do pagamento");
+});
+
+// ------------------------------------------------------------------ 27/11 (0035): permissão ESTREITA de empréstimo, com confirmação no WhatsApp
+const COM_EMPRESTIMO = ["financeiro_v2.ver", "financeiro_v2.registrar_obrigacao", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.enviar_documento", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_emprestimo"];
+
+// 28/11 (revisão do #248): a AUSÊNCIA de juros identificados NÃO prova que o valor é só principal. Executa pela conversa só com a
+// composição COMPROVADA (comprovante imprime juros/multa/desconto zero) ou DECLARADA ("só principal", "sem juros"); senão, Central.
+const LW_CONTA = EMPRESTIMO_INSTRUCAO.replace("Registrar uma única conta de R$ 2.911,08", "Registrar uma única conta de R$ 2.911,08, vence 15/12/2026");
+const LW_CONTA_PRINCIPAL = LW_CONTA.replace("Observações:", "Valor só principal, sem juros.\n\nObservações:");
+const SO_PRINCIPAL = "Empréstimo BNB alfa. Total R$ 2.911,08, competência novembro/2026. Pagamento só do principal, sem juros.";
+const BOLETO_SO_PRINCIPAL = base({ ...BOLETO_PAGO, valorOriginalCentavos: 291108, descontoCentavos: 0, jurosCentavos: 0, multaCentavos: 0 });
+const comPolitica = async (s) => { await s.mova.armazenamento.politicas.criar({ operacao: "DESPESA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 3000000,
+  responsavel: "Administrador Sintético", motivo: "Política sintética de despesa documental", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO }); return s; };
+const pagoCom = (boleto, opcoes = {}) => relatada({ criarDespesas: true, criarContas: true, concessao: COM_EMPRESTIMO, responder: (req) => (/document|pdf/i.test(JSON.stringify(req.messages ?? "")) ? boleto : base({})), ...opcoes }).then(comPolitica);
+
+t("LW-1 empréstimo AINDA A PAGAR: só com a composição DECLARADA (só principal) o 'sim' registra em aberto, PATRIMONIAL, pelo limite; sem a declaração, Central; acima do limite, Central", async () => {
+  const s = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA" }], concessao: COM_EMPRESTIMO, criarContas: true });
+  await s.enviar(gw({ texto: LW_CONTA_PRINCIPAL }));
+  assert.equal((await s.decisao()).motivo, "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO", JSON.stringify(await s.decisao()));
+  const resumo = await s.ultimoTexto();
+  assert.match(resumo, /Categoria: Empréstimos e financiamentos \(principal\)/);
+  assert.doesNotMatch(resumo, /vai para aprovação no Centro Financeiro/, "com a permissão e a composição declarada o 'sim' registra");
+  assert.equal((await s.contas()).length, 0, "nada antes do 'sim'");
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).decisao, "EXECUTADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  const [l] = await s.lancamentos();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos, l.categoria, l.natureza], ["ABERTA", 291108, "EMPRESTIMOS_E_FINANCIAMENTOS", "PATRIMONIAL"]);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.contas()).length, 1, "outro 'sim' não duplica");
+  // composição NÃO declarada (a parcela pode embutir juros) ⇒ resumo avisa a Central; o 'sim' só cria a proposta
+  const sem = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA" }], concessao: COM_EMPRESTIMO, criarContas: true });
+  await sem.enviar(gw({ texto: LW_CONTA }));
+  assert.match(await sem.ultimoTexto(), /Centro Financeiro/);
+  await sem.enviar(gw({ texto: "sim" }));
+  assert.equal((await sem.contas()).length, 0, "composição desconhecida: nada lançado");
+  assert.equal((await sem.propostas()).length, 1, "uma proposta para a revisão humana");
+  // limite da unidade menor que o valor ⇒ não executa pela conversa
+  const lim = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA", limiteCentavos: 100000 }], concessao: COM_EMPRESTIMO, criarContas: true });
+  await lim.enviar(gw({ texto: LW_CONTA_PRINCIPAL }));
+  await lim.enviar(gw({ texto: "sim" }));
+  assert.equal((await lim.contas()).length, 0, "acima do limite de R$ 1.000,00: nada lançado, fica a proposta");
+});
+
+t("LW-2 empréstimo JÁ PAGO: com desconto e sem composição comprovada (caso BNB) ⇒ Central, sem pergunta de 'sim'; comprovante com juros/multa ZERO impressos ⇒ 'sim' de FINANCEIRO quita; 'não' deixa para a Central", async () => {
+  // (a) BNB: original 2.971,69, desconto 60,61, pago 2.911,08 — não se sabe quanto é principal ⇒ revisão humana
+  const bnb = await pagoCom(BOLETO_PAGO);
+  await bnb.enviar(gw({ texto: "Empréstimo BNB alfa. Pessoa Um R$ 395,34, Pessoa Dois R$ 2.515,74, total R$ 2.911,08. Desconto da remuneração de novembro/2026 em 07/12/2026.", doc: "%PDF-sintetico-boleto-lw2" }));
+  const texto = await bnb.ultimoTexto();
+  assert.doesNotMatch(texto, /Responda "sim"/, "composição desconhecida: não oferece a execução pela conversa");
+  assert.match(texto, /Observações: Um R\$ 395,34 \+ Dois R\$ 2\.515,74 = R\$ 2\.911,08; Desconto da remuneração/);
+  await bnb.enviar(gw({ texto: "sim" }));
+  assert.equal((await bnb.lancamentos()).length, 0, "nada lançado: fica para a Central");
+  // (b) a leitura devolve juros/multa ZERO (ela usa 0 também quando o campo não existe) ⇒ NÃO prova composição ⇒ Central
+  const z = await pagoCom(BOLETO_SO_PRINCIPAL);
+  await z.enviar(gw({ texto: "Empréstimo BNB alfa. Total R$ 2.911,08, competência novembro/2026.", doc: "%PDF-sintetico-boleto-lw2z" }));
+  if ((await z.decisao()).motivo === "COMPETENCIA_AUSENTE") await z.enviar(gw({ texto: "novembro/2026" }));
+  assert.doesNotMatch(await z.ultimoTexto(), /Responda "sim"/, "zeros da leitura não comprovam que tudo é principal");
+  // (c) composição DECLARADA por quem envia ("só principal, sem juros") ⇒ pergunta; 'sim' de FINANCEIRO quita
+  const s = await pagoCom(BOLETO_SO_PRINCIPAL);
+  await s.enviar(gw({ texto: SO_PRINCIPAL, doc: "%PDF-sintetico-boleto-lw2b" }));
+  if ((await s.decisao()).motivo === "COMPETENCIA_AUSENTE") await s.enviar(gw({ texto: "novembro/2026" }));
+  assert.match(await s.ultimoTexto(), /Responda "sim"/);
+  assert.equal((await s.lancamentos()).length, 0, "nada antes do 'sim'");
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.decisao()).motivo, "EMPRESTIMO_PAGO_REGISTRADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  const [l] = await s.lancamentos();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos, l.categoria, l.natureza, l.valorCentavos], ["QUITADA", 0, "EMPRESTIMOS_E_FINANCIAMENTOS", "PATRIMONIAL", 291108]);
+  await s.enviar(gw({ texto: "sim" }));
+  assert.equal((await s.contas()).length, 1, "outro 'sim' não duplica");
+  // (d) "não": a proposta fica para a Central, nada lançado
+  const n = await pagoCom(BOLETO_SO_PRINCIPAL);
+  await n.enviar(gw({ texto: SO_PRINCIPAL, doc: "%PDF-sintetico-boleto-lw2-nao" }));
+  if ((await n.decisao()).motivo === "COMPETENCIA_AUSENTE") await n.enviar(gw({ texto: "novembro/2026" }));
+  await n.enviar(gw({ texto: "não" }));
+  assert.equal((await n.decisao()).motivo, "EMPRESTIMO_NAO_CONFIRMADO");
+  assert.equal((await n.lancamentos()).length, 0);
+});
+
+t("LW-3 confirmação do empréstimo pago vinda de um LID (reconhecido pelo telefone autenticado) ⇒ executa; composição DECLARADA na legenda", async () => {
+  const TEL = "+5500000000201"; const LID = "88000000000777@lid";
+  const config = { ...CONFIG_GRUPO, gruposAutorizados: CONFIG_GRUPO.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, participantes: g.participantes.map((p) => (p.ids.includes(FIN) ? { ...p, telefones: [TEL] } : p)) } : g)) };
+  const s = await pagoCom(BOLETO_PAGO, { config });
+  await s.enviar(gw({ texto: SO_PRINCIPAL, doc: "%PDF-sintetico-boleto-lw3" }));
+  if ((await s.decisao()).motivo === "COMPETENCIA_AUSENTE") await s.enviar(gw({ texto: "novembro/2026" }));
+  assert.match(await s.ultimoTexto(), /Responda "sim"/);
+  await s.enviar(gw({ texto: "sim", de: LID, telefone: TEL }));
+  assert.equal((await s.decisao()).motivo, "EMPRESTIMO_PAGO_REGISTRADO", JSON.stringify(await s.decisao()));
+  const [conta] = await s.contas();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos], ["QUITADA", 0]);
+});
+
+t("LW-4 confirmação do empréstimo com IDENTIDADE CONFLITANTE (identificador de uma pessoa, telefone autenticado de outra) ⇒ bloqueada, nada lançado; a pessoa legítima confirma depois", async () => {
+  const TEL = "+5500000000201";
+  const config = { ...CONFIG_GRUPO, gruposAutorizados: CONFIG_GRUPO.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, participantes: g.participantes.map((p) => (p.ids.includes(FIN) ? { ...p, telefones: [TEL] } : p)) } : g)) };
+  const s = await pagoCom(BOLETO_SO_PRINCIPAL, { config });
+  await s.enviar(gw({ texto: SO_PRINCIPAL, doc: "%PDF-sintetico-boleto-lw4" }));
+  if ((await s.decisao()).motivo === "COMPETENCIA_AUSENTE") await s.enviar(gw({ texto: "novembro/2026" }));
+  assert.match(await s.ultimoTexto(), /Responda "sim"/);
+  // o SÓCIO (outra entrada da lista) responde, mas o Gateway autentica o telefone do FINANCEIRO original
+  const r = await s.enviar(gw({ texto: "sim", de: SOCIO, telefone: TEL }));
+  if (r && typeof r === "object" && "motivo" in r) assert.equal(r.motivo, "IDENTIDADE_CONFLITANTE");
+  assert.equal((await s.lancamentos()).length, 0, "identidade conflitante: nada lançado");
+  await s.enviar(gw({ texto: "sim", de: FIN, telefone: TEL }));
+  assert.equal((await s.decisao()).motivo, "EMPRESTIMO_PAGO_REGISTRADO", JSON.stringify(await s.decisao()));
+  assert.equal((await s.contas()).length, 1);
+});
+
+t("LW-5 BAIXA de conta de EMPRÉSTIMO EXISTENTE por comprovante, mesmo com BAIXA_DOCUMENTAL automática: nada é baixado sozinho ⇒ revisão humana", async () => {
+  const PAGAMENTO = base({ tipoDocumento: "COMPROVANTE_PAGAMENTO", intencao: "INFORMAR_PAGAMENTO", valorCentavos: 291108, dataPagamento: "2026-10-15", favorecido: "Banco do Sertão Sintético",
+    situacaoTransacao: "CONCLUIDA", finalidadePagamento: "CONTA_EXISTENTE", idTransacao: "37815404336421932883310000" });
+  const s = await relatada({ politicas: [{ operacao: "CONTA_A_PAGAR_RELATADA" }], concessao: COM_EMPRESTIMO, criarContas: true, criarDespesas: true,
+    responder: (req) => (/document|pdf/i.test(JSON.stringify(req.messages ?? "")) ? PAGAMENTO : LEITURA(req)) });
+  await s.mova.armazenamento.politicas.criar({ operacao: "BAIXA_DOCUMENTAL", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_AUTOMATICO", limiteCentavos: 3000000,
+    responsavel: "Administrador Sintético", motivo: "Política sintética igual à de produção", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO });
+  await s.enviar(gw({ texto: LW_CONTA_PRINCIPAL }));
+  await s.enviar(gw({ texto: "sim" }));
+  const [conta] = await s.contas();
+  assert.deepEqual([conta.situacao, conta.saldoCentavos], ["ABERTA", 291108], "conta do empréstimo em aberto");
+  await s.enviar(gw({ texto: "pagamento da conta da alfa", doc: "%PDF-sintetico-pagamento-emprestimo" }));
+  const baixas = (await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).filter((p) => p.tipo === "BAIXA_DE_OBRIGACAO");
+  assert.equal(baixas.length, 1, JSON.stringify(await s.decisao()));
+  assert.equal(baixas[0].estado, "AGUARDANDO_REVISAO", "a baixa fica para a revisão humana");
+  const [depois] = await s.contas();
+  assert.deepEqual([depois.situacao, depois.saldoCentavos], ["ABERTA", 291108], "nada baixado automaticamente");
 });

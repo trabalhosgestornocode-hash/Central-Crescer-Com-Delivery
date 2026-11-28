@@ -297,8 +297,11 @@ const relevancia = (c, alvo) => [...radicais(c.nome)].filter((r) => alvo.has(r))
  */
 export function categoriaPatrimonialDoRelato(texto, categorias) {
   const alvo = radicais(texto ?? "");
-  const casadas = patrimoniaisDoPlano(categorias).filter((c) => relevancia(c, alvo) > 0);
-  return casadas.length === 1 ? casadas[0].codigo : null;
+  const casadas = patrimoniaisDoPlano(categorias).map((c) => [c, relevancia(c, alvo)]).filter(([, r]) => r > 0);
+  // 28/11: "pagamento só do principal" casa "principal" de DUAS patrimoniais — vale a de maior relevância, se for ÚNICA
+  const maior = Math.max(0, ...casadas.map(([, r]) => r));
+  const topo = casadas.filter(([, r]) => r === maior);
+  return topo.length === 1 ? topo[0][0].codigo : null;
 }
 
 /** Para equipamento: imobilizado e despesas de equipamento/manutenção/utensílios primeiro (só a ORDEM das opções; nada é escolhido). */

@@ -40,6 +40,9 @@ export const OPERACOES_DE_ESCRITA = Object.freeze({
   // 26/11: conta a pagar RELATADA por texto (parcelas explícitas, em aberto, sem documento) — ação ESTREITA própria (0033); a de
   // conta por documento (`registrar_obrigacao`) não cobre esta modalidade.
   registrarContaParcelada: "REGISTRAR_CONTA_PARCELADA",
+  // 27/11 (0035): EMPRÉSTIMO — a mesma conta relatada / o mesmo pagamento por comprovante, só na categoria do principal (+ registrar_emprestimo)
+  registrarContaParceladaDeEmprestimo: ["REGISTRAR_CONTA_PARCELADA", "REGISTRAR_EMPRESTIMO"],
+  registrarPagamentoDeEmprestimoPorComprovante: ["REGISTRAR_OBRIGACAO", "BAIXAR_POR_COMPROVANTE", "ENVIAR_DOCUMENTO", "REGISTRAR_EMPRESTIMO"],
 });
 /**
  * 27/11 — operações que gravam em DUAS empresas numa transação (passivo numa, ativo na outra). Ação ESTREITA nas duas; nunca a

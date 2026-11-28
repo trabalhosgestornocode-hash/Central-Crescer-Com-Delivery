@@ -29,6 +29,9 @@ export const PERFIS_OPERACIONAIS = Object.freeze({
   // pagamento feito por outra empresa do grupo (precisa da concessão NAS DUAS empresas; só muda a posição da conta).
   REGISTRAR_CONTA_RELATADA: Object.freeze(["financeiro_v2.ver", "financeiro_v2.registrar_conta_parcelada"]),
   REGISTRAR_ENTRE_EMPRESAS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.registrar_intercompany"]),
+  // 27/11 (0035) — NÃO concedido em produção sem revisão: PRINCIPAL DE EMPRÉSTIMO/FINANCIAMENTO (fora da DRE). Complemento das estreitas
+  // de conta (relatada em aberto; paga por comprovante): só a categoria EMPRESTIMOS_E_FINANCIAMENTOS, com confirmação no WhatsApp.
+  REGISTRAR_EMPRESTIMOS: Object.freeze(["financeiro_v2.ver", "financeiro_v2.enviar_documento", "financeiro_v2.baixar_por_comprovante", "financeiro_v2.registrar_obrigacao", "financeiro_v2.registrar_conta_parcelada", "financeiro_v2.registrar_emprestimo"]),
 });
 export const ACOES_PERMITIDAS_AO_MOVA = Object.freeze([...new Set(Object.values(PERFIS_OPERACIONAIS).flat())]);
 

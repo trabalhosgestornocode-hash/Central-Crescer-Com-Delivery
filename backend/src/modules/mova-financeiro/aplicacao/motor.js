@@ -25,13 +25,13 @@ import { INTENCOES_BLOQUEADAS, INTENCOES_DE_REVISAO, SAIDA_VAZIA, sinaisDeInjeca
 import { RESPOSTA, reais } from "./respostas.js";
 import { criarFerramentas, periodoDaConsulta } from "./ferramentas.js";
 import { ErroTransitorio } from "../gateway/fila.js";
-import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe } from "../dominio/participantes.js";
+import { ACESSO, CAPACIDADES, JANELA_CONTINUIDADE_MS, chamaPeloNome, POLITICA_RESPOSTA, algumaUnidadePermite, consultaPodeSairNoGrupo, decidirSaidaNoGrupo, destinoPrivado, participanteAutorizado, perfilNa, perfilPodeConsultar, podeVerDetalhe, identificarParticipante } from "../dominio/participantes.js";
 import { interpretarComando, interpretarSeguimento, saidaDeContinuacao } from "./comandos.js";
 import { MIMES_SEM_LEITURA, MODO_SEM_LEITURA, RESPOSTA_DOCUMENTO, conferirArquivo, legendaDoDocumento, protocoloDoDocumento } from "./recebimentoDocumental.js";
 import { MIDIA_RECUSADA } from "../contratos/evento.js";
 import { categoriaPatrimonialDoRelato, observacaoDoTexto, classificarContaRelatada, competenciaDoRelato, complementoDaResposta, ehPatrimonialForaDaDre, interpretarContaRelatada, interpretarRespostaDaCategoria, interpretarRespostaDoValor } from "../dominio/contaRelatada.js";
 import { contaCompativelComPeriodo, idTransacaoConfiavel, periodoDaLegenda } from "../dominio/periodo.js";
-import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
+import { DESFECHO, TIPO_DIVERGENCIA, MAX_CANDIDATAS_NA_PERGUNTA, buscarSemelhantes, classificarCasamento, competenciaDaResposta, composicaoComprovada, composicaoSoPrincipal, pedidoDeRetomar, confirmacaoDeProposta, interpretarCategoria, respostaSimNao, favorecidosCompativeis, DOCUMENTOS_COMPLEMENTARES, descreverPendencia, descricaoDireta, desfechoPorFinalidade, diferencaPlausivelComoJuros, escolherCategoria, extracaoDaRespostaIA, interpretarResposta, legendaIndicaParcial, parecerRespostaDeDivergencia } from "../dominio/divergencia.js";
 
 const NIVEL_APLICAR_COM_CONFIRMACAO = "APLICAR_COM_CONFIRMACAO";
 /** 26/11: fuso da operação (Açaí e Subway Saci): data da mensagem, competência e ano das parcelas relatadas. */
@@ -992,12 +992,42 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo, escopo, resposta: texto, injecao, extra: { divergencia: divergencia.tipo }, privado });
   }
 
+  /**
+   * 27/11 (0035) — "sim" ao pagamento de EMPRÉSTIMO já feito: a proposta guardada é executada (conta + pagamento juntos, quitada, fora da
+   * DRE) pela permissão estreita de empréstimo, se quem confirma é FINANCEIRO na unidade e a política/limite da unidade aceita. "não"
+   * deixa a proposta para a Central. Nada é relido: o documento e os dados são os da proposta.
+   */
+  async function confirmarEmprestimoPago(ctx) {
+    const { evento, escopo, esclarecimento, injecao, unidade } = ctx;
+    const div = esclarecimento.divergencia;
+    const p = await a.propostas.obter(escopo, div.propostaId);
+    if (!p || p.estado !== "AGUARDANDO_REVISAO") return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_PROPOSTA_JA_DECIDIDA", escopo, resposta: RESPOSTA.propostaNaoRetomavel(), injecao });
+    const sim = respostaSimNao(esclarecimento.texto);
+    if (sim === null) return perguntar(ctx, { ...div }, `Não entendi. ${RESPOSTA.confirmarEmprestimoPago(p, {})}`, "EMPRESTIMO_RESPOSTA_NAO_ENTENDIDA");
+    if (sim === false) return concluir(evento, { decisao: DECISAO.ORIENTACAO, motivo: "EMPRESTIMO_NAO_CONFIRMADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoConfirmado(p), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    // 27/11: quem confirmou é reconhecido pelo identificador OU pelo telefone autenticado do Gateway (lista por telefone; WhatsApp manda LID)
+    // 28/11 (#250): identificador e telefone de PESSOAS DIFERENTES ⇒ bloqueia e audita (nunca escolhe uma das duas)
+    const quemConfirma = identificarParticipante(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null });
+    if (quemConfirma.conflito) {
+      await a.auditoria.registrar({ acao: "IDENTIDADE_CONFLITANTE", atorTipo: "PARTICIPANTE", atorRef: esclarecimento.participanteId ?? evento.participanteId, alvo: p.id, dados: { fluxo: "EMPRESTIMO_PAGO_CONFIRMACAO" } });
+      return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "IDENTIDADE_CONFLITANTE", escopo, propostaId: p.id, resposta: RESPOSTA.complementoSemPermissao(), injecao });
+    }
+    const confirmador = quemConfirma.participante;
+    // 28/11: composição (só principal) precisa estar COMPROVADA ou DECLARADA — desconhecida ⇒ revisão humana no Centro Financeiro
+    if (!p.comando?.composicaoEmprestimo) return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_COMPOSICAO_DESCONHECIDA", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, ["EMPRESTIMO_COMPOSICAO_DESCONHECIDA"]), injecao });
+    if (perfilNa(confirmador, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "EMPRESTIMO_CONFIRMACAO_SEM_PERFIL_FINANCEIRO", escopo, resposta: RESPOSTA.complementoSemPermissao(), injecao });
+    const r = await execucao.aposDespesaNova(p, escopo, { confirmadoPor: esclarecimento.participanteId ?? evento.participanteId });
+    if (r.situacao === "PAGO_POR_COMPROVANTE") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "EMPRESTIMO_PAGO_REGISTRADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoPagoRegistrado(p, r.resultado), injecao, extra: { confirmadoPor: esclarecimento.participanteId ?? null } });
+    return concluir(evento, { decisao: DECISAO.PROPOSTA, motivo: "EMPRESTIMO_NAO_EXECUTADO", escopo, propostaId: p.id, resposta: RESPOSTA.emprestimoNaoExecutado(p, [...new Set([...(r.motivosDocumentais ?? []), ...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])]), injecao });
+  }
+
   async function tratarPagamento(ctx0) {
     // 25/11: identificador de transação RECORTADO na imagem (E2E incompleto) não serve de chave de duplicidade: é descartado e a
     // conferência segue pelas demais evidências (arquivo, conta, pergunta objetiva) — nunca afirma "mesma transação" por ele.
     const recortado = Boolean(ctx0.saida?.idTransacao) && !idTransacaoConfiavel(ctx0.saida.idTransacao);
     const ctx = recortado ? { ...ctx0, idRecortado: true, saida: { ...ctx0.saida, idTransacao: null } } : ctx0;
     const { evento, escopo, saida, injecao, esclarecimento } = ctx;
+    if (esclarecimento?.divergencia?.tipo === "EMPRESTIMO_PAGO_CONFIRMACAO") return confirmarEmprestimoPago(ctx);
     // 25/11 — resposta NATURAL a uma pergunta do MOVA: as regras curtas (determinísticas, custo zero) vêm primeiro; só se NÃO entenderem a
     // IA lê o texto e devolve campos estruturados, que o backend VALIDA (extracaoDaRespostaIA) antes de qualquer uso. No máximo UMA
     // leitura por mensagem (cache) e nenhuma quando a mensagem já foi lida (resposta sem citação traz `esclarecimento.ia`).
@@ -1231,6 +1261,9 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const vencimentoDaConta = composicao && saida.vencimento ? saida.vencimento : saida.dataPagamento;
     const comando = comandoDeObrigacao(composicao ? { ...saida, valorCentavos: composicao.principalCentavos } : saida, { competencia, vencimento: vencimentoDaConta, descricao: descricao ? mascararDadosSensiveis(descricao).slice(0, 120) : null, categoria, observacao: observacaoDoPagamento });
     if (!comando.ok) return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: `COMANDO_INVALIDO:${comando.campo}`, escopo, resposta: RESPOSTA.faltaInformacao([comando.campo]), injecao });
+    // 28/11 (0035, revisão): pagamento de EMPRÉSTIMO — composição "só principal" comprovada no documento ou declarada na conversa
+    const composicaoEmprestimo = patrimonialDoPagamento === "EMPRESTIMOS_E_FINANCIAMENTOS" && !composicao
+      ? composicaoSoPrincipal(saida, [legenda, esclarecimento?.texto, ...(esclarecimento?.observacoes ?? [])].filter(Boolean).join(". ")) : null;
     // Resumo consolidado: unidade, categoria e as contas em aberto do MESMO favorecido que este comprovante NÃO baixou.
     // A resposta NUNCA repete o texto recebido: só a descrição CURTA lida pela IA, mascarada e sem sinal de instrução, aparece.
     const descricaoExibivel = descricaoInformada && !sinaisDeInjecao(descricaoInformada) ? mascararDadosSensiveis(descricaoInformada).slice(0, 60) : null;
@@ -1243,11 +1276,19 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       // criada; o extrato concilia depois). Sem arquivo (relato por texto), a pessoa escolhe a conta do pagamento.
       // 24/11: com comprovante, a conta e o pagamento entram numa ÚNICA operação atômica (registrarDespesaPagaPorComprovante).
       comando: { operacao: !evento.midia ? "registrarObrigacao+pagarContaAPagar" : composicao ? "registrarDespesaPagaComEncargo" : "registrarDespesaPagaPorComprovante", entrada: comando.valor, pagamento: { contaId: null, dataEfetiva: saida.dataPagamento, valorCentavos: valor },
-        ...(composicao ? { encargos: { principalCentavos: composicao.principalCentavos, jurosCentavos: composicao.jurosCentavos, multaCentavos: composicao.multaCentavos, encargoCentavos: composicao.encargoCentavos } } : {}) },
+        ...(composicao ? { encargos: { principalCentavos: composicao.principalCentavos, jurosCentavos: composicao.jurosCentavos, multaCentavos: composicao.multaCentavos, encargoCentavos: composicao.encargoCentavos } } : {}),
+        ...(composicaoEmprestimo ? { composicaoEmprestimo } : {}) },
       ...(novaDeclarada || esclarecimento?.divergencia ? { compraNovaDeclarada: true } : {}),
     }, comAvisoDeCompetencia((p) => RESPOSTA.propostaDespesaPaga(p, resumo), competencia), {
       // 23/11: com as chaves e a política DESPESA_DOCUMENTAL, a rotina registra a conta e o pagamento por comprovante.
-      posCriacao: execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
+      // 28/11: só com a composição (só principal) COMPROVADA ou DECLARADA; ausência de juros lidos não basta ⇒ Central.
+      posCriacao: patrimonialDoPagamento === "EMPRESTIMOS_E_FINANCIAMENTOS" && execucao?.criarDespesas && evento.midia && !composicao && composicaoEmprestimo && typeof execucao?.podeRegistrarEmprestimo === "function"
+        ? async (p) => {
+          if (!(await execucao.podeRegistrarEmprestimo(escopo, "PAGAMENTO"))) return null; // sem a permissão de empréstimo: Central, como hoje
+          await a.mensagens.lembrar(evento.mensagemId, { grupoId: evento.grupoId, pendente: { evento, saida, divergencia: { tipo: "EMPRESTIMO_PAGO_CONFIRMACAO", propostaId: p.id, unidadeId: escopo.unidadeId } } });
+          return { situacao: "AGUARDANDO_CONFIRMACAO", nivel: null, texto: RESPOSTA.confirmarEmprestimoPago(p, resumo) };
+        }
+        : execucao?.criarDespesas && evento.midia && !patrimonialDoPagamento ? async (p) => {
         const r = await execucao.aposDespesaNova(p, escopo);
         return r.situacao === "PAGO_POR_COMPROVANTE" ? { ...r, texto: RESPOSTA.despesaPagaPorComprovante(p, r.resultado, resumo) } : r;
       } : null,
@@ -1362,7 +1403,12 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     const estado = { tipo: "CONTA_RELATADA_CONFIRMACAO", tipoValor: c.tipoValor, categoriaEscolhida: escolha ?? categoria ?? null, sugestaoDeCriacao: sugestao, impressao, complemento };
     // 27/11: categoria PATRIMONIAL (ex.: principal de empréstimo, fora da DRE). A permissão ESTREITA do MOVA registra só despesa e
     // imobilizado (regra do banco, 0033): depois do "sim" vira proposta para APROVAÇÃO no Centro Financeiro — nunca vira despesa.
-    const patrimonial = Boolean(categoria) && ehPatrimonialForaDaDre(categoria, plano);
+    // 27/11 (0035): principal de EMPRÉSTIMO com a permissão estreita de empréstimo concedida ⇒ o "sim" registra (fora da DRE); senão, Central.
+    // 28/11 (revisão): parcela de empréstimo costuma embutir juros — só registra como principal com a composição DECLARADA no relato.
+    const composicaoEmprestimo = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" ? composicaoSoPrincipal(null, textoDaConta) : null;
+    const emprestimoDireto = categoria === "EMPRESTIMOS_E_FINANCIAMENTOS" && Boolean(composicaoEmprestimo) && Boolean(execucao?.criarContas) && typeof execucao?.podeRegistrarEmprestimo === "function"
+      && await execucao.podeRegistrarEmprestimo(escopo, "CONTA");
+    const patrimonial = Boolean(categoria) && ehPatrimonialForaDaDre(categoria, plano) && !emprestimoDireto;
     const resumo = (prefixo = "", avisoFatura = null) => `${prefixo}${RESPOSTA.contaRelatadaResumo({ ...c, observacaoCompleta: descricaoComObservacao(c) }, { unidade: unidade.nome, categoriaNome: plano.find((x) => x.codigo === categoria)?.nome ?? null, avisoFatura, sugestaoDeCriacao: sugestao, patrimonial })}`;
     if (div?.tipo !== "CONTA_RELATADA_CONFIRMACAO") {
       return perguntar(ctx, estado, resumo("", fatura ? RESPOSTA.contaRelatadaFaturaDoCartao(fatura) : null), "CONTA_RELATADA_AGUARDANDO_CONFIRMACAO");
@@ -1386,7 +1432,7 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
       ...(categoria ? {} : { classificacao: { pendente: true, motivo: cls.motivo, sugestaoDeCriacao: sugestao } }),
       ...(evento.midia ? { evidenciaNaoFiscal: "FOTO_DO_PRODUTO" } : {}),
       ...(descricaoComObservacao(c).observacao ? { observacaoCompleta: descricaoComObservacao(c).observacao, observacaoNaDescricao: descricaoComObservacao(c).cabe } : {}),
-      comando: { operacao: "registrarContaParcelada", entrada: bruto },
+      comando: { operacao: "registrarContaParcelada", entrada: bruto, ...(composicaoEmprestimo ? { composicaoEmprestimo } : {}) },
     }, (p) => RESPOSTA.contaRelatadaProposta(p, c, { aClassificar: !categoria, patrimonial }), {
       posCriacao: !patrimonial && confirmadorFinanceiro && execucao?.criarContas && typeof execucao.aposContaRelatada === "function" ? async (p) => {
         const r = await execucao.aposContaRelatada(p, escopo);
