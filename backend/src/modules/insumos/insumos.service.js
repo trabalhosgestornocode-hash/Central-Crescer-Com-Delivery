@@ -5,7 +5,7 @@ import {
   custoUnitario, variacaoPct, validarCompraInsumo, UNIDADES, unidadeValida,
 } from "./insumos.calc.js";
 import {
-  carregarGrafo, produtosAfetadosPorInsumo, recalcularCache, custoTotalProduto,
+  carregarGrafo, produtosAfetadosPorInsumo, recalcularCache, custoTotalProduto, lerTudo,
 } from "../produtos/custo.js";
 
 // "Categoria" do insumo = enum tipo_insumo já existente no banco (não cria
@@ -91,12 +91,14 @@ function paraApi(i) {
 // LISTAGEM + INDICADORES
 // ---------------------------------------------------------------------------
 export async function listarInsumos({ organizacaoId, busca, categoria, status, semPreco }) {
-  let q = supabase.from("insumos").select("*").eq("organizacao_id", organizacaoId).order("nome");
-  if (categoria) q = q.eq("tipo", categoria);
-  if (status === "ativo") q = q.eq("ativo", true);
-  if (status === "inativo") q = q.eq("ativo", false);
-
-  const { data, error } = await q;
+  // Paginado (teto de 1.000 linhas por resposta do PostgREST); nome + id = ordem determinística entre páginas.
+  const { data, error } = await lerTudo((de, ate) => {
+    let q = supabase.from("insumos").select("*").eq("organizacao_id", organizacaoId);
+    if (categoria) q = q.eq("tipo", categoria);
+    if (status === "ativo") q = q.eq("ativo", true);
+    if (status === "inativo") q = q.eq("ativo", false);
+    return q.order("nome").order("id").range(de, ate);
+  });
   if (error) throw ApiError.internal(error.message);
 
   let itens = (data ?? []).map(paraApi);

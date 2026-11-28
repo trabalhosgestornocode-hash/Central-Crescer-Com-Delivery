@@ -14,12 +14,12 @@ function criarBanco(tabelas) {
   const db = {
     tabelas, log,
     from(nome) {
-      const f = []; let op = "select"; let payload = null; let lim = null; let ord = null;
+      const f = []; let op = "select"; let payload = null; let lim = null; let ord = null; let faixa = null;
       const aplica = (rows) => rows.filter((r) => f.every((x) => x.op === "eq" ? r[x.col] === x.val : x.op === "neq" ? r[x.col] !== x.val : x.op === "in" ? x.val.includes(r[x.col]) : true));
       const exec = () => {
         const base = db.tabelas[nome] ?? [];
         log.push({ tabela: nome, op, filtros: f.map((x) => `${x.op}:${x.col}`), payload });
-        if (op === "select") { let r = aplica(base).map((x) => structuredClone(x)); if (ord) r = [...r].sort((a, b) => String(a[ord]).localeCompare(String(b[ord]))); if (lim) r = r.slice(0, lim); return { data: r, error: null }; }
+        if (op === "select") { let r = aplica(base).map((x) => structuredClone(x)); if (ord) r = [...r].sort((a, b) => String(a[ord]).localeCompare(String(b[ord]))); if (lim) r = r.slice(0, lim); if (faixa) r = r.slice(faixa[0], faixa[1] + 1); return { data: r, error: null }; }
         if (op === "update") { const alvo = aplica(base); alvo.forEach((r) => Object.assign(r, payload)); return { data: alvo, error: null }; }
         if (op === "insert") { const linhas = Array.isArray(payload) ? payload : [payload]; (db.tabelas[nome] ??= []).push(...linhas.map((l) => ({ ...l }))); return { data: linhas, error: null }; }
         if (op === "upsert") { const chave = payload.__onConflict; const l = { ...payload }; delete l.__onConflict; const t = (db.tabelas[nome] ??= []); const i = t.findIndex((r) => chave.every((c) => r[c] === l[c])); if (i >= 0) Object.assign(t[i], l); else t.push(l); return { data: l, error: null }; }
@@ -27,7 +27,7 @@ function criarBanco(tabelas) {
       };
       const q = {
         select() { return q; }, eq(col, val) { f.push({ op: "eq", col, val }); return q; }, neq(col, val) { f.push({ op: "neq", col, val }); return q; },
-        in(col, val) { f.push({ op: "in", col, val }); return q; }, order(col) { ord = col; return q; }, limit(n) { lim = n; return q; }, ilike() { return q; },
+        in(col, val) { f.push({ op: "in", col, val }); return q; }, order(col) { ord = col; return q; }, limit(n) { lim = n; return q; }, range(de, ate) { faixa = [de, ate]; return q; }, ilike() { return q; }, // range: paginação de carregarGrafo (PostgREST)
         update(p) { op = "update"; payload = p; return q; }, insert(p) { op = "insert"; payload = p; return q; },
         upsert(p, o) { op = "upsert"; payload = { ...p, __onConflict: String(o?.onConflict ?? "id").split(",") }; return q; },
         single() { const r = exec(); return Promise.resolve(r.data?.[0] ? { data: r.data[0], error: null } : { data: null, error: { message: "not found" } }); },

@@ -1,6 +1,7 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { resolverTabelaComercialUnidade, normalizarCanalTabela, empresaExigeTabelaComercial } from "../../shared/tabelaComercial.js";
+import { lerTudo } from "../produtos/custo.js";
 
 // Margem/CMV por produto x canal x tabela (view vw_produto_margem).
 //
@@ -11,14 +12,17 @@ import { resolverTabelaComercialUnidade, normalizarCanalTabela, empresaExigeTabe
 // regra "sem tabela oficial => erro, nunca a primeira encontrada" usa
 // `listarMargensOficialOuComparacao` abaixo, não esta função diretamente.
 export async function listarMargens({ organizacaoId, canal, tabela }) {
-  let q = supabase
-    .from("vw_produto_margem")
-    .select("produto_id, nome, tamanho, canal, tabela, preco, custo, comissao_pct, lucro_liquido, cmv_pct, desatualizado")
-    .eq("organizacao_id", organizacaoId)
-    .order("nome");
-  if (canal) q = q.eq("canal", canal);
-  if (tabela) q = q.eq("tabela", tabela);
-  const { data, error } = await q;
+  // Paginado: a Subway já tem 1.000 linhas de preço (o teto de UMA resposta do PostgREST). Ordem total e determinística
+  // (nome, produto, canal, tabela) para que as páginas não repitam nem pulem linhas.
+  const { data, error } = await lerTudo((de, ate) => {
+    let q = supabase
+      .from("vw_produto_margem")
+      .select("produto_id, nome, tamanho, canal, tabela, preco, custo, comissao_pct, lucro_liquido, cmv_pct, desatualizado")
+      .eq("organizacao_id", organizacaoId);
+    if (canal) q = q.eq("canal", canal);
+    if (tabela) q = q.eq("tabela", tabela);
+    return q.order("nome").order("produto_id").order("canal").order("tabela").range(de, ate);
+  });
   if (error) throw ApiError.internal(error.message);
   return data;
 }

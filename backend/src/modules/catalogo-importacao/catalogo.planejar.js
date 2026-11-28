@@ -14,6 +14,8 @@
 //   * Toda ficha importada nasce 'pendente' de homologação; o CMV "homologado" só existe depois da
 //     conferência de um administrador (regra no backend: produtos/custo.js#resumoProduto).
 
+import { avaliarRendimento } from "../produtos/diagnostico.js";
+
 export const BLOQUEANTES = new Set([
   "layout_inesperado",
   "linha_sem_quantidade", "componente_nao_encontrado", "linha_com_erro_na_planilha", "sem_rendimento",
@@ -312,6 +314,22 @@ export function planejarCatalogo(arquivos, { fonte }) {
     p.linhas = [...acumulado.values()];
     lc.importadas = p.linhas.length;
     if (!p.linhas.length) add("sem_componentes", "nenhum componente válido importado");
+
+    // Plausibilidade do rendimento (só insumos na mesma dimensão do rendimento; preparações aninhadas ainda não têm
+    // unidade resolvida aqui). Ex. real: 2.685 g de ingredientes e rendimento "2,609 g" — valor em kg. Só AVISA.
+    if (!p.__final && p.unidade_rendimento && rend > 0) {
+      const fator = { g: ["m", 1], kg: ["m", 1000], ml: ["v", 1], l: ["v", 1000] };
+      const alvo = fator[p.unidade_rendimento];
+      let massa = 0; let comparaveis = 0;
+      for (const l of p.linhas) {
+        const u = l.ref === "insumo" ? fator[insumos.get(l.chave)?.unidade_medida] : null;
+        if (alvo && u && u[0] === alvo[0]) { massa += (l.quantidade * u[1]) / alvo[1]; comparaveis += 1; }
+      }
+      const aval = avaliarRendimento({ rendimento: rend, unidade: p.unidade_rendimento, massa, comparaveis, total: p.linhas.length });
+      if (aval?.codigo === "rendimento_unidade_suspeita") {
+        add("rendimento_unidade_suspeita", `rende ${rend} ${p.unidade_rendimento} para ${Math.round(massa)} ${p.unidade_rendimento} de ingredientes — provável valor em ${p.unidade_rendimento === "g" ? "kg" : "litros"}${aval.sugestao ? ` (${aval.sugestao} ${p.unidade_rendimento}?)` : ""}; corrigir na planilha ou na ficha antes de homologar`);
+      }
+    }
 
     {
       const mods = new Map();

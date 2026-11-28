@@ -92,7 +92,9 @@ export function renderRotaAtual() {
       renderPaginaFinanceira(item.id, { aoPerderAcesso: () => document.dispatchEvent(new CustomEvent("app:setor-perdido")) });
       break;
     case "pagina":
-      if (item.id === "produtos") views.renderProdutos();
+      // Produtos / CMV 2.0: só para empresa/unidade com o módulo piloto; as demais seguem na tela atual.
+      if (item.id === "produtos" && temModulo("products_cmv_v2")) import("./produtosCmv2.js").then((m) => m.renderProdutosCmv2());
+      else if (item.id === "produtos") views.renderProdutos();
       else views.renderDashboard();
       break;
     case "integracoes":

@@ -11,26 +11,18 @@ import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
 } from "../insumos/insumos.calc.js";
 import { bloqueiosDaCarga, pendenciasCargaAbertas, conferirPendenciasCarga } from "./pendenciasCarga.js";
-
-/** produto_id -> pendências da carga (catalogo_origem). Sem a migration 157 (ou sem carga): mapa vazio. */
-async function pendenciasCargaPorProduto(organizacaoId) {
-  const { data, error } = await supabase.from("catalogo_origem").select("entidade_id, pendencias")
-    .eq("organizacao_id", organizacaoId).eq("entidade", "produto");
-  if (error) return new Map();
-  const mapa = new Map();
-  for (const o of data ?? []) mapa.set(o.entidade_id, [...(mapa.get(o.entidade_id) ?? []), ...(o.pendencias ?? [])]); // mais de uma fonte: soma
-  return mapa;
-}
+import { lerTudo } from "./custo.js";
+// Critério ÚNICO de integridade (o mesmo da experiência nova) + pendências de carga paginadas.
+import { pendenciasCargaPorProduto, diagnosticoIntegridade, motivosIntegridade } from "./integridade.js";
 
 export async function listarProdutos({ organizacaoId, vendavel, tipo }) {
-  let q = supabase
-    .from("produtos")
-    .select("*")
-    .eq("organizacao_id", organizacaoId)
-    .order("nome");
-  if (vendavel !== undefined) q = q.eq("vendavel", vendavel);
-  if (tipo) q = q.eq("tipo", tipo);
-  const { data, error } = await q;
+  // Paginado (PostgREST devolve no máximo 1.000 linhas); ordem por nome + id = determinística, sem duplicar entre páginas.
+  const { data, error } = await lerTudo((de, ate) => {
+    let q = supabase.from("produtos").select("*").eq("organizacao_id", organizacaoId);
+    if (vendavel !== undefined) q = q.eq("vendavel", vendavel);
+    if (tipo) q = q.eq("tipo", tipo);
+    return q.order("nome").order("id").range(de, ate);
+  });
   if (error) throw ApiError.internal(error.message);
   // Projeção explícita (antes era select de colunas nomeadas); rendimento/unidade só existem após a migration 157.
   return (data ?? []).map((p) => ({
@@ -63,7 +55,7 @@ export async function obterProduto({ organizacaoId, id }) {
 
   const temPreco = precos.some((p) => Number(p.preco) > 0);
   const status = statusFicha({
-    componentes: ficha.map((c) => ({ custoUnitarioBase: c.custo_unitario_base, insumoAtivo: c.insumo_ativo })),
+    componentes: ficha.map((c) => ({ custoUnitarioBase: c.custo_unitario_base, insumoAtivo: c.insumo_ativo, custoZeroDeclarado: c.custo_zero_declarado })),
     temPreco,
   });
 
@@ -102,7 +94,8 @@ async function detalheCatalogo({ organizacaoId, produto, grafo, ficha }) {
   const carga = bloqueiosDaCarga(produto.id, grafo, pendPorProduto);
   const ativos = ficha.filter((c) => c.ativo !== false);
   // Item sem custo (ausente OU zero) torna o grupo indisponível: somar zero esconderia o dado faltante.
-  const semCusto = (c) => c.custo_aplicado == null || c.custo_unitario_base == null || Number(c.custo_unitario_base) <= 0;
+  // Custo zero DECLARADO (migration 163) é custo válido.
+  const semCusto = (c) => !c.custo_zero_declarado && (c.custo_aplicado == null || c.custo_unitario_base == null || Number(c.custo_unitario_base) <= 0);
   const grupo = (fn) => {
     const l = ativos.filter(fn);
     return { itens: l.length, total: l.some(semCusto) ? null : l.reduce((s, c) => s + Number(c.custo_aplicado), 0) };
@@ -281,7 +274,8 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
     const { data: atual } = await supabase.from("produtos").select("codigo_pdv").eq("id", id).eq("organizacao_id", organizacaoId).single();
     if ((atual?.codigo_pdv ?? null) !== novo) {
       if (novo !== null) {
-        const { data: iguais } = await supabase.from("produtos").select("id, nome, codigo_pdv").eq("organizacao_id", organizacaoId);
+        // Paginado: com mais de 1.000 produtos a duplicidade de código passaria despercebida.
+        const { data: iguais } = await lerTudo((de, ate) => supabase.from("produtos").select("id, nome, codigo_pdv").eq("organizacao_id", organizacaoId).order("id").range(de, ate));
         const repetido = (iguais ?? []).find((p) => p.id !== id && String(p.codigo_pdv ?? "").trim().toUpperCase() === novo.toUpperCase());
         if (repetido) throw new ApiError(409, `O código "${novo}" já está em uso por "${repetido.nome}". Cada produto precisa de um código próprio para vincular os itens do iFood.`);
       }
@@ -302,7 +296,7 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
 // (homologacao != 'nao_aplicavel'). Subways/cadastro manual não têm esse controle.
 // Homologar exige ficha ÍNTEGRA; reabrir devolve a 'pendente'. Sempre auditado.
 // ===========================================================================
-export async function definirHomologacao({ organizacaoId, produtoId, acao, usuario }) {
+export async function definirHomologacao({ organizacaoId, produtoId, acao, usuario, integridade = null }) {
   const id = v.uuid(produtoId, "Produto");
   if (!["homologar", "reabrir"].includes(acao)) throw ApiError.badRequest('Ação inválida: use "homologar" ou "reabrir".');
   const { data: p, error } = await supabase
@@ -311,7 +305,7 @@ export async function definirHomologacao({ organizacaoId, produtoId, acao, usuar
   if (!p) throw ApiError.notFound("Produto não encontrado");
   if (p.homologacao === "nao_aplicavel" || p.homologacao == null) throw new ApiError(409, `"${p.nome}" não tem controle de homologação (cadastro manual).`);
 
-  const grafo = await carregarGrafo(organizacaoId);
+  const grafo = integridade?.grafo ?? await carregarGrafo(organizacaoId);
   const efetiva = homologacaoEfetiva(id, grafo);
   let custoAgora = null;
   if (acao === "homologar") {
@@ -319,12 +313,21 @@ export async function definirHomologacao({ organizacaoId, produtoId, acao, usuar
     if (["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave)) {
       throw new ApiError(409, `A ficha de "${p.nome}" está incompleta (${res.status_ficha.label}). Complete-a antes de homologar.`, { status_ficha: res.status_ficha });
     }
-    const carga = bloqueiosDaCarga(id, grafo, await pendenciasCargaPorProduto(organizacaoId));
+    const cargas = integridade?.cargas ?? await pendenciasCargaPorProduto(organizacaoId);
+    const carga = bloqueiosDaCarga(id, grafo, cargas);
     if (carga.preparacoes.length) {
       throw new ApiError(409, `"${p.nome}" usa preparação com pendência da planilha ainda não conferida (${carga.preparacoes.map((x) => x.nome).join(", ")}). Confira a preparação primeiro.`, { codigo: "PREPARACAO_COM_PENDENCIA_DA_CARGA" });
     }
     if (carga.proprias.length) {
       throw new ApiError(409, `A ficha de "${p.nome}" tem ${carga.proprias.length} pendência(s) da planilha (item descartado, nome sem correspondência ou custo inválido). Corrija a ficha e marque as pendências como conferidas antes de homologar.`, { codigo: "PENDENCIAS_DA_CARGA" });
+    }
+    // Critério ÚNICO de integridade (mesmo motor da experiência nova, vale com ou sem products_cmv_v2): olha as
+    // preparações em qualquer nível, insumo sem custo, rendimento suspeito, unidade ausente, ciclo. Nenhuma chamada
+    // direta à API homologa ficha que a Central de Pendências marca como não confiável.
+    const integ = integridade ?? await diagnosticoIntegridade(organizacaoId, { grafo, cargas });
+    const motivos = motivosIntegridade(integ.porId.get(id));
+    if (motivos.length) {
+      throw new ApiError(409, `A ficha de "${p.nome}" não passa na verificação de integridade: ${motivos.join(" ")}`, { codigo: "FICHA_SEM_INTEGRIDADE", motivos });
     }
     custoAgora = custoTotalProduto(id, grafo); // custo HOMOLOGADO: base da invalidação por mudança de preço
   }
@@ -375,9 +378,11 @@ export async function homologarLote({ organizacaoId, ids, usuario }) {
   if (!Array.isArray(ids) || !ids.length) throw ApiError.badRequest("Informe ao menos uma ficha.");
   if (ids.length > 500) throw ApiError.badRequest("No máximo 500 fichas por vez.");
   const resultado = { homologadas: [], ja_estavam: [], recusadas: [] };
+  // Um único diagnóstico para o lote (mesmo critério da homologação individual, sem N cargas do grafo).
+  const integridade = await diagnosticoIntegridade(organizacaoId);
   for (const id of [...new Set(ids)]) {
     try {
-      const r = await definirHomologacao({ organizacaoId, produtoId: id, acao: "homologar", usuario });
+      const r = await definirHomologacao({ organizacaoId, produtoId: id, acao: "homologar", usuario, integridade });
       (r.alterado ? resultado.homologadas : resultado.ja_estavam).push(id);
     } catch (e) {
       resultado.recusadas.push({ id, motivo: e.message });
@@ -393,18 +398,26 @@ export async function homologarLote({ organizacaoId, ids, usuario }) {
 export async function listarFichasCatalogo({ organizacaoId }) {
   const [grafo, origemRes, modRes] = await Promise.all([
     carregarGrafo(organizacaoId),
-    supabase.from("catalogo_origem").select("entidade_id, referencia, pendencias").eq("organizacao_id", organizacaoId).eq("entidade", "produto"),
+    lerTudo((de, ate) => supabase.from("catalogo_origem").select("entidade_id, referencia, pendencias").eq("organizacao_id", organizacaoId).eq("entidade", "produto").order("id").range(de, ate)),
     carregarMaoDeObra(organizacaoId).catch(() => new Map()),
   ]);
-  const origem = new Map((origemRes.data ?? []).map((o) => [o.entidade_id, o]));
-  const pendPorProduto = new Map([...origem].map(([id, o]) => [id, o.pendencias ?? []]));
+  const origem = new Map(); // 1ª fonte para exibição; pendências de TODAS as fontes para o bloqueio
+  const pendPorProduto = new Map();
+  for (const o of origemRes.data ?? []) {
+    if (!origem.has(o.entidade_id)) origem.set(o.entidade_id, o);
+    pendPorProduto.set(o.entidade_id, [...(pendPorProduto.get(o.entidade_id) ?? []), ...(o.pendencias ?? [])]);
+  }
+  const integridade = await diagnosticoIntegridade(organizacaoId, { grafo, cargas: pendPorProduto });
   const itens = grafo.produtos.map((p) => {
     const res = resumoProduto({ produtoId: p.id, grafo, precoVenda: null });
     const o = origem.get(p.id);
     const mod = custoMaoDeObraUnitario(modRes.get(p.id) ?? [], rendimentoDe(p.id, grafo));
     const carga = bloqueiosDaCarga(p.id, grafo, pendPorProduto);
-    // Ficha incompleta = status dinâmico incompleto OU pendência de carga ainda não conferida (linha descartada etc.).
-    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave) || carga.bloqueado;
+    // Fichas padronizadas (franquia) seguem as regras delas; as demais usam o critério ÚNICO de integridade.
+    const motivos = (p.homologacao ?? "nao_aplicavel") === "nao_aplicavel" ? [] : motivosIntegridade(integridade.porId.get(p.id));
+    // Ficha incompleta = status dinâmico incompleto OU pendência de carga ainda não conferida OU falha de integridade
+    // (preparação comprometida em qualquer nível, rendimento suspeito, unidade ausente, ciclo).
+    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave) || carga.bloqueado || motivos.length > 0;
     return {
       id: p.id, nome: p.nome, ativo: p.ativo !== false, codigo_pdv: p.codigo_pdv ?? null,
       natureza: p.vendavel === false ? "preparacao" : "produto_final",
@@ -418,6 +431,7 @@ export async function listarFichasCatalogo({ organizacaoId }) {
       homologado_por_nome: res.homologacao === "homologada" ? p.homologado_por_nome ?? null : null,
       pendencias: o?.pendencias ?? [],
       bloqueios_carga: { proprias: carga.proprias.length, preparacoes: carga.preparacoes.map((x) => x.nome) },
+      motivos_integridade: motivos,
       pode_homologar: !bloqueada && res.homologacao === "pendente",
     };
   }).sort((a, b) => a.nome.localeCompare(b.nome));
@@ -431,15 +445,17 @@ export async function listarFichasCatalogo({ organizacaoId }) {
 
 // Pendências registradas na carga (catalogo_origem): o que precisa de conferência pela empresa.
 export async function listarPendenciasCatalogo({ organizacaoId }) {
-  const { data, error } = await supabase
+  // Paginado (antes: limit 3000 sobre o teto de 1.000 do PostgREST) e nomes lidos da organização inteira (evita `.in()`
+  // com milhares de ids na URL).
+  const { data, error } = await lerTudo((de, ate) => supabase
     .from("catalogo_origem").select("entidade, entidade_id, chave, referencia, pendencias")
-    .eq("organizacao_id", organizacaoId).neq("pendencias", "[]").limit(3000);
+    .eq("organizacao_id", organizacaoId).neq("pendencias", "[]").order("id").range(de, ate));
   if (error) throw ApiError.internal(error.message);
   const linhas = data ?? [];
   const ids = (e) => linhas.filter((l) => l.entidade === e).map((l) => l.entidade_id);
   const [prods, insu] = await Promise.all([
-    ids("produto").length ? supabase.from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).in("id", ids("produto")) : { data: [] },
-    ids("insumo").length ? supabase.from("insumos").select("id, nome").eq("organizacao_id", organizacaoId).in("id", ids("insumo")) : { data: [] },
+    ids("produto").length ? lerTudo((de, ate) => supabase.from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).order("id").range(de, ate)) : { data: [] },
+    ids("insumo").length ? lerTudo((de, ate) => supabase.from("insumos").select("id, nome").eq("organizacao_id", organizacaoId).order("id").range(de, ate)) : { data: [] },
   ]);
   const nome = new Map([...(prods.data ?? []), ...(insu.data ?? [])].map((r) => [r.id, r]));
   const itens = linhas.map((l) => ({
