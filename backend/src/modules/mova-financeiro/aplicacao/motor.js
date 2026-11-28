@@ -227,7 +227,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
   async function retomarPendencia(evento, pend, motivo, extra = {}) {
     let r;
     try {
-      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, ...extra } });
+      r = await processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia ?? null, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null, ...extra } });
     } catch (e) {
       try {
         await a.mensagens.lembrar(pend.pendente.evento.mensagemId, { grupoId: pend.grupoId ?? evento.grupoId, pendente: pend.pendente });
@@ -504,7 +504,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         const pend = await a.mensagens.tomarPendente(pendenteSemantico.mensagemId);
         if (pend?.pendente) {
           await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: "RESPOSTA_DE_DIVERGENCIA_POR_INTERPRETACAO", participanteId: evento.participanteId, organizacaoId: null, unidadeId: null, retomou: pend.pendente.evento.eventoId });
-          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId,
+          return processar(pend.pendente.evento, { esclarecimento: { texto: evento.texto, saida: pend.pendente.saida, divergencia: pend.pendente.divergencia, observacoes: pend.pendente.observacoes ?? null, porEvento: evento.eventoId, participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null,
             finalidade: saida.finalidadePagamento ?? null, descricao: saida.descricaoCompra ?? null, ia: { competencia: saida.competencia ?? null, descricaoCompra: saida.descricaoCompra ?? null, finalidadePagamento: saida.finalidadePagamento ?? null, categoriaSugerida: saida.categoriaSugerida ?? null, favorecido: saida.favorecido ?? null, jurosCentavos: saida.jurosCentavos ?? null, multaCentavos: saida.multaCentavos ?? null } } });
         }
       }
@@ -922,9 +922,35 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
    * concessão de agora; a duplicidade é barrada pela reserva idempotente e pela chave da fonte (MOVA:<proposta>).
    * @returns {Promise<object|null>} null = não é com este fluxo (segue a mensagem normal)
    */
+  /**
+   * 27/11 — retomada de uma CONTA RELATADA já confirmada no WhatsApp que ficou parada (caso real f8f15a27): a MESMA proposta é executada
+   * por aposContaRelatada, que revalida unidade, dados, política/limite vigentes e a concessão da identidade operacional. Quem retoma
+   * precisa ser FINANCEIRO na unidade (reconhecido por LID ou telefone); a retomada fica auditada com quem confirmou.
+   */
+  async function retomarContaRelatada(evento, proposta, { grupo, daPessoa, motivoRelacao, eventoOrigemId }) {
+    const unidade = cfg.unidades.find((x) => x.unidadeId === proposta.unidadeId) ?? null;
+    if (!unidade || !daPessoa.unidades.includes(proposta.unidadeId)) return null;
+    const escopo = escopoDe(unidade);
+    const base = { escopo, propostaId: proposta.id };
+    const quem = participanteAutorizado(grupo, { participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null });
+    if (perfilNa(quem, unidade.unidadeId) !== "FINANCEIRO") return concluir(evento, { decisao: DECISAO.BLOQUEADO, motivo: "RETOMADA_SEM_PERFIL_FINANCEIRO", ...base, resposta: RESPOSTA.complementoSemPermissao() });
+    await a.historico.registrar({ eventoId: evento.eventoId, decisao: "RELACIONADA", motivo: motivoRelacao, participanteId: evento.participanteId, organizacaoId: escopo.organizacaoId, unidadeId: escopo.unidadeId, retomou: eventoOrigemId });
+    if (!execucao?.criarContas || typeof execucao.aposContaRelatada !== "function") return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "PROPOSTA_NAO_RETOMAVEL", ...base, resposta: RESPOSTA.semExecucaoAutomatica(["CRIACAO_DE_CONTAS_DESLIGADA"]) });
+    const r = await execucao.aposContaRelatada(proposta, escopo);
+    await a.auditoria.registrar({ acao: "PROPOSTA_RETOMADA", atorTipo: "PARTICIPANTE", atorRef: evento.participanteId, alvo: proposta.id, dados: { tipo: "CONTA_RELATADA", situacao: r.situacao, motivos: r.motivos ?? [], confirmadoAntesPor: proposta.esclarecidoPor } });
+    const e = proposta.comando?.entrada ?? {};
+    const c = { descricao: e.descricao ?? "Conta", parcelas: e.parcelas ?? [], totalCentavos: proposta.valorCentavos };
+    if (r.situacao === "CONTA_REGISTRADA") return concluir(evento, { decisao: DECISAO.EXECUTADO, motivo: "CONTA_RELATADA_RETOMADA", ...base, resposta: RESPOSTA.contaRelatadaRegistrada(c, r.resultado), extra: { retomada: true } });
+    const motivos = [...new Set([...(r.motivos ?? []), ...(r.motivo ? [r.motivo] : [])])];
+    return concluir(evento, { decisao: DECISAO.PEDIR_INFORMACAO, motivo: "RETOMADA_NAO_EXECUTADA", ...base, resposta: RESPOSTA.semExecucaoAutomatica(motivos), extra: { retomada: true, motivosExecucao: motivos } });
+  }
+
   async function retomarProposta(evento, eventoOrigemId, { grupo, participante, daPessoa, podeConfirmar, recusarOutro }, { propostaId = null, motivoRelacao = "PROPOSTA_RETOMADA_POR_CITACAO", aviso = null } = {}) {
     if (typeof a.propostas.porEvento !== "function") return null;
-    const propostas = (await a.propostas.porEvento(eventoOrigemId)).filter((p) => p.tipo === "DESPESA_PAGA");
+    const todas = await a.propostas.porEvento(eventoOrigemId);
+    const relatada = todas.find((p) => p.tipo === "CONTA_RELATADA" && p.estado === "AGUARDANDO_REVISAO" && p.esclarecidoPor && p.categoriaDefinida === true && (!propostaId || p.id === propostaId));
+    if (relatada) return retomarContaRelatada(evento, relatada, { grupo, daPessoa, motivoRelacao, eventoOrigemId });
+    const propostas = todas.filter((p) => p.tipo === "DESPESA_PAGA");
     // só é retomável a proposta que a POLÍTICA autorizou a aplicar sozinha e que ficou parada (motivo registrado, ou criada antes do registro do motivo)
     const proposta = propostas.find((p) => p.estado === "AGUARDANDO_REVISAO" && (propostaId ? p.id === propostaId : (p.semExecucao || p.autonomiaDocumental?.nivel === "APLICAR_AUTOMATICO"))) ?? null;
     if (!proposta) return null;
@@ -1377,7 +1403,11 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
     // O que foi confirmado é exatamente o que vai para a proposta (plano/dados mudaram no meio ⇒ mostra de novo, nada é criado).
     if (div.impressao && div.impressao !== impressao) return perguntar(ctx, estado, resumo("Os dados mudaram desde o resumo. "), "CONTA_RELATADA_CONFIRMACAO_DESATUALIZADA");
     // Execução automática só quando QUEM CONFIRMOU é FINANCEIRO nesta unidade (operacional/consulta: fica a proposta para a Central).
-    const confirmador = participanteAutorizado(ctx.grupo, { participanteId: esclarecimento.participanteId ?? evento.participanteId });
+    // 27/11 (caso real f8f15a27): o WhatsApp manda o LID; a lista do grupo é por TELEFONE. Sem o telefone, quem confirmou não era
+    // encontrado ⇒ "não FINANCEIRO" ⇒ a execução nem era tentada. Mesma regra da entrada da mensagem: identificador OU telefone.
+    const confirmador = participanteAutorizado(ctx.grupo, esclarecimento
+      ? { participanteId: esclarecimento.participanteId ?? evento.participanteId, telefoneE164: esclarecimento.telefoneE164 ?? null }
+      : { participanteId: evento.participanteId, telefoneE164: evento.telefoneE164 ?? null });
     const confirmadorFinanceiro = perfilNa(confirmador, unidade.unidadeId) === "FINANCEIRO";
     return criarProposta(ctx, {
       tipo: TIPO_PROPOSTA.CONTA_RELATADA, valorCentavos: c.totalCentavos, parcial: false,
