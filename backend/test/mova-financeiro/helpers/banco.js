@@ -14,7 +14,8 @@ export const MIGRACOES = readdirSync(PASTA).filter((f) => /^\d{4}_.+\.sql$/.test
 export function motivoParaPularMova() {
   const a = lerAmbiente();
   const motivo = !a ? "PostgreSQL local isolado não iniciado (node scripts/fv2-banco-teste.mjs iniciar)" : null;
-  if (motivo && process.env.MOVA_EXIGIR_BANCO === "1") throw new Error(`MOVA: banco de teste exigido, mas ${motivo}.`);
+  // 27/11: teste de integração NUNCA passa em silêncio sem o banco — sem ele, FALHA. Pular só com a escolha consciente TESTES_SEM_BANCO=1.
+  if (motivo && process.env.TESTES_SEM_BANCO !== "1") throw new Error(`MOVA: banco de teste obrigatório indisponível — ${motivo}. Para pular conscientemente: TESTES_SEM_BANCO=1.`);
   return motivo ?? false;
 }
 
