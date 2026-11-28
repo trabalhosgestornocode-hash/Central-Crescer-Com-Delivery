@@ -242,9 +242,75 @@ t("EC-3 'não' encerra sem registrar nada; boleto (não é pagamento) com o mesm
   await s.enviar(s.privado({ texto: "não", respostaA: doc.mensagemId }));
   assert.equal((await s.ultima()).motivo, "ENTRE_EMPRESAS_RECUSADA");
   assert.deepEqual([(await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length, s.escritas().length], [0, 0, 0]);
+  // 28/11: boleto (não é pagamento) com o mesmo conflito não vira entre empresas: o MOVA EXPLICA o conflito (NT-1..4 abaixo)
   const b = await multi({ responder: () => BOLETO({ pagador: "MP" }) });
   await b.enviar(b.privado({ texto: "MOVA boleto da alfa", doc: pdf("ic-3b") }));
-  assert.equal((await b.ultima()).motivo, "UNIDADE_CONFLITANTE");
+  assert.equal((await b.ultima()).motivo, "UNIDADE_DO_TOMADOR_AGUARDANDO_CONFIRMACAO");
+});
+
+// ------------------------------------------------------------------ 28/11: NOTA/BOLETO em nome da empresa da OUTRA loja da conversa
+// Caso real: nota da distribuidora em nome da MP (empresa da Xis/Subway), "lançar na alfa" (Açaí). Antes: "Alfa ou Xis?" repetida a
+// cada resposta, sem saída. Agora: o conflito é explicado e a confirmação de quem é FINANCEIRO nas duas lojas decide.
+const NOTA_MP = (x = {}) => BOLETO({ pagador: "MP", valorCentavos: 765920, vencimento: "2026-10-28", favorecido: "Distribuidora Sintética", ...x });
+const PERGUNTA_TOMADOR = /^O boleto está em nome da MP \(Loja Xis\), mas a mensagem diz Loja Alfa\. Confirma que a conta é da Loja Alfa\?.*Só quem é FINANCEIRO nas duas unidades pode confirmar\. Nada foi registrado\.$/s;
+
+t("NT-1 caso real: explica o conflito (sem repetir a pergunta genérica); a resposta 'alfa' confirma e a conta nasce SÓ na Alfa, com quem confirmou", async () => {
+  const s = await multi({ responder: () => NOTA_MP() });
+  const doc = s.privado({ texto: "Lançar essa despesa na alfa. Distribuidora sintética", doc: pdf("nt-1") });
+  await s.enviar(doc);
+  assert.deepEqual([(await s.ultima()).decisao, (await s.ultima()).motivo], ["PEDIR_INFORMACAO", "UNIDADE_DO_TOMADOR_AGUARDANDO_CONFIRMACAO"]);
+  assert.match(await s.resposta(), PERGUNTA_TOMADOR);
+  assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0], "nada antes da confirmação");
+  await s.enviar(s.privado({ texto: "alfa", respostaA: doc.mensagemId }));
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.motivo, h.unidadeId], ["EXECUTADO", "NOVA_OBRIGACAO", ALFA]);
+  assert.match(await s.resposta(), /^Conta a pagar registrada: R\$ 7\.659,20 para Distribuidora Sintética/);
+  const [conta] = await s.contas(ORG, ALFA);
+  assert.deepEqual([(await s.contas(ORG, ALFA)).length, conta.saldoCentavos, (await s.contas(ORG_X, XIS)).length, (await s.propostas(ORG_X, XIS)).length], [1, 765920, 0, 0], "só na Alfa, em aberto");
+  const [p] = await s.propostas(ORG, ALFA);
+  assert.deepEqual([p.esclarecidoPor, p.leitura.evidenciaUnidade], [FIN, "TEXTO_CONFIRMADO_CONTRA_TOMADOR"]);
+  assert.ok((await s.mova.armazenamento.auditoria.listar()).some((a) => a.acao === "UNIDADE_DO_TOMADOR_CONFIRMADA" && a.atorRef === FIN && a.dados?.unidadeId === ALFA));
+});
+
+t("NT-2 respostas: 'talvez' repete a pergunta EXPLICADA; 'não' pergunta qual das duas; 'xis' (sem citar) leva a conta para a Xis — nunca a pergunta genérica em laço", async () => {
+  const s = await multi({ responder: () => NOTA_MP() });
+  const doc = s.privado({ texto: "Lançar essa despesa na alfa", doc: pdf("nt-2") });
+  await s.enviar(doc);
+  await s.enviar(s.privado({ texto: "talvez", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "UNIDADE_DO_TOMADOR_RESPOSTA_NAO_ENTENDIDA");
+  assert.match(await s.resposta(), /^Não entendi\. O boleto está em nome da MP \(Loja Xis\), mas a mensagem diz Loja Alfa\./);
+  await s.enviar(s.privado({ texto: "não", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "UNIDADE_DO_TOMADOR_NEGADA");
+  assert.match(await s.resposta(), /^Entendido\. Então a conta é da Loja Xis ou de outra unidade\? Responda com o nome da unidade \(Loja Alfa ou Loja Xis\)/);
+  assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0]);
+  await s.enviar(s.privado({ texto: "xis" })); // resposta curta, sem citação (memória curta da mesma pessoa)
+  const h = await s.ultima();
+  assert.deepEqual([h.decisao, h.unidadeId], ["EXECUTADO", XIS]);
+  assert.deepEqual([(await s.contas(ORG_X, XIS)).length, (await s.contas(ORG, ALFA)).length, (await s.propostas(ORG, ALFA)).length], [1, 0, 0]);
+  assert.equal((await s.propostas(ORG_X, XIS))[0].leitura.evidenciaUnidade, "TOMADOR_CONFIRMADO_CONTRA_TEXTO");
+});
+
+t("NT-3 quem não é FINANCEIRO nas duas lojas não confirma: a pergunta continua aberta e nada é gravado", async () => {
+  const s = await multi({ responder: () => NOTA_MP(), config: CONFIG({ participantesXis: [{ ids: [FIN], perfil: "CONSULTA", nome: "Financeiro" }] }) });
+  const doc = s.privado({ texto: "Lançar essa despesa na alfa", doc: pdf("nt-3") });
+  await s.enviar(doc);
+  assert.equal((await s.ultima()).motivo, "UNIDADE_DO_TOMADOR_AGUARDANDO_CONFIRMACAO");
+  await s.enviar(s.privado({ texto: "sim", respostaA: doc.mensagemId }));
+  assert.equal((await s.ultima()).motivo, "UNIDADE_DO_TOMADOR_SEM_PERMISSAO_NAS_DUAS");
+  assert.match(await s.resposta(), /é preciso ser FINANCEIRO nas duas unidades \(Loja Alfa e Loja Xis\)\. A pergunta continua aberta/);
+  assert.deepEqual([s.escritas().length, (await s.propostas(ORG, ALFA)).length, (await s.propostas(ORG_X, XIS)).length], [0, 0, 0]);
+});
+
+t("NT-4 revalidação antes de executar: a unidade CONFIRMADA vale só para uma das duas lojas do conflito e só com quem confirmou registrado", async () => {
+  const { revalidarUnidadeDaProposta } = await import("../../src/modules/mova-financeiro/dominio/unidade.js");
+  const cfg = validarConfiguracao(CONFIG());
+  const evento = { texto: "Lançar essa despesa na alfa", grupoId: FIN };
+  const leitura = (ev) => ({ pagador: "MP", unidadeSugerida: null, documentoDestinatario: null, documentoPagador: null, evidenciaUnidade: ev });
+  const r = (unidadeId, ev, esclarecidoPor = FIN) => revalidarUnidadeDaProposta({ cfg, evento, proposta: { unidadeId, esclarecidoPor, leitura: leitura(ev) } });
+  assert.equal(r(ALFA, "TEXTO_CONFIRMADO_CONTRA_TOMADOR").ok, true);
+  assert.equal(r(XIS, "TOMADOR_CONFIRMADO_CONTRA_TEXTO").ok, true);
+  assert.deepEqual([r(XIS, "TEXTO_CONFIRMADO_CONTRA_TOMADOR").ok, r(XIS, "TEXTO_CONFIRMADO_CONTRA_TOMADOR").contradiz], [false, true], "confirmada a Alfa, a Xis contradiz");
+  assert.equal(r(XIS, "TOMADOR_CONFIRMADO_CONTRA_TEXTO", null).ok, false, "sem quem confirmou não vale");
 });
 
 t("EC-4 várias contas compatíveis na Alfa: o MOVA não escolhe — a revisão escolhe UMA (sem ela, a aplicação é recusada)", async () => {

@@ -210,6 +210,10 @@ export const RESPOSTA = Object.freeze({
       : varias ? `\nHá mais de uma conta em aberto com esse valor no ${devedora}: a escolha fica para a revisão no Centro Financeiro.`
         : `\nNão encontrei conta em aberto com esse valor no ${devedora}: será proposta uma conta nova, já paga pela ${credora}.`)
     + "\nResponda sim ou não. Nada foi registrado ainda.",
+  // 28/11: nota/boleto em nome da empresa de uma loja da conversa e mensagem citando outra loja da conversa — explica o conflito.
+  tomadorDeOutraUnidade: ({ tomador, unidadeDoTomador, citada, tipoDocumento }) => `${tipoDocumento === "BOLETO" ? "O boleto está" : "A nota está"} em nome da ${tomador} (${unidadeDoTomador}), mas a mensagem diz ${citada}. Confirma que a conta é da ${citada}? Responda *sim* (ou o nome da unidade certa) citando esta mensagem. Só quem é FINANCEIRO nas duas unidades pode confirmar. Nada foi registrado.`,
+  tomadorQualUnidade: (citada, unidadeDoTomador) => `Entendido. Então a conta é da ${unidadeDoTomador} ou de outra unidade? Responda com o nome da unidade (${citada} ou ${unidadeDoTomador}) citando esta mensagem. Nada foi registrado.`,
+  tomadorSemPermissao: (citada, unidadeDoTomador) => `Para confirmar a unidade desta conta é preciso ser FINANCEIRO nas duas unidades (${citada} e ${unidadeDoTomador}). A pergunta continua aberta para quem tem essa permissão. Nada foi registrado.`,
   entreEmpresasRecusada: () => "Entendido: não registrei nada como operação entre empresas.",
   entreEmpresasSemPermissao: (devedora, credora) => `Para registrar um pagamento entre empresas é preciso permissão financeira nas duas: ${devedora} e ${credora}. Nada foi registrado.`,
   entreEmpresasRegistrada: ({ devedora, credora, valorCentavos }) => `Registrado: a conta do ${devedora} (${reais(valorCentavos)}) ficou paga pela ${credora}, e o ${devedora} passa a dever esse valor à ${credora} (Contas entre Empresas). Nenhuma saída nova foi lançada; o reembolso é registrado quando acontecer.`,

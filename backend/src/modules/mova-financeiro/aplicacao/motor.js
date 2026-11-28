@@ -596,7 +596,16 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
       if (evento.midia && PAGAMENTOS.includes(saida.tipoDocumento) && saida.intencao !== "TRANSFERENCIA_INTERNA") {
         return tratarEntreEmpresas({ evento, saida, injecao, esclarecimento, grupo, participante, interpretacao, devedora: u.unidade, credora: u.pagadora });
       }
-      u = { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: u.evidencia };
+      // 28/11 (caso real: nota da distribuidora em nome da MP ALIMENTOS, "lançar no açaí"): NOTA/BOLETO em nome da empresa de uma
+      // loja da conversa, com o texto citando OUTRA loja da conversa. Antes virava conflito e a pergunta genérica "Açaí ou Subway?"
+      // se repetia a cada resposta (a nota continuava apontando a outra empresa) — beco sem saída. Agora o MOVA EXPLICA o conflito e
+      // aceita a confirmação explícita de quem é FINANCEIRO nas DUAS unidades. Nada é presumido: sem confirmação, nada é gravado.
+      if (evento.midia && CONTAS.includes(saida.tipoDocumento)) {
+        const r = await confirmarUnidadeDoTomador({ evento, saida, injecao, esclarecimento, grupo, participante, citada: u.unidade, tomadora: u.pagadora });
+        if (r.concluido) return r.concluido;
+        u = r.u;
+        esclarecimento = r.esclarecimento;
+      } else u = { resultado: RESULTADO_UNIDADE.CONFLITANTE, unidade: null, evidencia: u.evidencia };
     }
     // 27/11 (caso real do empréstimo BNB): a resposta "Subway Saci" foi aceita, o MOVA perguntou o mês e, na resposta do mês, a unidade
     // era recalculada SÓ do texto original ("Empréstimo BNB…", pago pela MP, empresa de várias lojas) ⇒ "indicações de unidades
@@ -1468,6 +1477,46 @@ O identificador da transação está cortado na imagem: envie o comprovante comp
         return r.situacao === "CONTA_REGISTRADA" ? { ...r, texto: RESPOSTA.contaRelatadaRegistrada(c, r.resultado) } : r;
       } : null,
     });
+  }
+
+  /**
+   * 28/11 — NOTA/BOLETO em nome da empresa da `tomadora` (loja da conversa) com o texto citando a `citada` (outra loja da conversa).
+   * Primeira vez: EXPLICA o conflito e pergunta se a conta é da citada (pendência com as DUAS unidades exigidas). Na resposta:
+   *   "sim" ou o nome da citada ⇒ citada; o nome da tomadora ⇒ tomadora; "não" ⇒ pergunta qual das duas (nunca beco sem saída);
+   *   outra coisa ⇒ repete a pergunta explicada. Só vale a confirmação de quem é FINANCEIRO nas DUAS unidades (a mesma pessoa que
+   *   enviou também precisa ter). Confirmada, a operação segue normalmente na unidade escolhida (resumo, competência, política…),
+   *   com quem confirmou registrado (esclarecidoPor) e auditado. Nada é gravado antes disso.
+   * @returns {{concluido?:object, u?:object, esclarecimento?:object}}
+   */
+  async function confirmarUnidadeDoTomador({ evento, saida, injecao, esclarecimento, grupo, participante, citada, tomadora }) {
+    const ctx = { evento, escopo: escopoDe(citada), saida, injecao, unidade: citada, grupo, participante, esclarecimento };
+    const divergencia = { tipo: "UNIDADE_DO_TOMADOR", unidadesExigidas: [citada.unidadeId, tomadora.unidadeId], citada: citada.unidadeId, tomadora: tomadora.unidadeId };
+    const tomador = String(saida.pagador || saida.documentoPagador || "outra empresa").slice(0, 80);
+    const pergunta = RESPOSTA.tomadorDeOutraUnidade({ tomador, unidadeDoTomador: tomadora.nome, citada: citada.nome, tipoDocumento: saida.tipoDocumento });
+    const div = esclarecimento?.divergencia ?? null;
+    if (div?.tipo !== "UNIDADE_DO_TOMADOR" || div.citada !== citada.unidadeId || div.tomadora !== tomadora.unidadeId) {
+      return { concluido: await perguntar(ctx, divergencia, pergunta, "UNIDADE_DO_TOMADOR_AGUARDANDO_CONFIRMACAO") };
+    }
+    const texto = esclarecimento.texto ?? "";
+    const sim = respostaSimNao(texto);
+    const nomeadas = unidadesCitadas(texto, [citada, tomadora]);
+    const escolhida = nomeadas.length === 1 ? nomeadas[0] : sim === true && nomeadas.length === 0 ? citada : null;
+    if (!escolhida) {
+      if (sim === false) return { concluido: await perguntar(ctx, divergencia, RESPOSTA.tomadorQualUnidade(citada.nome, tomadora.nome), "UNIDADE_DO_TOMADOR_NEGADA") };
+      return { concluido: await perguntar(ctx, divergencia, `Não entendi. ${pergunta}`, "UNIDADE_DO_TOMADOR_RESPOSTA_NAO_ENTENDIDA") };
+    }
+    // quem respondeu (outra pessoa da lista já passou pela conferência da pendência; a MESMA pessoa também precisa das duas)
+    const respondeu = esclarecimento.participanteId ?? evento.participanteId;
+    const quem = respondeu === evento.participanteId ? participante
+      : participanteAutorizado(grupo, { participanteId: respondeu, telefoneE164: esclarecimento.telefoneE164 ?? null });
+    const financeiroNasDuas = Boolean(quem) && !quem.aberto && [citada, tomadora].every((x) => (quem.unidades ?? grupo?.unidades ?? []).includes(x.unidadeId) && perfilNa(quem, x.unidadeId) === "FINANCEIRO");
+    if (!financeiroNasDuas) {
+      return { concluido: await perguntar(ctx, divergencia, RESPOSTA.tomadorSemPermissao(citada.nome, tomadora.nome), "UNIDADE_DO_TOMADOR_SEM_PERMISSAO_NAS_DUAS") };
+    }
+    await a.auditoria.registrar({ acao: "UNIDADE_DO_TOMADOR_CONFIRMADA", atorTipo: "PARTICIPANTE", atorRef: respondeu, alvo: evento.eventoId,
+      dados: { unidadeId: escolhida.unidadeId, citada: citada.unidadeId, tomadora: tomadora.unidadeId, tipoDocumento: saida.tipoDocumento } });
+    const evidencia = escolhida === citada ? "TEXTO_CONFIRMADO_CONTRA_TOMADOR" : "TOMADOR_CONFIRMADO_CONTRA_TEXTO";
+    return { u: { resultado: RESULTADO_UNIDADE.IDENTIFICADA, unidade: escolhida, evidencia }, esclarecimento: { ...esclarecimento, divergencia: null } };
   }
 
   /**
