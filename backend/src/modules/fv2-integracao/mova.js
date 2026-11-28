@@ -46,6 +46,11 @@ import {
 import { LIMITE_CORPO_MOVA_BYTES, ROTA_EVENTO_MOVA, criarRotaEventosMova } from "../mova-financeiro/gateway/rota.js";
 import { assinarRequisicao, exigirHmac } from "../comunicacao/gateway/whatsappGateway.hmac.js";
 import { IDENTIDADE_MOVA, criarLeitorFinanceiroMova } from "./leitorMova.js";
+import { lerPdf } from "../financeiro-v2/importacao/formatos/pdf.js";
+import { lerNotaDeServico } from "../financeiro-v2/dominio/notaFiscalServico.js";
+
+/** 28/11: leitura DETERMINÍSTICA do PDF da NFS-e (layout nacional) para o MOVA — sem IA; layout desconhecido ou PDF digitalizado ⇒ null (cai na IA). */
+const leitorDeNotaPdf = (bytes) => lerNotaDeServico(lerPdf(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).paginas.flatMap((p) => p.linhas));
 import { configuracaoDaConversa } from "../mova-core/conversaWhatsapp.js";
 import { montarConversaCore } from "./movaCoreConversa.js";
 import { criarRepositorioDePropostasPostgres } from "../mova-core/persistenciaPropostas.js";
@@ -354,7 +359,7 @@ export async function montarMova({ cfg: cfgRecebida, pool, repositorio, verifica
       cfg = { ...cfg, autonomia: false, escrita: false, pagamentoPorComprovante: false, criarDespesas: false, registrarJuros: false, criarContas: false };
     }
   }
-  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
+  mova = criarMova({ configuracao, nucleo: nucleoServico, autonomia: cfg.autonomia === true, operacional, entregadores: cfg.entregadores === true, pagamentoPorComprovante: cfg.pagamentoPorComprovante === true, criarDespesas: cfg.criarDespesas === true, registrarJuros: cfg.registrarJuros === true, criarContas: cfg.criarContas === true, avisosNoGrupo: cfg.avisosNoGrupo ?? {}, avisosDiarios: cfg.modo === "OPERACAO" && cfg.envio ? cfg.avisosDiarios ?? null : null, concessoes: { listar: async () => [] }, financeiro: CONTRATO_FINANCEIRO, extrator, pool, relogio, registrar, controle, redator, somenteConsultas: cfg.somenteConsultas === true, comandosDeterministicos: cfg.comandosDeterministicos === true, leitorDeNota: leitorDeNotaPdf, recebimentoDocumental: cfg.recebimentoDocumental === true, conversaNova, titularDaFila });
   if (conversaCore) {
     try {
       // 25/11: operações pela conversa só com MOVA_CORE_OPERACOES e a migração 0020 (propostas) aplicada; sem ela, só consulta

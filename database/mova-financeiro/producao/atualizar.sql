@@ -1,7 +1,7 @@
 -- MOVA — ATUALIZAÇÃO do schema `mova` em PRODUÇÃO (gerado por backend/scripts/mova/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.
 -- Já instaladas (conferidas por nome e sha256): 0001_mova_fundacao.sql, 0002_mova_operacao.sql, 0003_mova_homologacao_privada.sql, 0004_mova_controle_orcamento.sql, 0005_mova_grupos_reais.sql, 0006_mova_politica_resposta.sql, 0007_mova_autonomia_operacoes.sql, 0008_mova_entregadores_automacoes.sql, 0009_mova_baixa_documental.sql, 0010_mova_despesa_documental.sql, 0011_mova_entregadores_rotina.sql, 0012_mova_juros_documental.sql, 0013_mova_entregadores_cadastro.sql, 0014_mova_unidade_sem_grupo.sql, 0015_mova_pagadores_multiunidade.sql, 0016_mova_avisos_entregadores.sql, 0017_mova_conversa_contexto.sql, 0018_mova_orcamento_renovavel.sql, 0020_mova_core_propostas.sql, 0022_mova_orcamento_uso.sql, 0023_mova_politica_sangria.sql, 0024_mova_grupo_multiempresa.sql, 0025_mova_contas_relatadas_intercompany_avisos.sql
--- Novas: 0026_mova_entregador_notificacoes_pagamento.sql, 0027_mova_fila_prioridade_limites.sql
+-- Novas: 0026_mova_entregador_notificacoes_pagamento.sql, 0027_mova_fila_prioridade_limites.sql, 0028_mova_identidade_fiscal.sql
 
 do $$ begin
   if not exists (select 1 from pg_namespace where nspname = 'mova') then raise exception 'MOVA atualização: schema mova não existe — nada foi feito'; end if;
@@ -33,6 +33,7 @@ do $$ begin
   if not exists (select 1 from mova.mova_migracao where nome = '0025_mova_contas_relatadas_intercompany_avisos.sql' and sha256 = '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a') then raise exception 'MOVA atualização: 0025_mova_contas_relatadas_intercompany_avisos.sql ausente ou com outro conteúdo — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0026_mova_entregador_notificacoes_pagamento.sql') then raise exception 'MOVA atualização: 0026_mova_entregador_notificacoes_pagamento.sql já aplicada — nada foi feito'; end if;
   if exists (select 1 from mova.mova_migracao where nome = '0027_mova_fila_prioridade_limites.sql') then raise exception 'MOVA atualização: 0027_mova_fila_prioridade_limites.sql já aplicada — nada foi feito'; end if;
+  if exists (select 1 from mova.mova_migracao where nome = '0028_mova_identidade_fiscal.sql') then raise exception 'MOVA atualização: 0028_mova_identidade_fiscal.sql já aplicada — nada foi feito'; end if;
 end $$;
 
 -- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351)
@@ -188,3 +189,96 @@ grant update (valor, ativo, atualizado_por, atualizado_em) on mova.limite_envio 
 grant usage on all sequences in schema mova to mova_app;
 comment on table mova.limite_envio is 'Limites de envio do WhatsApp por escopo. Sem linhas valem os padrões do código. Cada alteração grava mova.limite_envio_historico.';
 insert into mova.mova_migracao (nome, sha256) values ('0027_mova_fila_prioridade_limites.sql', 'a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0');
+
+-- ------------------------------------------------------------------------- 0028_mova_identidade_fiscal.sql (arquivo 97bafe89946451a198229db2f0da87d235c5dc92af1ad7ad6209ce6f2d5b6781)
+-- MOVA (28/11/2026): IDENTIDADE FISCAL APRENDIDA DAS NOTAS (sem cadastro manual).
+--
+-- O MOVA passa a guardar, internamente, quem é o prestador (CPF/CNPJ) de cada entregador, deduzido das notas que o Financeiro já tem
+-- ligadas às obrigações. Nada é digitado por gestor ou entregador; cada informação guarda a NOTA que a fundamentou (evidência).
+--   identidade_fiscal            o prestador (CPF/CNPJ único) e o que se sabe dele (razão social, fantasia, município)
+--   identidade_fiscal_vinculo    quem (unidade + entregador) usa esse prestador e em que situação (CONSOLIDADA | EM_REVISAO)
+--   identidade_fiscal_evidencia  cada nota analisada: hash, número, chave, valor, tomador, avaliação FORTE/FRACA e motivos
+--   identidade_fiscal_tomador    a empresa tomadora de cada unidade (configurada ou aprendida das notas aprovadas)
+--   nota_leitura_fiscal          cache da leitura por hash: a mesma nota nunca é lida (nem paga em IA) duas vezes
+-- Uma nota continua pertencendo SÓ à empresa tomadora da sua obrigação; o vínculo é por unidade. Sem DELETE para o app.
+-- Aditiva e reversível (recuperacao/reverter-0028.sql). Não altera nenhum dado existente.
+
+create table mova.identidade_fiscal (
+  id uuid primary key default gen_random_uuid(),
+  documento text not null unique check (documento ~ '^[0-9]{11}$' or documento ~ '^[0-9]{14}$'),
+  tipo text not null check (tipo in ('CPF', 'CNPJ')),
+  razao_social text check (razao_social is null or length(razao_social) <= 200),
+  nome_fantasia text check (nome_fantasia is null or length(nome_fantasia) <= 200),
+  municipio text check (municipio is null or length(municipio) <= 120),
+  criada_em timestamptz not null default now(),
+  atualizada_em timestamptz not null default now()
+);
+
+create table mova.identidade_fiscal_vinculo (
+  id uuid primary key default gen_random_uuid(),
+  identidade_id uuid references mova.identidade_fiscal (id),
+  organizacao_id uuid not null,
+  unidade_id uuid not null,
+  entregador text not null check (length(entregador) between 1 and 200),
+  situacao text not null check (situacao in ('CONSOLIDADA', 'EM_REVISAO')),
+  motivo text check (motivo is null or length(motivo) <= 80),
+  origem text not null check (origem in ('HISTORICO', 'PRIMEIRA_NOTA', 'NOTA_RECEBIDA', 'REVISAO_ADMINISTRATIVA')),
+  candidatos text[] not null default '{}',   -- documentos em disputa (só quando EM_REVISAO)
+  criada_em timestamptz not null default now(),
+  atualizada_em timestamptz not null default now(),
+  unique (unidade_id, entregador),
+  check ((situacao = 'CONSOLIDADA') = (identidade_id is not null))
+);
+create index identidade_fiscal_vinculo_identidade on mova.identidade_fiscal_vinculo (identidade_id);
+create index identidade_fiscal_vinculo_revisao on mova.identidade_fiscal_vinculo (organizacao_id) where situacao = 'EM_REVISAO';
+
+create table mova.identidade_fiscal_evidencia (
+  id uuid primary key default gen_random_uuid(),
+  organizacao_id uuid not null,
+  unidade_id uuid not null,
+  entregador text not null,
+  semana_inicio date,
+  sha256 text check (sha256 is null or sha256 ~ '^[0-9a-f]{64}$'),           -- a nota do Financeiro (histórico) pode não ter o hash do arquivo aqui
+  documento_id uuid,
+  chave_dedupe text not null check (length(chave_dedupe) between 5 and 100),   -- sha256 do arquivo ou 'doc:<id do documento>': uma nota, uma evidência por unidade
+  numero text,
+  chave_acesso text,
+  prestador_documento text check (prestador_documento is null or prestador_documento ~ '^([0-9]{11}|[0-9]{14})$'),
+  tomador_documento text check (tomador_documento is null or tomador_documento ~ '^([0-9]{11}|[0-9]{14})$'),
+  valor_centavos bigint,
+  competencia date,
+  fonte text not null check (fonte in ('FINANCEIRO', 'XML', 'PDF_TEXTO', 'IA')),
+  forca text not null check (forca in ('FORTE', 'FRACA')),
+  motivos jsonb not null default '[]'::jsonb,
+  criada_em timestamptz not null default now(),
+  unique (unidade_id, chave_dedupe),
+  check (sha256 is not null or documento_id is not null)
+);
+create index identidade_fiscal_evidencia_entregador on mova.identidade_fiscal_evidencia (unidade_id, entregador);
+create index identidade_fiscal_evidencia_chave on mova.identidade_fiscal_evidencia (chave_acesso) where chave_acesso is not null;
+
+create table mova.identidade_fiscal_tomador (
+  unidade_id uuid primary key,
+  organizacao_id uuid not null,
+  documento text check (documento is null or documento ~ '^[0-9]{14}$'),
+  situacao text not null check (situacao in ('CONFIGURADO', 'APRENDIDO', 'CONFLITO', 'EVIDENCIA_INSUFICIENTE')),
+  notas integer not null default 0,
+  entregadores integer not null default 0,
+  atualizada_em timestamptz not null default now()
+);
+
+create table mova.nota_leitura_fiscal (
+  sha256 text primary key check (sha256 ~ '^[0-9a-f]{64}$'),
+  fonte text not null check (fonte in ('FINANCEIRO', 'XML', 'PDF_TEXTO', 'IA')),
+  dados jsonb not null,
+  chamadas_ia integer not null default 0,
+  tokens_entrada integer not null default 0,
+  tokens_saida integer not null default 0,
+  criada_em timestamptz not null default now()
+);
+
+grant select, insert on mova.identidade_fiscal, mova.identidade_fiscal_vinculo, mova.identidade_fiscal_evidencia, mova.identidade_fiscal_tomador, mova.nota_leitura_fiscal to mova_app;
+grant update (razao_social, nome_fantasia, municipio, atualizada_em) on mova.identidade_fiscal to mova_app;
+grant update (identidade_id, situacao, motivo, origem, candidatos, atualizada_em) on mova.identidade_fiscal_vinculo to mova_app;
+grant update (documento, situacao, notas, entregadores, atualizada_em) on mova.identidade_fiscal_tomador to mova_app;
+insert into mova.mova_migracao (nome, sha256) values ('0028_mova_identidade_fiscal.sql', '97bafe89946451a198229db2f0da87d235c5dc92af1ad7ad6209ce6f2d5b6781');

@@ -166,7 +166,7 @@ const soDigitos = (s) => String(s ?? "").replace(/\D/g, "");
  *   emitente: nome do entregador; tomador: CNPJ da unidade (quando cadastrado) ou nome da empresa/unidade.
  * A situação fiscal NÃO é consultada (sem fonte oficial integrada): o resultado diz isso, e a validação final é humana.
  */
-export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, empresa = null, cnpjTomador = null }) {
+export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, empresa = null, cnpjTomador = null, identidade = null, tomadorAprendido = null, chaveDuplicada = false }) {
   const motivos = [];
   const incertos = [];
   if (!leitura || leitura.legivel === false || leitura.tipoDocumento !== "NOTA_FISCAL") return Object.freeze({ resultado: "INCONCLUSIVA", motivos: Object.freeze(["NAO_E_NOTA_FISCAL_LEGIVEL"]), situacaoFiscal: "NAO_CONSULTADA" });
@@ -177,11 +177,19 @@ export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, 
   if (leitura.competencia) { if (![mesDaSemana, mesDoFim].includes(leitura.competencia)) motivos.push("PERIODO_DIFERENTE"); }
   else if (leitura.dataEmissao) { if (leitura.dataEmissao < fechamento.semanaInicio) motivos.push("EMITIDA_ANTES_DA_SEMANA"); }
   else incertos.push("PERIODO_NAO_LIDO");
-  const emitente = leitura.favorecido ?? null;
-  if (!emitente) incertos.push("EMITENTE_NAO_LIDO");
-  else if (!nomesConferem(emitente, fechamento.entregador?.nome)) motivos.push("EMITENTE_NAO_E_O_ENTREGADOR");
+  // 28/11: com identidade fiscal, o CPF/CNPJ do prestador é a evidência principal; razão social/fantasia diferentes do nome operacional NÃO divergem.
+  const emitente = leitura.favorecido ?? null, docPrestador = soDigitos(leitura.prestadorDocumento);
+  const nomeConfere = (x) => nomesConferem(emitente, x);
+  if (identidade?.situacao === "CONSOLIDADA" && docPrestador) { if (docPrestador !== soDigitos(identidade.documento)) motivos.push("PRESTADOR_DIFERENTE_DO_HISTORICO"); }
+  else if (identidade?.situacao === "EM_REVISAO") incertos.push("IDENTIDADE_FISCAL_EM_REVISAO");
+  else if (identidade?.situacao === "CONSOLIDADA") { if (!emitente) incertos.push("EMITENTE_NAO_LIDO"); else if (![fechamento.entregador?.nome, identidade.nome, identidade.nomeFantasia].some(nomeConfere)) incertos.push("EMITENTE_NAO_CONFIRMADO"); }
+  else if (!emitente) incertos.push("EMITENTE_NAO_LIDO");
+  else if (!nomeConfere(fechamento.entregador?.nome)) { if (docPrestador) incertos.push("EMITENTE_PENDENTE_DE_VALIDACAO"); else motivos.push("EMITENTE_NAO_E_O_ENTREGADOR"); }
+  if (leitura.periodo?.inicio && fechamento.semanaFim && (leitura.periodo.inicio !== fechamento.semanaInicio || leitura.periodo.fim !== fechamento.semanaFim)) motivos.push("PERIODO_DIFERENTE");
+  if (chaveDuplicada) motivos.push("NOTA_FISCAL_JA_RECEBIDA");
   const tomador = leitura.pagador ?? null, docTomador = soDigitos(leitura.documentoDestinatario);
-  if (cnpjTomador && docTomador.length === 14) { if (docTomador !== soDigitos(cnpjTomador)) motivos.push("TOMADOR_DIFERENTE"); }
+  const cnpjDoTomador = cnpjTomador ?? tomadorAprendido;
+  if (cnpjDoTomador && docTomador.length === 14) { if (docTomador !== soDigitos(cnpjDoTomador)) motivos.push("TOMADOR_DIFERENTE"); }
   else if (!tomador) incertos.push("TOMADOR_NAO_LIDO");
   else if (!nomesConferem(tomador, empresa) && !nomesConferem(tomador, unidade)) incertos.push("TOMADOR_NAO_CONFIRMADO");
   const resultado = motivos.length ? "DIVERGENTE" : incertos.length ? "INCONCLUSIVA" : "CONFERE";
@@ -190,7 +198,7 @@ export function conferirNotaDoEntregador({ leitura, fechamento, unidade = null, 
 
 const MOTIVO_NOTA = Object.freeze({
   VALOR_DIFERENTE_DO_FECHAMENTO: "valor diferente do fechamento", PERIODO_DIFERENTE: "período diferente da semana", EMITIDA_ANTES_DA_SEMANA: "emitida antes da semana",
-  EMITENTE_NAO_E_O_ENTREGADOR: "o emitente não é você", TOMADOR_DIFERENTE: "o tomador não é a empresa", NAO_E_NOTA_FISCAL_LEGIVEL: "não deu para ler como nota fiscal",
+  EMITENTE_NAO_E_O_ENTREGADOR: "o emitente não é você", PRESTADOR_DIFERENTE_DO_HISTORICO: "o CPF/CNPJ do emitente é diferente do que consta no seu histórico de notas", NOTA_FISCAL_JA_RECEBIDA: "essa nota fiscal já foi recebida antes", TOMADOR_DIFERENTE: "o tomador não é a empresa", NAO_E_NOTA_FISCAL_LEGIVEL: "não deu para ler como nota fiscal",
 });
 /** Resposta ao entregador depois da leitura da nota (a liberação continua sendo do financeiro). */
 export function respostaDaConferencia(f, conferencia) {

@@ -35,7 +35,7 @@ const apurar = async ({ unidadeId, inicio, fim }) => ({ disponivel: true, dias: 
 const criados = [];
 after(async () => { for (const b of criados.splice(0)) await descartarBancoMova(b).catch(() => {}); });
 
-export async function cenario({ entregadores = ENTREGADORES, interpretador = null, semanas = [SEG, S2], agora = AGORA } = {}) {
+export async function cenario({ entregadores = ENTREGADORES, interpretador = null, semanas = [SEG, S2], agora = AGORA, leitorDeNota = null, documentos = {} } = {}) {
   const estado = { agora };
   const relogio = () => new Date(estado.agora);
   const cofre = criarCofreMemoria();
@@ -49,14 +49,14 @@ export async function cenario({ entregadores = ENTREGADORES, interpretador = nul
   }
   const banco = await criarBancoMova();
   criados.push(banco);
-  const config = { ...CONFIG, entregadores, unidades: CONFIG.unidades.map((u) => ({ ...u, empresa: u.unidadeId === ALFA ? "Acai Alfa Sintetico" : u.unidadeId === BETA ? "Subway Beta Sintetico" : null })),
+  const config = { ...CONFIG, entregadores, unidades: CONFIG.unidades.map((u) => ({ ...u, ...(documentos[u.unidadeId] ? { documentos: documentos[u.unidadeId] } : {}), empresa: u.unidadeId === ALFA ? "Acai Alfa Sintetico" : u.unidadeId === BETA ? "Subway Beta Sintetico" : null })),
     gruposAutorizados: [...CONFIG.gruposAutorizados,
       { grupoId: GRUPO_ALFA, unidades: [ALFA], acesso: "LISTA", politicaResposta: "GRUPO_FINANCEIRO", participantes: [{ ids: [FIN], perfil: "FINANCEIRO" }] },
       { grupoId: GRUPO_BETA, unidades: [BETA], acesso: "LISTA", politicaResposta: "GRUPO_FINANCEIRO", participantes: [{ ids: [FIN], perfil: "FINANCEIRO" }] }] };
   await instalarConfiguracao(banco.pool, validarConfiguracao(config));
   const ia = { beta: { messages: { async create() { throw new Error("IA nao pode ser chamada na notificacao de pagamento"); } } } };
   const montarMova = () => criarMova({ configuracao: config, nucleo: real, concessoes: criarConcessoesMemoria([]), financeiro: FINANCEIRO, pool: banco.pool, relogio, comandosDeterministicos: true,
-    extrator: { extrair: ia.beta.messages.create }, entregadores: true, interpretadorEntregador: interpretador });
+    extrator: { extrair: ia.beta.messages.create }, entregadores: true, interpretadorEntregador: interpretador, leitorDeNota });
   let mova = montarMova();
   const s = { estado, real, adm, contas, banco, get mova() { return mova; }, reiniciar() { mova = montarMova(); return mova; } };
   s.passada = () => s.mova.pagamentos.passada();

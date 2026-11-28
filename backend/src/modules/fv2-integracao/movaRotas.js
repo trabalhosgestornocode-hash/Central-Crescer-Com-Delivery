@@ -39,6 +39,7 @@
 //   POST /acoes/mova/conciliar-comprovante  responsável liga a saída do extrato à MESMA baixa (vincular_pagamento; nunca 2ª baixa)
 import { ACAO, ErroFinanceiro } from "../financeiro-v2/index.js";
 import { faixaDeUso, resolverLimites, validarRegra } from "../mova-financeiro/dominio/politicaEnvio.js";
+import { mascararDocumento } from "../mova-financeiro/dominio/identidadeFiscal.js";
 import { AUTOMACAO, ErroDeAprovacao, ESTADO_CONFERENCIA, TIPOS_INFORMADOS, contasRelacionadas, linhaDoTempo, montarConferencia } from "../mova-financeiro/index.js";
 import { normalizarTelefoneBr } from "../mova-financeiro/dominio/entregadores.js";
 
@@ -259,6 +260,16 @@ export const CONSULTAS_MOVA = Object.freeze({
   },
   // 28/11: PAINEL DE ENVIO — uso do dia, limites efetivos, represamento, alertas, falhas e consumo de IA. Escopo da unidade da sessão; os totais
   // gerais (todas as empresas) só com a permissão de configurar. Nunca devolve texto de mensagem nem telefone (só contagens e identificadores mascarados).
+  // 28/11: IDENTIDADE FISCAL aprendida das notas — contagens da unidade, casos em revisão (documento sempre mascarado) e consumo de leitura (arquivos, IA, tokens).
+  "/mova/identidade-fiscal": async ({ ctx, mova }) => {
+    exigirVer(ctx);
+    const f = mova.armazenamento.identidadesFiscais;
+    if (!f || !(await f.disponivel())) return { disponivel: false, motivo: "SEM_MIGRACAO_0028" };
+    const escopo = { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId };
+    const [contagens, itens, tomador] = await Promise.all([f.contagens(escopo), f.listar(escopo), f.tomadorDaUnidade(ctx.unidadeId)]);
+    return { disponivel: true, contagens, tomadorDaUnidade: tomador ? { situacao: tomador.situacao, documento: mascararDocumento(tomador.documento) } : null,
+      itens: itens.map((x) => ({ entregador: x.entregador, situacao: x.situacao, motivo: x.motivo, origem: x.origem, documento: mascararDocumento(x.documento), atualizadaEm: x.atualizadaEm })), podeAprender: ctx.permissoes?.includes("financeiro_v2.configurar") === true };
+  },
   "/mova/envio-painel": async ({ ctx, mova, params = {} }) => {
     exigirVer(ctx);
     const a = mova.armazenamento;
@@ -342,6 +353,15 @@ export const CONSULTAS_MOVA = Object.freeze({
 export const ACOES_MOVA = Object.freeze({
   // 28/11: ajuste administrativo de UM limite de envio (sem deploy). Exige configurar; escopo EMPRESA/UNIDADE só da própria sessão; GLOBAL e
   // GRUPO/FINALIDADE só com a permissão de configurar. Valida faixa, exige justificativa, grava histórico + auditoria (na mesma transação).
+  // 28/11: aprende (de novo) a identidade fiscal dos entregadores DESTA unidade a partir das notas do Financeiro. Só leitura do Financeiro; idempotente.
+  "/mova/identidade-fiscal-aprender": { campos: [], escreveNoFinanceiro: false,
+    fazer: async ({ ctx, mova }) => {
+      exigirConfigurar(ctx);
+      if (typeof mova.entregadores?.aprenderIdentidadesFiscais !== "function") throw recusa(503, "ENTREGADORES_INDISPONIVEIS", "Entregadores indisponíveis.");
+      const r = await mova.entregadores.aprenderIdentidadesFiscais({ unidadeId: ctx.unidadeId });
+      if (r.disponivel === false) throw recusa(503, "SEM_MIGRACAO_0028", "Identidade fiscal indisponível (migração 0028 não aplicada).");
+      return { documentosAnalisados: r.documentosAnalisados, consolidadas: r.consolidadas, emRevisao: r.emRevisao, semHistorico: r.semHistorico, divergencias: r.divergencias, evidenciasNovas: r.evidenciasNovas };
+    } },
   "/mova/limite-envio": { campos: ["escopo", "chave", "campo", "valor", "ativo", "justificativa"], escreveNoFinanceiro: false,
     fazer: async ({ ctx, mova, b }) => {
       exigirConfigurar(ctx);

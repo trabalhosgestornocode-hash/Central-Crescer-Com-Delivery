@@ -31,6 +31,12 @@ const linhaCadastro = (r) => ({ id: r.id, chave: r.chave, telefone: `…${r.tele
   revogadoEm: r.revogado_em?.toISOString() ?? null, revogadoPor: r.revogado_por ?? null, motivoRevogacao: r.motivo_revogacao ?? null });
 /** 28/11: a fila com prioridade só é usada depois da migração 0027 (detecção única por pool); antes dela tudo segue como era. */
 const filaNovaPorPool = new WeakMap();
+const fiscalNovaPorPool = new WeakMap();
+/** Migração 0028 (identidade fiscal) aplicada? Sem ela o MOVA segue com a conferência por nome, como antes. */
+function fiscalNovaDe(pool) {
+  if (!fiscalNovaPorPool.has(pool)) fiscalNovaPorPool.set(pool, pool.query("select 1 from information_schema.tables where table_schema = 'mova' and table_name = 'identidade_fiscal_vinculo'").then((r) => r.rowCount > 0).catch(() => false));
+  return fiscalNovaPorPool.get(pool);
+}
 function filaNovaDe(pool) {
   if (!filaNovaPorPool.has(pool)) filaNovaPorPool.set(pool, pool.query("select 1 from information_schema.columns where table_schema = 'mova' and table_name = 'resposta' and column_name = 'prioridade'").then((r) => r.rowCount > 0, () => false));
   return filaNovaPorPool.get(pool);
@@ -400,6 +406,95 @@ export function criarArmazenamentoPostgres({ pool, gerarId = randomUUID }) {
       },
       async listar(escopo) {
         return (await q("select * from mova.nota_entregador where organizacao_id = $1 and unidade_id = $2 order by criada_em desc limit 200", [escopo.organizacaoId, escopo.unidadeId])).rows.map(linhaNota);
+      },
+    }),
+    // 28/11: IDENTIDADE FISCAL aprendida das notas (migração 0028). Sem a migração, `disponivel()` é falso e o fluxo antigo segue igual.
+    identidadesFiscais: Object.freeze({
+      async disponivel() { return fiscalNovaDe(pool); },
+      async doEntregador({ unidadeId, entregador }) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q(`select v.situacao, v.motivo, v.origem, v.candidatos, i.documento, i.razao_social, i.nome_fantasia, i.municipio from mova.identidade_fiscal_vinculo v
+                           left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2`, [unidadeId, entregador]);
+        const l = r.rows[0];
+        return l ? { situacao: l.situacao, motivo: l.motivo, origem: l.origem, documento: l.documento ?? null, candidatos: l.candidatos ?? [], nome: l.razao_social ?? null, nomeFantasia: l.nome_fantasia ?? null, municipio: l.municipio ?? null } : null;
+      },
+      /** O CPF/CNPJ já é de OUTRO entregador (em qualquer unidade)? Então não é candidato desta pessoa. */
+      async documentoUsadoPorOutro({ documento, entregador }) {
+        if (!(await fiscalNovaDe(pool))) return false;
+        const r = await q("select 1 from mova.identidade_fiscal_vinculo v join mova.identidade_fiscal i on i.id = v.identidade_id where i.documento = $1 and v.entregador <> $2 limit 1", [documento, entregador]);
+        return r.rowCount > 0;
+      },
+      /** Consolida (ou confirma) a identidade de UM entregador numa unidade. Conflito com a identidade vigente: só este caso vai a revisão. */
+      async consolidar({ organizacaoId, unidadeId, entregador, documento, tipo, nome = null, nomeFantasia = null, municipio = null, origem, motivo = null }) {
+        return emTransacao(pool, async (tx) => {
+          await tx("select pg_advisory_xact_lock(hashtextextended($1, 0))", [`mova.identidade_fiscal:${unidadeId}:${entregador}`]);
+          const atual = (await tx("select v.id, v.situacao, i.documento from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id where v.unidade_id = $1 and v.entregador = $2", [unidadeId, entregador])).rows[0];
+          if (atual?.situacao === "CONSOLIDADA" && atual.documento !== documento) {
+            await tx("update mova.identidade_fiscal_vinculo set identidade_id = null, situacao = 'EM_REVISAO', motivo = 'DOCUMENTO_DIFERENTE_DA_IDENTIDADE', candidatos = $2, atualizada_em = now() where id = $1", [atual.id, [atual.documento, documento]]);
+            return { resultado: "EM_REVISAO", motivo: "DOCUMENTO_DIFERENTE_DA_IDENTIDADE" };
+          }
+          if (atual?.situacao === "EM_REVISAO" && origem !== "REVISAO_ADMINISTRATIVA") return { resultado: "EM_REVISAO", motivo: "AGUARDA_REVISAO" };
+          const i = (await tx(`insert into mova.identidade_fiscal (documento, tipo, razao_social, nome_fantasia, municipio) values ($1,$2,$3,$4,$5)
+                               on conflict (documento) do update set razao_social = coalesce(mova.identidade_fiscal.razao_social, excluded.razao_social), nome_fantasia = coalesce(mova.identidade_fiscal.nome_fantasia, excluded.nome_fantasia),
+                                 municipio = coalesce(mova.identidade_fiscal.municipio, excluded.municipio), atualizada_em = now() returning id`, [documento, tipo, nome, nomeFantasia, municipio])).rows[0];
+          if (atual) {
+            await tx("update mova.identidade_fiscal_vinculo set identidade_id = $2, situacao = 'CONSOLIDADA', motivo = $3, origem = $4, candidatos = '{}', atualizada_em = now() where id = $1", [atual.id, i.id, motivo, origem]);
+            return { resultado: "CONSOLIDADA", motivo: "CONFIRMADA", nova: false };
+          }
+          await tx("insert into mova.identidade_fiscal_vinculo (identidade_id, organizacao_id, unidade_id, entregador, situacao, motivo, origem) values ($1,$2,$3,$4,'CONSOLIDADA',$5,$6)", [i.id, organizacaoId, unidadeId, entregador, motivo, origem]);
+          return { resultado: "CONSOLIDADA", motivo: "CRIADA", nova: true };
+        });
+      },
+      async marcarRevisao({ organizacaoId, unidadeId, entregador, motivo, candidatos = [], origem }) {
+        await q(`insert into mova.identidade_fiscal_vinculo (organizacao_id, unidade_id, entregador, situacao, motivo, origem, candidatos) values ($1,$2,$3,'EM_REVISAO',$4,$5,$6)
+                 on conflict (unidade_id, entregador) do update set identidade_id = null, situacao = 'EM_REVISAO', motivo = excluded.motivo, candidatos = excluded.candidatos, atualizada_em = now()`, [organizacaoId, unidadeId, entregador, motivo, origem, candidatos]);
+      },
+      async registrarEvidencia(e) {
+        const r = await q(`insert into mova.identidade_fiscal_evidencia (organizacao_id, unidade_id, entregador, semana_inicio, sha256, documento_id, chave_dedupe, numero, chave_acesso, prestador_documento, tomador_documento, valor_centavos, competencia, fonte, forca, motivos)
+                           values ($1,$2,$3,$4,$5,$6,$16,$7,$8,$9,$10,$11,$12,$13,$14,$15) on conflict (unidade_id, chave_dedupe) do nothing`,
+          [e.organizacaoId, e.unidadeId, e.entregador, e.semanaInicio ?? null, e.sha256 ?? null, e.documentoId ?? null, e.numero ?? null, e.chaveAcesso ?? null, e.prestadorDocumento ?? null, e.tomadorDocumento ?? null, e.valorCentavos ?? null, e.competencia ?? null, e.fonte, e.forca, JSON.stringify(e.motivos ?? []), e.sha256 ?? `doc:${e.documentoId}`]);
+        return r.rowCount === 1;
+      },
+      /** A MESMA chave de acesso já foi vista em outra nota (qualquer entregador/unidade)? Duplicidade fiscal, não só de arquivo. */
+      async chaveJaVista({ chaveAcesso, sha256 }) {
+        if (!chaveAcesso || !(await fiscalNovaDe(pool))) return null;
+        const r = await q("select unidade_id, entregador from mova.identidade_fiscal_evidencia where chave_acesso = $1 and chave_dedupe <> $2 limit 1", [chaveAcesso, sha256]);
+        return r.rows[0] ? { unidadeId: r.rows[0].unidade_id, entregador: r.rows[0].entregador } : null;
+      },
+      async tomadorDaUnidade(unidadeId) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q("select documento, situacao from mova.identidade_fiscal_tomador where unidade_id = $1", [unidadeId]);
+        return r.rows[0]?.documento ? { documento: r.rows[0].documento, situacao: r.rows[0].situacao } : null;
+      },
+      async definirTomador({ organizacaoId, unidadeId, documento, situacao, notas = 0, entregadores = 0 }) {
+        await q(`insert into mova.identidade_fiscal_tomador (unidade_id, organizacao_id, documento, situacao, notas, entregadores) values ($1,$2,$3,$4,$5,$6)
+                 on conflict (unidade_id) do update set documento = excluded.documento, situacao = excluded.situacao, notas = excluded.notas, entregadores = excluded.entregadores, atualizada_em = now()`, [unidadeId, organizacaoId, documento, situacao, notas, entregadores]);
+      },
+      async listar(escopo) {
+        if (!(await fiscalNovaDe(pool))) return [];
+        const r = await q(`select v.entregador, v.situacao, v.motivo, v.origem, v.atualizada_em, i.documento, i.razao_social from mova.identidade_fiscal_vinculo v left join mova.identidade_fiscal i on i.id = v.identidade_id
+                           where v.organizacao_id = $1 and v.unidade_id = $2 order by v.situacao desc, v.atualizada_em desc limit 500`, [escopo.organizacaoId, escopo.unidadeId]);
+        return r.rows.map((x) => ({ entregador: x.entregador, situacao: x.situacao, motivo: x.motivo, origem: x.origem, documento: x.documento ?? null, razaoSocial: x.razao_social ?? null, atualizadaEm: x.atualizada_em }));
+      },
+      /** Contagens da unidade para o painel (sem documentos). */
+      async contagens(escopo) {
+        if (!(await fiscalNovaDe(pool))) return { disponivel: false };
+        const v = (await q("select situacao, count(*)::int n from mova.identidade_fiscal_vinculo where organizacao_id = $1 and unidade_id = $2 group by 1", [escopo.organizacaoId, escopo.unidadeId])).rows;
+        const e = (await q("select forca, count(*)::int n from mova.identidade_fiscal_evidencia where organizacao_id = $1 and unidade_id = $2 group by 1", [escopo.organizacaoId, escopo.unidadeId])).rows;
+        const l = (await q("select coalesce(sum(chamadas_ia),0)::int ia, coalesce(sum(tokens_entrada),0)::int te, coalesce(sum(tokens_saida),0)::int ts, count(*)::int lidas from mova.nota_leitura_fiscal")).rows[0];
+        return { disponivel: true, consolidadas: v.find((x) => x.situacao === "CONSOLIDADA")?.n ?? 0, emRevisao: v.find((x) => x.situacao === "EM_REVISAO")?.n ?? 0,
+          evidenciasFortes: e.find((x) => x.forca === "FORTE")?.n ?? 0, evidenciasFracas: e.find((x) => x.forca === "FRACA")?.n ?? 0, leituras: { arquivosLidos: l.lidas, chamadasIa: l.ia, tokensEntrada: l.te, tokensSaida: l.ts } };
+      },
+    }),
+    leiturasFiscais: Object.freeze({
+      async obter(sha256) {
+        if (!(await fiscalNovaDe(pool))) return null;
+        const r = await q("select fonte, dados from mova.nota_leitura_fiscal where sha256 = $1", [sha256]);
+        return r.rows[0] ? { fonte: r.rows[0].fonte, dados: r.rows[0].dados } : null;
+      },
+      async gravar({ sha256, fonte, dados, chamadasIa = 0, tokensEntrada = 0, tokensSaida = 0 }) {
+        if (!(await fiscalNovaDe(pool))) return false;
+        return (await q("insert into mova.nota_leitura_fiscal (sha256, fonte, dados, chamadas_ia, tokens_entrada, tokens_saida) values ($1,$2,$3,$4,$5,$6) on conflict (sha256) do nothing", [sha256, fonte, JSON.stringify(dados), chamadasIa, tokensEntrada, tokensSaida])).rowCount === 1;
       },
     }),
     // 23/11: cadastro pelo gestor (a chave já foi conferida no Financeiro pela rota). FONTE ÚNICA dos contatos (Financeiro e MOVA).

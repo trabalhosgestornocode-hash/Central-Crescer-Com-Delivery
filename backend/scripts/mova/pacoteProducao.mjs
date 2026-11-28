@@ -23,6 +23,7 @@ export const TABELAS_ESPERADAS = Object.freeze([
   "politica_autonomia", "proposta", "resposta", "unidade_sem_grupo", "mova_migracao",
   "pagamento_marco", "notificacao_pagamento", "notificacao_pagamento_item", "atendimento_metrica",
   "limite_envio", "limite_envio_historico", "alerta_envio",
+  "identidade_fiscal", "identidade_fiscal_vinculo", "identidade_fiscal_evidencia", "identidade_fiscal_tomador", "nota_leitura_fiscal",
 ]);
 
 export function listarMigracoes() {
