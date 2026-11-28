@@ -437,7 +437,7 @@ export function criarMotor({ cfg, porta, extrator, armazenamento: a, relogio = (
         // 27/11: resposta ao "falta o vencimento / o mês de referência" da conta relatada ("vence 10/12, referente a novembro"):
         // lida sem IA; só retoma se preencher o que faltava (senão segue a leitura comum, com a pergunta como contexto).
         // 28/11: resposta LIVRE com o valor novo da correção ("Gelo Norte", "paga pela sócia") — sem IA
-        if (visto?.pendente?.divergencia?.tipo === TIPO_CORRECAO.VALOR) {
+        if ([TIPO_CORRECAO.VALOR, TIPO_CORRECAO.JUSTIFICATIVA].includes(visto?.pendente?.divergencia?.tipo)) {
           const pend = await a.mensagens.tomarPendente(visto.mensagemId);
           if (pend?.pendente) return retomarPendencia(evento, pend, "VALOR_DA_CORRECAO");
         }

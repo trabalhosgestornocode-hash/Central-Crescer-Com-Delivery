@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { ACOES_OPERACIONAIS_DO_MOVA as ACOES_ATUAIS, atualizar } from "./pacoteProducao.mjs";
 
 /** A lista estreita como era quando este kit foi EXECUTADO (28/11): o kit fica idêntico ao que rodou em produção. */
-const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(ACOES_ATUAIS.filter((a) => a !== "financeiro_v2.corrigir_conta_a_pagar"));
+const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(ACOES_ATUAIS.filter((a) => !/^financeiro_v2.(corrigir|reclassificar|ajustar|mover_competencia|cancelar)_conta_a_pagar$/.test(a)));
 
 /** A atualização de produção de 28/11 (base 0034, só a 0035) — a que foi aplicada; usada no ensaio deste kit. */
 export const atualizarAte0035 = () => atualizar("0034", "0035");

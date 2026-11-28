@@ -9,7 +9,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { ACOES_OPERACIONAIS_DO_MOVA } from "./pacoteProducao.mjs";
+import { ACOES_OPERACIONAIS_DO_MOVA as ACOES_ATUAIS, atualizar } from "./pacoteProducao.mjs";
+
+/** A lista estreita como era quando este kit foi EXECUTADO (28/11): o kit fica idêntico ao que rodou em produção. */
+const ACOES_OPERACIONAIS_DO_MOVA = Object.freeze(ACOES_ATUAIS.filter((a) => !/^financeiro_v2\.(reclassificar|ajustar|mover_competencia|cancelar)_conta_a_pagar$/.test(a)));
+/** A atualização de produção de 28/11 (base 0035, só a 0036) — a que foi aplicada; usada no ensaio deste kit. */
+export const atualizarAte0036 = () => atualizar("0035", "0036");
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.resolve(AQUI, "../../..");
@@ -43,9 +48,9 @@ const lerMigracao = (n) => fs.readFileSync(path.join(MIGRACOES, n), "utf8").repl
 /** Hash da 0036 (o mesmo que o atualizar.sql grava) — conferido contra o arquivo. */
 export function hashDa0036() {
   const arquivo = sha(fs.readFileSync(path.join(MIGRACOES, MIGRACAO)));
-  const atualizar = fs.readFileSync(path.join(RAIZ, "database/financeiro-v2/producao/atualizar.sql"), "utf8");
-  const m = new RegExp(`values \\('${MIGRACAO.replace(/\./g, "\\.")}', '([0-9a-f]{64})'`).exec(atualizar);
-  if (!m) throw new Error("atualizar.sql não aplica a 0036 — gerar o pacote de produção antes");
+  // 28/11: a 0036 já está em produção e o atualizar.sql passou a ter base 0036; confere pela atualização LIMITADA (a que foi aplicada)
+  const m = new RegExp(`values \\('${MIGRACAO.replace(/\./g, "\\.")}', '([0-9a-f]{64})'`).exec(atualizarAte0036());
+  if (!m) throw new Error("a atualização 0035→0036 não aplica a 0036");
   if (m[1] !== arquivo) throw new Error("hash da 0036 no atualizar.sql difere do arquivo da migração");
   return arquivo;
 }

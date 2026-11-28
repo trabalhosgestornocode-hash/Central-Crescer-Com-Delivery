@@ -10,7 +10,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 import { ESCOPOS_PADRAO } from "./helpers/cenario.js";
-import { ACAO_0036, gerarKit, hashDa0036, PRODUCAO } from "../../scripts/fv2/kitCorrecao0036.mjs";
+import { ACAO_0036, atualizarAte0036, gerarKit, hashDa0036, PRODUCAO } from "../../scripts/fv2/kitCorrecao0036.mjs";
+import { gerarKit as gerarKit0037, PRODUCAO as PRODUCAO_0037 } from "../../scripts/fv2/kitOperacoes0037.mjs";
+import { atualizar } from "../../scripts/fv2/pacoteProducao.mjs";
 import { sqlConcessaoOperacionalDoMova, sqlRevogarConcessaoOperacionalDoMova } from "../../scripts/fv2/pacoteProducao.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -52,6 +54,8 @@ test("KIT-0036 ensaio completo: backup, reversão exata para a 0035, ida e volta
     const concessao = async (u, usuario = MOVA) => (await q(`select versao, situacao, acoes from financeiro_v2.fv2_concessao where organizacao_id = '${u.organizacaoId}' and unidade_id = '${u.unidadeId}' and usuario_id = '${usuario}'`)).rows[0];
     const conferir = async (kit) => (await q(kit["03-conferencia.sql"])).rows[0];
 
+    // a 0037 está por cima no banco de teste: o ensaio da 0036 começa revertendo a 0037 pelo PRÓPRIO kit dela
+    await comoMigrador(parte(gerarKit0037({ ...PRODUCAO_0037, identidade: MOVA, proprietario: DONO, unidades: [], data: "20990102" })["05-reversao.sql"], "B"));
     const comA0036 = await retrato();
     assert.equal(comA0036.n, 36, "banco de teste com a 0036");
     const kit = gerarKit({ identidade: MOVA, proprietario: DONO, unidades: [{ nome: "Unidade Um", ...U1, versao: 1 }, { nome: "Unidade Dois", ...U2, versao: 1 }], vigentes: PRODUCAO.vigentes, data: "20990101" });
@@ -67,7 +71,7 @@ test("KIT-0036 ensaio completo: backup, reversão exata para a 0035, ida e volta
     for (const f of ["fv2_so_corrige_conta", "fv2_conta_corrigivel", "fv2_correcao_de_conta", "fv2_correcao_de_lancamento"]) assert.equal(sem.funcoes[f], undefined, `${f} removida`);
     assert.ok(!sem.gatilhos.includes("fv2_obrigacao_correcao_estreita") && !sem.gatilhos.includes("fv2_lancamento_correcao_estreita"));
     // 02: atualizar.sql de produção (base 0035) → ida e volta IDÊNTICA (políticas, funções, gatilhos, restrição)
-    await comoMigrador(ler("atualizar.sql"));
+    await comoMigrador(atualizarAte0036());
     assert.deepEqual(await retrato(), comA0036, "reaplicar a 0036 depois da reversão devolve exatamente o mesmo banco");
     let c = await conferir(kit);
     assert.deepEqual([Number(c.migracoes), c.tem_0036, c.hash_confere, c.acao_na_lista, Number(c.funcoes_novas), Number(c.gatilhos_novos), Number(c.concessoes_com_a_acao)], [36, true, true, true, 4, 2, 0]);
@@ -107,6 +111,8 @@ test("KIT-0036 ensaio completo: backup, reversão exata para a 0035, ida e volta
     // 05-B e reaplicação: o banco de teste termina como começou
     await comoMigrador(parte(kit["05-reversao.sql"], "B"));
     assert.equal((await retrato()).n, 35);
-    await comoMigrador(ler("atualizar.sql"));
+    await comoMigrador(atualizarAte0036());
     assert.deepEqual(await retrato(), comA0036);
+    await comoMigrador(atualizar("0036")); // devolve a 0037
+    assert.equal((await retrato()).n, 37);
   });

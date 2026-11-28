@@ -12,6 +12,7 @@ import { ESCOPOS_PADRAO } from "./helpers/cenario.js";
 import { atualizarAte0035, gerarKit, hashDa0035, PRODUCAO } from "../../scripts/fv2/kitEmprestimo0035.mjs";
 import { gerarKit as gerarKit0036, PRODUCAO as PRODUCAO_0036 } from "../../scripts/fv2/kitCorrecao0036.mjs";
 import { atualizar } from "../../scripts/fv2/pacoteProducao.mjs";
+import { gerarKit as gerarKit0037, PRODUCAO as PRODUCAO_0037 } from "../../scripts/fv2/kitOperacoes0037.mjs";
 import { sqlConcessaoOperacionalDoMova, sqlRevogarConcessaoOperacionalDoMova } from "../../scripts/fv2/pacoteProducao.mjs";
 
 const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -50,6 +51,7 @@ test("KIT-0035 ensaio completo: backup verificado, reversão, atualizar.sql, has
     const conferir = async (kit) => (await q(kit["03-conferencia.sql"])).rows[0];
 
     // 28/11: o banco de teste já tem a 0036 (aplicada por cima da 0035); o ensaio da 0035 começa revertendo a 0036 pelo PRÓPRIO kit dela
+    await comoMigrador(parte(gerarKit0037({ ...PRODUCAO_0037, identidade: MOVA, proprietario: DONO, unidades: [], data: "20990102" })["05-reversao.sql"], "B"));
     const kit36 = gerarKit0036({ ...PRODUCAO_0036, identidade: MOVA, proprietario: DONO, unidades: [], data: "20990101" });
     await comoMigrador(parte(kit36["05-reversao.sql"], "B"));
     assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 }, "banco de teste com a 0035 (sem a 0036)");
@@ -108,6 +110,6 @@ test("KIT-0035 ensaio completo: backup verificado, reversão, atualizar.sql, has
     assert.deepEqual(await estado(), { n: 34, acao: false, funcao: 0 });
     await comoMigrador(atualizarAte0035());
     assert.deepEqual(await estado(), { n: 35, acao: true, funcao: 1 });
-    await comoMigrador(atualizar("0035")); // devolve a 0036 (banco de teste fica como estava)
-    assert.equal(Number((await q("select count(*) n from financeiro_v2.fv2_migracao")).rows[0].n), 36);
+    await comoMigrador(atualizar("0035")); // devolve a 0036 e a 0037 (banco de teste fica como estava)
+    assert.equal(Number((await q("select count(*) n from financeiro_v2.fv2_migracao")).rows[0].n), 37);
   });

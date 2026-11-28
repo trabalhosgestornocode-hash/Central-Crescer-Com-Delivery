@@ -62,6 +62,12 @@ export const ACAO = Object.freeze({
   // 28/11 — CORREÇÃO CADASTRAL de conta a pagar (fornecedor, vencimento, descrição, observação, forma de pagamento): só conta
   // aberta, sem pagamento, de despesa/equipamento e de período editável. NÃO é `corrigir` (ampla). Migração 0036.
   CORRIGIR_CONTA_A_PAGAR: "financeiro_v2.corrigir_conta_a_pagar",
+  // 28/11 — FASE 2 (migração 0037): operações ESTREITAS de conta a pagar existente de despesa/equipamento, período aberto/preliminar.
+  // NÃO são `reclassificar`/`corrigir`/`cancelar` (amplas). Pagamento, ajuste prévio ou parcela cancelada que torne ambíguo ⇒ revisão humana.
+  RECLASSIFICAR_CONTA_A_PAGAR: "financeiro_v2.reclassificar_conta_a_pagar",       // categoria da compra inteira
+  AJUSTAR_CONTA_A_PAGAR: "financeiro_v2.ajustar_conta_a_pagar",                   // valor correto ⇒ ajuste documentado (nunca sobrescreve)
+  MOVER_COMPETENCIA_CONTA_A_PAGAR: "financeiro_v2.mover_competencia_conta_a_pagar", // competência da compra entre períodos abertos
+  CANCELAR_CONTA_A_PAGAR: "financeiro_v2.cancelar_conta_a_pagar",                 // compra inteira ou uma parcela (com ajuste auditado)
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

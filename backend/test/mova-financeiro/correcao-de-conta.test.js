@@ -49,7 +49,7 @@ async function conversa({ concessao = CORRIGE, corrigirContas = true, repositori
 
 t("OF-0 leitura do pedido (sem IA): campo, valor, parcela/todas, 'nessa conta' e termos; perguntas e pedidos de pagamento NÃO são correção", () => {
   const h = "2026-11-28";
-  assert.deepEqual(interpretarPedidoDeCorrecao("MOVA, altere o fornecedor da segunda parcela do bebedouro.", h), { campo: "fornecedor", valor: null, bruto: null, valorInvalido: false, parcela: 2, todas: false, nessaConta: false, termos: ["bebedouro"] });
+  assert.deepEqual(interpretarPedidoDeCorrecao("MOVA, altere o fornecedor da segunda parcela do bebedouro.", h), { campo: "fornecedor", valor: null, bruto: null, valorInvalido: false, parcela: 2, todas: false, nessaConta: false, termos: ["bebedouro"], justificativa: null });
   assert.deepEqual(Object.values(interpretarPedidoDeCorrecao("MOVA, altere o vencimento da conta de energia para 15/12.", h)).slice(0, 2), ["vencimento", "2026-12-15"]);
   assert.equal(interpretarPedidoDeCorrecao("MOVA, adicione uma observação nessa conta: paga pela sócia", h).nessaConta, true);
   assert.equal(interpretarPedidoDeCorrecao("mude a forma de pagamento do aluguel para pix", h).valor, "PIX");
@@ -155,9 +155,12 @@ t("OF-4 concorrência e isolamento: conta alterada entre o resumo e o 'sim' ⇒ 
   const atual = await s.porId(s.energia.id);
   await s.m.nucleo.corrigirObrigacao(s.c(ORG, ALFA), { obrigacaoId: atual.id, mudancas: { descricao: "Energia pela Central" }, justificativa: "Correção pela Central (sintético).", versaoEsperada: atual.versao });
   await s.dizer("sim");
-  assert.match((await s.decisao()).motivo, /CONFLITO_VERSAO/, await s.texto());
-  assert.match(await s.texto(), /A conta mudou depois do resumo/);
+  // confirmação antiga invalidada (nada sobrescrito) ⇒ resumo ATUALIZADO com o valor atual
+  assert.equal((await s.decisao()).motivo, "CORRECAO_CONFIRMAR", await s.texto());
+  assert.match(await s.texto(), /A conta mudou depois do resumo: a confirmação anterior foi cancelada e nada foi alterado\. Resumo atualizado:\n[\s\S]*Descrição: Energia pela Central → Energia A/);
   assert.equal((await s.porId(s.energia.id)).descricao, "Energia pela Central", "a alteração legítima não é sobrescrita");
+  await s.dizer("não"); // desiste do resumo atualizado (nada muda)
+  assert.equal((await s.porId(s.energia.id)).descricao, "Energia pela Central");
   // isolamento: conta com o mesmo nome na Beta; quem é FINANCEIRO só da Alfa só vê a da Alfa
   await s.m.nucleo.registrarObrigacao(s.c(ORG, BETA), { contraparteId: (await s.m.nucleo.registrarContraparte(s.c(ORG, BETA), { tipo: "FORNECEDOR", nome: "Fornecedor Beta Sintético" })).id,
     valorOriginalCentavos: 9900, categoria: "INSUMOS", descricao: "Conta de água sintética", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-11-12" });
@@ -241,7 +244,9 @@ t("OF-6 várias parcelas: valores anteriores DIFERENTES aparecem por parcela; pa
   const p2a = await s.porId(p2.id);
   await s.m.nucleo.corrigirObrigacao(s.c(ORG, ALFA), { obrigacaoId: p2.id, mudancas: { vencimento: "2026-12-20" }, justificativa: "Ajuste pela Central (sintético).", versaoEsperada: p2a.versao });
   await s.dizer("sim");
-  assert.match((await s.decisao()).motivo, /CONFLITO_VERSAO/, await s.texto());
+  // confirmação antiga invalidada ⇒ resumo ATUALIZADO (com o conjunto e as versões atuais); nada foi alterado
+  assert.equal((await s.decisao()).motivo, "CORRECAO_CONFIRMAR", await s.texto());
+  assert.match(await s.texto(), /A conta mudou depois do resumo/);
   const depois = await s.obrigacoes();
   assert.deepEqual(depois.filter((o) => o.grupoId === p1.grupoId).map((o) => o.descricao), ["Bebedouro sintético (1ª)", "Bebedouro sintético"], "nenhuma parcela alterada");
 });
