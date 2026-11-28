@@ -76,8 +76,8 @@ export function interpretarPergunta(texto, { hoje, vinculos, outrosNomes = [], a
   if (tem(t, /comprovante|recibo/)) return com(INTENCAO.COMPROVANTE);
   if (tem(t, /diverg|errad|nao bate|incorret|recus|rejeit|problema|contest|reclam|diferente|duplicad/)) return com(INTENCAO.DIVERGENCIA);
   if (tem(t, /\bnota\b|\bnf\b|\bnfs\b|\bnfse\b|fiscal/)) return com(INTENCAO.NOTA);
-  if (tem(t, /\bquando\b|previs|data d[eo] pagamento|dia d[eo] pagamento|vai cair|vao pagar|prazo/)) return com(INTENCAO.PREVISAO);
-  if (tem(t, /pendente|ainda falta|falta (eu )?receber|a receber|em aberto|me devem|devendo|\bsaldo\b/)) return com(INTENCAO.PENDENTE);
+  if (tem(t, /\bquando\b|\b(kd|cade)\b.*\b(dinheiro|pix|pagamento|grana|pgto)\b|previs|data d[eo] pagamento|dia d[eo] pagamento|vai cair|vao pagar|prazo/)) return com(INTENCAO.PREVISAO);
+  if (tem(t, /pendente|ainda falta|\bfalta(m)?\b|falta (eu )?receber|a receber|em aberto|me devem|devendo|\bsaldo\b/)) return com(INTENCAO.PENDENTE);
   if (tem(t, /pagamentos?|\brecebi\b|ja recebi|historico|extrato|pagaram|foi pago|fui pago|\bpagos?\b/)) return com(INTENCAO.PAGAMENTOS);
   if (tem(t, /entregas?|corridas?|pedidos?|viagens?/)) return com(INTENCAO.ENTREGAS);
   if (tem(t, /quanto|valor|fechamento|semana|total|ganh|receb/)) return com(INTENCAO.VALOR);
