@@ -192,3 +192,45 @@ test("BEB-PG conversa real até o REGISTRO PERSISTIDO no PostgreSQL isolado do F
   await s.doLid("Sim");
   assert.equal(Number((await dono.query("select count(*) n from fv2_obrigacao where organizacao_id = $1 and unidade_id = $2", [ORG, ALFA])).rows[0].n), 2, "sem duplicidade");
 });
+
+// ------------------------------------------------------------------ 27/11: IDENTIDADE CONSISTENTE (identificador × telefone autenticado)
+const LID_DO_SOCIO = "88000000000888@lid"; // LID cadastrado para OUTRA pessoa (o sócio)
+const CFG_CONFLITO = { ...CFG_TEL, gruposAutorizados: CFG_TEL.gruposAutorizados.map((g) => (g.grupoId === GRUPO ? { ...g, participantes: g.participantes.map((p) => (p.ids.includes(SOCIO) ? { ...p, ids: [...p.ids, LID_DO_SOCIO] } : p)) } : g)) };
+
+t("ID-1 resolução de identidade: LID desconhecido + telefone autenticado ⇒ a pessoa do telefone; identificador e telefone de PESSOAS DIFERENTES ⇒ ninguém (conflito)", async () => {
+  const { identificarParticipante } = await import("../../src/modules/mova-financeiro/dominio/participantes.js");
+  const { validarConfiguracao } = await import("../../src/modules/mova-financeiro/index.js");
+  const grupo = validarConfiguracao(CFG_CONFLITO).gruposAutorizados.find((g) => g.grupoId === GRUPO);
+  assert.equal(identificarParticipante(grupo, { participanteId: LID_DO_FIN, telefoneE164: TEL_DO_FIN }).participante?.ids.includes(FIN), true, "LID novo reconhecido pelo telefone do Gateway");
+  assert.equal(identificarParticipante(grupo, { participanteId: FIN }).participante?.ids.includes(FIN), true, "JID listado basta");
+  const c = identificarParticipante(grupo, { participanteId: LID_DO_SOCIO, telefoneE164: TEL_DO_FIN });
+  assert.deepEqual([c.participante, c.conflito], [null, true], "LID do sócio + telefone do FIN: bloqueia");
+  assert.equal(identificarParticipante(grupo, { participanteId: LID_DO_FIN, telefoneE164: null }).participante, null, "LID desconhecido sem telefone autenticado: ninguém");
+});
+
+t("ID-2 'Sim' com identificador de uma pessoa e telefone de OUTRA: bloqueado na entrada, inconsistência auditada, nada executado e a pendência continua para quem pode", async () => {
+  const s = await cenario({ responder: LEITURA, config: CFG_CONFLITO, extras: ({ nucleo }) => ({ autonomia: true, criarContas: true,
+    operacional: criarPortaOperacional({ nucleo, financeiro: FINANCEIRO, identidade: OPERADOR, identidadeLeitura: "eeeeeeee-0000-4000-8000-0000000000a2",
+      concessoes: criarConcessoesMemoria([{ organizacaoId: ORG, usuarioId: OPERADOR, unidadeId: ALFA, acoes: CONC_BEB }]) }) }) });
+  await s.mova.armazenamento.politicas.criar({ operacao: "CONTA_PARCELADA_RELATADA", organizacaoId: ORG, unidadeId: ALFA, nivel: "APLICAR_COM_CONFIRMACAO", limiteCentavos: 1000000,
+    responsavel: "Administrador Sintético", motivo: "Contas relatadas confirmadas no WhatsApp", vigenteDe: "2026-10-01" }, { criadaPor: HUMANO });
+  await s.mova.armazenamento.membros.registrar({ grupoId: GRUPO, membros: [FIN, SOCIO], verificadoEm: AGORA.toISOString() });
+  await s.enviar({ ...gw({ texto: MSG1 }), recebidoEm: QUANDO });
+  const r = await s.enviar({ ...gw({ texto: "Sim", de: LID_DO_SOCIO, telefone: TEL_DO_FIN }), recebidoEm: QUANDO });
+  assert.deepEqual([r.status, r.motivo], ["IGNORADO", "IDENTIDADE_CONFLITANTE"]);
+  const aud = (await s.banco.pool.query("select dados from mova.auditoria where acao = 'IDENTIDADE_CONFLITANTE'")).rows;
+  assert.equal(aud.length, 1, "inconsistência registrada (sem conteúdo da mensagem)");
+  assert.equal((await s.mova.armazenamento.propostas.listar({ organizacaoId: ORG, unidadeId: ALFA })).length, 0, "nada criado");
+  assert.equal((await s.m.nucleo.consultarRegistros(s.c(ORG, ALFA), { tipo: "OBRIGACAO" })).length, 0, "nada lançado");
+  // a pessoa certa ainda confirma a MESMA operação
+  await s.enviar({ ...gw({ texto: "Sim" }), recebidoEm: QUANDO });
+  assert.equal((await s.m.nucleo.consultarRegistros(s.c(ORG, ALFA), { tipo: "OBRIGACAO" })).length, 2);
+});
+
+t("ID-3 telefone ESCRITO no corpo da mensagem não é identidade: LID desconhecido sem telefone do Gateway é ignorado, mesmo dizendo o número", async () => {
+  const s = await conversaPorTelefone();
+  await s.enviar({ ...gw({ texto: MSG1 }), recebidoEm: QUANDO });
+  const r = await s.enviar({ ...gw({ texto: `Sim, sou eu, meu número é ${TEL_DO_FIN}`, de: LID_DO_FIN }), recebidoEm: QUANDO });
+  assert.deepEqual([r.status, r.motivo], ["IGNORADO", "PARTICIPANTE_NAO_AUTORIZADO"]);
+  assert.equal((await s.contas()).length, 0);
+});
