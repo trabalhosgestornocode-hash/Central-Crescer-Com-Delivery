@@ -257,6 +257,13 @@ export function revalidarUnidadeDaProposta({ cfg, proposta, evento = null }) {
   if (r.resultado === RESULTADO_UNIDADE.PAGO_POR_OUTRA_UNIDADE) {
     const credora = proposta.comando?.credora?.unidadeId ?? null;
     const mesma = r.unidade.unidadeId === proposta.unidadeId && (!credora || credora === r.pagadora.unidadeId);
+    // 28/11: nota/boleto em nome da empresa da OUTRA loja da conversa, com a unidade CONFIRMADA por quem é FINANCEIRO nas duas
+    // (motor: confirmarUnidadeDoTomador). Vale só para uma das DUAS lojas do conflito e só com a confirmação registrada.
+    const confirmada = proposta.esclarecidoPor && ["TEXTO_CONFIRMADO_CONTRA_TOMADOR", "TOMADOR_CONFIRMADO_CONTRA_TEXTO"].includes(l.evidenciaUnidade);
+    if (confirmada) {
+      const alvo = l.evidenciaUnidade === "TEXTO_CONFIRMADO_CONTRA_TOMADOR" ? r.unidade : r.pagadora;
+      return alvo?.unidadeId === proposta.unidadeId ? { ok: true, motivo: null, contradiz: false } : { ok: false, motivo: "UNIDADE_DIVERGENTE", contradiz: true };
+    }
     return mesma ? { ok: true, motivo: null, contradiz: false } : { ok: false, motivo: "ENTRE_EMPRESAS_DIVERGENTE", contradiz: true };
   }
   if (r.resultado === RESULTADO_UNIDADE.NAO_IDENTIFICADA) {
