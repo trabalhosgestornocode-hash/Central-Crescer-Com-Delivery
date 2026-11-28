@@ -36,7 +36,7 @@ do $$ begin
   if exists (select 1 from mova.mova_migracao where nome = '0028_mova_identidade_fiscal.sql') then raise exception 'MOVA atualização: 0028_mova_identidade_fiscal.sql já aplicada — nada foi feito'; end if;
 end $$;
 
--- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351)
+-- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee)
 -- MOVA (27/11/2026): NOTIFICAÇÃO AUTOMÁTICA DE PAGAMENTO ao entregador + aviso consolidado no grupo financeiro + métricas de atendimento.
 --
 -- Arquitetura (Transactional Outbox "por leitura confirmada"): o fato é a LIQUIDAÇÃO persistida no Financeiro v2 (qualquer origem:
@@ -117,7 +117,7 @@ create table mova.atendimento_metrica (
 grant select, insert on mova.notificacao_pagamento, mova.notificacao_pagamento_item, mova.atendimento_metrica to mova_app;
 grant update (estado, resposta_id, tentativas_envio, reenvios, ultimo_erro, enviado_em, atualizado_em) on mova.notificacao_pagamento to mova_app;
 grant update (respostas, chamadas_ia, tokens_entrada, tokens_saida, atualizado_em) on mova.atendimento_metrica to mova_app;
-insert into mova.mova_migracao (nome, sha256) values ('0026_mova_entregador_notificacoes_pagamento.sql', '20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351');
+insert into mova.mova_migracao (nome, sha256) values ('0026_mova_entregador_notificacoes_pagamento.sql', '287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee');
 
 -- ------------------------------------------------------------------------- 0027_mova_fila_prioridade_limites.sql (arquivo a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0)
 -- MOVA (28/11/2026): FILA DE SAÍDA COM PRIORIDADE, CATEGORIAS, VALIDADE, ADIAMENTO E LIMITES CONFIGURÁVEIS (sem deploy).

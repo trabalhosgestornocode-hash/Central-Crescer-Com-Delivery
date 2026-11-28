@@ -1083,7 +1083,7 @@ grant select, insert on mova.aviso_diario to mova_app;
 grant update (situacao, resumo, resposta_id, tentativas, atualizado_em) on mova.aviso_diario to mova_app;
 -- sem DELETE para o app (histórico do que foi avisado)
 
--- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351)
+-- ------------------------------------------------------------------------- 0026_mova_entregador_notificacoes_pagamento.sql (arquivo 287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee)
 -- MOVA (27/11/2026): NOTIFICAÇÃO AUTOMÁTICA DE PAGAMENTO ao entregador + aviso consolidado no grupo financeiro + métricas de atendimento.
 --
 -- Arquitetura (Transactional Outbox "por leitura confirmada"): o fato é a LIQUIDAÇÃO persistida no Financeiro v2 (qualquer origem:
@@ -1355,7 +1355,7 @@ insert into mova.mova_migracao (nome, sha256) values
   ('0023_mova_politica_sangria.sql', '7855261f01a9363397032937ea2dbf6cfb62a5f6cabedc2a5ffcda346c513631'),
   ('0024_mova_grupo_multiempresa.sql', '441327e033f00fa8a032da0be652c747f45b509ebc3199ba0167a2ba4eff9c47'),
   ('0025_mova_contas_relatadas_intercompany_avisos.sql', '3cbc7d7db7c79e6e159d309a950aa66071f2346dc4205538addfa81bd690209a'),
-  ('0026_mova_entregador_notificacoes_pagamento.sql', '20cd4a9e0005ed5610e18a506b1ee08b3c6c6c1935ebc8df465b06ba52fc2351'),
+  ('0026_mova_entregador_notificacoes_pagamento.sql', '287bd901d7f3fc90c826a9d1832b7091cd2d6ca22845b90184cda4802cac3fee'),
   ('0027_mova_fila_prioridade_limites.sql', 'a2052ce4517b25a5d9fc028d77342dc3a7178602398b9103ceda05510aa48cc0'),
   ('0028_mova_identidade_fiscal.sql', '97bafe89946451a198229db2f0da87d235c5dc92af1ad7ad6209ce6f2d5b6781');
 grant select on mova.mova_migracao to mova_app;
