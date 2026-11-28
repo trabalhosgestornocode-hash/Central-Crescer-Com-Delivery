@@ -663,3 +663,29 @@ export const movaVinculoGerarCodigo = () => postJson(`${MOVA_VINCULO}/codigo`, {
 export const movaVinculoRevogar = (vinculoId, motivo = null) => postJson(`${MOVA_VINCULO}/revogar`, { vinculoId, motivo });
 export const movaVinculoAdmin = () => getJson(`${MOVA_VINCULO}/admin`);
 export const movaVinculoAprovar = (entradaId, perfilId) => postJson(`${MOVA_VINCULO}/admin/aprovar`, { entradaId, perfilId });
+
+// ---------------------------------------------------------------- Produtos / CMV 2.0 (módulo products_cmv_v2)
+async function putJson(url, body) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${url}`, { method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(body) });
+  return tratar(r, g);
+}
+const PC = "/api/v1/produtos/cmv";
+const dd = async (p) => (await p)?.data;
+export const cmv2Saude = () => dd(getJson(`${PC}/saude`));
+export const cmv2Pendencias = () => dd(getJson(`${PC}/pendencias`));
+export const cmv2PreviaRendimentos = (sobrescritas = {}) => dd(postJson(`${PC}/rendimentos/previa`, { sobrescritas }));
+export const cmv2AplicarRendimentos = (itens) => dd(postJson(`${PC}/rendimentos/aplicar`, { itens }));
+export const cmv2PreviaCustoZero = (insumoId) => dd(getJson(`${PC}/custo-zero/${encodeURIComponent(insumoId)}/previa`));
+export const cmv2DefinirCustoZero = (insumoId, declarar, motivo) => dd(postJson(`${PC}/custo-zero/${encodeURIComponent(insumoId)}`, { declarar, motivo }));
+export const cmv2ValidarAproveitamento = (insumo_id, entrada) => dd(postJson(`${PC}/aproveitamento/validar`, { insumo_id, entrada }));
+export const cmv2Rascunhos = () => dd(getJson(`${PC}/rascunhos`));
+export const cmv2Rascunho = (id) => dd(getJson(`${PC}/rascunhos/${encodeURIComponent(id)}`));
+export const cmv2SalvarRascunho = (id, corpo) => dd(id ? putJson(`${PC}/rascunhos/${encodeURIComponent(id)}`, corpo) : postJson(`${PC}/rascunhos`, corpo));
+export const cmv2ExcluirRascunho = (id) => dd(delJson(`${PC}/rascunhos/${encodeURIComponent(id)}`));
+export const cmv2PreviaHomologacao = () => dd(getJson(`${PC}/homologacao/previa`));
+export const cmv2HomologarLote = (ids) => dd(postJson(`${PC}/homologacao/lote`, { ids }));
+export const cmv2CriarFicha = (corpo) => dd(postJson(`${PC}/fichas`, corpo));
+export const cmv2Recuperacao = (id) => dd(getJson(`${PC}/fichas/${encodeURIComponent(id)}/recuperacao`));
+export const cmv2Simular = (id, corpo) => dd(postJson(`${PC}/fichas/${encodeURIComponent(id)}/simular`, corpo));
+export const cmv2DefinirPreco = (id, corpo) => dd(putJson(`${PC}/fichas/${encodeURIComponent(id)}/preco`, corpo));

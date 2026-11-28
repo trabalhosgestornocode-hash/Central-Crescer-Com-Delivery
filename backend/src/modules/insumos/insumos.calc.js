@@ -76,6 +76,19 @@ export function converterQuantidade(qtd, de, para) {
  * @param {{precoCompra?: number|null, quantidadeEmbalagem?: number|null, fatorCorrecao?: number|null}} p
  * @returns {number|null}
  */
+/**
+ * Natureza do custo de um insumo — nunca confundir as três:
+ *   'informado'  preço de aquisição > 0
+ *   'zero_declarado' zero intencional, com motivo e responsável (ex.: água absorvida nas despesas operacionais)
+ *   'desconhecido'   sem preço, ou zero sem declaração (o sistema não presume zero)
+ * @param {{preco_unitario?: unknown, custo_zero_declarado?: boolean}} insumo
+ */
+export function naturezaCusto(insumo) {
+  if (insumo?.custo_zero_declarado === true) return "zero_declarado";
+  const p = Number(insumo?.preco_unitario);
+  return insumo?.preco_unitario != null && Number.isFinite(p) && p > 0 ? "informado" : "desconhecido";
+}
+
 export function custoUnitario({ precoCompra, quantidadeEmbalagem, fatorCorrecao = 1 }) {
   // Ausência de dado (null/undefined/"") não é "custo zero" — é "sem custo".
   if (precoCompra === null || precoCompra === undefined || precoCompra === "") return null;
@@ -156,12 +169,49 @@ export function variacaoPct(anterior, novo) {
 export function statusFicha({ componentes, temPreco = true }) {
   const lista = componentes ?? [];
   if (!lista.length) return { chave: "sem_componentes", label: "Sem componentes", ok: false };
-  const semCusto = lista.some((c) => c.custoUnitarioBase == null || Number(c.custoUnitarioBase) <= 0);
+  // Custo zero DECLARADO (motivo/responsável, migration 163) é custo válido; zero sem declaração continua desconhecido.
+  const semCusto = lista.some((c) => !c.custoZeroDeclarado && (c.custoUnitarioBase == null || Number(c.custoUnitarioBase) <= 0));
   if (semCusto) return { chave: "insumo_sem_custo", label: "Insumo sem custo", ok: false };
   const inativo = lista.some((c) => c.insumoAtivo === false);
   if (inativo) return { chave: "insumo_inativo", label: "Possui insumo inativo", ok: false };
   if (!temPreco) return { chave: "sem_preco", label: "Sem preço de venda", ok: false };
   return { chave: "completa", label: "Completa", ok: true };
+}
+
+/**
+ * Lê um número digitado no padrão BRASILEIRO ("1.234,56", "0,0149", "2.600") com segurança.
+ * Números (já numéricos) passam direto. Texto vazio/ inválido -> { valor: null }.
+ * "2.600" sem vírgula é o caso perigoso: em pt-BR é dois mil e seiscentos; lido como JS vira 2,6
+ * (é o erro de 1.000× visto em rendimentos importados). Aqui ele é lido como milhar (2600) E marcado
+ * `ambiguo: true`, para a tela pedir confirmação em vez de gravar em silêncio.
+ * @param {unknown} entrada @returns {{valor: number|null, ambiguo: boolean}}
+ */
+export function lerNumeroBR(entrada) {
+  if (typeof entrada === "number") return { valor: Number.isFinite(entrada) ? entrada : null, ambiguo: false };
+  if (entrada == null) return { valor: null, ambiguo: false };
+  let s = String(entrada).trim().replace(/\s|R\$/g, "");
+  if (!s) return { valor: null, ambiguo: false };
+  const neg = s.startsWith("-"); if (neg) s = s.slice(1);
+  let valor; let ambiguo = false;
+  if (s.includes(",")) {
+    if (!/^\d{1,3}(\.\d{3})*,\d+$|^\d+,\d+$/.test(s)) return { valor: null, ambiguo: false };
+    valor = Number(s.replace(/\./g, "").replace(",", "."));
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    valor = Number(s.replace(/\./g, "")); ambiguo = true;
+  } else if (/^\d+(\.\d+)?$/.test(s)) {
+    valor = Number(s); ambiguo = s.includes("."); // "2.5": ponto decimal fora do padrão BR — confirmar
+  } else return { valor: null, ambiguo: false };
+  return { valor: Number.isFinite(valor) ? (neg ? -valor : valor) : null, ambiguo };
+}
+
+/**
+ * Divisão segura: denominador ausente, zero ou negativo devolve null (custo desconhecido), nunca Infinity/0.
+ * @param {number|null} a @param {number|null} b @returns {number|null}
+ */
+export function dividirSeguro(a, b) {
+  const x = Number(a); const y = Number(b);
+  if (a == null || b == null || !Number.isFinite(x) || !Number.isFinite(y) || y <= 0) return null;
+  return x / y;
 }
 
 // ---------------------------------------------------------------------------

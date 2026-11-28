@@ -38,6 +38,8 @@ export const MODULOS = {
   CHECKLIST_OPERACIONAL: "checklist_operacional",
   // Dashboard Financeiro (migration 120). Nasce desabilitado; o acesso real também exige concessão explícita por perfil.
   GESTAO_FINANCEIRA: "gestao_financeira",
+  // Nova experiência Produtos / CMV (migration 163). Ativação GRADUAL por empresa/unidade; exige também products_cmv.
+  PRODUTOS_CMV_2: "products_cmv_v2",
 };
 
 /**
@@ -67,6 +69,7 @@ export const CATALOGO_MODULOS = [
   { id: MODULOS.INTELIGENCIA, nome: "Inteligência (seção)", categoria: "operacao", ordem: 16 },
   { id: MODULOS.GESTAO_FINANCEIRA, nome: "Gestão Financeira", categoria: "financeiro", ordem: 17 },
   { id: MODULOS.CHECKLIST_OPERACIONAL, nome: "Checklist Operacional", categoria: "operacao", ordem: 18 },
+  { id: MODULOS.PRODUTOS_CMV_2, nome: "Produtos / CMV 2.0 (piloto)", categoria: "operacao", ordem: 19 },
 ];
 
 const IDS_VALIDOS = new Set(CATALOGO_MODULOS.map((m) => m.id));

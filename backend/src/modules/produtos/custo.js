@@ -20,23 +20,42 @@ const PROF_MAX = 12; // trava contra ciclos na árvore de submontagens/combos
  * quantidade_informada, ordem, ativo) ainda não migradas.
  * @param {string} organizacaoId
  */
+/**
+ * Lê TODAS as linhas de uma consulta, em páginas. O PostgREST devolve no máximo 1.000 linhas por pedido: sem isto,
+ * uma organização com mais de 1.000 linhas de ficha tinha o grafo truncado em silêncio — custos e diagnósticos errados.
+ * @param {(de: number, ate: number) => PromiseLike<{data: any[]|null, error: any}>} consulta
+ */
+export async function lerTudo(consulta, pagina = 1000) {
+  const todas = [];
+  for (let de = 0; ; de += pagina) {
+    const { data, error } = await consulta(de, de + pagina - 1);
+    if (error) return { data: null, error };
+    todas.push(...(data ?? []));
+    if (!data || data.length < pagina) return { data: todas, error: null };
+  }
+}
+
 export async function carregarGrafo(organizacaoId) {
   const [insumosRes, produtosRes] = await Promise.all([
-    supabase.from("insumos")
-      .select("id, nome, tipo, unidade_medida, preco_unitario, ativo, categoria_id")
-      .eq("organizacao_id", organizacaoId),
+    lerTudo((de, ate) => supabase.from("insumos")
+      .select("*")
+      .eq("organizacao_id", organizacaoId).order("id").range(de, ate)),
     // `*` (e não colunas nomeadas): rendimento/homologacao são da migration 157 — antes dela
     // o select continua funcionando e o rendimento cai no padrão 1 (comportamento legado).
-    supabase.from("produtos").select("*").eq("organizacao_id", organizacaoId),
+    lerTudo((de, ate) => supabase.from("produtos").select("*").eq("organizacao_id", organizacaoId).order("id").range(de, ate)),
   ]);
   if (insumosRes.error) throw ApiError.internal(insumosRes.error.message);
   if (produtosRes.error) throw ApiError.internal(produtosRes.error.message);
 
   const produtos = produtosRes.data ?? [];
   const orgProdutoIds = produtos.map((p) => p.id);
-  const fichaRes = orgProdutoIds.length
-    ? await supabase.from("ficha_tecnica").select("*").in("produto_id", orgProdutoIds)
-    : { data: [], error: null };
+  // `.in()` com centenas de UUIDs também estoura o tamanho da URL: blocos de 150 ids, cada um paginado.
+  const fichaRes = { data: [], error: null };
+  for (let i = 0; i < orgProdutoIds.length && !fichaRes.error; i += 150) {
+    const bloco = orgProdutoIds.slice(i, i + 150);
+    const r = await lerTudo((de, ate) => supabase.from("ficha_tecnica").select("*").in("produto_id", bloco).order("id").range(de, ate));
+    if (r.error) fichaRes.error = r.error; else fichaRes.data.push(...r.data);
+  }
   if (fichaRes.error) throw ApiError.internal(fichaRes.error.message);
 
   const insumoById = new Map((insumosRes.data ?? []).map((i) => [i.id, i]));
@@ -161,8 +180,10 @@ export function maoDeObraDoProduto(produtoId, grafo, modPorProduto) {
 
 /** Carrega a mão de obra por produto (tabela da migration 157). Só para as telas novas — nunca no caminho legado. */
 export async function carregarMaoDeObra(organizacaoId) {
-  const { data, error } = await supabase
-    .from("ficha_mao_de_obra").select("produto_id, funcao, minutos, custo_minuto").eq("organizacao_id", organizacaoId);
+  // Paginado; (produto_id, funcao) é único por produto (o importador soma a mesma função), logo a ordem é total.
+  const { data, error } = await lerTudo((de, ate) => supabase
+    .from("ficha_mao_de_obra").select("produto_id, funcao, minutos, custo_minuto").eq("organizacao_id", organizacaoId)
+    .order("produto_id").order("funcao").range(de, ate));
   if (error) throw ApiError.internal(error.message);
   const porProduto = new Map();
   for (const l of data ?? []) {
@@ -205,6 +226,8 @@ export function componentesDiretos(produtoId, grafo) {
         unidade_base: unidadeBase,
         custo_unitario_base: custoUnitarioBase,
         custo_aplicado: custoUnitarioBase == null ? null : custoAplicado,
+        custo_zero_declarado: ins.custo_zero_declarado === true,
+        peso_bruto: f.peso_bruto ?? null, peso_liquido: f.peso_liquido ?? null, indice_coccao: f.indice_coccao ?? null,
         observacao: f.observacao ?? null,
         ativo,
       };
@@ -276,7 +299,7 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
   const custo = custoManual != null ? Number(custoManual) : custoCalculado;
   const temPreco = precoVenda != null && Number(precoVenda) > 0;
   const status = statusFicha({
-    componentes: componentes.map((c) => ({ custoUnitarioBase: c.custo_unitario_base, insumoAtivo: c.insumo_ativo })),
+    componentes: componentes.map((c) => ({ custoUnitarioBase: c.custo_unitario_base, insumoAtivo: c.insumo_ativo, custoZeroDeclarado: c.custo_zero_declarado })),
     temPreco,
   });
   const m = margem(custo, precoVenda);
@@ -405,10 +428,9 @@ export async function recalcularCache({ organizacaoId, produtoIds, grafo }) {
   if (!produtoIds?.length) return 0;
   const g = grafo ?? (await carregarGrafo(organizacaoId));
 
-  // custo_manual dos produtos alvo (override vence o calculado).
-  const { data: manuais } = await supabase
-    .from("produtos").select("id, custo_manual").eq("organizacao_id", organizacaoId).in("id", produtoIds);
-  const manualById = new Map((manuais ?? []).map((p) => [p.id, p.custo_manual]));
+  // custo_manual dos produtos alvo (override vence o calculado). Vem do grafo COMPLETO (select * paginado): evita um
+  // `.in()` com centenas de ids (URL grande e teto de 1.000 linhas).
+  const manualById = new Map((g.produtos ?? []).map((p) => [p.id, p.custo_manual]));
 
   let ok = 0;
   for (const pid of produtoIds) {
